@@ -229,7 +229,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_directory_release_stages_exact_identity_before_reusable_gate_and_promotion(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
         required = workflow["jobs"]["required_stable_launch_evidence"]
-        self.assertEqual(set(required["needs"]), {"sign", "materialize_site", "gate_exact_staged_publication"})
+        self.assertEqual(set(required["needs"]), {"prepare", "sign", "materialize_site", "gate_exact_staged_publication"})
         self.assertEqual(required["uses"], "./.github/workflows/live-e2e.yml")
         self.assertEqual(required["with"]["consent"], "true")
         self.assertEqual(required["permissions"], {
