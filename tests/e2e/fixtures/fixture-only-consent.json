@@ -7,7 +7,7 @@
   "run_id": "fixture-only",
   "run_attempt": "0",
   "catalog_sha": null,
-  "scenario_contract_digest": "sha256:2709b90e1c9ae998fc4f240df08ada8de29a543a0d54d24e146c46f14c8e1a03",
+  "scenario_contract_digest": "sha256:1631457d72acdcff0def85dc1dcf23eae31bc71fa28472fb53878448ad592b78",
   "pseudonymous_identity_id": "fixture-contract-identity",
   "pseudonymous_workspace_id": "fixture-contract-workspace",
   "dedicated_identity": true,

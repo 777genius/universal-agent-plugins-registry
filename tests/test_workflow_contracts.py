@@ -67,17 +67,17 @@ class WorkflowContractTests(unittest.TestCase):
             ("linux", "amd64"), ("windows", "amd64"), ("windows", "arm64"),
         })
         self.assertEqual({slot["asset"] for slot in slots}, {
-            "agentplugins_0.1.8_darwin_arm64", "agentplugins_0.1.8_darwin_amd64",
-            "agentplugins_0.1.8_linux_arm64", "agentplugins_0.1.8_linux_amd64",
-            "agentplugins_0.1.8_windows_amd64.exe", "agentplugins_0.1.8_windows_arm64.exe",
+            "agentplugins_0.1.10_darwin_arm64", "agentplugins_0.1.10_darwin_amd64",
+            "agentplugins_0.1.10_linux_arm64", "agentplugins_0.1.10_linux_amd64",
+            "agentplugins_0.1.10_windows_amd64.exe", "agentplugins_0.1.10_windows_arm64.exe",
         })
         self.assertIn("prepare_launch_evidence.py", commands(native))
         self.assertIn("node-version: '22'", yaml.safe_dump(npm))
         self.assertIn("npm install --global", commands(npm))
         self.assertIn("npm audit signatures", commands(npm))
         self.assertIn("--npm-facade", commands(npm))
-        self.assertIn("universal-agent-plugins-0.1.8.tgz", commands(npm))
-        self.assertIn("--asset-name agentplugins_0.1.8_linux_amd64", commands(npm))
+        self.assertIn("universal-agent-plugins-0.1.10.tgz", commands(npm))
+        self.assertIn("--asset-name agentplugins_0.1.10_linux_amd64", commands(npm))
         self.assertNotIn("universal-agent-plugins.tgz", commands(npm))
         self.assertNotRegex(commands(npm), r"github\.com/.*\.tgz")
         self.assertIn("inputs.consent", aggregate["if"])
@@ -98,7 +98,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--release-tag", body)
         production = (ROOT / "tests/e2e/production-launch.json").read_text()
         self.assertIn('"cli_release_repository": "777genius/plugin-kit-ai"', production)
-        self.assertIn('"cli_release_tag": "agentplugins-v0.1.8"', production)
+        self.assertIn('"cli_release_tag": "agentplugins-v0.1.10"', production)
         prepare = (ROOT / "scripts/prepare_launch_evidence.py").read_text()
         self.assertNotIn('os.environ.get("GITHUB_TOKEN")', prepare)
         self.assertIn("token=None", prepare)
@@ -124,7 +124,7 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("SHA256SUMS", text)
                 self.assertIn("overwrite: false", text)
                 if path == LAUNCH:
-                    self.assertIn("agentplugins_0.1.8_linux_amd64", text)
+                    self.assertIn("agentplugins_0.1.10_linux_amd64", text)
                 self.assertNotIn("AGENTPLUGINS_VERSION: \"0.1.6\"", text)
 
     def test_live_workflow_is_read_only_and_does_not_publish(self) -> None:

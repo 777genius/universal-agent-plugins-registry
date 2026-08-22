@@ -279,7 +279,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         config = e2e.read_production_config()
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
-        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.8")
+        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.10")
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
         self.assertEqual(
@@ -287,6 +287,20 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
         )
         self.assertNotIn("repository", config)
+
+    def test_hero_contract_is_exactly_five_by_three(self) -> None:
+        scenarios = json.loads(e2e.SCENARIOS.read_text())
+        self.assertEqual(
+            scenarios["heroes"],
+            ["agent-code-navigator", "chrome-devtools", "context7", "cloudflare-docs", "notion"],
+        )
+        self.assertEqual(scenarios["runtime_clients"], ["codex", "cursor", "kiro"])
+        expected_rows = len(scenarios["heroes"]) * len(scenarios["runtime_clients"])
+        self.assertEqual(expected_rows, 15)
+        self.assertEqual(scenarios["expected_counts"]["hero_lifecycle_rows"], expected_rows)
+        self.assertEqual(scenarios["expected_counts"]["hero_runtime_rows"], expected_rows)
+        self.assertEqual(e2e.EXPECTED_COUNTS["hero_lifecycle_rows"], expected_rows)
+        self.assertEqual(e2e.EXPECTED_COUNTS["hero_runtime_rows"], expected_rows)
 
     def test_production_identity_rejects_configured_repository_or_tag_changes(self) -> None:
         original = json.loads(e2e.PRODUCTION_CONFIG.read_text())
