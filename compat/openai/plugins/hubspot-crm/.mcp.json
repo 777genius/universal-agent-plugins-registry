@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "hubspot-crm": {
-      "url": "https://mcp.hubspot.com",
-      "type": "http"
-    }
-  }
-}

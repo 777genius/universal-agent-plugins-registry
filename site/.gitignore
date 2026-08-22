@@ -1,9 +1,0 @@
-node_modules/
-.nuxt/
-.output/
-dist
-.cache/
-coverage/
-*.log
-test-results/
-playwright-report/
