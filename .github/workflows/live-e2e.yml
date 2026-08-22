@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   required-stable-launch-evidence:
-    if: github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch'
+    if: inputs.consent
     uses: ./.github/workflows/launch-evidence-e2e.yml
     with:
       consent: ${{ inputs.consent }}
@@ -99,6 +99,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: false
+
+  required-live-e2e:
+    name: Require complete live E2E results
+    if: always() && inputs.consent
+    needs:
+      - required-stable-launch-evidence
+      - public-read-flows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Reject skipped or failed nested evidence
+        env:
+          STABLE_E2E_RESULT: ${{ needs.required-stable-launch-evidence.result }}
+          PUBLIC_READ_RESULT: ${{ needs.public-read-flows.result }}
+        run: |
+          test "$STABLE_E2E_RESULT" = success
+          test "$PUBLIC_READ_RESULT" = success
 
   scheduled-fixture-contract:
     if: github.event_name == 'schedule'

@@ -174,10 +174,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_scheduled_live_workflow_never_calls_staged_publication_gate(self) -> None:
         workflow = load(LIVE)
         required = workflow["jobs"]["required-stable-launch-evidence"]
-        self.assertEqual(
-            required["if"],
-            "github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch'",
-        )
+        self.assertEqual(required["if"], "inputs.consent")
         scheduled = {
             name: job
             for name, job in workflow["jobs"].items()
@@ -199,6 +196,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(
             public_reads["if"], "github.event_name == 'schedule' || inputs.consent"
         )
+
+    def test_live_terminal_gate_rejects_skipped_or_failed_nested_evidence(self) -> None:
+        workflow = load(LIVE)
+        gate = workflow["jobs"]["required-live-e2e"]
+        self.assertEqual(gate["if"], "always() && inputs.consent")
+        self.assertEqual(
+            set(gate["needs"]),
+            {"required-stable-launch-evidence", "public-read-flows"},
+        )
+        step = gate["steps"][0]
+        self.assertEqual(
+            step["env"],
+            {
+                "STABLE_E2E_RESULT": "${{ needs.required-stable-launch-evidence.result }}",
+                "PUBLIC_READ_RESULT": "${{ needs.public-read-flows.result }}",
+            },
+        )
+        body = commands(gate)
+        self.assertIn('test "$STABLE_E2E_RESULT" = success', body)
+        self.assertIn('test "$PUBLIC_READ_RESULT" = success', body)
 
     def test_publication_identity_contract_matches_across_both_reusable_edges(self) -> None:
         launch = load(LAUNCH)
