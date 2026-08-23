@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "request_policy", "git", "clients", "matrix", "consent_record", "chatgpt", "workspace_root"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "request_policy": {
+      "type": "object",
+      "required": ["catalog_repository", "cli_release_repository", "cli_release_tag", "release_manifest_digest", "release_checksums_digest", "directory_digest"],
+      "properties": {
+        "catalog_repository": {"const": "777genius/universal-agent-plugins"},
+        "cli_release_repository": {"const": "777genius/plugin-kit-ai"},
+        "cli_release_tag": {"const": "agentplugins-v0.1.13"},
+        "release_manifest_digest": {"const": "sha256:f13de10e96296bf6d68de4298fd2349bf75597a64544fa7e99b5bfbf34c3641c"},
+        "release_checksums_digest": {"const": "sha256:d682e61936a9d8ba891a2a036f0714ee96beb87cd96ccb2f24d334ca52158590"},
+        "directory_digest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
+    },
+    "workspace_root": {"const": "/var/lib/uap-observer/workspaces"},
+    "git": {"$ref": "#/$defs/binary"},
+    "clients": {
+      "type": "object",
+      "required": ["codex", "cursor", "kiro"],
+      "properties": {
+        "codex": {"$ref": "#/$defs/client"},
+        "cursor": {"$ref": "#/$defs/client"},
+        "kiro": {"$ref": "#/$defs/client"}
+      },
+      "additionalProperties": false
+    },
+    "matrix": {"type": "array", "minItems": 15, "maxItems": 15, "items": {"$ref": "#/$defs/matrix"}},
+    "consent_record": {
+      "type": "object",
+      "required": ["directory"],
+      "properties": {"directory": {"const": "/var/lib/uap-observer-consent/pending"}},
+      "additionalProperties": false
+    },
+    "chatgpt": {
+      "type": "object",
+      "required": ["app_binding_path", "app_binding_sha256", "app_id", "mcp_endpoint", "human_attestation_directory", "tuple", "client_version", "projection_receipt_digest"],
+      "properties": {
+        "app_binding_path": {"type": "string", "pattern": "^/"},
+        "app_binding_sha256": {"$ref": "#/$defs/digest"},
+        "app_id": {"type": "string", "pattern": "^plugin_asdk_app_[a-f0-9]{32}$"},
+        "mcp_endpoint": {"const": "https://docs.mcp.cloudflare.com/mcp"},
+        "human_attestation_directory": {"const": "/var/lib/uap-observer-human/pending"},
+        "tuple": {"type": "object"}, "client_version": {"type": "string", "minLength": 1},
+        "projection_receipt_digest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "file": {
+      "type": "object", "required": ["path", "sha256"],
+      "properties": {"path": {"type": "string", "pattern": "^/"}, "sha256": {"$ref": "#/$defs/digest"}},
+      "additionalProperties": false
+    },
+    "binary": {
+      "type": "object", "required": ["binary", "sha256"],
+      "properties": {"binary": {"type": "string", "pattern": "^/"}, "sha256": {"$ref": "#/$defs/digest"}},
+      "additionalProperties": false
+    },
+    "client": {
+      "type": "object", "required": ["binary", "sha256", "profile", "client_id"],
+      "properties": {
+        "binary": {"type": "string", "pattern": "^/"}, "sha256": {"$ref": "#/$defs/digest"},
+        "profile": {"type": "string", "pattern": "^/var/lib/uap-observer/profiles/"},
+        "client_id": {"enum": ["codex", "cursor", "kiro"]}
+      },
+      "additionalProperties": false
+    },
+    "matrix": {
+      "type": "object", "required": ["plugin", "client", "tuple", "application_id", "endpoint"],
+      "properties": {
+        "plugin": {"enum": ["agent-code-navigator", "context7", "cloudflare-docs", "chrome-devtools", "notion"]},
+        "client": {"enum": ["codex", "cursor", "kiro"]}, "tuple": {"type": "object"},
+        "application_id": {"type": "string", "minLength": 1}, "endpoint": {"type": "string", "pattern": "^https://"},
+        "projection_receipt_digest": {"$ref": "#/$defs/digest"}, "native_app_digest": {"$ref": "#/$defs/digest"}, "native_mcp_digest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

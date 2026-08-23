@@ -1,0 +1,36 @@
+[Unit]
+Description=UAP protected stable-launch observer
+After=network-online.target uap-observer-signer.service uap-observer-runner.socket
+Requires=uap-observer-signer.service uap-observer-runner.socket
+
+[Service]
+Type=simple
+User=uap-observer
+Group=uap-observer
+SupplementaryGroups=uap-observer-signer-ipc uap-observer-runner-ipc
+ExecStart=/opt/uap-observer-venv/bin/python -m observer.http_server --config /etc/uap-observer.json
+WorkingDirectory=/opt/uap-observer-runtime
+Environment=PYTHONPATH=/opt/uap-observer-runtime
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+InaccessiblePaths=-/var/run/docker.sock -/run/docker.sock
+ReadWritePaths=/var/lib/uap-observer/state
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

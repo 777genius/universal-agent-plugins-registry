@@ -1,0 +1,40 @@
+[Unit]
+Description=UAP observer root-owned Ed25519 signer
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=uap-observer-signer-ipc
+ExecStart=/opt/uap-observer-venv/bin/python /opt/uap-observer-runtime/uap-observer-signer.py
+WorkingDirectory=/opt/uap-observer-runtime
+Environment=PYTHONPATH=/opt/uap-observer-runtime
+RuntimeDirectory=uap-observer-signer
+RuntimeDirectoryMode=0750
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictRealtime=yes
+RemoveIPC=yes
+ReadOnlyPaths=/etc/uap-observer-ed25519.key /opt/uap-observer-runtime /opt/uap-observer-venv
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
