@@ -1029,12 +1029,13 @@ class DirectoryDomainTests(unittest.TestCase):
                 continue
             suspended_live_npx = {
                 "777genius/chrome-devtools",
-                "777genius/firebase",
                 "777genius/hubspot-developer",
             }
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
-            expected_sequences = [1, 2] if distribution["id"] in {"777genius/chrome-devtools-bridge", "777genius/context7"} else [1]
+            expected_sequences = [1, 2] if distribution["id"] in {
+                "777genius/chrome-devtools-bridge", "777genius/context7", "777genius/firebase",
+            } else [1]
             self.assertEqual([item["sequence"] for item in distribution["releases"]], expected_sequences)
             self.assertEqual(
                 [item["tree_digest_algorithm"] for item in distribution["releases"]],
@@ -1150,9 +1151,92 @@ class DirectoryDomainTests(unittest.TestCase):
         _distribution, _release, policy = candidate
         policy["minimum_installer_version"] = "0.1.11"
         with self.assertRaisesRegex(
-            registry.RegistryError, "locked npm runtime requires minimum installer version 0.1.12 or newer",
+            registry.RegistryError, "locked npm runtime requires minimum installer version 0.1.13 or newer",
         ):
             registry.validate_active_local_runtime_closures(source)
+
+    def test_firebase_locked_runtime_is_active_at_sequence_two(self) -> None:
+        registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "firebase")
+        source = self.source()
+        distribution = next(
+            item for item in source["distributions"]
+            if item["id"] == "777genius/firebase"
+        )
+        self.assertEqual(distribution["status"], "active")
+        self.assertEqual(
+            [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
+            [(1, "revoked"), (2, "active")],
+        )
+        resolution = registry.resolve_directory(source, "firebase", ["codex"])
+        self.assertEqual(
+            (resolution["distribution_id"], resolution["release_sequence"]),
+            ("777genius/firebase", 2),
+        )
+
+    def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "context7"
+            shutil.copytree(registry.ROOT / "plugins" / "context7", package)
+            config_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config.pop("omit_optional")
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "runtime identity does not match"):
+                registry.validate_locked_npm_runtime(package)
+
+    def test_locked_npm_runtime_binds_ignored_install_script_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "firebase"
+            shutil.copytree(registry.ROOT / "plugins" / "firebase", package)
+            lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
+            lock = json.loads(lock_path.read_text())
+            protobuf = lock["packages"]["node_modules/protobufjs"]
+            protobuf["integrity"] = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+            lock_path.write_text(json.dumps(lock))
+            config_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "exact reviewed allowlist"):
+                registry.validate_locked_npm_runtime(package)
+
+    def test_locked_launcher_rejects_symlinked_plugin_data_and_repairs_mode(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            shutil.copytree(
+                registry.ROOT / "plugins" / "firebase" / registry.LOCKED_NPM_RUNTIME_PATH,
+                runtime,
+            )
+            config_path = runtime / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = "sha256:" + "0" * 64
+            config_path.write_text(json.dumps(config))
+
+            plugin_data = root / "plugin-data"
+            plugin_data.mkdir(mode=0o755)
+            plugin_data.chmod(0o755)
+            result = subprocess.run(
+                [node, str(runtime / "launcher.mjs")],
+                env={"PLUGIN_DATA": str(plugin_data)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("runtime.json does not match", result.stderr)
+            self.assertEqual(plugin_data.stat().st_mode & 0o777, 0o700)
+
+            symlink = root / "plugin-data-link"
+            symlink.symlink_to(plugin_data, target_is_directory=True)
+            result = subprocess.run(
+                [node, str(runtime / "launcher.mjs")],
+                env={"PLUGIN_DATA": str(symlink)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must be a real directory, not a symlink", result.stderr)
 
     def test_locked_npm_runtime_rejects_tampered_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1174,7 +1258,7 @@ class DirectoryDomainTests(unittest.TestCase):
         source = self.source()
         distribution = next(
             item for item in source["distributions"]
-            if item["id"] == "777genius/firebase"
+            if item["id"] == "777genius/hubspot-developer"
         )
         self.assertEqual(distribution["kind"], "community")
         distribution["status"] = "active"

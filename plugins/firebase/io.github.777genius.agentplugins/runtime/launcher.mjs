@@ -4,7 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import {
+  chmod,
   copyFile,
+  lstat,
   mkdir,
   readFile,
   realpath,
@@ -171,6 +173,11 @@ async function main() {
     throw new Error("the client did not provide an absolute PLUGIN_DATA directory");
   }
   await mkdir(pluginDataValue, { recursive: true, mode: 0o700 });
+  const pluginDataStat = await lstat(pluginDataValue);
+  if (!pluginDataStat.isDirectory() || pluginDataStat.isSymbolicLink()) {
+    throw new Error("PLUGIN_DATA must be a real directory, not a symlink");
+  }
+  await chmod(pluginDataValue, 0o700);
   const pluginData = await realpath(pluginDataValue);
   const configBody = await readFile(join(runtimeRoot, "runtime.json"));
   const config = JSON.parse(configBody.toString("utf8"));

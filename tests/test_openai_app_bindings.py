@@ -610,8 +610,8 @@ class OpenAIAppBindingTests(unittest.TestCase):
 
         self.assertEqual(generated, expected)
         self.assertEqual(listed, expected)
-        self.assertTrue({"chrome-devtools", "context7"}.issubset(expected))
-        self.assertTrue({"firebase", "hubspot-developer"}.isdisjoint(expected))
+        self.assertTrue({"chrome-devtools", "context7", "firebase"}.issubset(expected))
+        self.assertNotIn("hubspot-developer", expected)
 
     def test_referenced_runtime_closures_are_complete_in_generated_packages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

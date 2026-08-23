@@ -78,9 +78,17 @@ DIRECTORY_TREE_DIGEST_ALGORITHM = "agentplugins-tree-sha256-v1"
 DIRECTORY_TREE_DIGEST_DOMAIN = b"agentplugins.package-tree\x00sha256\x00v1"
 DIRECTORY_MINIMUM_INSTALLER_VERSION = "0.1.8"
 LOCKED_NPM_RUNTIME_PATH = "io.github.777genius.agentplugins/runtime"
-LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.12"
+LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.13"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
-LOCKED_NPM_LAUNCHER_DIGEST = "sha256:437bbe6b14ccdabde0531330d8b3b2ece3e7b4dc20f298f9ffc58974a2ffccb7"
+LOCKED_NPM_LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
+LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
+    ("firebase-tools", "15.28.1"): frozenset({
+        (
+            "node_modules/protobufjs", "7.6.5",
+            "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
+        ),
+    }),
+}
 
 
 class RegistryError(Exception):
@@ -1162,10 +1170,11 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         f"{package_path}: runtime dependency must use one exact npm version",
     )
     require(
-        set(config) == {"schema_version", "package", "version", "entrypoint", "package_lock_sha256"}
+        set(config) == {"schema_version", "package", "version", "entrypoint", "package_lock_sha256", "omit_optional"}
         and config.get("schema_version") == 1
         and config.get("package") == dependency
         and config.get("version") == version
+        and isinstance(config.get("omit_optional"), bool)
         and config.get("package_lock_sha256") == digest_bytes(lock_body),
         f"{config_path}: runtime identity does not match package.json and package-lock.json",
     )
@@ -1185,6 +1194,7 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
     require(packages[""].get("dependencies") == {dependency: version}, f"{lock_path}: root dependency identity mismatch")
     root_dependency = packages.get(f"node_modules/{dependency}")
     require(isinstance(root_dependency, dict) and root_dependency.get("version") == version, f"{lock_path}: locked root package version mismatch")
+    ignored_install_scripts: set[tuple[str, str, str]] = set()
     for relative, entry in packages.items():
         if relative == "":
             continue
@@ -1193,6 +1203,14 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
             and isinstance(entry, dict) and entry.get("link") is not True
             and isinstance(entry.get("version"), str),
             f"{lock_path}: invalid installed package entry {relative!r}",
+        )
+        require(
+            "hasInstallScript" not in entry or isinstance(entry["hasInstallScript"], bool),
+            f"{lock_path}: {relative} has invalid install-script metadata",
+        )
+        require(
+            "optional" not in entry or isinstance(entry["optional"], bool),
+            f"{lock_path}: {relative} has invalid optional-package metadata",
         )
         resolved = entry.get("resolved")
         integrity = entry.get("integrity")
@@ -1208,6 +1226,19 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         except (ValueError, TypeError) as error:
             raise RegistryError(f"{lock_path}: {relative} has invalid SHA-512 integrity") from error
         require(len(decoded) == 64, f"{lock_path}: {relative} has invalid SHA-512 integrity length")
+        if entry.get("hasInstallScript") is True and not (
+            config["omit_optional"] and entry.get("optional") is True
+        ):
+            ignored_install_scripts.add((relative, entry["version"], integrity))
+
+    allowed_install_scripts = LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST.get(
+        (dependency, version), frozenset(),
+    )
+    require(
+        ignored_install_scripts == allowed_install_scripts,
+        f"{lock_path}: ignored install scripts differ from the exact reviewed allowlist: "
+        f"{sorted(ignored_install_scripts)!r}",
+    )
 
 
 def validate_locked_npm_runtime_policy(

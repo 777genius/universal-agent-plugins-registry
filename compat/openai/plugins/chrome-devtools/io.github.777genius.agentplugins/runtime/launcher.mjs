@@ -4,7 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import {
+  chmod,
   copyFile,
+  lstat,
   mkdir,
   readFile,
   realpath,
@@ -13,12 +15,12 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RUNTIME_SCHEMA_VERSION = 1;
-const INSTALL_TIMEOUT_MS = 180_000;
-const LOCK_STALE_MS = 600_000;
+const INSTALL_TIMEOUT_MS = 600_000;
+const LOCK_STALE_MS = INSTALL_TIMEOUT_MS + 120_000;
 const POLL_MS = 250;
 
 function fail(message) {
@@ -54,6 +56,7 @@ async function readyRuntime(target, expected) {
       marker.lock_digest !== expected.lockDigest ||
       marker.package !== expected.config.package ||
       marker.version !== expected.config.version ||
+      marker.omit_optional !== expected.config.omit_optional ||
       marker.entrypoint !== expected.config.entrypoint
     ) return null;
     const entrypoint = resolve(target, expected.config.entrypoint);
@@ -109,9 +112,12 @@ async function installRuntime(runtimeRoot, pluginData, config, lockBody, lockDig
     await copyFile(join(runtimeRoot, "package.json"), join(temporary, "package.json"), constants.COPYFILE_EXCL);
     await writeFile(join(temporary, "package-lock.json"), lockBody, { mode: 0o600, flag: "wx" });
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    const installArgs = ["ci", "--ignore-scripts", "--omit=dev"];
+    if (config.omit_optional) installArgs.push("--omit=optional");
+    installArgs.push("--no-audit", "--no-fund");
     const result = spawnSync(
       npm,
-      ["ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"],
+      installArgs,
       {
         cwd: temporary,
         env: {
@@ -144,6 +150,7 @@ async function installRuntime(runtimeRoot, pluginData, config, lockBody, lockDig
         lock_digest: lockDigest,
         package: config.package,
         version: config.version,
+        omit_optional: config.omit_optional,
         entrypoint: config.entrypoint,
       })}\n`,
       { mode: 0o600, flag: "wx" },
@@ -166,6 +173,11 @@ async function main() {
     throw new Error("the client did not provide an absolute PLUGIN_DATA directory");
   }
   await mkdir(pluginDataValue, { recursive: true, mode: 0o700 });
+  const pluginDataStat = await lstat(pluginDataValue);
+  if (!pluginDataStat.isDirectory() || pluginDataStat.isSymbolicLink()) {
+    throw new Error("PLUGIN_DATA must be a real directory, not a symlink");
+  }
+  await chmod(pluginDataValue, 0o700);
   const pluginData = await realpath(pluginDataValue);
   const configBody = await readFile(join(runtimeRoot, "runtime.json"));
   const config = JSON.parse(configBody.toString("utf8"));
@@ -175,13 +187,25 @@ async function main() {
     config.schema_version !== RUNTIME_SCHEMA_VERSION ||
     typeof config.package !== "string" ||
     typeof config.version !== "string" ||
+    typeof config.omit_optional !== "boolean" ||
     !isSafeRelativePath(config.entrypoint) ||
     config.package_lock_sha256 !== lockDigest
   ) throw new Error("runtime.json does not match the locked npm runtime");
 
   const entrypoint = await installRuntime(runtimeRoot, pluginData, config, lockBody, lockDigest);
+  const materializedRoot = join(pluginData, "npm-runtime", lockDigest.slice("sha256:".length));
+  const runtimeBin = join(materializedRoot, "node_modules", ".bin");
+  if (!(await exists(runtimeBin))) {
+    throw new Error("locked package did not provide node_modules/.bin");
+  }
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") || "PATH";
+  const inheritedPath = process.env[pathKey];
+  const childEnv = {
+    ...process.env,
+    [pathKey]: inheritedPath ? `${runtimeBin}${delimiter}${inheritedPath}` : runtimeBin,
+  };
   const child = spawnSync(process.execPath, [entrypoint, ...process.argv.slice(2)], {
-    env: process.env,
+    env: childEnv,
     stdio: "inherit",
     windowsHide: true,
   });

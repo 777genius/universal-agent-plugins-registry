@@ -1155,7 +1155,7 @@
             "upstream_revision": "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:a0cb4338215ad2b1d4f50b8560e6e3b079e41de19254368c7309bbcd62786797",
+          "tree_digest": "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed",
           "manifest_digest": "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265",
           "components": ["mcp"]
         }
@@ -1177,7 +1177,7 @@
         {
           "release_sequence": 2,
           "status": "active",
-          "minimum_installer_version": "0.1.12",
+          "minimum_installer_version": "0.1.13",
           "targets": [
             {"client": "codex", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
             {"client": "cursor", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
@@ -1674,7 +1674,7 @@
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:e6569f012d35cbc1c4c3e44fef561a0324a29ec1d8adcedf24bb3629e9caaddb",
+          "tree_digest": "sha256:663f92049d29218aa8a5506a4f40fcc3002583a63730d4584ec12c84d481503d",
           "manifest_digest": "sha256:6f1cca4322bc7bcca4ef0d7fbf33d3b7b0bf3b132b10b80fe5dd27e58c0ff327",
           "components": [
             "mcp"
@@ -1733,7 +1733,7 @@
         {
           "release_sequence": 2,
           "status": "active",
-          "minimum_installer_version": "0.1.12",
+          "minimum_installer_version": "0.1.13",
           "targets": [
             {
               "client": "codex",
@@ -1941,7 +1941,7 @@
       "id": "777genius/firebase",
       "product_id": "firebase",
       "kind": "community",
-      "status": "suspended",
+      "status": "active",
       "packager": "777genius",
       "releases": [
         {
@@ -1961,6 +1961,23 @@
             "mcp"
           ],
           "published_at": "2026-08-09T22:28:33Z"
+        },
+        {
+          "sequence": 2,
+          "package_version": "0.2.0",
+          "manifest_name": "firebase",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins",
+            "revision": null,
+            "path": "plugins/firebase"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:d48433bf9e17bbe9417e90e39dabd25bec83e2975960f64a458c2cc94335f77f",
+          "manifest_digest": "sha256:dbc739597d146ae4a4e416045f3ff5a3d07e6e1cc81c80de71ff0ffefe6eaf73",
+          "components": [
+            "mcp"
+          ]
         }
       ],
       "release_policies": [
@@ -1968,6 +1985,54 @@
           "release_sequence": 1,
           "status": "revoked",
           "minimum_installer_version": "0.1.8",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 2,
+          "status": "active",
+          "minimum_installer_version": "0.1.13",
           "targets": [
             {
               "client": "codex",

@@ -1767,7 +1767,7 @@
             "path": "plugins/chrome-devtools"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:a0cb4338215ad2b1d4f50b8560e6e3b079e41de19254368c7309bbcd62786797",
+          "tree_digest": "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed",
           "manifest_digest": "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265"
         }
       ]
@@ -5896,7 +5896,7 @@
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:e6569f012d35cbc1c4c3e44fef561a0324a29ec1d8adcedf24bb3629e9caaddb",
+          "tree_digest": "sha256:663f92049d29218aa8a5506a4f40fcc3002583a63730d4584ec12c84d481503d",
           "manifest_digest": "sha256:6f1cca4322bc7bcca4ef0d7fbf33d3b7b0bf3b132b10b80fe5dd27e58c0ff327"
         },
         {
@@ -7085,27 +7085,555 @@
       "fallback_order": [
         "777genius/firebase"
       ],
-      "target_resolutions": [],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 2
+        }
+      ],
       "distributions": [
         {
           "id": "777genius/firebase",
           "kind": "community",
-          "status": "suspended",
-          "release_sequence": 1,
-          "package_version": "0.1.0",
+          "status": "active",
+          "release_sequence": 2,
+          "package_version": "0.2.0",
           "components": [
             "mcp"
           ],
-          "eligible_targets": [],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
           "current_evidence": [],
           "source": {
             "repository": "777genius/universal-agent-plugins",
-            "revision": "2ddbb99dd190c1792b79904f9875e6322bccd243",
+            "revision": null,
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:29b864edd3e63df79ef93f5aece08c7391676849b7bc63b33fa2504634af617d",
-          "manifest_digest": "sha256:9883d7c5b0472304f799df862f52d3cdae3120b3324633d6a58fceceb78da7b7"
+          "tree_digest": "sha256:d48433bf9e17bbe9417e90e39dabd25bec83e2975960f64a458c2cc94335f77f",
+          "manifest_digest": "sha256:dbc739597d146ae4a4e416045f3ff5a3d07e6e1cc81c80de71ff0ffefe6eaf73"
         }
       ]
     },
