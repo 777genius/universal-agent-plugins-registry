@@ -66,7 +66,9 @@ RELEASE_CHECKSUMS_NAME = "checksums.txt"
 RELEASE_MANIFEST_SCHEMA = ROOT / "schemas" / "e2e" / "release-manifest.schema.json"
 TRUSTED_CATALOG_REPOSITORY = "777genius/universal-agent-plugins"
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
-TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.12"
+TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.13"
+TRUSTED_CLI_RELEASE_COMMIT = "f6e7cd44bfe6c0fec433ae1391eafb2266ed91c1"
+TRUSTED_CLI_RELEASE_ID = 375257134
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
@@ -211,6 +213,8 @@ def read_production_config() -> dict[str, Any]:
         or value.get("catalog_repository") != TRUSTED_CATALOG_REPOSITORY
         or value.get("cli_release_repository") != TRUSTED_CLI_RELEASE_REPOSITORY
         or value.get("cli_release_tag") != TRUSTED_CLI_RELEASE_TAG
+        or value.get("cli_release_commit") != TRUSTED_CLI_RELEASE_COMMIT
+        or value.get("cli_release_id") != TRUSTED_CLI_RELEASE_ID
         or value.get("cli_release_workflow") != TRUSTED_CLI_RELEASE_WORKFLOW
         or value.get("copilot_cli_package") != "@github/copilot"
         or value.get("copilot_cli_version") != "1.0.80"
@@ -832,15 +836,24 @@ def collect_digests(value: Any) -> set[str]:
     return found
 
 
-def make_challenge(github_sha: str, run_id: str, run_attempt: str, release_digest: str, directory_digest: str, run_root: Path) -> dict[str, str]:
+def make_challenge(
+    github_sha: str, run_id: str, run_attempt: str,
+    caller_event_name: str, caller_ref: str, caller_workflow_ref: str,
+    release_digest: str, directory_digest: str, run_root: Path,
+) -> dict[str, str]:
     if not FULL_SHA.fullmatch(github_sha) or not run_id.isdigit() or not run_attempt.isdigit():
         raise ValueError("enforced evidence requires exact GitHub SHA/run identity")
     if not DIGEST.fullmatch(release_digest) or not DIGEST.fullmatch(directory_digest):
         raise ValueError("challenge inputs require release and Directory digests")
+    expected_workflow_ref = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@refs/heads/main"
+    if caller_event_name not in {"push", "schedule", "workflow_dispatch"} or caller_ref != "refs/heads/main" or caller_workflow_ref != expected_workflow_ref:
+        raise ValueError("enforced evidence requires an approved protected Directory publication caller")
     nonce = secrets.token_hex(32)
     root_id = hashlib.sha256(str(run_root.resolve()).encode()).hexdigest()
     framed = json.dumps({
         "github_sha": github_sha, "run_id": run_id, "run_attempt": run_attempt,
+        "caller_event_name": caller_event_name, "caller_ref": caller_ref,
+        "caller_workflow_ref": caller_workflow_ref,
         "release_manifest_digest": release_digest, "directory_digest": directory_digest,
         "root_id": root_id, "nonce": nonce,
     }, sort_keys=True, separators=(",", ":")).encode()
@@ -848,12 +861,14 @@ def make_challenge(github_sha: str, run_id: str, run_attempt: str, release_diges
         "value": hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest(),
         "nonce": nonce, "github_sha": github_sha, "run_id": run_id,
         "run_attempt": run_attempt, "release_manifest_digest": release_digest,
+        "caller_event_name": caller_event_name, "caller_ref": caller_ref,
+        "caller_workflow_ref": caller_workflow_ref,
         "directory_digest": directory_digest, "root_id": root_id,
     }
 
 
 def challenge_context_valid(value: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != {"value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest", "root_id"}:
+    if not isinstance(value, dict) or set(value) != {"value", "nonce", "github_sha", "run_id", "run_attempt", "caller_event_name", "caller_ref", "caller_workflow_ref", "release_manifest_digest", "directory_digest", "root_id"}:
         return False
     if not all(isinstance(value.get(field), str) for field in value):
         return False
@@ -861,10 +876,15 @@ def challenge_context_valid(value: Any) -> bool:
         return False
     if not DIGEST.fullmatch(value["release_manifest_digest"]) or not DIGEST.fullmatch(value["directory_digest"]):
         return False
+    expected_workflow_ref = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@refs/heads/main"
+    if value["caller_event_name"] not in {"push", "schedule", "workflow_dispatch"} or value["caller_ref"] != "refs/heads/main" or value["caller_workflow_ref"] != expected_workflow_ref:
+        return False
     if not re.fullmatch(r"[a-f0-9]{64}", value["nonce"]) or not re.fullmatch(r"[a-f0-9]{64}", value["root_id"]):
         return False
     framed = json.dumps({
         "github_sha": value["github_sha"], "run_id": value["run_id"], "run_attempt": value["run_attempt"],
+        "caller_event_name": value["caller_event_name"], "caller_ref": value["caller_ref"],
+        "caller_workflow_ref": value["caller_workflow_ref"],
         "release_manifest_digest": value["release_manifest_digest"], "directory_digest": value["directory_digest"],
         "root_id": value["root_id"], "nonce": value["nonce"],
     }, sort_keys=True, separators=(",", ":")).encode()
@@ -1045,6 +1065,8 @@ class LaunchHarness:
         if mode == "enforced" and self.challenge is None and self.run_root and self.release_manifest_digest and self.snapshot_digest:
             self.challenge = make_challenge(
                 str(github_sha), str(github_run_id), str(github_run_attempt),
+                "push", "refs/heads/main",
+                f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@refs/heads/main",
                 self.release_manifest_digest, self.snapshot_digest, self.run_root,
             )
         self.consent, self.consent_digest = self._load_consent(consent)
@@ -2154,7 +2176,7 @@ class LaunchHarness:
         required_ids = self.config["fault_scenarios"] + self.config["adapter_repair_faults"] + self.config["advanced_scenarios"] + self.config["acceptance_postconditions"] + self.config["journeys"] + ["shared_copilot_vscode_backend"]
         return {
             "schema_version": 3,
-            "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": hashlib.sha256(str(self.run_root).encode()).hexdigest()[:16] if self.run_root else None, "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
+            "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": hashlib.sha256(str(self.run_root).encode()).hexdigest()[:16] if self.run_root else None, "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "caller_event_name": self.challenge.get("caller_event_name") if self.challenge else None, "caller_ref": self.challenge.get("caller_ref") if self.challenge else None, "caller_workflow_ref": self.challenge.get("caller_workflow_ref") if self.challenge else None, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
             "release": {"repository": read_production_config()["cli_release_repository"] if self.mode == "enforced" else None, "tag": self.release_tag, "tag_commit": self.release_manifest.get("commit"), "release_id": self.release_identity.get("release_id"), "immutable": self.release_identity.get("immutable") if self.mode == "enforced" else None, "manifest_digest": self.release_manifest_digest, "checksums_digest": self.release_checksums_digest},
             "directory": {"origin": self.directory_environment.get("AGENTPLUGINS_DIRECTORY_ORIGIN"), "snapshot_digest": self.snapshot_digest, "sequence": self.snapshot.get("sequence"), "trust_root_digest": sha256_file(PRODUCTION_DIRECTORY_TRUST) if self.mode == "enforced" else None},
             "scenario_contract": {"id": self.config["contract_id"], "digest": sha256_file(SCENARIOS), "expected_ids": list(EXPECTED_ACCEPTANCE_SCENARIOS), "required_singleton_ids": required_ids, "expected_counts": EXPECTED_COUNTS},
@@ -2360,6 +2382,10 @@ def main() -> int:
         challenge = prepared["challenge"]
         if challenge.get("release_manifest_digest") != release_manifest_digest or challenge.get("directory_digest") != prepared["directory"]["digest"]:
             raise ValueError("prepared challenge is not bound to release and Directory digests")
+        if any(challenge.get(field) != github.get(field) for field in (
+            "caller_event_name", "caller_ref", "caller_workflow_ref",
+        )):
+            raise ValueError("prepared challenge is not bound to the protected caller identity")
         observer_public_key = os.environ.get("OBSERVER_ED25519_PUBLIC_KEY", "")
         observer_key_id = os.environ.get("OBSERVER_KEY_ID", "")
         if not observer_public_key or not observer_key_id:

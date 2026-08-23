@@ -83,6 +83,9 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
             "run": {
                 "mode": "enforced", "runtime_claims": True,
                 "github_sha": "a" * 40, "github_run_id": "123",
+                "github_run_attempt": "2",
+                "caller_event_name": "push", "caller_ref": "refs/heads/main",
+                "caller_workflow_ref": "owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
                 "observer_bundle_digest": evidence.sha256(observer),
             },
             "directory": {"sequence": 7, "snapshot_digest": "sha256:" + "b" * 64},
@@ -99,7 +102,9 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
                 root, repository="owner/repository",
                 workflow="owner/repository/.github/workflows/launch-evidence-e2e.yml",
                 source_ref="refs/heads/main", source_digest="a" * 40,
-                expected_run_id="123", expected_publication_id="456",
+                expected_run_id="123", expected_run_attempt="2", expected_publication_id="456",
+                expected_caller_event_name="push", expected_caller_ref="refs/heads/main",
+                expected_caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
                 expected_sequence=7, expected_snapshot_digest="sha256:" + "b" * 64,
                 expected_source_commit="c" * 40,
             )
@@ -119,6 +124,34 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(evidence.EvidenceError, "expected 16|duplicate"):
             evidence.selected_rows({"matrix": rows})
 
+    def test_wrong_attempt_event_or_caller_is_rejected(self) -> None:
+        observer = evidence.canonical_json({"schema_version": 1, "signed": True})
+        for field, value in (
+            ("github_run_attempt", "3"),
+            ("caller_event_name", "workflow_dispatch"),
+            ("caller_ref", "refs/heads/feature"),
+            ("caller_workflow_ref", "owner/repository/.github/workflows/live-e2e.yml@refs/heads/main"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                launch = self.launch(observer)
+                launch["run"][field] = value
+                (root / "launch-evidence.json").write_bytes(evidence.canonical_json(launch))
+                (root / "signed-observer-bundle.json").write_bytes(observer)
+                with mock.patch.object(evidence, "validate_with_schema"), self.assertRaisesRegex(
+                    evidence.EvidenceError, "mismatch",
+                ):
+                    evidence.build_bundle(
+                        root, repository="owner/repository", workflow="owner/repository/.github/workflows/launch-evidence-e2e.yml",
+                        source_ref="refs/heads/main", source_digest="a" * 40,
+                        expected_run_id="123", expected_run_attempt="2",
+                        expected_caller_event_name="push", expected_caller_ref="refs/heads/main",
+                        expected_caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
+                        expected_publication_id="456", expected_sequence=7,
+                        expected_snapshot_digest="sha256:" + "b" * 64,
+                        expected_source_commit="c" * 40,
+                    )
+
     def test_bundle_is_canonical_bounded_and_checksum_complete(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -137,9 +170,33 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(evidence.EvidenceError, "paths differ"):
                 evidence.verify_exact_bundle(root, files)
 
+    def test_every_bundle_layer_is_rederived_even_after_local_checksum_rewrite(self) -> None:
+        for target in (
+            "launch-evidence.json", "signed-observer-bundle.json",
+            "bundle-identity.json", "directory-evidence/index.json", "leaf",
+        ):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, files = self.build(root)
+                evidence.write_bundle(root, files)
+                path = target
+                if target == "leaf":
+                    path = next(name for name in files if name.startswith("directory-evidence/records/"))
+                (root / path).write_bytes((root / path).read_bytes() + b" ")
+                actual = {
+                    item.relative_to(root).as_posix(): item.read_bytes()
+                    for item in root.rglob("*") if item.is_file() and item.name != "SHA256SUMS"
+                }
+                (root / "SHA256SUMS").write_bytes(evidence.checksum_bytes(actual))
+                with self.assertRaises(evidence.EvidenceError):
+                    _, expected = self.build(root)
+                    evidence.verify_exact_bundle(root, expected)
+
 
 class PermanentCommitTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.validator_patch = mock.patch.object(evidence, "validate_directory")
+        self.validate_directory = self.validator_patch.start()
         self.temporary = tempfile.TemporaryDirectory()
         self.repo = Path(self.temporary.name) / "repo"
         self.repo.mkdir()
@@ -163,6 +220,7 @@ class PermanentCommitTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+        self.validator_patch.stop()
 
     def files(self) -> tuple[str, dict[str, bytes]]:
         record = {
@@ -180,8 +238,10 @@ class PermanentCommitTests(unittest.TestCase):
         launch = evidence.canonical_json({"launch": True})
         record_body = evidence.canonical_json(record)
         digest = evidence.sha256(launch)
+        observer = evidence.canonical_json({"bundle": True})
         index = {
             "schema_version": 1, "launch_evidence_digest": digest,
+            "signed_observer_bundle_digest": evidence.sha256(observer),
             "repository": "owner/repository",
             "workflow": "owner/repository/.github/workflows/launch-evidence-e2e.yml",
             "source_ref": "refs/heads/main", "source_digest": "4" * 40,
@@ -189,10 +249,16 @@ class PermanentCommitTests(unittest.TestCase):
         }
         files = {
             "launch-evidence.json": launch,
-            "signed-observer-bundle.json": evidence.canonical_json({"bundle": True}),
+            "signed-observer-bundle.json": observer,
             path: record_body,
             "directory-evidence/index.json": evidence.canonical_json(index),
         }
+        files["bundle-identity.json"] = evidence.canonical_json({
+            "schema_version": 1, "launch_evidence_digest": digest,
+            "signed_observer_bundle_digest": evidence.sha256(observer),
+            "directory_evidence_index_digest": evidence.sha256(files["directory-evidence/index.json"]),
+            "records": index["records"],
+        })
         files["SHA256SUMS"] = evidence.checksum_bytes(files)
         return digest, files
 
@@ -220,7 +286,20 @@ class PermanentCommitTests(unittest.TestCase):
         pointer = source["evidence"][0]
         self.assertEqual(pointer["artifact"]["revision"], ledger)
         self.assertEqual(pointer["trust"]["source_digest"], "4" * 40)
+        self.assertTrue(pointer["trust"]["bundle_manifest"]["path"].endswith("/bundle-identity.json"))
+        self.assertIn("launch-evidence.json", git(self.repo, "ls-tree", "-r", "--name-only", ledger))
+        self.assertIn("signed-observer-bundle.json", git(self.repo, "ls-tree", "-r", "--name-only", ledger))
+        self.validate_directory.assert_called_once()
         self.assertEqual(result["approval_target"], self.parent)
+
+    def test_full_directory_validation_blocks_commit_before_cas(self) -> None:
+        digest, files = self.files()
+        self.validate_directory.side_effect = evidence.RegistryError("evidence target mismatch")
+        with self.assertRaisesRegex(evidence.EvidenceError, "full Directory validation"):
+            evidence.materialize_commits(
+                self.repo, self.repo, self.repo, files, repository="owner/repository",
+                main_parent=self.parent, ledger_parent=self.parent, digest=digest,
+            )
 
     def test_existing_immutable_digest_root_is_rejected(self) -> None:
         digest, files = self.files()
@@ -258,59 +337,71 @@ class PermanentCommitTests(unittest.TestCase):
 
 class ProtectedWorkflowChainTests(unittest.TestCase):
     def test_attested_workflow_source_can_differ_from_ledger_artifact_revision(self) -> None:
-        leaf = evidence.canonical_json({"schema_version": 1})
-        launch = evidence.canonical_json({
-            "run": {"mode": "enforced", "runtime_claims": True},
-            "summary": {"required_gates_complete": True, "hero_runtime_results": 15},
-        })
-        record_id = "launch/demo/codex/runtime/0123456789abcdef01234567"
-        root = "registry/evidence/sha256/" + hashlib.sha256(launch).hexdigest()
-        leaf_path = "directory-evidence/records/demo.json"
         workflow = "owner/repository/.github/workflows/launch-evidence-e2e.yml"
         source_digest = "a" * 40
         ledger_revision = "b" * 40
-        index = evidence.canonical_json({
-            "launch_evidence_digest": evidence.sha256(launch),
-            "records": [{"id": record_id, "path": leaf_path, "digest": evidence.sha256(leaf)}],
-            "repository": "owner/repository", "workflow": workflow,
-            "source_ref": "refs/heads/main", "source_digest": source_digest,
-        })
-        pointer = {
-            "id": record_id,
-            "artifact": {
-                "repository": "owner/repository", "revision": ledger_revision,
-                "path": f"{root}/{leaf_path}", "digest": evidence.sha256(leaf),
-            },
-            "trust": {
-                "kind": "github_actions", "workflow": workflow,
-                "source_ref": "refs/heads/main", "source_digest": source_digest,
-                "attested_artifact": {
-                    "repository": "owner/repository", "revision": ledger_revision,
-                    "path": f"{root}/launch-evidence.json", "digest": evidence.sha256(launch),
-                },
-                "evidence_index": {
-                    "repository": "owner/repository", "revision": ledger_revision,
-                    "path": f"{root}/directory-evidence/index.json", "digest": evidence.sha256(index),
-                },
-            },
-        }
         config = {"trusted_evidence_workflows": [{
             "workflow": workflow, "protected_source_ref": "refs/heads/main",
             "source_digest_policy": "protected_workflow_source",
             "allow_self_hosted_runners": False,
         }], "trusted_external_evidence": []}
-        with tempfile.TemporaryDirectory() as temporary, \
-             mock.patch.object(prepare, "validate_with_schema"), \
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary) / "artifact"
+            artifact_dir.mkdir()
+            _, files = LaunchEvidenceBundleTests().build(artifact_dir)
+            index_value = json.loads(files["directory-evidence/index.json"])
+            indexed = index_value["records"][0]
+            record = json.loads(files[indexed["path"]])
+            root = "registry/evidence/sha256/" + index_value["launch_evidence_digest"].removeprefix("sha256:")
+            pointer = evidence.pointer_for(
+                record, repository="owner/repository", ledger_commit=ledger_revision,
+                root=root, index=index_value,
+                index_digest=evidence.sha256(files["directory-evidence/index.json"]),
+                bundle_identity_digest=evidence.sha256(files["bundle-identity.json"]),
+            )
+            with mock.patch.object(evidence, "validate_with_schema"), \
              mock.patch.object(prepare.Path, "is_file", return_value=True), \
              mock.patch.object(prepare.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
-            prepare.verify_evidence_trust(
-                pointer, config, Path(temporary), leaf,
-                attested_body=launch, index_body=index,
-            )
+                prepare.verify_evidence_trust(
+                    pointer, config, Path(temporary), files[indexed["path"]],
+                    manifest_body=files["bundle-identity.json"],
+                    launch_body=files["launch-evidence.json"],
+                    observer_body=files["signed-observer-bundle.json"],
+                    index_body=files["directory-evidence/index.json"],
+                )
         command = run.call_args.args[0]
         self.assertIn("--source-digest", command)
         self.assertIn(source_digest, command)
         self.assertNotEqual(source_digest, ledger_revision)
+
+
+class RealDirectoryValidationTests(unittest.TestCase):
+    def test_real_domain_validator_accepts_exact_release_and_rejects_unreviewed_target(self) -> None:
+        source = json.loads((ROOT / "registry" / "directory.json").read_text())
+        distribution = next(item for item in source["distributions"] if item["id"] == "upstash/context7")
+        release = distribution["releases"][0]
+        package = release["package_source"]
+        record = {
+            "schema_version": 1, "id": "launch/context7/codex/runtime/domain-validator",
+            "product_id": "context7", "distribution_id": distribution["id"],
+            "release_sequence": release["sequence"], "package_tree_digest": release["tree_digest"],
+            "manifest_digest": release["manifest_digest"], "source_repository": package["repository"],
+            "source_revision": package["revision"], "source_path": package["path"],
+            "level": "runtime", "outcome": "passed", "client": "codex", "client_version": "1",
+            "installer_version": "0.1.13", "adapter_version": "0.1.13", "os": "linux",
+            "architecture": "amd64", "dependency_identity": "none", "observed_at": "2026-08-23T00:00:00Z",
+            "artifact": {"repository": "owner/evidence", "revision": "a" * 40, "path": "context7.json", "digest": "sha256:" + "b" * 64},
+        }
+        updated = evidence.update_directory(source, [record])
+        evidence.validate_directory(updated, verify_packages=False, repository_root=ROOT)
+        rejected = json.loads(json.dumps(record))
+        rejected["id"] = "launch/context7/chatgpt/runtime/unreviewed-target"
+        rejected["client"] = "chatgpt"
+        with self.assertRaisesRegex(evidence.RegistryError, "not a reviewed release target"):
+            evidence.validate_directory(
+                evidence.update_directory(source, [rejected]),
+                verify_packages=False, repository_root=ROOT,
+            )
 
 
 if __name__ == "__main__":

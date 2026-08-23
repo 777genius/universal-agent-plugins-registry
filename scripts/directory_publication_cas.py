@@ -202,7 +202,7 @@ def atomic_transition(
         return _git(repo, list(arguments), check=False).returncode == 0
 
     arguments = [
-        "push", "--atomic",
+        "-c", "core.hooksPath=/dev/null", "push", "--atomic",
         f"--force-with-lease={main_ref}:{source}",
         f"--force-with-lease={ledger_ref}:{ledger_old}",
         f"--force-with-lease={sequence_tag}:",
@@ -251,7 +251,8 @@ def materialize_transition(
         return read_ref_state(repo, remote, "refs/heads/__unused-main", ledger_ref, "refs/tags/__unused-tag").ledger
 
     arguments = [
-        "push", f"--force-with-lease={ledger_ref}:{ledger_old}", remote,
+        "-c", "core.hooksPath=/dev/null", "push",
+        f"--force-with-lease={ledger_ref}:{ledger_old}", remote,
         f"{ledger_new}:{ledger_ref}",
     ]
     for _attempt in range(attempts):
@@ -295,7 +296,7 @@ def evidence_transition(
     before = RefState(main_old, ledger_old, None)
     committed = RefState(main_new, ledger_new, ledger_old)
     arguments = [
-        "push", "--atomic",
+        "-c", "core.hooksPath=/dev/null", "push", "--atomic",
         f"--force-with-lease={main_ref}:{main_old}",
         f"--force-with-lease={ledger_ref}:{ledger_old}",
         f"--force-with-lease={approval_tag}:",

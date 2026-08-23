@@ -32,6 +32,22 @@ class EvidenceRedactionTests(unittest.TestCase):
             ):
                 signatures.validate_evidence_redaction({"trace": {"argv": argv}})
 
+    def test_embedded_path_url_and_oauth_query_bypasses_are_rejected(self) -> None:
+        unsafe = (
+            "file:///Users/alice/Profile/config.json",
+            "path:/Users/alice/Profile",
+            "callback=https://example.test/cb?code=secret",
+            "callback=https://example.test/cb?state=secret",
+            "callback=https://example.test/cb?token=secret",
+            "callback=https://example.test/cb?credential=secret",
+            "prefix=https://user:pass@example.test/private",
+        )
+        for value in unsafe:
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "absolute local path or credential material",
+            ):
+                signatures.validate_evidence_redaction({"detail": value})
+
     def test_recursive_sanitizer_preserves_operation_and_only_exports_digests(self) -> None:
         raw = {
             "trace": {

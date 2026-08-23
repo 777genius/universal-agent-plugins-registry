@@ -1587,7 +1587,14 @@ def validate_directory(
                     and observation["source_path"] == evidence_source["path"],
                     f"{evidence_id}: evidence identity does not match release",
                 )
-                evidence_tuple = tuple(observation.get(field) for field in ("level", "client", "dependency_identity", "client_version", "installer_version", "os", "architecture"))
+                require(
+                    observation.get("client") is None or observation.get("client") in target_ids,
+                    f"{evidence_id}: evidence client is not a reviewed release target",
+                )
+                evidence_tuple = tuple(observation.get(field) for field in (
+                    "level", "client", "dependency_identity", "client_version",
+                    "installer_version", "adapter_version", "os", "architecture",
+                ))
                 require(evidence_tuple not in current_tuples, f"{distribution['id']}@{sequence}: multiple current evidence pointers for one applicability tuple")
                 current_tuples.add(evidence_tuple)
             package_source = release["package_source"]

@@ -21,6 +21,15 @@ on:
       publication_ledger_commit:
         required: true
         type: string
+      caller_event_name:
+        required: true
+        type: string
+      caller_ref:
+        required: true
+        type: string
+      caller_workflow_ref:
+        required: true
+        type: string
     outputs:
       evidence_artifact_name:
         description: Exact stable-launch Actions transport artifact
@@ -69,7 +78,7 @@ concurrency:
 
 jobs:
   required-stable-launch-evidence:
-    if: inputs.consent
+    if: github.event_name == 'workflow_call' && inputs.consent
     uses: ./.github/workflows/launch-evidence-e2e.yml
     with:
       consent: ${{ inputs.consent }}
@@ -78,6 +87,9 @@ jobs:
       publication_snapshot_digest: ${{ inputs.publication_snapshot_digest }}
       publication_source_commit: ${{ inputs.publication_source_commit }}
       publication_ledger_commit: ${{ inputs.publication_ledger_commit }}
+      caller_event_name: ${{ inputs.caller_event_name }}
+      caller_ref: ${{ inputs.caller_ref }}
+      caller_workflow_ref: ${{ inputs.caller_workflow_ref }}
     permissions:
       actions: read
       attestations: write
@@ -112,7 +124,7 @@ jobs:
 
   required-live-e2e:
     name: Require complete live E2E results
-    if: always() && inputs.consent
+    if: always() && github.event_name == 'workflow_call' && inputs.consent
     needs:
       - required-stable-launch-evidence
       - public-read-flows

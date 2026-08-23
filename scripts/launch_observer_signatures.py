@@ -10,7 +10,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 
 SIGNATURE_DOMAIN = b"UAP-STABLE-LAUNCH-OBSERVER-BUNDLE-V1\0"
@@ -28,6 +28,10 @@ SAFE_DIGEST = re.compile(r"^(?:sha256:)?[a-fA-F0-9]{40,128}$")
 POSIX_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9:/])/(?!/)[^\s,;]+")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\)[^\s,;]+")
 REDACTION = re.compile(r"^<redacted:(?:credential|absolute-path):sha256:[a-f0-9]{64}>$")
+URL = re.compile(r"(?i)https?://[^\s,;]+")
+FILE_URL = re.compile(r"(?i)file:///(?:[^\s,;]+)")
+LABELED_ABSOLUTE_PATH = re.compile(r"(?i)\b(path|file|dir|directory|root|cwd|home):(/[^\s,;]+)")
+SENSITIVE_QUERY = re.compile(r"(?i)^(?:code|state|token|credential|oauth[_-]?(?:code|state|token))$")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -68,6 +72,10 @@ def _sanitize_path_text(value: str) -> str:
         path = match.group(0)
         return _redaction("absolute-path", path)
 
+    value = FILE_URL.sub(lambda match: _redaction("absolute-path", match.group(0)), value)
+    value = LABELED_ABSOLUTE_PATH.sub(
+        lambda match: f"{match.group(1)}:{_redaction('absolute-path', match.group(2))}", value,
+    )
     value = WINDOWS_ABSOLUTE_PATH.sub(replace, value)
     return POSIX_ABSOLUTE_PATH.sub(replace, value)
 
@@ -78,10 +86,15 @@ def _sanitize_credential_text(value: str) -> str:
         lambda match: f"{match.group(1)} {_redaction('credential', match.group(2))}",
         value,
     )
-    parsed = urlsplit(value)
-    if parsed.scheme in {"http", "https"} and parsed.hostname and (parsed.username or parsed.password):
-        return _redaction("credential", value)
-    return value
+    def sanitize_url(match: re.Match[str]) -> str:
+        candidate = match.group(0)
+        parsed = urlsplit(candidate)
+        sensitive_query = any(SENSITIVE_QUERY.fullmatch(name) for name, _ in parse_qsl(parsed.query, keep_blank_values=True))
+        if parsed.username or parsed.password or sensitive_query:
+            return _redaction("credential", candidate)
+        return candidate
+
+    return URL.sub(sanitize_url, value)
 
 
 def sanitize_argv(argv: list[str]) -> list[str]:

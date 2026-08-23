@@ -7,7 +7,7 @@
     "schema_version": {"const": 3},
     "run": {
       "type": "object",
-      "required": ["id", "mode", "runtime_claims", "observed_at", "platform", "architecture", "disposable", "root_id", "github_sha", "github_run_id", "github_run_attempt", "challenge", "observer_bundle_digest", "cli"],
+      "required": ["id", "mode", "runtime_claims", "observed_at", "platform", "architecture", "disposable", "root_id", "github_sha", "github_run_id", "github_run_attempt", "caller_event_name", "caller_ref", "caller_workflow_ref", "challenge", "observer_bundle_digest", "cli"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-f0-9]{16}$"},
         "mode": {"enum": ["enforced", "fixture-only"]},
@@ -20,6 +20,9 @@
         "github_sha": {"type": ["string", "null"], "pattern": "^[a-f0-9]{40}$"},
         "github_run_id": {"type": ["string", "null"], "pattern": "^[0-9]+$"},
         "github_run_attempt": {"type": ["string", "null"], "pattern": "^[0-9]+$"},
+        "caller_event_name": {"type": ["string", "null"], "enum": ["push", "schedule", "workflow_dispatch", null]},
+        "caller_ref": {"type": ["string", "null"], "pattern": "^refs/heads/[A-Za-z0-9._/-]+$"},
+        "caller_workflow_ref": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\\.github/workflows/directory-publication\\.yml@refs/heads/main$"},
         "challenge": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
         "observer_bundle_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
         "cli": {
@@ -34,7 +37,7 @@
         }
       },
       "allOf": [
-        {"if": {"properties": {"mode": {"const": "enforced"}}}, "then": {"properties": {"runtime_claims": {"const": true}, "github_sha": {"type": "string"}, "github_run_id": {"type": "string"}, "github_run_attempt": {"type": "string"}, "challenge": {"type": "string"}, "observer_bundle_digest": {"type": "string"}, "cli": {"properties": {"available": {"const": true}, "version": {"type": "string", "pattern": "^(?:0\\.1\\.(?:[89]|[1-9][0-9]+)|0\\.(?:[2-9]|[1-9][0-9]+)\\.[0-9]+|[1-9][0-9]*\\.[0-9]+\\.[0-9]+)$"}, "binary_digest": {"type": "string"}}}}}},
+        {"if": {"properties": {"mode": {"const": "enforced"}}}, "then": {"properties": {"runtime_claims": {"const": true}, "github_sha": {"type": "string"}, "github_run_id": {"type": "string"}, "github_run_attempt": {"type": "string"}, "caller_event_name": {"type": "string"}, "caller_ref": {"const": "refs/heads/main"}, "caller_workflow_ref": {"type": "string"}, "challenge": {"type": "string"}, "observer_bundle_digest": {"type": "string"}, "cli": {"properties": {"available": {"const": true}, "version": {"type": "string", "pattern": "^(?:0\\.1\\.(?:[89]|[1-9][0-9]+)|0\\.(?:[2-9]|[1-9][0-9]+)\\.[0-9]+|[1-9][0-9]*\\.[0-9]+\\.[0-9]+)$"}, "binary_digest": {"type": "string"}}}}}},
         {"if": {"properties": {"mode": {"const": "fixture-only"}}}, "then": {"properties": {"runtime_claims": {"const": false}}}}
       ],
       "additionalProperties": false

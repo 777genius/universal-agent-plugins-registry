@@ -97,9 +97,10 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
 
     def test_challenge_binds_github_release_directory_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e.secrets, "token_hex", return_value="ab" * 32):
-            first = e2e.make_challenge("a" * 40, "12", "3", "sha256:" + "b" * 64, "sha256:" + "c" * 64, Path(tmp))
-            changed = e2e.make_challenge("a" * 40, "12", "3", "sha256:" + "d" * 64, "sha256:" + "c" * 64, Path(tmp))
-        self.assertNotEqual(first["value"], changed["value"])
+            caller = ("push", "refs/heads/main", "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main")
+            first = e2e.make_challenge("a" * 40, "12", "3", *caller, "sha256:" + "b" * 64, "sha256:" + "c" * 64, Path(tmp))
+            changed = e2e.make_challenge("a" * 40, "12", "3", *caller, "sha256:" + "d" * 64, "sha256:" + "c" * 64, Path(tmp))
+            self.assertNotEqual(first["value"], changed["value"])
         self.assertEqual(first["github_sha"], "a" * 40)
         self.assertEqual(first["root_id"], e2e.hashlib.sha256(str(Path(tmp).resolve()).encode()).hexdigest())
         self.assertTrue(e2e.challenge_context_valid(first))
@@ -279,7 +280,9 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         config = e2e.read_production_config()
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
-        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.12")
+        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.13")
+        self.assertEqual(config["cli_release_commit"], "f6e7cd44bfe6c0fec433ae1391eafb2266ed91c1")
+        self.assertEqual(config["cli_release_id"], 375257134)
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
         self.assertEqual(
@@ -308,6 +311,8 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             ("catalog_repository", "attacker/catalog"),
             ("cli_release_repository", "attacker/binaries"),
             ("cli_release_tag", "agentplugins-v0.1.9"),
+            ("cli_release_commit", "a" * 40),
+            ("cli_release_id", 1),
             ("cli_release_workflow", "attacker/repo/.github/workflows/agentplugins-release.yml"),
         ):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:

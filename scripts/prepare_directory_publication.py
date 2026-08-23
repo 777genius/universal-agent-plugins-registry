@@ -292,7 +292,8 @@ def acquire_evidence_bytes(
 
 def verify_evidence_trust(
     pointer: dict[str, Any], config: dict[str, Any], temporary_root: Path, body: bytes,
-    attested_body: bytes | None = None, index_body: bytes | None = None,
+    manifest_body: bytes | None = None, launch_body: bytes | None = None,
+    observer_body: bytes | None = None, index_body: bytes | None = None,
 ) -> None:
     artifact = pointer["artifact"]
     trust = pointer["trust"]
@@ -307,61 +308,92 @@ def verify_evidence_trust(
     require(policy is not None, f"{pointer['id']}: evidence workflow has no reviewed trust policy")
     require(workflow.startswith(artifact["repository"] + "/.github/workflows/"), f"{pointer['id']}: workflow and artifact repositories differ")
     require(trust["source_ref"] == policy["protected_source_ref"], f"{pointer['id']}: evidence source ref is not trusted")
-    attested = trust.get("attested_artifact")
+    manifest_artifact = trust.get("bundle_manifest")
+    launch_artifact = trust.get("launch_artifact")
+    observer_artifact = trust.get("observer_artifact")
     evidence_index = trust.get("evidence_index")
     if policy["source_digest_policy"] == "artifact_revision":
         require(
-            trust["source_digest"] == artifact["revision"] and attested is None and evidence_index is None,
+            trust["source_digest"] == artifact["revision"]
+            and all(item is None for item in (manifest_artifact, launch_artifact, observer_artifact, evidence_index)),
             f"{pointer['id']}: evidence source digest does not match the exact artifact revision",
         )
         verified_body = body
     else:
         require(
-            isinstance(attested, dict) and isinstance(evidence_index, dict)
-            and attested_body is not None and index_body is not None,
-            f"{pointer['id']}: protected workflow evidence lacks its attested launch artifact/index chain",
+            all(isinstance(item, dict) for item in (manifest_artifact, launch_artifact, observer_artifact, evidence_index))
+            and all(item is not None for item in (manifest_body, launch_body, observer_body, index_body)),
+            f"{pointer['id']}: protected workflow evidence lacks its complete canonical bundle chain",
         )
+        assert isinstance(manifest_artifact, dict) and isinstance(launch_artifact, dict)
+        assert isinstance(observer_artifact, dict) and isinstance(evidence_index, dict)
+        assert manifest_body is not None and launch_body is not None and observer_body is not None and index_body is not None
+        chain = (artifact, manifest_artifact, launch_artifact, observer_artifact, evidence_index)
         require(
-            artifact["repository"] == attested["repository"] == evidence_index["repository"]
-            and artifact["revision"] == attested["revision"] == evidence_index["revision"],
+            len({item["repository"] for item in chain}) == 1
+            and len({item["revision"] for item in chain}) == 1,
             f"{pointer['id']}: evidence chain crosses repository revisions",
         )
-        require("sha256:" + hashlib.sha256(attested_body).hexdigest() == attested["digest"], f"{pointer['id']}: attested launch artifact digest mismatch")
-        require("sha256:" + hashlib.sha256(index_body).hexdigest() == evidence_index["digest"], f"{pointer['id']}: evidence index digest mismatch")
-        launch = parse_json_bytes(attested_body, f"attested launch evidence for {pointer['id']}", max_bytes=MAX_EVIDENCE_BYTES)
-        require(isinstance(launch, dict) and canonical_json(launch) == attested_body, f"{pointer['id']}: attested launch evidence is not canonical JSON")
-        validate_with_schema(launch, LAUNCH_EVIDENCE_SCHEMA)
-        require(
-            launch["run"]["mode"] == "enforced"
-            and launch["run"]["runtime_claims"] is True
-            and launch["summary"]["required_gates_complete"] is True
-            and launch["summary"]["hero_runtime_results"] == 15,
-            f"{pointer['id']}: attested launch evidence did not pass the protected stable gate",
-        )
+        for label, artifact_identity, acquired_body in (
+            ("bundle manifest", manifest_artifact, manifest_body),
+            ("launch artifact", launch_artifact, launch_body),
+            ("observer artifact", observer_artifact, observer_body),
+            ("evidence index", evidence_index, index_body),
+        ):
+            require(
+                "sha256:" + hashlib.sha256(acquired_body).hexdigest() == artifact_identity["digest"],
+                f"{pointer['id']}: {label} digest mismatch",
+            )
+        manifest = parse_json_bytes(manifest_body, f"bundle manifest for {pointer['id']}", max_bytes=MAX_EVIDENCE_BYTES)
         index = parse_json_bytes(index_body, f"evidence index for {pointer['id']}", max_bytes=MAX_EVIDENCE_BYTES)
+        require(isinstance(manifest, dict) and canonical_json(manifest) == manifest_body, f"{pointer['id']}: bundle manifest is not canonical JSON")
         require(isinstance(index, dict) and canonical_json(index) == index_body, f"{pointer['id']}: evidence index is not canonical JSON")
-        attested_path = Path(attested["path"])
-        require(attested_path.name == "launch-evidence.json", f"{pointer['id']}: attested artifact is not canonical launch evidence")
-        root = attested_path.parent.as_posix()
+        manifest_path = Path(manifest_artifact["path"])
+        require(manifest_path.name == "bundle-identity.json", f"{pointer['id']}: attested artifact is not the canonical bundle identity")
+        root = manifest_path.parent.as_posix()
         require(
-            evidence_index["path"] == f"{root}/directory-evidence/index.json"
-            and index.get("launch_evidence_digest") == attested["digest"]
+            launch_artifact["path"] == f"{root}/launch-evidence.json"
+            and observer_artifact["path"] == f"{root}/signed-observer-bundle.json"
+            and evidence_index["path"] == f"{root}/directory-evidence/index.json"
+            and len(index.get("records", [])) == 16
             and index.get("repository") == artifact["repository"]
             and index.get("workflow") == workflow
             and index.get("source_ref") == trust["source_ref"]
             and index.get("source_digest") == trust["source_digest"],
             f"{pointer['id']}: evidence index identity mismatch",
         )
+        with tempfile.TemporaryDirectory(prefix="uap-rederive-", dir=temporary_root) as bundle_directory:
+            bundle_path = Path(bundle_directory)
+            (bundle_path / "launch-evidence.json").write_bytes(launch_body)
+            (bundle_path / "signed-observer-bundle.json").write_bytes(observer_body)
+            from materialize_launch_evidence import build_bundle
+            derived_digest, derived = build_bundle(
+                bundle_path, repository=index["repository"], workflow=index["workflow"],
+                source_ref=index["source_ref"], source_digest=index["source_digest"],
+                expected_run_id=index["workflow_run_id"],
+                expected_run_attempt=index["workflow_run_attempt"],
+                expected_caller_event_name=index["caller_event_name"],
+                expected_caller_ref=index["caller_ref"],
+                expected_caller_workflow_ref=index["caller_workflow_ref"],
+                expected_publication_id=index["publication_id"],
+                expected_sequence=index["publication_sequence"],
+                expected_snapshot_digest=index["publication_snapshot_digest"],
+                expected_source_commit=index["publication_source_commit"],
+            )
+        require(derived_digest == index["launch_evidence_digest"], f"{pointer['id']}: re-derived launch digest mismatch")
+        require(derived["bundle-identity.json"] == manifest_body, f"{pointer['id']}: bundle manifest was not deterministically derived")
+        require(derived["directory-evidence/index.json"] == index_body, f"{pointer['id']}: evidence index was not deterministically derived")
         record = next((item for item in index.get("records", []) if item.get("id") == pointer["id"]), None)
         require(
             isinstance(record, dict)
             and artifact["path"] == f"{root}/{record.get('path', '')}"
-            and artifact["digest"] == record.get("digest"),
+            and artifact["digest"] == record.get("digest")
+            and derived.get(record.get("path", "")) == body,
             f"{pointer['id']}: evidence leaf is not bound by the attested launch index",
         )
-        verified_body = attested_body
+        verified_body = manifest_body
     require(Path(GH).is_file(), f"reviewed evidence verifier is missing: {GH}")
-    acquired = temporary_root / "verified-evidence.json"
+    acquired = temporary_root / "verified-evidence-bundle-identity.json"
     acquired.write_bytes(verified_body)
     command = [
         GH, "attestation", "verify", str(acquired), "--repo", artifact["repository"],
@@ -393,11 +425,16 @@ def verified_evidence(
         require(isinstance(payload, dict), f"{pointer['id']}: evidence artifact must be an object")
         validate_with_schema(payload, EVIDENCE_ARTIFACT_SCHEMA)
         require(payload["id"] == pointer["id"], f"{pointer['id']}: evidence artifact identity mismatch")
-        attested_body = None
+        manifest_body = None
+        launch_body = None
+        observer_body = None
         index_body = None
         trust = pointer["trust"]
-        if trust["kind"] == "github_actions" and "attested_artifact" in trust:
-            for name, destination in (("attested_artifact", "attested"), ("evidence_index", "index")):
+        if trust["kind"] == "github_actions" and "bundle_manifest" in trust:
+            for name, destination in (
+                ("bundle_manifest", "manifest"), ("launch_artifact", "launch"),
+                ("observer_artifact", "observer"), ("evidence_index", "index"),
+            ):
                 chained_temporary, chained_body = acquire_evidence_bytes(
                     trust[name], overrides.get(trust[name]["repository"]),
                 )
@@ -406,13 +443,14 @@ def verified_evidence(
                     "sha256:" + hashlib.sha256(chained_body).hexdigest() == trust[name]["digest"],
                     f"{pointer['id']}: {destination} artifact digest mismatch",
                 )
-                if destination == "attested":
-                    attested_body = chained_body
-                else:
-                    index_body = chained_body
+                if destination == "manifest": manifest_body = chained_body
+                elif destination == "launch": launch_body = chained_body
+                elif destination == "observer": observer_body = chained_body
+                else: index_body = chained_body
         verify_evidence_trust(
             pointer, config, Path(temporary.name), body,
-            attested_body=attested_body, index_body=index_body,
+            manifest_body=manifest_body, launch_body=launch_body,
+            observer_body=observer_body, index_body=index_body,
         )
         return {**copy.deepcopy(payload), "artifact": copy.deepcopy(artifact)}
     finally:

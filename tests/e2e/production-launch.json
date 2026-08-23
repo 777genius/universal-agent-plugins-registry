@@ -1,7 +1,9 @@
 {
   "catalog_repository": "777genius/universal-agent-plugins",
   "cli_release_repository": "777genius/plugin-kit-ai",
-  "cli_release_tag": "agentplugins-v0.1.12",
+  "cli_release_tag": "agentplugins-v0.1.13",
+  "cli_release_commit": "f6e7cd44bfe6c0fec433ae1391eafb2266ed91c1",
+  "cli_release_id": 375257134,
   "cli_release_workflow": "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml",
   "copilot_cli_integrity": "sha512-6tf93ZF56KOiTTAjK/UhLZkl1W543IzaTQly288kockJZFswpRTnQEI00Yvacpb39DTvTYu3/ha9SeKpo/pgZQ==",
   "copilot_cli_package": "@github/copilot",

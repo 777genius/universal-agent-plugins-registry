@@ -18,6 +18,7 @@ PUBLICATION_INPUTS = {
     "publication_source_commit": "string",
     "publication_ledger_commit": "string",
 }
+CALLER_INPUTS = {"caller_event_name", "caller_ref", "caller_workflow_ref"}
 
 
 def load(path: Path):
@@ -58,7 +59,7 @@ class WorkflowContractTests(unittest.TestCase):
         inputs = workflow["on"]["workflow_dispatch"]["inputs"]
         self.assertEqual(inputs["consent"]["required"], "true")
         self.assertNotIn("release_tag", inputs)
-        self.assertEqual(set(workflow["on"]["workflow_call"]["inputs"]), {"consent", *PUBLICATION_INPUTS})
+        self.assertEqual(set(workflow["on"]["workflow_call"]["inputs"]), {"consent", *PUBLICATION_INPUTS, *CALLER_INPUTS})
         self.assertTrue(all(workflow["on"]["workflow_call"]["inputs"][name]["required"] == "true" for name in PUBLICATION_INPUTS))
         self.assertIn("workflow_call", workflow["on"])
         slots = native["strategy"]["matrix"]["include"]
@@ -67,28 +68,31 @@ class WorkflowContractTests(unittest.TestCase):
             ("linux", "amd64"), ("windows", "amd64"), ("windows", "arm64"),
         })
         self.assertEqual({slot["asset"] for slot in slots}, {
-            "agentplugins_0.1.12_darwin_arm64", "agentplugins_0.1.12_darwin_amd64",
-            "agentplugins_0.1.12_linux_arm64", "agentplugins_0.1.12_linux_amd64",
-            "agentplugins_0.1.12_windows_amd64.exe", "agentplugins_0.1.12_windows_arm64.exe",
+            "agentplugins_0.1.13_darwin_arm64", "agentplugins_0.1.13_darwin_amd64",
+            "agentplugins_0.1.13_linux_arm64", "agentplugins_0.1.13_linux_amd64",
+            "agentplugins_0.1.13_windows_amd64.exe", "agentplugins_0.1.13_windows_arm64.exe",
         })
         self.assertIn("prepare_launch_evidence.py", commands(native))
         self.assertIn("node-version: '22'", yaml.safe_dump(npm))
         self.assertIn("npm install --global", commands(npm))
         self.assertIn("npm audit signatures", commands(npm))
         self.assertIn("--npm-facade", commands(npm))
-        self.assertIn("universal-agent-plugins-0.1.12.tgz", commands(npm))
-        self.assertIn("--asset-name agentplugins_0.1.12_linux_amd64", commands(npm))
+        self.assertIn("universal-agent-plugins-0.1.13.tgz", commands(npm))
+        self.assertIn("--asset-name agentplugins_0.1.13_linux_amd64", commands(npm))
         self.assertNotIn("universal-agent-plugins.tgz", commands(npm))
         self.assertNotRegex(commands(npm), r"github\.com/.*\.tgz")
         self.assertIn("inputs.consent", aggregate["if"])
         self.assertIn("release_manifest_digest", commands(aggregate))
-        self.assertEqual(set(enforced["needs"]), {"native-release", "node22-npm-facade", "aggregate-one-release"})
-        self.assertEqual(enforced["environment"], "stable-launch-e2e")
+        self.assertEqual(set(enforced["needs"]), {"native-release", "node22-npm-facade", "aggregate-one-release", "protected-observer-inputs"})
+        observer = workflow["jobs"]["protected-observer-inputs"]
+        self.assertEqual(observer["environment"], "stable-launch-e2e")
+        self.assertNotIn("environment", enforced)
         self.assertIn("--prepared-context", commands(enforced))
         self.assertIn("--native-observations", commands(enforced))
-        self.assertIn("request_launch_runtime_observations.py", commands(enforced))
+        self.assertIn("request_launch_runtime_observations.py", commands(observer))
+        self.assertNotIn("id-token", enforced["permissions"])
         self.assertIn("--observer-bundle", commands(enforced))
-        self.assertIn("observer-bundle.schema.json", commands(enforced))
+        self.assertIn("observer-bundle.schema.json", commands(observer))
         self.assertIn("STABLE_LAUNCH_OBSERVER_ED25519_PUBLIC_KEY", yaml.safe_dump(enforced))
         self.assertIn("STABLE_LAUNCH_OBSERVER_KEY_ID", yaml.safe_dump(enforced))
         self.assertIn("node-version: '22'", yaml.safe_dump(enforced))
@@ -108,7 +112,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--release-tag", body)
         production = (ROOT / "tests/e2e/production-launch.json").read_text()
         self.assertIn('"cli_release_repository": "777genius/plugin-kit-ai"', production)
-        self.assertIn('"cli_release_tag": "agentplugins-v0.1.12"', production)
+        self.assertIn('"cli_release_tag": "agentplugins-v0.1.13"', production)
+        self.assertIn('"cli_release_commit": "f6e7cd44bfe6c0fec433ae1391eafb2266ed91c1"', production)
+        self.assertIn('"cli_release_id": 375257134', production)
+        native_schema = (ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text()
+        self.assertIn("sha512-AlNr76NpS8x9rRVhngnp5BBl8xwVhFr9E9ZUdqhipy4Gei9fzRsd8s54X2TspR4K6LX4bDWFZcGaw1X73l3lMA==", native_schema)
         prepare = (ROOT / "scripts/prepare_launch_evidence.py").read_text()
         self.assertNotIn('os.environ.get("GITHUB_TOKEN")', prepare)
         self.assertIn("token=None", prepare)
@@ -134,7 +142,7 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("SHA256SUMS", text)
                 self.assertIn("overwrite: false", text)
                 if path == LAUNCH:
-                    self.assertIn("agentplugins_0.1.12_linux_amd64", text)
+                    self.assertIn("agentplugins_0.1.13_linux_amd64", text)
                 self.assertNotIn("AGENTPLUGINS_VERSION: \"0.1.6\"", text)
 
     def test_live_workflow_is_read_only_and_does_not_publish(self) -> None:
@@ -184,7 +192,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_scheduled_live_workflow_never_calls_staged_publication_gate(self) -> None:
         workflow = load(LIVE)
         required = workflow["jobs"]["required-stable-launch-evidence"]
-        self.assertEqual(required["if"], "inputs.consent")
+        self.assertEqual(required["if"], "github.event_name == 'workflow_call' && inputs.consent")
         scheduled = {
             name: job
             for name, job in workflow["jobs"].items()
@@ -210,7 +218,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_live_terminal_gate_rejects_skipped_or_failed_nested_evidence(self) -> None:
         workflow = load(LIVE)
         gate = workflow["jobs"]["required-live-e2e"]
-        self.assertEqual(gate["if"], "always() && inputs.consent")
+        self.assertEqual(gate["if"], "always() && github.event_name == 'workflow_call' && inputs.consent")
         self.assertEqual(
             set(gate["needs"]),
             {"required-stable-launch-evidence", "public-read-flows"},
@@ -235,7 +243,7 @@ class WorkflowContractTests(unittest.TestCase):
         live_inputs = live["on"]["workflow_call"]["inputs"]
         live_call = live["jobs"]["required-stable-launch-evidence"]["with"]
         publication_call = publication["jobs"]["required_stable_launch_evidence"]["with"]
-        expected = {"consent", *PUBLICATION_INPUTS}
+        expected = {"consent", *PUBLICATION_INPUTS, *CALLER_INPUTS}
         self.assertEqual(set(launch_inputs), expected)
         self.assertEqual(set(live_inputs), expected)
         self.assertEqual(set(live_call), expected)
@@ -247,6 +255,10 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertEqual(launch_inputs[name]["type"], expected_type)
                 self.assertEqual(live_inputs[name]["type"], expected_type)
                 self.assertEqual(live_call[name], "${{ inputs." + name + " }}")
+        for name in CALLER_INPUTS:
+            self.assertEqual(launch_inputs[name]["required"], "true")
+            self.assertEqual(live_inputs[name]["required"], "true")
+            self.assertEqual(live_call[name], "${{ inputs." + name + " }}")
         self.assertEqual(publication_call["publication_id"], "${{ needs.sign.outputs.publication_id }}")
         self.assertEqual(publication_call["publication_sequence"], "${{ fromJSON(needs.sign.outputs.sequence) }}")
         self.assertEqual(publication_call["publication_snapshot_digest"], "${{ needs.sign.outputs.snapshot_digest }}")
@@ -308,12 +320,29 @@ class WorkflowContractTests(unittest.TestCase):
         live = load(LIVE)
         publication = load(DIRECTORY_PUBLICATION)
         enforced = launch["jobs"]["enforced-stable-gate"]
-        self.assertEqual(enforced["permissions"]["attestations"], "write")
+        observer = launch["jobs"]["protected-observer-inputs"]
+        attester = launch["jobs"]["attest-stable-evidence"]
+        self.assertNotIn("environment", enforced)
+        self.assertNotIn("attestations", enforced["permissions"])
+        self.assertNotIn("id-token", enforced["permissions"])
+        self.assertEqual(observer["permissions"]["id-token"], "write")
+        self.assertNotIn("attestations", observer["permissions"])
+        observer_downloads = [
+            step["with"].get("name", "") for step in observer["steps"]
+            if "download-artifact" in step.get("uses", "")
+        ]
+        self.assertTrue(any(name.startswith("prepared-launch-context-") for name in observer_downloads))
+        self.assertFalse(any(name.startswith("prepared-producer-inputs-") for name in observer_downloads))
+        self.assertEqual(attester["permissions"]["attestations"], "write")
+        self.assertEqual(attester["permissions"]["id-token"], "write")
+        self.assertNotIn("OBSERVER_", yaml.safe_dump(attester))
         self.assertIn("materialize_launch_evidence.py prepare-bundle", commands(enforced))
         attestation = next(
-            step for step in enforced["steps"]
-            if step.get("name") == "Attest the canonical launch evidence"
+            step for step in attester["steps"]
+            if step.get("name") == "Attest the canonical bundle identity only"
         )
+        self.assertEqual(attestation["with"]["subject-path"], "evidence/bundle-identity.json")
+        self.assertIn("materialize_launch_evidence.py verify-bundle", commands(attester))
         self.assertEqual(
             attestation["uses"],
             "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
@@ -334,6 +363,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--verify-attestation", body)
         self.assertIn("materialize_launch_evidence.py commit", body)
         self.assertIn("directory_publication_cas.py evidence-publish", body)
+        self.assertNotIn("ls-remote", body)
+        self.assertIn("validate_directory", (ROOT / "scripts/materialize_launch_evidence.py").read_text())
         self.assertIn('--main-old "${EXPECTED_SOURCE_COMMIT}"', body)
         self.assertIn('--ledger-old "${EXPECTED_LEDGER_COMMIT}"', body)
         self.assertIn('--approval-tag "${marker_ref}"', body)

@@ -46,7 +46,9 @@
             "workflow": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*/\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"},
             "source_ref": {"type": "string", "pattern": "^refs/heads/[A-Za-z0-9._/-]+$"},
             "source_digest": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-            "attested_artifact": {"$ref": "#/$defs/artifact"},
+            "bundle_manifest": {"$ref": "#/$defs/artifact"},
+            "launch_artifact": {"$ref": "#/$defs/artifact"},
+            "observer_artifact": {"$ref": "#/$defs/artifact"},
             "evidence_index": {"$ref": "#/$defs/artifact"}
           },
           "additionalProperties": false

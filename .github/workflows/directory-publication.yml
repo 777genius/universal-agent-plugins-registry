@@ -738,6 +738,9 @@ jobs:
       publication_snapshot_digest: ${{ needs.sign.outputs.snapshot_digest }}
       publication_source_commit: ${{ needs.sign.outputs.marker_commit }}
       publication_ledger_commit: ${{ needs.materialize_site.outputs.ledger_commit }}
+      caller_event_name: ${{ github.event_name }}
+      caller_ref: ${{ github.ref }}
+      caller_workflow_ref: ${{ github.workflow_ref }}
     permissions:
       actions: read
       attestations: write
@@ -793,16 +796,15 @@ jobs:
           dpkg-query --show git gh
           test -z "$(dpkg --verify git gh)"
           test "$(git -C approved-ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_COMMIT}"
-          observed_ledger="$(git -C approved-ledger ls-remote --refs origin "refs/heads/${LEDGER_BRANCH}" | awk '{ print $1 }')"
-          test "${observed_ledger}" = "${EXPECTED_LEDGER_COMMIT}"
-          git -C trusted-source fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
-          test "$(git -C trusted-source rev-parse refs/remotes/origin/main)" = "${EXPECTED_SOURCE_COMMIT}"
           test "${WORKFLOW_SOURCE_DIGEST}" = "${{ github.sha }}"
           python3 trusted-source/scripts/materialize_launch_evidence.py verify-bundle \
             --artifact-dir launch-evidence --repository "${GITHUB_REPOSITORY}" \
             --workflow "${GITHUB_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml" \
             --source-ref refs/heads/main --source-digest "${WORKFLOW_SOURCE_DIGEST}" \
-            --expected-run-id "${GITHUB_RUN_ID}" --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
+            --expected-run-id "${GITHUB_RUN_ID}" --expected-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --expected-caller-event-name "${{ github.event_name }}" --expected-caller-ref "${{ github.ref }}" \
+            --expected-caller-workflow-ref "${{ github.workflow_ref }}" \
+            --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
             --expected-publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
             --expected-publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
             --expected-publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \
@@ -831,7 +833,10 @@ jobs:
             --artifact-dir launch-evidence --repository "${GITHUB_REPOSITORY}" \
             --workflow "${GITHUB_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml" \
             --source-ref refs/heads/main --source-digest "${WORKFLOW_SOURCE_DIGEST}" \
-            --expected-run-id "${GITHUB_RUN_ID}" --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
+            --expected-run-id "${GITHUB_RUN_ID}" --expected-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --expected-caller-event-name "${{ github.event_name }}" --expected-caller-ref "${{ github.ref }}" \
+            --expected-caller-workflow-ref "${{ github.workflow_ref }}" \
+            --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
             --expected-publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
             --expected-publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
             --expected-publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \

@@ -24,11 +24,13 @@ from directory_publication import (  # noqa: E402
     require,
     validate_with_schema,
 )
+from build_registry import RegistryError, validate_directory  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCH_SCHEMA = ROOT / "tests" / "e2e" / "schemas" / "launch-evidence.schema.json"
 EVIDENCE_SCHEMA = ROOT / "schemas" / "directory-evidence-artifact.schema.json"
+DIRECTORY_EVIDENCE_SCHEMA = ROOT / "schemas" / "directory-evidence.schema.json"
 GIT = "/usr/bin/git"
 GH = "/usr/bin/gh"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -178,6 +180,9 @@ def checksum_bytes(files: Mapping[str, bytes]) -> bytes:
 
 def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
                  source_ref: str, source_digest: str, expected_run_id: str,
+                 expected_run_attempt: str,
+                 expected_caller_event_name: str, expected_caller_ref: str,
+                 expected_caller_workflow_ref: str,
                  expected_publication_id: str, expected_sequence: int,
                  expected_snapshot_digest: str, expected_source_commit: str) -> tuple[str, dict[str, bytes]]:
     if REPOSITORY_RE.fullmatch(repository) is None or WORKFLOW_RE.fullmatch(workflow) is None:
@@ -188,8 +193,8 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
         fail("protected workflow source ref is invalid")
     require_sha(source_digest, "workflow source digest")
     require_sha(expected_source_commit, "publication source commit")
-    if not expected_run_id.isdigit() or not expected_publication_id.isdigit():
-        fail("run and publication IDs must be decimal strings")
+    if not expected_run_id.isdigit() or not expected_run_attempt.isdigit() or not expected_publication_id.isdigit():
+        fail("run ID, run attempt, and publication ID must be decimal strings")
     if type(expected_sequence) is not int or expected_sequence < 1:
         fail("publication sequence must be a positive integer")
     if DIGEST_RE.fullmatch(expected_snapshot_digest) is None:
@@ -209,6 +214,17 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
         fail("launch evidence workflow source digest mismatch")
     if launch["run"].get("github_run_id") != expected_run_id:
         fail("launch evidence workflow run ID mismatch")
+    if launch["run"].get("github_run_attempt") != expected_run_attempt:
+        fail("launch evidence workflow run attempt mismatch")
+    if (
+        launch["run"].get("caller_event_name") != expected_caller_event_name
+        or launch["run"].get("caller_ref") != expected_caller_ref
+        or launch["run"].get("caller_workflow_ref") != expected_caller_workflow_ref
+        or expected_caller_event_name not in {"push", "schedule", "workflow_dispatch"}
+        or expected_caller_ref != "refs/heads/main"
+        or expected_caller_workflow_ref != f"{repository}/.github/workflows/directory-publication.yml@refs/heads/main"
+    ):
+        fail("launch evidence protected caller identity mismatch")
     directory = launch["directory"]
     expected_directory = {
         "sequence": expected_sequence,
@@ -238,11 +254,16 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
     index = {
         "schema_version": 1,
         "launch_evidence_digest": digest,
+        "signed_observer_bundle_digest": sha256(observer_bytes),
         "repository": repository,
         "workflow": workflow,
         "source_ref": source_ref,
         "source_digest": source_digest,
         "workflow_run_id": expected_run_id,
+        "workflow_run_attempt": expected_run_attempt,
+        "caller_event_name": expected_caller_event_name,
+        "caller_ref": expected_caller_ref,
+        "caller_workflow_ref": expected_caller_workflow_ref,
         "publication_id": expected_publication_id,
         "publication_sequence": expected_sequence,
         "publication_snapshot_digest": expected_snapshot_digest,
@@ -250,6 +271,14 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
         "records": sorted(index_records, key=lambda item: item["id"]),
     }
     files["directory-evidence/index.json"] = canonical_json(index)
+    bundle_identity = {
+        "schema_version": 1,
+        "launch_evidence_digest": digest,
+        "signed_observer_bundle_digest": sha256(observer_bytes),
+        "directory_evidence_index_digest": sha256(files["directory-evidence/index.json"]),
+        "records": index["records"],
+    }
+    files["bundle-identity.json"] = canonical_json(bundle_identity)
     files["SHA256SUMS"] = checksum_bytes(files)
     validate_bounded_files(files)
     return digest, files
@@ -308,7 +337,7 @@ def verify_attestation(directory: Path, *, repository: str, workflow: str,
     if not Path(GH).is_file():
         fail(f"required attestation verifier is missing: {GH}")
     command = [
-        GH, "attestation", "verify", str(directory / "launch-evidence.json"),
+        GH, "attestation", "verify", str(directory / "bundle-identity.json"),
         "--repo", repository, "--signer-workflow", workflow,
         "--source-ref", source_ref, "--source-digest", source_digest,
         "--deny-self-hosted-runners",
@@ -326,7 +355,8 @@ def load_index(files: Mapping[str, bytes]) -> dict[str, Any]:
 
 
 def pointer_for(record: dict[str, Any], *, repository: str, ledger_commit: str,
-                root: str, index: dict[str, Any], index_digest: str) -> dict[str, Any]:
+                root: str, index: dict[str, Any], index_digest: str,
+                bundle_identity_digest: str) -> dict[str, Any]:
     index_record = next((item for item in index["records"] if item["id"] == record["id"]), None)
     if index_record is None:
         fail(f"evidence index omitted {record['id']}")
@@ -336,7 +366,7 @@ def pointer_for(record: dict[str, Any], *, repository: str, ledger_commit: str,
         "path": f"{root}/{index_record['path']}",
         "digest": index_record["digest"],
     }
-    return {
+    pointer = {
         **copy.deepcopy(record),
         "artifact": artifact,
         "trust": {
@@ -344,11 +374,23 @@ def pointer_for(record: dict[str, Any], *, repository: str, ledger_commit: str,
             "workflow": index["workflow"],
             "source_ref": index["source_ref"],
             "source_digest": index["source_digest"],
-            "attested_artifact": {
+            "bundle_manifest": {
+                "repository": repository,
+                "revision": ledger_commit,
+                "path": f"{root}/bundle-identity.json",
+                "digest": bundle_identity_digest,
+            },
+            "launch_artifact": {
                 "repository": repository,
                 "revision": ledger_commit,
                 "path": f"{root}/launch-evidence.json",
                 "digest": index["launch_evidence_digest"],
+            },
+            "observer_artifact": {
+                "repository": repository,
+                "revision": ledger_commit,
+                "path": f"{root}/signed-observer-bundle.json",
+                "digest": index["signed_observer_bundle_digest"],
             },
             "evidence_index": {
                 "repository": repository,
@@ -358,6 +400,8 @@ def pointer_for(record: dict[str, Any], *, repository: str, ledger_commit: str,
             },
         },
     }
+    validate_with_schema(pointer, DIRECTORY_EVIDENCE_SCHEMA)
+    return pointer
 
 
 def directory_applicability(record: Mapping[str, Any]) -> bytes:
@@ -447,6 +491,8 @@ def materialize_commits(source_repo: Path, ledger_repo: Path, artifact_dir: Path
     root = (LEDGER_ROOT / digest.removeprefix("sha256:")).as_posix()
     if _git(ledger_repo, ["cat-file", "-e", f"{ledger_parent}:{root}"], check=False).returncode == 0:
         fail("immutable evidence root already exists")
+    # The launch and observer inputs remain necessary for independent future
+    # re-derivation of every leaf from the attested bundle identity.
     ledger_files = {f"{root}/{path}": body for path, body in files.items()}
     ledger_message = (
         "chore(evidence): persist stable launch evidence\n\n"
@@ -469,10 +515,18 @@ def materialize_commits(source_repo: Path, ledger_repo: Path, artifact_dir: Path
         pointers.append(pointer_for(
             record, repository=repository, ledger_commit=ledger_commit, root=root,
             index=index, index_digest=sha256(files["directory-evidence/index.json"]),
+            bundle_identity_digest=sha256(files["bundle-identity.json"]),
         ))
     directory_path = source_repo / "registry" / "directory.json"
     directory = read_json(directory_path, "Directory source")
     updated = update_directory(directory, pointers)
+    try:
+        validate_directory(
+            updated, verify_packages=False,
+            repository_root=source_repo, repository=repository,
+        )
+    except RegistryError as error:
+        fail(f"mechanical evidence selection failed full Directory validation: {error}")
     main_message = (
         "chore(evidence): select stable launch evidence\n\n"
         "Launch-Evidence-Selection: 1\n"
@@ -509,6 +563,10 @@ def common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source-ref", required=True)
     parser.add_argument("--source-digest", required=True)
     parser.add_argument("--expected-run-id", required=True)
+    parser.add_argument("--expected-run-attempt", required=True)
+    parser.add_argument("--expected-caller-event-name", required=True)
+    parser.add_argument("--expected-caller-ref", required=True)
+    parser.add_argument("--expected-caller-workflow-ref", required=True)
     parser.add_argument("--expected-publication-id", required=True)
     parser.add_argument("--expected-publication-sequence", type=int, required=True)
     parser.add_argument("--expected-publication-snapshot-digest", required=True)
@@ -538,6 +596,10 @@ def main() -> int:
             args.artifact_dir, repository=args.repository, workflow=args.workflow,
             source_ref=args.source_ref, source_digest=args.source_digest,
             expected_run_id=args.expected_run_id,
+            expected_run_attempt=args.expected_run_attempt,
+            expected_caller_event_name=args.expected_caller_event_name,
+            expected_caller_ref=args.expected_caller_ref,
+            expected_caller_workflow_ref=args.expected_caller_workflow_ref,
             expected_publication_id=args.expected_publication_id,
             expected_sequence=args.expected_publication_sequence,
             expected_snapshot_digest=args.expected_publication_snapshot_digest,
@@ -561,7 +623,7 @@ def main() -> int:
                     ledger_parent=args.ledger_parent, digest=digest,
                 )
         write_outputs(args.output, values)
-    except (EvidenceError, PublicationError, OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError) as error:
+    except (EvidenceError, PublicationError, RegistryError, OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError) as error:
         print(f"launch-evidence-materializer: {error}", file=sys.stderr)
         return 1
     return 0

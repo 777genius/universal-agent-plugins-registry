@@ -120,12 +120,15 @@ class BarePublicationCasTests(unittest.TestCase):
 
     def test_response_loss_exact_readback_and_rerun(self) -> None:
         marker, ledger = self.objects()
+        pushes = []
 
         def lose_response(arguments):
+            pushes.append(arguments)
             git(self.publisher, *arguments)
             return False
 
         self.assertEqual(self.publish(marker, ledger, push_runner=lose_response), "published")
+        self.assertEqual(pushes[0][:3], ["-c", "core.hooksPath=/dev/null", "push"])
         self.assertEqual(self.publish(marker, ledger), "committed")
         self.assertEqual(self.state(), cas.RefState(marker, ledger, ledger))
 
@@ -234,6 +237,7 @@ class BarePublicationCasTests(unittest.TestCase):
             push_runner=lose_response,
         ), "published")
         self.assertEqual(len(pushes), 1)
+        self.assertEqual(pushes[0][:3], ["-c", "core.hooksPath=/dev/null", "push"])
         self.assertEqual(cas.evidence_transition(
             self.publisher, "origin", main_old=self.source, main_new=main_new,
             ledger_old=self.source, ledger_new=ledger_new, approval_tag=APPROVAL_TAG,
@@ -258,6 +262,19 @@ class BarePublicationCasTests(unittest.TestCase):
             "refs/heads/directory-publication-ledger", APPROVAL_TAG,
         )
         self.assertEqual(after, before)
+
+    def test_privileged_transition_never_executes_workspace_pre_push_hook(self) -> None:
+        sentinel = Path(self.temporary.name) / "hook-executed"
+        hook = self.publisher / ".git" / "hooks" / "pre-push"
+        hook.write_text(f"#!/bin/sh\ntouch '{sentinel}'\nexit 1\n")
+        hook.chmod(0o755)
+        main_new = self.commit_object(self.source, "mechanical evidence pointers")
+        ledger_new = self.commit_object(self.source, "permanent evidence")
+        self.assertEqual(cas.evidence_transition(
+            self.publisher, "origin", main_old=self.source, main_new=main_new,
+            ledger_old=self.source, ledger_new=ledger_new, approval_tag=APPROVAL_TAG,
+        ), "published")
+        self.assertFalse(sentinel.exists())
 
 
 class MarkerBindingContractTests(unittest.TestCase):
