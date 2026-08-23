@@ -36,12 +36,13 @@ checked there rather than duplicated in this historical record.
 
 ## Dependency verification
 
-The npm registry stable tags were checked before pinning:
+The npm registry releases were checked before pinning. HubSpot is the explicit
+preview exception and is not represented as stable:
 
 - `chrome-devtools-mcp@1.7.0`
 - `@upstash/context7-mcp@4.0.3`
 - `firebase-tools@15.26.0`
-- `@hubspot/cli@8.12.0`
+- `@hubspot/cli@8.14.0-beta.0` (preview prerelease; not a stable-upstream dependency claim)
 
 The Docker Hub package is pinned to the multi-architecture OCI digest recorded
 in `plugins/docker-hub/mcp.json`.

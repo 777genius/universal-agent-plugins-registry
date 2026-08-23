@@ -10559,27 +10559,555 @@
       "fallback_order": [
         "777genius/hubspot-developer"
       ],
-      "target_resolutions": [],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 2
+        }
+      ],
       "distributions": [
         {
           "id": "777genius/hubspot-developer",
           "kind": "community",
-          "status": "suspended",
-          "release_sequence": 1,
-          "package_version": "0.1.0",
+          "status": "active",
+          "release_sequence": 2,
+          "package_version": "0.2.0",
           "components": [
             "mcp"
           ],
-          "eligible_targets": [],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
           "current_evidence": [],
           "source": {
             "repository": "777genius/universal-agent-plugins",
-            "revision": "2ddbb99dd190c1792b79904f9875e6322bccd243",
+            "revision": null,
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:01778fdb27d89d4d675c48ae1afe1bb3622e6d850d5e2a5c9a514cd6c4323a83",
-          "manifest_digest": "sha256:257a75ed2e473945a26afa102152f866bd8269bb41c998f6d87fbdf43ed1a6b9"
+          "tree_digest": "sha256:f8fbb1d3b6e16db839f23a6f6f58e5339e473f31852e9bf577ddb64badb4a24e",
+          "manifest_digest": "sha256:4d591f71a943e133eb26de76b24324f7ccae5d3c19869401a404ad06842c669f"
         }
       ]
     },

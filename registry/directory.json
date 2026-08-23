@@ -2518,7 +2518,7 @@
       "id": "777genius/hubspot-developer",
       "product_id": "hubspot-developer",
       "kind": "community",
-      "status": "suspended",
+      "status": "active",
       "packager": "777genius",
       "releases": [
         {
@@ -2538,6 +2538,23 @@
             "mcp"
           ],
           "published_at": "2026-08-09T22:28:33Z"
+        },
+        {
+          "sequence": 2,
+          "package_version": "0.2.0",
+          "manifest_name": "hubspot-developer",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins",
+            "revision": null,
+            "path": "plugins/hubspot-developer"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:f8fbb1d3b6e16db839f23a6f6f58e5339e473f31852e9bf577ddb64badb4a24e",
+          "manifest_digest": "sha256:4d591f71a943e133eb26de76b24324f7ccae5d3c19869401a404ad06842c669f",
+          "components": [
+            "mcp"
+          ]
         }
       ],
       "release_policies": [
@@ -2545,6 +2562,54 @@
           "release_sequence": 1,
           "status": "revoked",
           "minimum_installer_version": "0.1.8",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 2,
+          "status": "active",
+          "minimum_installer_version": "0.1.13",
           "targets": [
             {
               "client": "codex",

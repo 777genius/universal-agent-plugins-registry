@@ -610,15 +610,14 @@ class OpenAIAppBindingTests(unittest.TestCase):
 
         self.assertEqual(generated, expected)
         self.assertEqual(listed, expected)
-        self.assertTrue({"chrome-devtools", "context7", "firebase"}.issubset(expected))
-        self.assertNotIn("hubspot-developer", expected)
+        self.assertTrue({"chrome-devtools", "context7", "firebase", "hubspot-developer"}.issubset(expected))
 
     def test_referenced_runtime_closures_are_complete_in_generated_packages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             plugins = root / "plugins"
             builder.build(plugins, root / "marketplace.json")
-            for name in ("chrome-devtools", "context7"):
+            for name in ("chrome-devtools", "context7", "hubspot-developer"):
                 with self.subTest(plugin=name):
                     runtime = (
                         plugins / name / "io.github.777genius.agentplugins" / "runtime"

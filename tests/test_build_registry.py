@@ -1029,12 +1029,12 @@ class DirectoryDomainTests(unittest.TestCase):
                 continue
             suspended_live_npx = {
                 "777genius/chrome-devtools",
-                "777genius/hubspot-developer",
             }
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
             expected_sequences = [1, 2] if distribution["id"] in {
                 "777genius/chrome-devtools-bridge", "777genius/context7", "777genius/firebase",
+                "777genius/hubspot-developer",
             } else [1]
             self.assertEqual([item["sequence"] for item in distribution["releases"]], expected_sequences)
             self.assertEqual(
@@ -1173,6 +1173,29 @@ class DirectoryDomainTests(unittest.TestCase):
             ("777genius/firebase", 2),
         )
 
+    def test_hubspot_preview_locked_runtime_is_active_at_sequence_two(self) -> None:
+        package = registry.ROOT / "plugins" / "hubspot-developer"
+        registry.validate_locked_npm_runtime(package)
+        runtime = json.loads((package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json").read_text())
+        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.14.0-beta.0"))
+        self.assertFalse(runtime["omit_optional"])
+        source = self.source()
+        distribution = next(
+            item for item in source["distributions"]
+            if item["id"] == "777genius/hubspot-developer"
+        )
+        self.assertEqual(distribution["status"], "active")
+        self.assertEqual(
+            [(policy["release_sequence"], policy["status"], policy["minimum_installer_version"])
+             for policy in distribution["release_policies"]],
+            [(1, "revoked", "0.1.8"), (2, "active", "0.1.13")],
+        )
+        resolution = registry.resolve_directory(source, "hubspot-developer", ["codex"])
+        self.assertEqual(
+            (resolution["distribution_id"], resolution["release_sequence"]),
+            ("777genius/hubspot-developer", 2),
+        )
+
     def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "context7"
@@ -1198,6 +1221,22 @@ class DirectoryDomainTests(unittest.TestCase):
             config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
             config_path.write_text(json.dumps(config))
             with self.assertRaisesRegex(registry.RegistryError, "exact reviewed allowlist"):
+                registry.validate_locked_npm_runtime(package)
+
+    def test_locked_npm_runtime_binds_optional_install_script_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "hubspot-developer"
+            shutil.copytree(registry.ROOT / "plugins" / "hubspot-developer", package)
+            lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
+            lock = json.loads(lock_path.read_text())
+            fsevents = lock["packages"]["node_modules/fsevents"]
+            fsevents["integrity"] = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+            lock_path.write_text(json.dumps(lock))
+            config_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "optional install scripts differ"):
                 registry.validate_locked_npm_runtime(package)
 
     def test_locked_launcher_rejects_symlinked_plugin_data_and_repairs_mode(self) -> None:
@@ -1261,14 +1300,23 @@ class DirectoryDomainTests(unittest.TestCase):
             if item["id"] == "777genius/hubspot-developer"
         )
         self.assertEqual(distribution["kind"], "community")
-        distribution["status"] = "active"
         distribution["release_policies"][0]["status"] = "active"
         distribution["releases"][0]["package_source"]["revision"] = None
-        with self.assertRaisesRegex(
-            registry.RegistryError,
-            "active in-repository release uses live npx without a recognized content-addressed runtime closure contract",
-        ):
-            registry.validate_active_local_runtime_closures(source)
+        distribution["releases"][0]["package_source"]["path"] = "plugins/fake-live-npx"
+        distribution["release_policies"][1]["status"] = "revoked"
+        source["distributions"] = [distribution]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "plugins" / "fake-live-npx"
+            package.mkdir(parents=True)
+            (package / "mcp.json").write_text(json.dumps({
+                "mcpServers": {"fake": {"type": "stdio", "command": "npx", "args": ["fake@1.0.0"]}},
+            }))
+            with self.assertRaisesRegex(
+                registry.RegistryError,
+                "active in-repository release uses live npx without a recognized content-addressed runtime closure contract",
+            ):
+                registry.validate_active_local_runtime_closures(source, repository_root=root)
 
     def test_bound_historical_release_is_not_checked_against_current_path(self) -> None:
         source = self.source()

@@ -82,10 +82,24 @@ LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.13"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
 LOCKED_NPM_LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
+    ("@hubspot/cli", "8.14.0-beta.0"): frozenset({
+        (
+            "node_modules/esbuild", "0.25.12",
+            "sha512-bbPBYYrtZbkt6Os6FiTLCTFxvq4tt3JKall1vRwshA3fdVztsLAatFaZobhkBC8/BrPetoa0oksYoKXoG4ryJg==",
+        ),
+    }),
     ("firebase-tools", "15.28.1"): frozenset({
         (
             "node_modules/protobufjs", "7.6.5",
             "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
+        ),
+    }),
+}
+LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST = {
+    ("@hubspot/cli", "8.14.0-beta.0"): frozenset({
+        (
+            "node_modules/fsevents", "2.3.3",
+            "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
         ),
     }),
 }
@@ -1195,6 +1209,7 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
     root_dependency = packages.get(f"node_modules/{dependency}")
     require(isinstance(root_dependency, dict) and root_dependency.get("version") == version, f"{lock_path}: locked root package version mismatch")
     ignored_install_scripts: set[tuple[str, str, str]] = set()
+    optional_install_scripts: set[tuple[str, str, str]] = set()
     for relative, entry in packages.items():
         if relative == "":
             continue
@@ -1226,10 +1241,13 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         except (ValueError, TypeError) as error:
             raise RegistryError(f"{lock_path}: {relative} has invalid SHA-512 integrity") from error
         require(len(decoded) == 64, f"{lock_path}: {relative} has invalid SHA-512 integrity length")
-        if entry.get("hasInstallScript") is True and not (
-            config["omit_optional"] and entry.get("optional") is True
-        ):
-            ignored_install_scripts.add((relative, entry["version"], integrity))
+        if entry.get("hasInstallScript") is True:
+            script = (relative, entry["version"], integrity)
+            if entry.get("optional") is True:
+                if not config["omit_optional"]:
+                    optional_install_scripts.add(script)
+            else:
+                ignored_install_scripts.add(script)
 
     allowed_install_scripts = LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST.get(
         (dependency, version), frozenset(),
@@ -1238,6 +1256,14 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         ignored_install_scripts == allowed_install_scripts,
         f"{lock_path}: ignored install scripts differ from the exact reviewed allowlist: "
         f"{sorted(ignored_install_scripts)!r}",
+    )
+    allowed_optional_install_scripts = LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST.get(
+        (dependency, version), frozenset(),
+    )
+    require(
+        optional_install_scripts == allowed_optional_install_scripts,
+        f"{lock_path}: optional install scripts differ from the exact reviewed allowlist: "
+        f"{sorted(optional_install_scripts)!r}",
     )
 
 
