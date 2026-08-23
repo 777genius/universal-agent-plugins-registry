@@ -296,7 +296,10 @@ class RealBridgeCohortTests(unittest.TestCase):
         cloudflare = json.loads((ROOT / "plugins/cloudflare-docs/mcp.json").read_text())["mcpServers"]["cloudflare-docs"]
         github = json.loads((ROOT / "plugins/github/mcp.json").read_text())["mcpServers"]["github"]
         self.assertEqual(chrome["command"], "node")
-        self.assertEqual(chrome["args"], ["${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs"])
+        self.assertEqual(chrome["args"], [
+            "${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs",
+            "--no-usage-statistics",
+        ])
         runtime = json.loads((ROOT / "plugins/chrome-devtools/io.github.777genius.agentplugins/runtime/runtime.json").read_text())
         self.assertEqual((runtime["package"], runtime["version"]), ("chrome-devtools-mcp", "1.7.0"))
         directory = json.loads((ROOT / "registry/directory.json").read_text())

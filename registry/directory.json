@@ -1155,7 +1155,7 @@
             "upstream_revision": "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:86738963d73749f0949d41fb2dbb529f1b0e1d5f07178a1105c0664e571f3c9d",
+          "tree_digest": "sha256:a0cb4338215ad2b1d4f50b8560e6e3b079e41de19254368c7309bbcd62786797",
           "manifest_digest": "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265",
           "components": ["mcp"]
         }

@@ -16,6 +16,7 @@ This package is independently assembled by 777genius from configuration anchored
 - Transport: `stdio`
 - Runtime: integrity-locked `chrome-devtools-mcp@1.7.0`; install scripts are disabled
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
+- Privacy: upstream usage statistics are disabled by default with `--no-usage-statistics`
 - Upstream source: https://github.com/ChromeDevTools/chrome-devtools-mcp
 - Authentication: No service credential is declared; the launched browser controls its own session.
 

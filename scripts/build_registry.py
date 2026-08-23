@@ -1122,7 +1122,10 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         name for name, server in servers.items()
         if isinstance(server, dict)
         and server.get("command") == "node"
-        and server.get("args") == [LOCKED_NPM_LAUNCHER_ARGUMENT]
+        and isinstance(server.get("args"), list)
+        and server["args"]
+        and server["args"][0] == LOCKED_NPM_LAUNCHER_ARGUMENT
+        and all(isinstance(argument, str) for argument in server["args"])
     ]
     require(len(users) == 1, f"{runtime_root}: exactly one MCP server must use the locked npm launcher")
 
