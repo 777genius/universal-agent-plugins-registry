@@ -151,21 +151,29 @@ def parse_canonical_github_source(value: Any) -> dict[str, str] | None:
 
 def authoritative_native_client_evidence(
     evidence: Any, *, client_version: Any, product_id: str | None = None,
+    client: str | None = None,
 ) -> bool:
-    """Validate protected evidence from real client version/discovery commands."""
+    """Validate signed protected evidence from real native client commands."""
     if not isinstance(evidence, dict) or evidence.get("basis") != "protected_external_observer":
+        return False
+    if evidence.get("observer") != "native-client-command-v1":
         return False
     version = evidence.get("version_operation")
     discovery = evidence.get("discovery_operation")
+    expected_client = client or evidence.get("client")
     return bool(
-        isinstance(client_version, str) and client_version
+        expected_client in CLIENT_ROOTS
+        and evidence.get("client") == expected_client
+        and isinstance(client_version, str) and client_version
         and isinstance(version, dict)
-        and version.get("operation") in {"version", "list"}
+        and version.get("operation") == "version"
         and isinstance(version.get("argv"), list) and version["argv"]
+        and version["argv"][0] == expected_client
         and version.get("observed_client_version") == client_version
         and isinstance(discovery, dict)
         and discovery.get("operation") in {"discovery", "list"}
         and isinstance(discovery.get("argv"), list) and discovery["argv"]
+        and discovery["argv"][0] == expected_client
         and discovery.get("discovered") is True
         and (product_id is None or discovery.get("product_id") == product_id)
     )
@@ -977,8 +985,13 @@ class LaunchHarness:
         self.external_pr_evidence: dict[str, Any] | None = None
         self.attestations = self._load_attestations(attestations, allow_external_pr=True)
         notion_records = self._load_attestations(notion_oauth)
-        if any(key[0] != "notion" for key in notion_records):
-            raise ValueError("Notion OAuth artifact may contain only Notion attestations")
+        expected_notion = {("notion", client, "runtime") for client in ("codex", "cursor", "kiro")}
+        if any(key[0] == "notion" for key in self.attestations):
+            raise ValueError("primary runtime artifact must not contain Notion records")
+        if notion_records and set(notion_records) != expected_notion:
+            raise ValueError("Notion artifact must contain exactly codex, cursor, and kiro runtime records")
+        if any(record.get("outcome") != "passed" for record in notion_records.values()):
+            raise ValueError("all Notion runtime records must be passed")
         chatgpt_records = self._load_attestations(chatgpt_attestation)
         if any(key != ("cloudflare-docs", "chatgpt", "oauth") for key in chatgpt_records):
             raise ValueError("ChatGPT artifact is scoped only to Cloudflare Docs registered binding")
@@ -987,7 +1000,7 @@ class LaunchHarness:
             if overlap:
                 raise ValueError(f"duplicate attestation tuple across artifacts: {sorted(overlap)}")
             self.attestations.update(records)
-        self.notion_oauth_supplied = bool(notion_records)
+        self.notion_oauth_supplied = set(notion_records) == expected_notion
         self.chatgpt_attestation_supplied = bool(chatgpt_records)
         self._preflight()
 
@@ -1097,6 +1110,13 @@ class LaunchHarness:
                 "release_id": self.release_identity.get("release_id"), "immutable": True,
             } or not isinstance(self.release_identity.get("release_id"), int):
                 raise ValueError("GitHub release identity is mutable or does not match repository/tag/commit")
+            expected_discovery = {
+                (product["id"], self.all_package_client(product["id"])[0], "discovery")
+                for product in self.snapshot.get("products", [])
+            }
+            supplied_discovery = {key for key in self.attestations if key[2] == "discovery"}
+            if len(expected_discovery) != 26 or supplied_discovery != expected_discovery:
+                raise ValueError("primary signed runtime artifact must contain exactly 26 target-aware all-package discovery records")
 
     def fresh_sandbox(self, label: str) -> Path:
         if self.run_root is None:
@@ -1143,12 +1163,14 @@ class LaunchHarness:
         synthetic_version = str(tuple_value.get("client_version") or "").startswith(
             ("native-state-v1@", "native-observation-v1@")
         )
-        fixture_basis = isinstance(details, dict) and details.get("evidence_basis") == "fixture_materialization"
-        if synthetic_version or fixture_basis:
+        basis = details.get("evidence_basis") if isinstance(details, dict) else None
+        repository_basis = basis == "repository_owned_disposable_observer"
+        untrusted_fixture_basis = basis == "fixture_materialization"
+        if synthetic_version or untrusted_fixture_basis or repository_basis:
             tuple_value = {**tuple_value, "client_version": None}
-            if outcome == "passed" and level != "harness":
-                outcome = "inconclusive"
-                reason = "fixture/materialization evidence cannot establish native discovery or a real client version"
+        if outcome == "passed" and level in {"discovery", "runtime", "oauth"} and (synthetic_version or untrusted_fixture_basis or repository_basis):
+            outcome = "inconclusive"
+            reason = "repository/materialization evidence cannot establish native discovery, runtime, or a real client version"
         row = {
             "id": hashlib.sha256(identity.encode()).hexdigest()[:24],
             "scenario": scenario, "plugin": plugin, "client": client,
@@ -1181,7 +1203,11 @@ class LaunchHarness:
             if record.get("outcome") not in OUTCOMES:
                 raise ValueError(f"invalid attestation outcome: {key}")
             tuple_value = record.get("tuple", {})
-            expected_scenario = "chatgpt_registered_binding" if record["client"] == "chatgpt" else "hero_5x3_runtime"
+            expected_scenario = (
+                "chatgpt_registered_binding" if record["client"] == "chatgpt"
+                else "all_26_info" if record["level"] == "discovery"
+                else "hero_5x3_runtime"
+            )
             privacy_fields = (
                 "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity",
                 "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome",
@@ -1273,9 +1299,11 @@ class LaunchHarness:
                 native_evidence = record.get("native_discovery_evidence")
                 if not authoritative_native_client_evidence(
                     native_evidence, client_version=tuple_value.get("client_version"),
-                    product_id=record["plugin"],
+                    product_id=record["plugin"], client=record["client"],
                 ):
                     raise ValueError(f"runtime pass lacks authoritative exact-version client discovery evidence: {key}")
+                if record["level"] == "discovery" and not self.protected_copilot_lifecycle(record):
+                    raise ValueError(f"all-package discovery pass lacks exact protected Copilot lifecycle proof: {key}")
                 for observation_name in ("manager_observation", "native_observation"):
                     observation = record.get(observation_name)
                     if not isinstance(observation, dict) or not all(isinstance(observation.get(field), str) and observation[field] for field in ("observer", "before_digest", "after_digest", "observed_at")):
@@ -1587,15 +1615,34 @@ class LaunchHarness:
         return observed == expected
 
     @staticmethod
-    def info_reconciled(value: dict[str, Any] | None) -> bool:
+    def info_reconciled(value: dict[str, Any] | None, client: str | None = None) -> bool:
         native_evidence = find_value(value, {"native_discovery_evidence"}) if value else None
         client_version = find_value(value, {"client_version"}) if value else None
         return bool(
             value
             and find_value(value, {"receipt_reconciled"}) is True
             and find_value(value, {"native_discovery_reconciled"}) is True
-            and authoritative_native_client_evidence(native_evidence, client_version=client_version)
+            and authoritative_native_client_evidence(native_evidence, client_version=client_version, client=client)
         )
+
+
+    @staticmethod
+    def protected_copilot_lifecycle(record: dict[str, Any]) -> bool:
+        return (
+            record.get("level") == "discovery"
+            and record.get("client") == "copilot"
+            and record.get("lifecycle_verified") is True
+            and record.get("lifecycle_operations") == ["add", "info", "remove"]
+        )
+
+    def all_package_client(self, plugin: str) -> tuple[str, dict[str, Any]]:
+        client = self.config["all_package_client"]
+        if client != "copilot":
+            raise ValueError("all-package launch proof must use GitHub Copilot CLI")
+        try:
+            return client, self.directory_release(plugin, [client])
+        except ValueError as error:
+            raise ValueError(f"signed Directory release does not support Copilot lifecycle for {plugin}") from error
 
     def all_package_matrix(self) -> None:
         names = [item["id"] for item in self.snapshot.get("products", [])]
@@ -1603,17 +1650,7 @@ class LaunchHarness:
             raise RuntimeError(f"signed launch Directory must contain 26 unique products, found {len(set(names))}")
         for plugin in names:
             sandbox = self.fresh_sandbox("package-" + plugin)
-            release = None
-            client = None
-            for candidate in (self.config["all_package_client"], "codex", "kiro"):
-                try:
-                    release = self.directory_release(plugin, [candidate])
-                    client = candidate
-                    break
-                except ValueError:
-                    continue
-            if release is None or client is None:
-                raise ValueError(f"signed Directory release has no isolated launch-gate client for {plugin}")
+            client, release = self.all_package_client(plugin)
             resolved_digest: str | None = None
             for operation in self.config["all_package_operations"]:
                 outcome, value, reason = self.command([operation, plugin, "--target", client, "--format", "json"], sandbox, (client,))
@@ -1627,12 +1664,25 @@ class LaunchHarness:
                     outcome, reason = "inconclusive", "CLI output did not expose the immutable package digest"
                 if outcome == "passed" and not self.command_matches_release(plugin, [client], value):
                     outcome, reason = "failed", "CLI result identity does not match the signed Directory release"
+                tuple_value = self.evidence_tuple(plugin, [client], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}")
+                details = {
+                    "evidence_basis": "repository_owned_disposable_observer",
+                    "runtime_proof": False, "native_discovery_proof": False,
+                    "operation": operation, **release,
+                    "receipt_reconciliation_required": operation == "info",
+                    "command_trace": value.get("_launch_command_trace") if value else None,
+                }
                 if outcome == "passed" and operation == "info":
-                    if not self.info_reconciled(value):
-                        outcome, reason = "inconclusive", "fixture info proved no authoritative native client discovery/version operation"
+                    record = self.attestations.get((plugin, client, "discovery"))
+                    if record is None or record.get("outcome") != "passed" or not self.info_reconciled(record, client):
+                        outcome, reason = "failed", "signed protected native client discovery/version observation was not supplied"
+                    else:
+                        tuple_value = record["tuple"]
+                        details = {**self.runtime_attestation_details(record), "resolution": release, "evidence_basis": "protected_external_observer", "runtime_proof": False, "native_discovery_proof": True, "operation": operation, "command_trace": value.get("_launch_command_trace") if value else None}
+                        reason = record.get("reason", "signed native discovery and exact client version reconciled")
                 if outcome == "passed" and resolved_digest != release["tree_digest"]:
                     outcome, reason = "failed", "CLI package digest does not match the signed Directory release"
-                self.add(f"all_26_{operation}", plugin, client, "discovery" if operation == "info" else "materialization", outcome, reason or "unknown result", tuple_value=self.evidence_tuple(plugin, [client], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"evidence_basis": "fixture_materialization", "runtime_proof": False, "operation": operation, **release, "receipt_reconciliation_required": operation == "info", "command_trace": value.get("_launch_command_trace") if value else None})
+                self.add(f"all_26_{operation}", plugin, client, "discovery" if operation == "info" else "materialization", outcome, reason or "unknown result", tuple_value=tuple_value, details=details)
 
     def context7_multi_target(self) -> None:
         targets = tuple(self.config["context7_targets"])
@@ -1656,7 +1706,7 @@ class LaunchHarness:
             self.add(
                 f"context7_three_target_{operation}", "context7", target_arg, "materialization", outcome, reason,
                 tuple_value=value.get("tuple") if value else self.evidence_tuple("context7", targets, client_version=None, dependency="single-acquisition"),
-                details={"evidence_basis": "fixture_materialization", "runtime_proof": False, "operation": operation, "target_argument": target_arg, "single_process_invocation": True, "reported_target_count": len(value.get("target_outcomes", {})) if value else 0, "command_traces": value.get("command_traces", []) if value else [], "operation_observations": value.get("operation_observations", []) if value else [], "resolution": release},
+                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "operation": operation, "target_argument": target_arg, "single_process_invocation": True, "reported_target_count": len(value.get("target_outcomes", {})) if value else 0, "command_traces": value.get("command_traces", []) if value else [], "operation_observations": value.get("operation_observations", []) if value else [], "resolution": release},
             )
 
     @staticmethod
@@ -1670,9 +1720,14 @@ class LaunchHarness:
             "scenario_id", "run_id", "run_attempt", "pseudonymous_identity_id",
             "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status",
             "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof",
-            "native_discovery_evidence",
+            "native_discovery_evidence", "lifecycle_verified", "lifecycle_operations",
         )
-        return {field: record[field] for field in fields if field in record}
+        return {
+            **{field: record[field] for field in fields if field in record},
+            "evidence_basis": "protected_external_observer",
+            "runtime_proof": record.get("level") in {"runtime", "oauth"},
+            "native_discovery_proof": True,
+        }
 
     def hero_runtime_matrix(self) -> None:
         for plugin in self.config["heroes"]:
@@ -1701,15 +1756,15 @@ class LaunchHarness:
                 release = self.directory_release(plugin, [client])
                 expected_digest = release["tree_digest"]
                 outcome, value, reason = self.driven_scenario(f"hero_lifecycle_{plugin}_{client}")
-                required_operations = {"add", "update", "remove", "discovery"}
+                required_operations = {"add", "update", "info", "remove"}
                 operation_outcomes = value.get("operation_outcomes", {}) if value else {}
                 tuple_value = value.get("tuple") if value else None
                 valid = set(operation_outcomes) == required_operations and all(result == "passed" for result in operation_outcomes.values())
                 valid = valid and tuple_value is not None and tuple_value.get("tree_digest") == expected_digest
                 valid = valid and self.tuple_matches_release(plugin, [client], tuple_value)
                 if outcome == "passed" and not valid:
-                    outcome, reason = "failed", "hero driver omitted exact add/update/remove/discovery proof"
-                self.add("hero_5x3_lifecycle", plugin, client, "discovery", outcome, reason, tuple_value=tuple_value or self.evidence_tuple(plugin, [client], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"evidence_basis": "fixture_materialization", "runtime_proof": False, "operations": sorted(required_operations), "operation_outcomes": operation_outcomes, "command_traces": value.get("command_traces", []) if value else [], "resolution": release})
+                    outcome, reason = "failed", "hero driver omitted exact disposable add/update/info/remove lifecycle proof"
+                self.add("hero_5x3_lifecycle", plugin, client, "materialization", outcome, reason, tuple_value=tuple_value or self.evidence_tuple(plugin, [client], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "operations": sorted(required_operations), "operation_outcomes": operation_outcomes, "command_traces": value.get("command_traces", []) if value else [], "resolution": release})
 
     def shared_backend(self) -> None:
         targets = tuple(self.config["shared_backend_targets"])
@@ -1720,7 +1775,7 @@ class LaunchHarness:
         valid = valid and self.tuple_matches_release("context7", targets, value.get("tuple") if value else None)
         if outcome == "passed" and not valid:
             outcome, reason = "failed", "shared-backend driver did not prove one add/remove mutation affecting both surfaces"
-        self.add("shared_copilot_vscode_backend", "context7", "copilot,vscode", "materialization", outcome, reason, tuple_value=value.get("tuple") if value else self.evidence_tuple("context7", targets, client_version=None, dependency="copilot-shared-backend"), details={"expected_physical_mutations_per_operation": 1, "operations": ["add", "remove"], "command_traces": value.get("command_traces", []) if value else [], "operation_observations": value.get("operation_observations", []) if value else [], "resolution": release})
+        self.add("shared_copilot_vscode_backend", "context7", "copilot,vscode", "materialization", outcome, reason, tuple_value=value.get("tuple") if value else self.evidence_tuple("context7", targets, client_version=None, dependency="copilot-shared-backend"), details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "expected_physical_mutations_per_operation": 1, "operations": ["add", "remove"], "command_traces": value.get("command_traces", []) if value else [], "operation_observations": value.get("operation_observations", []) if value else [], "resolution": release})
 
     def fault_matrix(self) -> None:
         for scenario in (*self.config["fault_scenarios"], *self.config["adapter_repair_faults"], *self.config["advanced_scenarios"]):
@@ -1749,9 +1804,7 @@ class LaunchHarness:
             if tuple_value is None:
                 observed_client_version = find_value(value, {"client_version"}) if value else None
                 tuple_value = None if source_selection else self.evidence_tuple(product, [client], client_version=observed_client_version if isinstance(observed_client_version, str) else None, dependency="repository-owned-fault-observer")
-            details = {"fixture_contract_present": scenario in self.config["fault_scenarios"], "repository_observer_required": True, "proof": value.get("proof", {}) if value else {}, "command_traces": value.get("command_traces", []) if value else [], "validator_artifact": value.get("validator_artifact") if value else None, "source_identity": value.get("source_identity") if value else None, "resolution": release}
-            if source_selection:
-                details.update({"evidence_basis": "fixture_materialization", "runtime_proof": False})
+            details = {"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "fixture_contract_present": scenario in self.config["fault_scenarios"], "repository_observer_required": True, "proof": value.get("proof", {}) if value else {}, "command_traces": value.get("command_traces", []) if value else [], "validator_artifact": value.get("validator_artifact") if value else None, "source_identity": value.get("source_identity") if value else None, "resolution": release}
             self.add(scenario, product, client, "materialization", outcome, reason, tuple_value=tuple_value, details=details)
 
     def acceptance_postconditions(self) -> None:
@@ -1779,7 +1832,7 @@ class LaunchHarness:
             self.add(
                 scenario, "context7", "cursor", "materialization", outcome, reason,
                 tuple_value=self.evidence_tuple("context7", ["cursor"], client_version=find_value(value, {"client_version"}) if value else None, dependency="repository-owned-observer"),
-                details={"expected_postcondition_id": scenario, "command_traces": value.get("command_traces", []) if value else [], "manager_and_native_before_after": observations_present, "resolution": self.directory_release("context7", ["cursor"])},
+                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "expected_postcondition_id": scenario, "command_traces": value.get("command_traces", []) if value else [], "manager_and_native_before_after": observations_present, "resolution": self.directory_release("context7", ["cursor"])},
             )
 
     def native_platform_matrix(self) -> None:
@@ -1931,11 +1984,8 @@ class LaunchHarness:
         remove_outcome, remove_value, remove_reason = "inconclusive", None, "add did not commit; remove was not run"
         if add_value is not None and find_value(add_value, {"mutated"}) is True:
             info_outcome, info_value, info_reason = self.command(["info", "e2e-external-package", "--target", "cursor", "--format", "json"], sandbox, ("cursor",))
-            if info_outcome == "passed" and not self.info_reconciled(info_value):
-                if find_value(info_value, {"receipt_reconciled"}) is True:
-                    info_outcome, info_reason = "inconclusive", "fixture receipt reconciled; native discovery/version requires protected external observation"
-                else:
-                    info_outcome, info_reason = "failed", "direct-source info omitted owned-receipt reconciliation"
+            if info_outcome == "passed" and find_value(info_value, {"receipt_reconciled"}) is not True:
+                info_outcome, info_reason = "failed", "direct-source info omitted owned-receipt reconciliation"
             # Cleanup is mandatory after a committed add, including when identity or info validation fails.
             remove_outcome, remove_value, remove_reason = self.command(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"], sandbox, ("cursor",))
 
@@ -1955,8 +2005,8 @@ class LaunchHarness:
         else:
             outcome = "failed" if "failed" in lifecycle_outcomes else "inconclusive"
             reason = next((str(item["reason"]) for item in operations.values() if item["outcome"] != "passed"), "direct-source lifecycle did not complete")
-        client_version = find_value(info_value, {"client_version"}) if self.info_reconciled(info_value) else None
-        self.add("direct_external_package", "e2e-external-package", "cursor", "materialization", outcome, reason, tuple_value=self.tuple(product_id="e2e-external-package", digest=digest, manifest_digest=sha256_file(EXTERNAL_PACKAGE / "plugin.json"), distribution_id="direct/e2e-external-package", distribution_kind="direct", release_sequence=1, package_version="1.0.0", client_version=client_version if isinstance(client_version, str) else None, dependency="direct-local-source"), details={"evidence_basis": "fixture_materialization", "runtime_proof": False, "tree_digest_algorithm": "agentplugins-tree-sha256-v1", "directory_submission_used": False, "source_locator": "fixture://external-package", "operations": operations, "command_traces": traces})
+        client_version = None
+        self.add("direct_external_package", "e2e-external-package", "cursor", "materialization", outcome, reason, tuple_value=self.tuple(product_id="e2e-external-package", digest=digest, manifest_digest=sha256_file(EXTERNAL_PACKAGE / "plugin.json"), distribution_id="direct/e2e-external-package", distribution_kind="direct", release_sequence=1, package_version="1.0.0", client_version=client_version if isinstance(client_version, str) else None, dependency="direct-local-source"), details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "tree_digest_algorithm": "agentplugins-tree-sha256-v1", "directory_submission_used": False, "source_locator": "fixture://external-package", "operations": operations, "command_traces": traces})
         fork_outcome, fork_value, fork_reason = self.driven_scenario("fork_submission")
         if fork_outcome == "passed" and not (
             fork_value
@@ -1971,7 +2021,7 @@ class LaunchHarness:
         fork_client_version = find_value(fork_value, {"client_version"}) if fork_value else None
         fork_artifact = fork_value.get("validator_artifact", {}) if fork_value else {}
         fork_package = fork_artifact.get("package", {})
-        self.add("fork_submission", "fixture-bridge", None, "schema", fork_outcome, fork_reason, tuple_value=self.tuple(product_id="fixture-bridge", digest=fork_package.get("tree_digest") or package_digest(FORK_PACKAGE), manifest_digest=fork_package.get("manifest_digest") or sha256_file(FORK_PACKAGE / "plugin.json"), distribution_id="contributor/fixture-bridge", distribution_kind="community_bridge", release_sequence=1, package_version=fork_package.get("package_version") or "1.2.3", client_version=fork_client_version if isinstance(fork_client_version, str) else None, dependency="disposable-fork-validation"), details={"publication_or_pr_created": False, "publication_required": False, "supplemental_contract_evidence": True, "satisfies_first_stable_external_pr_gate": False, "validator_artifact": fork_artifact, "command_traces": fork_value.get("command_traces", []) if fork_value else []})
+        self.add("fork_submission", "fixture-bridge", None, "schema", fork_outcome, fork_reason, tuple_value=self.tuple(product_id="fixture-bridge", digest=fork_package.get("tree_digest") or package_digest(FORK_PACKAGE), manifest_digest=fork_package.get("manifest_digest") or sha256_file(FORK_PACKAGE / "plugin.json"), distribution_id="contributor/fixture-bridge", distribution_kind="community_bridge", release_sequence=1, package_version=fork_package.get("package_version") or "1.2.3", client_version=fork_client_version if isinstance(fork_client_version, str) else None, dependency="disposable-fork-validation"), details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "publication_or_pr_created": False, "publication_required": False, "supplemental_contract_evidence": True, "satisfies_first_stable_external_pr_gate": False, "validator_artifact": fork_artifact, "command_traces": fork_value.get("command_traces", []) if fork_value else []})
         rejected_outcome, rejected_value, rejected_reason = self.driven_scenario("fork_submission_rejected")
         if rejected_outcome == "passed" and not (
             rejected_value
@@ -1982,7 +2032,7 @@ class LaunchHarness:
         ):
             rejected_outcome, rejected_reason = "failed", "rejected fork driver omitted rejection and zero-side-effect proof"
         rejected_client_version = find_value(rejected_value, {"client_version"}) if rejected_value else None
-        self.add("fork_submission_rejected", "fixture-bridge", None, "schema", rejected_outcome, rejected_reason, tuple_value=self.tuple(product_id="fixture-bridge", digest=package_digest(FORK_PACKAGE), manifest_digest=sha256_file(FORK_PACKAGE / "plugin.json"), distribution_id="contributor/fixture-bridge", distribution_kind="community_bridge", release_sequence=1, package_version="1.2.3", client_version=rejected_client_version if isinstance(rejected_client_version, str) else None, dependency="disposable-fork-validation"), details={"publication_or_pr_created": False, "publication_required": False, "expected_rejection": True, "validator_artifact": rejected_value.get("validator_artifact") if rejected_value else None, "command_traces": rejected_value.get("command_traces", []) if rejected_value else []})
+        self.add("fork_submission_rejected", "fixture-bridge", None, "schema", rejected_outcome, rejected_reason, tuple_value=self.tuple(product_id="fixture-bridge", digest=package_digest(FORK_PACKAGE), manifest_digest=sha256_file(FORK_PACKAGE / "plugin.json"), distribution_id="contributor/fixture-bridge", distribution_kind="community_bridge", release_sequence=1, package_version="1.2.3", client_version=rejected_client_version if isinstance(rejected_client_version, str) else None, dependency="disposable-fork-validation"), details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "publication_or_pr_created": False, "publication_required": False, "expected_rejection": True, "validator_artifact": rejected_value.get("validator_artifact") if rejected_value else None, "command_traces": rejected_value.get("command_traces", []) if rejected_value else []})
 
     def external_pr_gate(self) -> None:
         config = read_production_config()
@@ -2066,16 +2116,21 @@ def assert_redacted(value: dict[str, Any]) -> None:
         tuple_value = row.get("tuple", {})
         details = row.get("details", {})
         client_version = str(tuple_value.get("client_version") or "")
-        if details.get("evidence_basis") == "fixture_materialization" or client_version.startswith(("native-state-v1@", "native-observation-v1@")):
-            raise ValueError(f"fixture/materialization evidence cannot be promoted: {row.get('id')}")
-        if row.get("level") in {"discovery", "runtime", "oauth"}:
+        native_level = row.get("level") in {"discovery", "runtime", "oauth"}
+        if client_version.startswith(("native-state-v1@", "native-observation-v1@")):
+            raise ValueError(f"synthetic client version cannot be promoted: {row.get('id')}")
+        if native_level:
             native_evidence = details.get("native_discovery_evidence")
-            if not authoritative_native_client_evidence(
+            if details.get("evidence_basis") != "protected_external_observer" or not authoritative_native_client_evidence(
                 native_evidence, client_version=tuple_value.get("client_version"),
-                product_id=row.get("plugin"),
+                product_id=row.get("plugin"), client=row.get("client"),
             ):
                 raise ValueError(f"passed native/runtime evidence lacks authoritative client operations: {row.get('id')}")
-        required = ("product_id", "tree_digest", "manifest_digest", "distribution_id", "distribution_kind", "release_sequence", "package_version", "source_repository", "source_revision", "source_path", "snapshot_sequence", "snapshot_digest", "binary_digest", "installer_version", "adapter_version", "client_version", "os", "architecture", "observed_at")
+            required = ("product_id", "tree_digest", "manifest_digest", "distribution_id", "distribution_kind", "release_sequence", "package_version", "source_repository", "source_revision", "source_path", "snapshot_sequence", "snapshot_digest", "binary_digest", "installer_version", "adapter_version", "client_version", "os", "architecture", "observed_at")
+        else:
+            if details.get("evidence_basis") != "repository_owned_disposable_observer" or details.get("runtime_proof") is not False or details.get("native_discovery_proof") is not False or tuple_value.get("client_version") is not None:
+                raise ValueError(f"repository-owned proof crossed into native/runtime semantics: {row.get('id')}")
+            required = ("product_id", "tree_digest", "manifest_digest", "distribution_id", "distribution_kind", "release_sequence", "package_version", "snapshot_sequence", "snapshot_digest", "binary_digest", "installer_version", "adapter_version", "os", "architecture", "observed_at")
         if any(not tuple_value.get(field) for field in required):
             raise ValueError(f"passed evidence has an incomplete applicability tuple: {row.get('id')}")
         for field in ("tree_digest", "manifest_digest", "snapshot_digest", "binary_digest"):

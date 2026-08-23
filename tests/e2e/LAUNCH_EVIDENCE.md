@@ -85,7 +85,20 @@ The individual artifacts must conform to
 fresh start/end timestamps, command traces, exact client/application IDs and
 HTTPS endpoint, isolated consent identity, complete release/Directory tuple,
 and a GitHub attestation for this repository/SHA/run/attempt/workflow/job.
-Projection or fixture output cannot become runtime evidence.
+Projection or fixture output cannot become runtime evidence. Repository-owned
+disposable observers may pass lifecycle, materialization, fault, and
+postcondition rows, but those rows always carry a null client version and
+explicitly deny native discovery and runtime proof.
+
+The primary signed artifact must contain exactly 26 `all_26_info` discovery
+records, one per product, all using the supported GitHub Copilot CLI lifecycle.
+Each pass binds native `copilot --version` and marketplace discovery to the
+exact `add`, `info`, `remove` lifecycle. A copied client file, manager receipt,
+or Cursor fixture is not discovery evidence. If the released Agent Plugins CLI
+cannot expose the required reconciliation, the gate fails closed until a newer
+release provides that contract. Notion is forbidden in the primary artifact;
+its separate artifact must contain exactly three passed runtime records for
+Codex, Cursor, and Kiro.
 
 Consent and every runtime record are independently bound to the same challenge,
 GitHub run/attempt, and scenario contract. They carry only pseudonymous

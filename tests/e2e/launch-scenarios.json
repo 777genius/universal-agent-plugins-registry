@@ -15,7 +15,7 @@
     "journey_rows": 3
   },
   "directory_contract": "signed-snapshot-v1",
-  "all_package_client": "cursor",
+  "all_package_client": "copilot",
   "all_package_operations": ["add", "info", "remove"],
   "heroes": [
     "agent-code-navigator",

@@ -97,8 +97,12 @@
         },
         "allOf": [
           {
-            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"not": {"const": "harness"}}}, "required": ["outcome", "level"]},
-            "then": {"properties": {"tuple": {"$ref": "#/$defs/completeTuple"}}}
+            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"enum": ["discovery", "runtime", "oauth"]}}, "required": ["outcome", "level"]},
+            "then": {"properties": {"tuple": {"$ref": "#/$defs/completeTuple"}, "details": {"required": ["evidence_basis", "native_discovery_proof"], "properties": {"evidence_basis": {"const": "protected_external_observer"}, "native_discovery_proof": {"const": true}}}}}
+          },
+          {
+            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"enum": ["schema", "materialization"]}}, "required": ["outcome", "level"]},
+            "then": {"properties": {"tuple": {"$ref": "#/$defs/repositoryProofTuple"}, "details": {"required": ["evidence_basis", "runtime_proof", "native_discovery_proof"], "properties": {"evidence_basis": {"const": "repository_owned_disposable_observer"}, "runtime_proof": {"const": false}, "native_discovery_proof": {"const": false}}}}}
           }
         ],
         "additionalProperties": false
@@ -165,6 +169,20 @@
         "observed_at": {"type": "string", "format": "date-time"}
       },
       "additionalProperties": false
+    },
+    "repositoryProofTuple": {
+      "allOf": [
+        {"$ref": "#/$defs/tuple"},
+        {"properties": {
+          "product_id": {"type": "string"}, "tree_digest": {"type": "string"}, "manifest_digest": {"type": "string"},
+          "distribution_id": {"type": "string"}, "distribution_kind": {"type": "string"},
+          "release_sequence": {"type": "integer"}, "package_version": {"type": "string"},
+          "snapshot_sequence": {"type": "integer"}, "snapshot_digest": {"type": "string"},
+          "binary_digest": {"type": "string"}, "dependency_identity": {"type": "string", "minLength": 1},
+          "installer_version": {"type": "string", "minLength": 1}, "adapter_version": {"type": "string", "minLength": 1},
+          "client_version": {"const": null}
+        }}
+      ]
     },
     "completeTuple": {
       "allOf": [

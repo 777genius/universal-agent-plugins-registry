@@ -385,6 +385,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             "client_version": "cursor-1.2.3",
             "native_discovery_evidence": {
                 "basis": "protected_external_observer",
+                "observer": "native-client-command-v1", "client": "cursor",
                 "version_operation": {"operation": "version", "argv": ["cursor", "--version"], "observed_client_version": "cursor-1.2.3"},
                 "discovery_operation": {"operation": "list", "argv": ["cursor", "plugins", "list"], "discovered": True, "product_id": "context7"},
             },
@@ -393,6 +394,59 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         self.assertFalse(e2e.LaunchHarness.info_reconciled({"receipt_reconciled": True, "native_discovery_reconciled": True}))
         self.assertFalse(e2e.LaunchHarness.info_reconciled({"receipts": ["owned"], "discovery": {"state": "found"}}))
         self.assertFalse(e2e.LaunchHarness.info_reconciled({"receipt_reconciled": True, "native_discovery_reconciled": False}))
+        missing_observer = json.loads(json.dumps(authoritative))
+        del missing_observer["native_discovery_evidence"]["observer"]
+        self.assertFalse(e2e.LaunchHarness.info_reconciled(missing_observer, "cursor"))
+        wrong_client = json.loads(json.dumps(authoritative))
+        wrong_client["native_discovery_evidence"]["client"] = "codex"
+        self.assertFalse(e2e.LaunchHarness.info_reconciled(wrong_client, "cursor"))
+
+    def test_repository_owned_proof_cannot_be_promoted_to_discovery(self) -> None:
+        harness = self.fixture_harness()
+        details = {
+            "evidence_basis": "repository_owned_disposable_observer",
+            "runtime_proof": False, "native_discovery_proof": False,
+        }
+        tuple_value = harness.tuple(client_version="native-state-v1")
+        harness.add("local-materialization", "context7", "cursor", "materialization", "passed", "proved", tuple_value=tuple_value, details=details)
+        harness.add("fake-discovery", "context7", "cursor", "discovery", "passed", "claimed", tuple_value=tuple_value, details=details)
+        self.assertEqual(harness.rows[0]["outcome"], "passed")
+        self.assertIsNone(harness.rows[0]["tuple"]["client_version"])
+        self.assertEqual(harness.rows[1]["outcome"], "inconclusive")
+        self.assertIsNone(harness.rows[1]["tuple"]["client_version"])
+
+    def test_all_package_native_proof_is_exact_copilot_lifecycle(self) -> None:
+        valid = {
+            "level": "discovery", "client": "copilot", "lifecycle_verified": True,
+            "lifecycle_operations": ["add", "info", "remove"],
+        }
+        self.assertTrue(e2e.LaunchHarness.protected_copilot_lifecycle(valid))
+        for mutation in (
+            {"client": "cursor"},
+            {"lifecycle_verified": False},
+            {"lifecycle_operations": ["add", "remove"]},
+        ):
+            self.assertFalse(e2e.LaunchHarness.protected_copilot_lifecycle({**valid, **mutation}))
+        harness = self.fixture_harness()
+        with mock.patch.object(harness, "directory_release", return_value={}):
+            client, _ = harness.all_package_client("context7")
+        self.assertEqual(client, "copilot")
+        harness.config = {**harness.config, "all_package_client": "cursor"}
+        with self.assertRaisesRegex(ValueError, "GitHub Copilot CLI"):
+            harness.all_package_client("context7")
+
+    def test_notion_records_are_exact_separate_and_all_passed(self) -> None:
+        expected = {("notion", client, "runtime"): {"outcome": "passed"} for client in ("codex", "cursor", "kiro")}
+        cases = (
+            ({("notion", "codex", "runtime"): {"outcome": "passed"}}, expected, "primary runtime artifact"),
+            ({}, {key: value for key, value in expected.items() if key[1] != "kiro"}, "exactly codex"),
+            ({}, {key: ({"outcome": "failed"} if key[1] == "kiro" else value) for key, value in expected.items()}, "all Notion runtime records"),
+        )
+        for primary, notion, message in cases:
+            with self.subTest(message=message), mock.patch.object(
+                e2e.LaunchHarness, "_load_attestations", side_effect=[primary, notion, {}],
+            ), self.assertRaisesRegex(ValueError, message):
+                e2e.LaunchHarness(None, None, mode="fixture-only", consent=CONSENT)
 
     def test_empty_or_materialized_client_directories_never_become_native_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -482,8 +536,8 @@ print(json.dumps({"schema_version": 1, "command": "update", "data": {"result": {
         }
         with mock.patch.object(harness, "driven_scenario", return_value=("passed", value, "proved")):
             harness.context7_multi_target()
-        self.assertEqual([row["outcome"] for row in harness.rows], ["inconclusive"] * 4)
-        self.assertTrue(all(row["details"]["evidence_basis"] == "fixture_materialization" for row in harness.rows))
+        self.assertEqual([row["outcome"] for row in harness.rows], ["passed"] * 4)
+        self.assertTrue(all(row["details"]["evidence_basis"] == "repository_owned_disposable_observer" for row in harness.rows))
         self.assertTrue(all(row["details"]["target_argument"] == "codex,cursor,kiro" for row in harness.rows))
         self.assertNotIn("--yes", commands[0])
 
@@ -537,8 +591,8 @@ print(json.dumps(value))
             workspace.mkdir()
             with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}, clear=False):
                 value = observer.run(binary, "context7_grouped_lifecycle", workspace, context)
-        self.assertEqual(value["outcome"], "inconclusive")
-        self.assertEqual(value["evidence_basis"], "fixture_materialization")
+        self.assertEqual(value["outcome"], "passed")
+        self.assertEqual(value["evidence_basis"], "repository_owned_disposable_observer")
         self.assertIsNone(value["client_version"])
         self.assertTrue(value["no_newer_release_update_noop"])
         self.assertEqual(value["acquisition_digests"], ["sha256:" + "a" * 64])
@@ -672,8 +726,8 @@ print(json.dumps(value))
         ):
             harness.fault_matrix()
         exact_row = harness.rows[0]
-        self.assertEqual(exact_row["outcome"], "inconclusive")
-        self.assertEqual(exact_row["details"]["evidence_basis"], "fixture_materialization")
+        self.assertEqual(exact_row["outcome"], "passed")
+        self.assertEqual(exact_row["details"]["evidence_basis"], "repository_owned_disposable_observer")
         self.assertFalse(exact_row["details"]["runtime_proof"])
         self.assertEqual(exact_row["tuple"]["source_repository"], expected_identity["source_repository"])
 
@@ -851,8 +905,8 @@ print(json.dumps(value))
         ):
             harness.journeys()
         row = next(item for item in harness.rows if item["scenario"] == "direct_external_package")
-        self.assertEqual(row["outcome"], "inconclusive")
-        self.assertEqual(row["details"]["evidence_basis"], "fixture_materialization")
+        self.assertEqual(row["outcome"], "passed")
+        self.assertEqual(row["details"]["evidence_basis"], "repository_owned_disposable_observer")
         self.assertEqual(row["details"]["tree_digest_algorithm"], "agentplugins-tree-sha256-v1")
         self.assertEqual([call.args[0][0] for call in command.call_args_list], ["add", "info", "remove"])
         self.assertEqual(row["details"]["operations"]["info"]["outcome"], "passed")
@@ -864,8 +918,8 @@ print(json.dumps(value))
         rejected = {"fork_created": True, "submission_rejected": True, "no_side_effect": True, "no_candidate": True}
         cases = (
             (
-                "missing reconciliation",
-                "inconclusive",
+                "receipt-only materialization",
+                "passed",
                 [
                     ("passed", {"package_digest": digest, "client_version": "cursor-test-v1", "mutated": True}, "added"),
                     ("passed", {"receipt_reconciled": True, "native_discovery_reconciled": False}, "partial"),

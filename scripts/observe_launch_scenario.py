@@ -466,20 +466,21 @@ def lifecycle(
             passed = passed and after["manager"]["committed_receipts"] > 0
         elif operation == "remove":
             passed = passed and all(after["materialized_mentions"][client] == 0 for client in clients)
-        outcomes["discovery" if operation == "info" else operation] = (
-            "inconclusive" if operation == "info" and passed else "passed" if passed else "failed"
-        )
+        # The info command is part of the receipt-backed lifecycle assertion.
+        # It is deliberately not named or exported as native discovery proof.
+        outcomes[operation] = "passed" if passed else "failed"
         if value is not None:
             values[operation] = value
     representative = values.get("info") or values.get("add") or {}
     tuple_value = evidence_tuple(context, representative, "fixture-manager-receipts-and-materialized-files")
     tuple_value["client_version"] = None
-    materialization_passed = all(value == "passed" for key, value in outcomes.items() if key != "discovery")
+    materialization_passed = all(value == "passed" for value in outcomes.values())
     passed = materialization_passed
     return passed, {
         "command_traces": traces, "operation_observations": observations,
         "operation_outcomes": outcomes, "values": values, "identities": identities, "tuple": tuple_value,
-        "evidence_basis": "fixture_materialization", "runtime_proof": False,
+        "evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False,
+        "native_discovery_proof": False,
         "no_newer_release_update_noop": outcomes.get("update") == "passed",
     }
 
@@ -530,7 +531,8 @@ def shared_backend_lifecycle(
     return passed, {
         "command_traces": traces, "operation_observations": observations,
         "affected_surfaces": surfaces, "physical_mutations": mutations, "tuple": tuple_value,
-        "evidence_basis": "fixture_materialization", "runtime_proof": False,
+        "evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False,
+        "native_discovery_proof": False,
     }
 
 
@@ -1425,7 +1427,7 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, st
         passed, lifecycle_value = lifecycle(binary, product, (client,), root, challenge, challenge_context, include_repair=False)
         traces.extend(lifecycle_value["command_traces"])
         proof = lifecycle_value
-        reason = "fixture lifecycle materialized; native discovery requires protected external observer evidence" if passed else "fixture lifecycle materialization was incomplete"
+        reason = "disposable lifecycle and materialization postconditions passed; native discovery was not claimed" if passed else "disposable lifecycle materialization was incomplete"
     elif scenario == "context7_grouped_lifecycle":
         clients = ("codex", "cursor", "kiro")
         passed, lifecycle_value = lifecycle(binary, "context7", clients, root, challenge, challenge_context, include_repair=True)
@@ -1447,7 +1449,7 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, st
             "acquisition_digests": acquisition,
             "target_outcomes": {client: "passed" if passed else "failed" for client in clients},
         }
-        reason = "one fixture acquisition and three materializations observed; native discovery was not claimed" if passed else "grouped fixture lifecycle did not prove one acquisition and every target materialization"
+        reason = "one disposable acquisition and three materializations observed; native discovery was not claimed" if passed else "grouped disposable lifecycle did not prove one acquisition and every target materialization"
     elif scenario == "shared_copilot_vscode_backend":
         passed, shared_value = shared_backend_lifecycle(binary, root, challenge, challenge_context)
         traces.extend(shared_value["command_traces"])
@@ -1566,12 +1568,14 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, st
     result = {
         "schema_version": 1, "scenario_id": scenario, "challenge": challenge,
         "started_at": traces[0]["started_at"] if traces else now(), "observed_at": now(),
-        # This repository-owned runner only manipulates disposable fixtures.
-        # Even a satisfied local postcondition is not native/runtime proof.
-        "outcome": "inconclusive" if passed else "failed", "reason": reason,
+        # This repository-owned runner proves only disposable lifecycle,
+        # materialization, fault, and postcondition behavior. Native discovery
+        # and runtime claims remain exclusive to the protected observer input.
+        "outcome": "passed" if passed else "failed", "reason": reason,
         "command_traces": traces, "before": before, "after": after, "proof": proof,
         "client_version": None,
-        "evidence_basis": "fixture_materialization", "runtime_proof": False,
+        "evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False,
+        "native_discovery_proof": False,
         "manager_observer": "agentplugins-state-tree-v1", "native_observer": "native-client-tree-v1",
     }
     if validator_artifact is not None:
