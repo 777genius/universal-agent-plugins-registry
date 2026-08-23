@@ -494,11 +494,18 @@ def validate_reproduced_bridges(
                     reproduce.add(distribution["product_id"])
                 elif not eligible:
                     if old_release is None:
-                        require(
-                            sequence == current_release["sequence"],
-                            f"{distribution['id']}@{sequence}: inactive historical bridge has no reproducible recipe",
+                        retired_historical = (
+                            policy["status"] == "revoked"
+                            and isinstance(release["package_source"]["revision"], str)
+                            and SHA_RE.fullmatch(release["package_source"]["revision"]) is not None
+                            and release.get("published_at") is None
                         )
-                        reproduce.add(distribution["product_id"])
+                        if not retired_historical:
+                            require(
+                                sequence == current_release["sequence"],
+                                f"{distribution['id']}@{sequence}: inactive historical bridge has no reproducible recipe",
+                            )
+                            reproduce.add(distribution["product_id"])
                     else:
                         require(
                             old_release == release,
@@ -682,19 +689,43 @@ def build_candidate(
                         finally:
                             temporary.cleanup()
                 elif in_repository:
-                    require(
-                        reviewed_revision is None and reviewed_published_at is None,
-                        f"{label}: new in-repository release must have an unresolved revision and no published_at",
+                    retired_historical = (
+                        policy["status"] == "revoked"
+                        and isinstance(reviewed_revision, str)
+                        and SHA_RE.fullmatch(reviewed_revision) is not None
+                        and reviewed_published_at is None
                     )
-                    release["published_at"] = None
-                    # Review source cannot author this binding.  Only an unresolved
-                    # revision is bound after the checked-out merge tree passes the
-                    # reviewed digest checks below.
-                    verify_package(
-                        repository_root / package_source["path"], release, label,
-                        require_closed_runtime=require_closed_runtime,
-                    )
-                    package_source["revision"] = source_commit
+                    if retired_historical:
+                        # A never-published release may retain reviewed historical
+                        # bytes after the live package path advances. This exception
+                        # is terminally revoked; eligible releases still bind only
+                        # to the checked-out post-merge tree below.
+                        temporary = acquire_external(
+                            package_source["repository"], reviewed_revision,
+                            package_source["path"], repository_root,
+                        )
+                        try:
+                            verify_package(
+                                Path(temporary.name) / "checkout" / package_source["path"],
+                                release, label, require_closed_runtime=False,
+                            )
+                        finally:
+                            temporary.cleanup()
+                        release["published_at"] = None
+                    else:
+                        require(
+                            reviewed_revision is None and reviewed_published_at is None,
+                            f"{label}: new in-repository release must have an unresolved revision and no published_at",
+                        )
+                        release["published_at"] = None
+                        # Review source cannot author an eligible binding. Only an
+                        # unresolved revision is bound after the checked-out merge
+                        # tree passes the reviewed digest checks below.
+                        verify_package(
+                            repository_root / package_source["path"], release, label,
+                            require_closed_runtime=require_closed_runtime,
+                        )
+                        package_source["revision"] = source_commit
                 else:
                     require(
                         isinstance(reviewed_revision, str) and SHA_RE.fullmatch(reviewed_revision) is not None and reviewed_published_at is None,

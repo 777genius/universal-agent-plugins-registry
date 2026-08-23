@@ -3,15 +3,19 @@
 Portable Agent Plugins package for Context7. Pull up-to-date, version-specific documentation and code examples directly from source repositories into agent context.
 
 <!-- agentplugins-install:start -->
-## Installation unavailable
+## Install
 
-> Installation is currently unavailable because the Directory has no eligible release target.
+```bash
+npx universal-agent-plugins add context7 --target codex
+```
 <!-- agentplugins-install:end -->
 
 This is an independent community package for [Agent Plugins 1.0](https://agent-plugins.org/specification). It is not an endorsement or an official package from Context7.
 
 - Component: MCP server
 - Transport: `stdio`
+- Runtime: integrity-locked `@upstash/context7-mcp@4.0.3`; install scripts are disabled
+- Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Upstream documentation: https://context7.com
 - Authentication: No credential is declared by the package. Context7 may apply its own service limits.
 

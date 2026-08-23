@@ -990,19 +990,18 @@ class DirectoryDomainTests(unittest.TestCase):
                 continue
             suspended_live_npx = {
                 "777genius/chrome-devtools",
-                "777genius/chrome-devtools-bridge",
-                "777genius/context7",
                 "777genius/firebase",
                 "777genius/hubspot-developer",
             }
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
-            self.assertEqual([item["sequence"] for item in distribution["releases"]], [1])
+            expected_sequences = [1, 2] if distribution["id"] in {"777genius/chrome-devtools-bridge", "777genius/context7"} else [1]
+            self.assertEqual([item["sequence"] for item in distribution["releases"]], expected_sequences)
             self.assertEqual(
                 [item["tree_digest_algorithm"] for item in distribution["releases"]],
-                ["agentplugins-tree-sha256-v1"],
+                ["agentplugins-tree-sha256-v1"] * len(expected_sequences),
             )
-            self.assertEqual([item["release_sequence"] for item in distribution["release_policies"]], [1])
+            self.assertEqual([item["release_sequence"] for item in distribution["release_policies"]], expected_sequences)
 
     def test_bridge_cohort_preserves_every_migrated_legacy_distribution(self) -> None:
         source = self.source()
@@ -1031,7 +1030,7 @@ class DirectoryDomainTests(unittest.TestCase):
             self.assertEqual(release["tree_digest"], registry.directory_tree_digest(root))
             self.assertEqual(release["manifest_digest"], registry.digest_bytes((root / "plugin.json").read_bytes()))
 
-    def test_real_bridge_defaults_qualified_history_and_fail_closed_npx_resolution(self) -> None:
+    def test_real_bridge_defaults_qualified_history_and_locked_npm_resolution(self) -> None:
         source = self.source()
         expected_defaults = {
             "cloudflare-docs": "777genius/cloudflare-docs-bridge",
@@ -1041,13 +1040,16 @@ class DirectoryDomainTests(unittest.TestCase):
             self.assertEqual(registry.resolve_directory(source, product, ["codex"])["distribution_id"], bridge)
             legacy = f"777genius/{product}"
             self.assertEqual(registry.resolve_directory(source, legacy, ["codex"])["distribution_id"], legacy)
-        with self.assertRaisesRegex(registry.RegistryError, r"chrome-devtools: no distribution supports"):
-            registry.resolve_directory(source, "chrome-devtools", ["codex"])
-        for distribution_id in ("777genius/chrome-devtools", "777genius/chrome-devtools-bridge"):
-            with self.assertRaisesRegex(registry.RegistryError, rf"{distribution_id}: distribution is suspended"):
-                registry.resolve_directory(source, distribution_id, ["codex"])
-        with self.assertRaisesRegex(registry.RegistryError, r"context7: no distribution supports"):
-            registry.resolve_directory(source, "context7", ["codex"])
+        chrome = registry.resolve_directory(source, "chrome-devtools", ["codex"])
+        self.assertEqual((chrome["distribution_id"], chrome["release_sequence"]), ("777genius/chrome-devtools-bridge", 2))
+        with self.assertRaisesRegex(registry.RegistryError, r"777genius/chrome-devtools: distribution is suspended"):
+            registry.resolve_directory(source, "777genius/chrome-devtools", ["codex"])
+        self.assertEqual(
+            registry.resolve_directory(source, "777genius/chrome-devtools-bridge", ["codex"])["release_sequence"],
+            2,
+        )
+        context7_resolution = registry.resolve_directory(source, "context7", ["codex"])
+        self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("777genius/context7", 2))
         with self.assertRaisesRegex(registry.RegistryError, r"upstash/context7: .* evidence .* for codex"):
             registry.resolve_directory(source, "upstash/context7", ["codex"])
 
@@ -1055,12 +1057,10 @@ class DirectoryDomainTests(unittest.TestCase):
             product for product in registry.directory_preview(source)["products"]
             if product["id"] == "context7"
         )
-        self.assertTrue(all(
-            not distribution["eligible_targets"]
-            for distribution in context7["distributions"]
-        ))
+        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 2)
+        self.assertEqual([item["client"] for item in local["eligible_targets"]], ["codex", "cursor", "copilot", "vscode", "kiro"])
 
-    def test_both_chrome_distributions_are_suspended_and_all_policies_revoked(self) -> None:
+    def test_chrome_bridge_has_one_locked_active_release_and_legacy_bytes_stay_revoked(self) -> None:
         source = self.source()
         chrome_ids = {"777genius/chrome-devtools", "777genius/chrome-devtools-bridge"}
         chrome = {
@@ -1068,19 +1068,39 @@ class DirectoryDomainTests(unittest.TestCase):
             if item["id"] in chrome_ids
         }
         self.assertEqual(set(chrome), chrome_ids)
-        for distribution in chrome.values():
-            self.assertEqual(distribution["status"], "suspended")
-            self.assertTrue(distribution["release_policies"])
-            self.assertEqual(
-                {policy["status"] for policy in distribution["release_policies"]},
-                {"revoked"},
-            )
+        self.assertEqual(chrome["777genius/chrome-devtools"]["status"], "suspended")
+        self.assertEqual({policy["status"] for policy in chrome["777genius/chrome-devtools"]["release_policies"]}, {"revoked"})
+        bridge = chrome["777genius/chrome-devtools-bridge"]
+        self.assertEqual(bridge["status"], "active")
+        self.assertEqual([(policy["release_sequence"], policy["status"]) for policy in bridge["release_policies"]], [(1, "revoked"), (2, "active")])
+        registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "chrome-devtools")
+
+    def test_context7_locked_npm_runtime_is_complete(self) -> None:
+        registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "context7")
+        source = self.source()
+        registry.validate_active_local_runtime_closures(source)
+
+    def test_locked_npm_runtime_rejects_tampered_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "context7"
+            shutil.copytree(registry.ROOT / "plugins" / "context7", package)
+            lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
+            lock = json.loads(lock_path.read_text())
+            dependency = next(value for key, value in lock["packages"].items() if key)
+            dependency["integrity"] = "sha512-not-base64"
+            lock_path.write_text(json.dumps(lock))
+            config_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "invalid SHA-512 integrity"):
+                registry.validate_locked_npm_runtime(package)
 
     def test_active_non_bridge_live_npx_distribution_is_rejected(self) -> None:
         source = self.source()
         distribution = next(
             item for item in source["distributions"]
-            if item["id"] == "777genius/chrome-devtools"
+            if item["id"] == "777genius/firebase"
         )
         self.assertEqual(distribution["kind"], "community")
         distribution["status"] = "active"
@@ -1112,7 +1132,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "777genius/github-bridge": ("github/github-mcp-server", "fcdd664099f957c4a7dc183d9381cef191e8c8a9"),
         }
         for distribution_id, provenance in expected.items():
-            release = distributions[distribution_id]["releases"][0]
+            release = distributions[distribution_id]["releases"][-1]
             self.assertEqual((release["build_provenance"]["upstream_repository"], release["build_provenance"]["upstream_revision"]), provenance)
             self.assertIsNone(release["package_source"]["revision"])
         context7 = distributions["upstash/context7"]["releases"][0]
@@ -1165,7 +1185,7 @@ class DirectoryDomainTests(unittest.TestCase):
         for label, mutate in mutations:
             changed = copy.deepcopy(source)
             distribution = next(item for item in changed["distributions"] if item["id"] == first["id"])
-            mutate(distribution, distribution["releases"][0])
+            mutate(distribution, distribution["releases"][-1])
             with self.subTest(label=label), self.assertRaises(registry.RegistryError):
                 registry.validate_bridge_bindings(changed, build_reports=reports)
 
@@ -1186,7 +1206,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_bridge_binding_uses_newest_release_without_revalidating_historical_bytes(self) -> None:
         source = self.source()
         reports = self.bridge_reports()
-        distribution = next(item for item in source["distributions"] if item["kind"] == "community_bridge")
+        distribution = next(item for item in source["distributions"] if item["id"] == "777genius/cloudflare-docs-bridge")
         historical = copy.deepcopy(distribution["releases"][0])
         historical["package_source"]["revision"] = "1" * 40
         historical["manifest_digest"] = "sha256:" + "1" * 64

@@ -1118,12 +1118,31 @@
       "id": "777genius/chrome-devtools-bridge",
       "product_id": "chrome-devtools",
       "kind": "community_bridge",
-      "status": "suspended",
+      "status": "active",
       "packager": "777genius",
       "releases": [
         {
           "sequence": 1,
           "package_version": "1.7.0",
+          "manifest_name": "chrome-devtools",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins",
+            "revision": "0720b65a9fba93853a45be0ce78677aeea6c7fa0",
+            "path": "plugins/chrome-devtools"
+          },
+          "build_provenance": {
+            "upstream_repository": "ChromeDevTools/chrome-devtools-mcp",
+            "upstream_revision": "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:98172304c27836ebcbf842a5970b128ce8b9688ec06dcf136c35f0688691053a",
+          "manifest_digest": "sha256:02a77a0509681567df75e941175b148c1bcdfe0001cec24cfef8300b85547850",
+          "components": ["mcp"]
+        },
+        {
+          "sequence": 2,
+          "package_version": "1.7.0-uap.1",
           "manifest_name": "chrome-devtools",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
@@ -1136,8 +1155,8 @@
             "upstream_revision": "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:98172304c27836ebcbf842a5970b128ce8b9688ec06dcf136c35f0688691053a",
-          "manifest_digest": "sha256:02a77a0509681567df75e941175b148c1bcdfe0001cec24cfef8300b85547850",
+          "tree_digest": "sha256:86738963d73749f0949d41fb2dbb529f1b0e1d5f07178a1105c0664e571f3c9d",
+          "manifest_digest": "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265",
           "components": ["mcp"]
         }
       ],
@@ -1145,6 +1164,19 @@
         {
           "release_sequence": 1,
           "status": "revoked",
+          "minimum_installer_version": "0.1.8",
+          "targets": [
+            {"client": "codex", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
+            {"client": "cursor", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
+            {"client": "copilot", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
+            {"client": "vscode", "authentication": "not_required", "scopes": ["user"], "delivery": "prepared"},
+            {"client": "kiro", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"}
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 2,
+          "status": "active",
           "minimum_installer_version": "0.1.8",
           "targets": [
             {"client": "codex", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
@@ -1610,7 +1642,7 @@
       "id": "777genius/context7",
       "product_id": "context7",
       "kind": "community",
-      "status": "suspended",
+      "status": "active",
       "packager": "777genius",
       "releases": [
         {
@@ -1630,12 +1662,77 @@
             "mcp"
           ],
           "published_at": "2026-08-09T22:28:33Z"
+        },
+        {
+          "sequence": 2,
+          "package_version": "0.2.0",
+          "manifest_name": "context7",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins",
+            "revision": null,
+            "path": "plugins/context7"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:e6569f012d35cbc1c4c3e44fef561a0324a29ec1d8adcedf24bb3629e9caaddb",
+          "manifest_digest": "sha256:6f1cca4322bc7bcca4ef0d7fbf33d3b7b0bf3b132b10b80fe5dd27e58c0ff327",
+          "components": [
+            "mcp"
+          ]
         }
       ],
       "release_policies": [
         {
           "release_sequence": 1,
           "status": "revoked",
+          "minimum_installer_version": "0.1.8",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 2,
+          "status": "active",
           "minimum_installer_version": "0.1.8",
           "targets": [
             {

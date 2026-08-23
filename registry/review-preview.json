@@ -1169,7 +1169,545 @@
         "777genius/chrome-devtools",
         "777genius/chrome-devtools-bridge"
       ],
-      "target_resolutions": [],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        }
+      ],
       "distributions": [
         {
           "id": "777genius/chrome-devtools",
@@ -1194,13 +1732,34 @@
         {
           "id": "777genius/chrome-devtools-bridge",
           "kind": "community_bridge",
-          "status": "suspended",
-          "release_sequence": 1,
-          "package_version": "1.7.0",
+          "status": "active",
+          "release_sequence": 2,
+          "package_version": "1.7.0-uap.1",
           "components": [
             "mcp"
           ],
-          "eligible_targets": [],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
           "current_evidence": [],
           "source": {
             "repository": "777genius/universal-agent-plugins",
@@ -1208,8 +1767,8 @@
             "path": "plugins/chrome-devtools"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:98172304c27836ebcbf842a5970b128ce8b9688ec06dcf136c35f0688691053a",
-          "manifest_digest": "sha256:02a77a0509681567df75e941175b148c1bcdfe0001cec24cfef8300b85547850"
+          "tree_digest": "sha256:86738963d73749f0949d41fb2dbb529f1b0e1d5f07178a1105c0664e571f3c9d",
+          "manifest_digest": "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265"
         }
       ]
     },
@@ -4790,27 +5349,555 @@
         "777genius/context7",
         "upstash/context7"
       ],
-      "target_resolutions": [],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/context7",
+          "release_sequence": 2
+        }
+      ],
       "distributions": [
         {
           "id": "777genius/context7",
           "kind": "community",
-          "status": "suspended",
-          "release_sequence": 1,
-          "package_version": "0.1.0",
+          "status": "active",
+          "release_sequence": 2,
+          "package_version": "0.2.0",
           "components": [
             "mcp"
           ],
-          "eligible_targets": [],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
           "current_evidence": [],
           "source": {
             "repository": "777genius/universal-agent-plugins",
-            "revision": "2ddbb99dd190c1792b79904f9875e6322bccd243",
+            "revision": null,
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:242759b2c2eec4807897d34009fab5655403f7c164a8ec151f7dbf936cc8058b",
-          "manifest_digest": "sha256:341c54728c2f50d3876b12a6e94ba06751c94d2be215037846d06f93a018434e"
+          "tree_digest": "sha256:e6569f012d35cbc1c4c3e44fef561a0324a29ec1d8adcedf24bb3629e9caaddb",
+          "manifest_digest": "sha256:6f1cca4322bc7bcca4ef0d7fbf33d3b7b0bf3b132b10b80fe5dd27e58c0ff327"
         },
         {
           "id": "upstash/context7",

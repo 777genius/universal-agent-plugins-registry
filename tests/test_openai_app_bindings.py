@@ -610,7 +610,8 @@ class OpenAIAppBindingTests(unittest.TestCase):
 
         self.assertEqual(generated, expected)
         self.assertEqual(listed, expected)
-        self.assertTrue({"chrome-devtools", "context7", "firebase", "hubspot-developer"}.isdisjoint(expected))
+        self.assertTrue({"chrome-devtools", "context7"}.issubset(expected))
+        self.assertTrue({"firebase", "hubspot-developer"}.isdisjoint(expected))
 
     @staticmethod
     def resolves(source: dict[str, object], product: str, target: str) -> bool:

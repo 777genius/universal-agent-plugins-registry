@@ -62,7 +62,7 @@ RELEASE_CHECKSUMS_NAME = "checksums.txt"
 RELEASE_MANIFEST_SCHEMA = ROOT / "schemas" / "e2e" / "release-manifest.schema.json"
 TRUSTED_CATALOG_REPOSITORY = "777genius/universal-agent-plugins"
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
-TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.10"
+TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.12"
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",

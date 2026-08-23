@@ -8,6 +8,7 @@ GitHub archive, bounds and validates it, and never invokes package content.
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import hashlib
 import itertools
@@ -76,6 +77,9 @@ KIND_PRIORITY = {"upstream": 0, "community_bridge": 1, "community": 2}
 DIRECTORY_TREE_DIGEST_ALGORITHM = "agentplugins-tree-sha256-v1"
 DIRECTORY_TREE_DIGEST_DOMAIN = b"agentplugins.package-tree\x00sha256\x00v1"
 DIRECTORY_MINIMUM_INSTALLER_VERSION = "0.1.8"
+LOCKED_NPM_RUNTIME_PATH = "io.github.777genius.agentplugins/runtime"
+LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
+LOCKED_NPM_LAUNCHER_DIGEST = "sha256:437bbe6b14ccdabde0531330d8b3b2ece3e7b4dc20f298f9ffc58974a2ffccb7"
 
 
 class RegistryError(Exception):
@@ -1096,6 +1100,100 @@ def _package_uses_unclosed_live_npx(package_root: Path) -> bool:
     )
 
 
+def validate_locked_npm_runtime(package_root: Path) -> None:
+    """Validate the repository-owned, integrity-locked npm bootstrap contract."""
+    runtime_root = package_root / LOCKED_NPM_RUNTIME_PATH
+    mcp_path = package_root / "mcp.json"
+    if not runtime_root.exists():
+        return
+    require(runtime_root.is_dir() and not runtime_root.is_symlink(), f"{runtime_root}: runtime extension must be a directory")
+    require(mcp_path.is_file(), f"{runtime_root}: locked npm runtime requires mcp.json")
+    mcp = read_object(mcp_path)
+    servers = mcp.get("mcpServers")
+    require(isinstance(servers, dict), f"{mcp_path}: mcpServers must be an object")
+    users = [
+        name for name, server in servers.items()
+        if isinstance(server, dict)
+        and server.get("command") == "node"
+        and server.get("args") == [LOCKED_NPM_LAUNCHER_ARGUMENT]
+    ]
+    require(len(users) == 1, f"{runtime_root}: exactly one MCP server must use the locked npm launcher")
+
+    launcher = runtime_root / "launcher.mjs"
+    package_path = runtime_root / "package.json"
+    lock_path = runtime_root / "package-lock.json"
+    config_path = runtime_root / "runtime.json"
+    require(
+        all(path.is_file() and not path.is_symlink() for path in (launcher, package_path, lock_path, config_path)),
+        f"{runtime_root}: launcher, package.json, package-lock.json, and runtime.json are required",
+    )
+    require(digest_bytes(launcher.read_bytes()) == LOCKED_NPM_LAUNCHER_DIGEST, f"{launcher}: launcher is not the reviewed implementation")
+    package = read_object(package_path)
+    config = read_object(config_path)
+    lock_body = lock_path.read_bytes()
+    lock = read_object(lock_path)
+    require(
+        set(package) == {"name", "version", "private", "dependencies"}
+        and package.get("private") is True
+        and isinstance(package.get("dependencies"), dict)
+        and len(package["dependencies"]) == 1,
+        f"{package_path}: runtime package must contain one exact production dependency and no scripts",
+    )
+    dependency, version = next(iter(package["dependencies"].items()))
+    require(
+        isinstance(dependency, str) and isinstance(version, str)
+        and version and not any(token in version for token in ("*", "^", "~", ">", "<", "||", " ")),
+        f"{package_path}: runtime dependency must use one exact npm version",
+    )
+    require(
+        set(config) == {"schema_version", "package", "version", "entrypoint", "package_lock_sha256"}
+        and config.get("schema_version") == 1
+        and config.get("package") == dependency
+        and config.get("version") == version
+        and config.get("package_lock_sha256") == digest_bytes(lock_body),
+        f"{config_path}: runtime identity does not match package.json and package-lock.json",
+    )
+    entrypoint = config.get("entrypoint")
+    dependency_root = f"node_modules/{dependency}/"
+    require(
+        isinstance(entrypoint, str) and entrypoint.startswith(dependency_root)
+        and "\\" not in entrypoint and ".." not in PurePosixPath(entrypoint).parts,
+        f"{config_path}: entrypoint must remain inside the locked root dependency",
+    )
+    packages = lock.get("packages")
+    require(
+        lock.get("lockfileVersion") == 3 and lock.get("requires") is True
+        and isinstance(packages, dict) and isinstance(packages.get(""), dict),
+        f"{lock_path}: npm lockfile v3 with a root package is required",
+    )
+    require(packages[""].get("dependencies") == {dependency: version}, f"{lock_path}: root dependency identity mismatch")
+    root_dependency = packages.get(f"node_modules/{dependency}")
+    require(isinstance(root_dependency, dict) and root_dependency.get("version") == version, f"{lock_path}: locked root package version mismatch")
+    for relative, entry in packages.items():
+        if relative == "":
+            continue
+        require(
+            isinstance(relative, str) and relative.startswith("node_modules/")
+            and isinstance(entry, dict) and entry.get("link") is not True
+            and isinstance(entry.get("version"), str),
+            f"{lock_path}: invalid installed package entry {relative!r}",
+        )
+        resolved = entry.get("resolved")
+        integrity = entry.get("integrity")
+        parsed = urlsplit(resolved) if isinstance(resolved, str) else None
+        require(
+            parsed is not None and parsed.scheme == "https" and parsed.hostname == "registry.npmjs.org"
+            and parsed.username is None and parsed.password is None and not parsed.fragment,
+            f"{lock_path}: {relative} is not pinned to the npm registry",
+        )
+        require(isinstance(integrity, str) and integrity.startswith("sha512-"), f"{lock_path}: {relative} lacks SHA-512 integrity")
+        try:
+            decoded = base64.b64decode(integrity.removeprefix("sha512-"), validate=True)
+        except (ValueError, TypeError) as error:
+            raise RegistryError(f"{lock_path}: {relative} has invalid SHA-512 integrity") from error
+        require(len(decoded) == 64, f"{lock_path}: {relative} has invalid SHA-512 integrity length")
+
+
 def validate_release_package(
     package_root: Path, release: dict[str, object], *, label: str | None = None,
     allow_unresolved_revision: bool = False, require_closed_runtime: bool = True,
@@ -1150,6 +1248,7 @@ def validate_release_package(
             f"{identity}: reacquired {field} differs from submitted metadata: {actual!r} != {submitted!r}",
         )
     if require_closed_runtime:
+        validate_locked_npm_runtime(package_root)
         require(
             not _package_uses_unclosed_live_npx(package_root),
             f"{identity}: package uses live npx without a recognized content-addressed runtime closure contract",
@@ -1179,6 +1278,7 @@ def validate_active_local_runtime_closures(
                 continue
             package_root = repository_root / package_source["path"]
             require(package_root.is_dir(), f"{distribution['id']}@{release['sequence']}: package path is missing")
+            validate_locked_npm_runtime(package_root)
             require(
                 not _package_uses_unclosed_live_npx(package_root),
                 f"{distribution['id']}@{release['sequence']}: active in-repository release uses live npx "

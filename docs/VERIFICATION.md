@@ -1,13 +1,13 @@
 # Verification record
 
-Updated: 2026-08-10.
+Updated: 2026-08-22.
 
 Every committed evidence link below resolves through the exact commit that
 contains the cited bytes and is accompanied by their SHA-256. These are
 historical observations, not claims about current rolling clients or package
 trees. Current stable-launch runtime/OAuth evidence is unavailable until the
 protected launch workflow succeeds against one exact signed production
-publication and the attested `agentplugins-v0.1.10` release.
+publication and the attested `agentplugins-v0.1.12` release.
 
 Current distribution, release sequence, tree digest, and manifest digest are
 generated from [`registry/directory.json`](../registry/directory.json) and are
@@ -39,7 +39,7 @@ checked there rather than duplicated in this historical record.
 The npm registry stable tags were checked before pinning:
 
 - `chrome-devtools-mcp@1.7.0`
-- `@upstash/context7-mcp@4.0.0`
+- `@upstash/context7-mcp@4.0.3`
 - `firebase-tools@15.26.0`
 - `@hubspot/cli@8.12.0`
 

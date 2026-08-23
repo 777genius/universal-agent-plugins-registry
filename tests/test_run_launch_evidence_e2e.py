@@ -279,7 +279,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         config = e2e.read_production_config()
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
-        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.10")
+        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.12")
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
         self.assertEqual(
