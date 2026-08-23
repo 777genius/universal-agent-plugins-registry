@@ -78,6 +78,7 @@ DIRECTORY_TREE_DIGEST_ALGORITHM = "agentplugins-tree-sha256-v1"
 DIRECTORY_TREE_DIGEST_DOMAIN = b"agentplugins.package-tree\x00sha256\x00v1"
 DIRECTORY_MINIMUM_INSTALLER_VERSION = "0.1.8"
 LOCKED_NPM_RUNTIME_PATH = "io.github.777genius.agentplugins/runtime"
+LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.12"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
 LOCKED_NPM_LAUNCHER_DIGEST = "sha256:437bbe6b14ccdabde0531330d8b3b2ece3e7b4dc20f298f9ffc58974a2ffccb7"
 
@@ -989,12 +990,14 @@ def validate_changed_local_releases(
             continue
         label = f"{identity[0]}@{identity[1]}"
         revision = package_source["revision"]
-        require_closed_runtime = _policy_for(distribution, identity[1])["status"] != "revoked"
+        policy = _policy_for(distribution, identity[1])
+        require_closed_runtime = policy["status"] != "revoked"
         if revision is None:
             validate_release_package(
                 repository_root / package_source["path"], release,
                 label=label, allow_unresolved_revision=True,
                 require_closed_runtime=require_closed_runtime,
+                runtime_policy=policy if require_closed_runtime else None,
             )
         else:
             temporary = None
@@ -1006,6 +1009,7 @@ def validate_changed_local_releases(
                     Path(temporary.name) / "checkout" / package_source["path"],
                     release, label=label,
                     require_closed_runtime=require_closed_runtime,
+                    runtime_policy=policy if require_closed_runtime else None,
                 )
             except RegistryError:
                 raise
@@ -1050,6 +1054,7 @@ def validate_changed_external_releases(
         revision = package_source["revision"]
         require(isinstance(revision, str) and SHA_RE.fullmatch(revision) is not None, f"{label}: external source revision must be a full lowercase commit SHA")
         package_path = validate_registry_path(package_source["path"])
+        policy = _policy_for(distribution, identity[1])
         temporary = None
         try:
             temporary = acquirer(source_repository, revision, package_path, overrides.get(source_repository))
@@ -1057,7 +1062,8 @@ def validate_changed_external_releases(
             require(package_root.is_dir(), f"{label}: reacquired package path is unavailable")
             validate_release_package(
                 package_root, release, label=label,
-                require_closed_runtime=_policy_for(distribution, identity[1])["status"] != "revoked",
+                require_closed_runtime=policy["status"] != "revoked",
+                runtime_policy=policy if policy["status"] != "revoked" else None,
             )
         except RegistryError:
             raise
@@ -1204,9 +1210,27 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         require(len(decoded) == 64, f"{lock_path}: {relative} has invalid SHA-512 integrity length")
 
 
+def validate_locked_npm_runtime_policy(
+    package_root: Path, policy: dict[str, object], *, label: str,
+) -> None:
+    """Require the installer version that understands the reviewed runtime."""
+    runtime_root = package_root / LOCKED_NPM_RUNTIME_PATH
+    validate_locked_npm_runtime(package_root)
+    if not runtime_root.exists():
+        return
+    minimum = tuple(int(part) for part in str(policy["minimum_installer_version"]).split("."))
+    compatible = tuple(int(part) for part in LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION.split("."))
+    require(
+        minimum >= compatible,
+        f"{label}: locked npm runtime requires minimum installer version "
+        f"{LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION} or newer",
+    )
+
+
 def validate_release_package(
     package_root: Path, release: dict[str, object], *, label: str | None = None,
     allow_unresolved_revision: bool = False, require_closed_runtime: bool = True,
+    runtime_policy: dict[str, object] | None = None,
 ) -> None:
     """Validate the complete immutable package boundary used for eligibility.
 
@@ -1258,7 +1282,10 @@ def validate_release_package(
             f"{identity}: reacquired {field} differs from submitted metadata: {actual!r} != {submitted!r}",
         )
     if require_closed_runtime:
-        validate_locked_npm_runtime(package_root)
+        if runtime_policy is None:
+            validate_locked_npm_runtime(package_root)
+        else:
+            validate_locked_npm_runtime_policy(package_root, runtime_policy, label=identity)
         require(
             not _package_uses_unclosed_live_npx(package_root),
             f"{identity}: package uses live npx without a recognized content-addressed runtime closure contract",
@@ -1288,7 +1315,10 @@ def validate_active_local_runtime_closures(
                 continue
             package_root = repository_root / package_source["path"]
             require(package_root.is_dir(), f"{distribution['id']}@{release['sequence']}: package path is missing")
-            validate_locked_npm_runtime(package_root)
+            validate_locked_npm_runtime_policy(
+                package_root, policy,
+                label=f"{distribution['id']}@{release['sequence']}",
+            )
             require(
                 not _package_uses_unclosed_live_npx(package_root),
                 f"{distribution['id']}@{release['sequence']}: active in-repository release uses live npx "
@@ -1527,6 +1557,7 @@ def validate_directory(
                         package_root, release,
                         label=f"{distribution['id']}@{sequence}",
                         allow_unresolved_revision=True,
+                        runtime_policy=policy,
                     )
                 else:
                     fields = package_fields(package_root, [])

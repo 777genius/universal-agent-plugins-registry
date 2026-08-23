@@ -1059,8 +1059,19 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_migration_preserves_exact_package_bytes_and_provenance(self) -> None:
         source = self.source()
         for distribution in source["distributions"]:
+            releases = {release["sequence"]: release for release in distribution["releases"]}
             for policy in distribution["release_policies"]:
-                self.assertEqual(policy["minimum_installer_version"], registry.DIRECTORY_MINIMUM_INSTALLER_VERSION)
+                policy_release = releases[policy["release_sequence"]]
+                package_source = policy_release["package_source"]
+                runtime_root = registry.ROOT / package_source["path"] / registry.LOCKED_NPM_RUNTIME_PATH
+                expected_minimum = registry.DIRECTORY_MINIMUM_INSTALLER_VERSION
+                if (
+                    policy["status"] == "active"
+                    and package_source["revision"] is None
+                    and runtime_root.is_dir()
+                ):
+                    expected_minimum = registry.LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION
+                self.assertEqual(policy["minimum_installer_version"], expected_minimum)
             release = distribution["releases"][0]
             if release["package_source"]["revision"] is not None:
                 continue
@@ -1118,6 +1129,30 @@ class DirectoryDomainTests(unittest.TestCase):
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "context7")
         source = self.source()
         registry.validate_active_local_runtime_closures(source)
+
+    def test_active_locked_npm_runtime_rejects_incompatible_installer_policy(self) -> None:
+        source = self.source()
+        candidate = next(
+            (distribution, release, policy)
+            for distribution in source["distributions"]
+            for release in distribution["releases"]
+            for policy in distribution["release_policies"]
+            if policy["release_sequence"] == release["sequence"]
+            and distribution["status"] == "active"
+            and policy["status"] == "active"
+            and release["package_source"]["revision"] is None
+            and (
+                registry.ROOT
+                / release["package_source"]["path"]
+                / registry.LOCKED_NPM_RUNTIME_PATH
+            ).is_dir()
+        )
+        _distribution, _release, policy = candidate
+        policy["minimum_installer_version"] = "0.1.11"
+        with self.assertRaisesRegex(
+            registry.RegistryError, "locked npm runtime requires minimum installer version 0.1.12 or newer",
+        ):
+            registry.validate_active_local_runtime_closures(source)
 
     def test_locked_npm_runtime_rejects_tampered_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

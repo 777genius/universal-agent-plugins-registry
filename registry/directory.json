@@ -1177,7 +1177,7 @@
         {
           "release_sequence": 2,
           "status": "active",
-          "minimum_installer_version": "0.1.8",
+          "minimum_installer_version": "0.1.12",
           "targets": [
             {"client": "codex", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
             {"client": "cursor", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
@@ -1733,7 +1733,7 @@
         {
           "release_sequence": 2,
           "status": "active",
-          "minimum_installer_version": "0.1.8",
+          "minimum_installer_version": "0.1.12",
           "targets": [
             {
               "client": "codex",
