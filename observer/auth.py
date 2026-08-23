@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import threading
 import time
 import urllib.request
@@ -57,10 +58,17 @@ class JsonFetcher:
 
 
 class JwksCache:
+    """A bounded-stale cache; an outage can never extend key trust forever."""
+
+    REFRESH_SECONDS = 300
+    RETRY_SECONDS = 30
+    MAX_STALE_SECONDS = 900
+
     def __init__(self, url: str, fetch: Callable[[str], Any], monotonic: Callable[[], float] = time.monotonic):
         self._url, self._fetch, self._monotonic = url, fetch, monotonic
         self._expires = 0.0
         self._keys: dict[str, Any] = {}
+        self._last_success: float | None = None
         self._generation = 0
         self._next_unknown_refresh = 0.0
         self._negative: OrderedDict[str, int] = OrderedDict()
@@ -70,8 +78,9 @@ class JwksCache:
         with self._lock:
             now = self._monotonic()
             refreshed_expired_cache = False
-            if now >= self._expires:
-                self._refresh(now, required=not self._keys)
+            hard_stale = self._last_success is None or now - self._last_success >= self.MAX_STALE_SECONDS
+            if now >= self._expires or hard_stale:
+                self._refresh(now, required=not self._keys or hard_stale)
                 refreshed_expired_cache = True
             key = self._keys.get(kid)
             if key is not None:
@@ -112,12 +121,14 @@ class JwksCache:
             if not parsed:
                 raise ValueError("empty JWKS")
         except Exception:
-            self._expires = now + 30
+            self._expires = now + self.RETRY_SECONDS
             self._next_unknown_refresh = max(self._next_unknown_refresh, now + 60)
             if required:
+                self._keys.clear()
                 raise AuthenticationError("GitHub OIDC key discovery failed") from None
             return
-        self._keys, self._expires = parsed, now + 300
+        self._keys, self._expires = parsed, now + self.REFRESH_SECONDS
+        self._last_success = now
         self._generation += 1
         self._negative.clear()
 
@@ -213,6 +224,7 @@ class OidcVerifier:
 
 
 class ReplayStore:
+    MAX_ENTRIES = 4096
     def __init__(self, root: Path, now: Callable[[], float] = time.time):
         self.root, self.now = root, now
         self._lock = threading.Lock()
@@ -221,12 +233,23 @@ class ReplayStore:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         target = self.root / hashlib.sha256(jti.encode()).hexdigest()
         with self._lock:
-            for old in self.root.iterdir():
+            entries = list(self.root.iterdir())
+            retained = 0
+            for old in entries:
                 try:
+                    info = old.lstat()
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+                        raise AuthenticationError("GitHub OIDC replay store is not trusted")
                     if int(old.read_text()) < int(self.now()) - 60:
                         old.unlink()
+                    else:
+                        retained += 1
+                except AuthenticationError:
+                    raise
                 except (OSError, ValueError):
-                    continue
+                    raise AuthenticationError("GitHub OIDC replay store is not trusted") from None
+            if retained >= self.MAX_ENTRIES:
+                raise AuthenticationError("GitHub OIDC replay store quota exceeded")
             try:
                 descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             except FileExistsError:

@@ -5,12 +5,13 @@ Requires=uap-observer-signer.service uap-observer-runner.socket
 
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/test -f /opt/uap-observer-current/.complete
 User=uap-observer
 Group=uap-observer
 SupplementaryGroups=uap-observer-signer-ipc uap-observer-runner-ipc
-ExecStart=/opt/uap-observer-venv/bin/python -m observer.http_server --config /etc/uap-observer.json
-WorkingDirectory=/opt/uap-observer-runtime
-Environment=PYTHONPATH=/opt/uap-observer-runtime
+ExecStart=/opt/uap-observer-current/venv/bin/python -m observer.http_server --config /opt/uap-observer-current/etc/uap-observer.json
+WorkingDirectory=/opt/uap-observer-current/runtime
+Environment=PYTHONPATH=/opt/uap-observer-current/runtime
 Restart=on-failure
 NoNewPrivileges=yes
 PrivateDevices=yes
@@ -30,6 +31,8 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 InaccessiblePaths=-/var/run/docker.sock -/run/docker.sock
 ReadWritePaths=/var/lib/uap-observer/state
+ReadOnlyPaths=/opt/uap-observer-current
+BindReadOnlyPaths=/opt/uap-observer-current/etc/hosts:/etc/hosts
 UMask=0077
 
 [Install]

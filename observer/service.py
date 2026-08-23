@@ -31,6 +31,8 @@ DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 CHALLENGE_DOMAIN = b"UAP-STABLE-LAUNCH-CHALLENGE-V1\0"
 CACHE_SECONDS = 30 * 60
 MAX_RESPONSE_BYTES = 8 << 20
+MAX_CACHE_RUNS = 64
+MAX_CACHE_BYTES = 512 << 20
 
 
 class RequestValidationError(ValueError):
@@ -87,7 +89,10 @@ class ObserverService:
         self._coordinator = WorkCoordinator()
         config.state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-    def observe(self, request: Any, bearer_token: str, *, deadline: float | None = None) -> bytes:
+    def observe(
+        self, request: Any, bearer_token: str, *, deadline: float | None = None,
+        on_authenticated: Callable[[], None] | None = None,
+    ) -> bytes:
         deadline = deadline if deadline is not None else self.monotonic() + 900
         try:
             validated = validate_request(request, self.config)
@@ -97,6 +102,8 @@ class ObserverService:
         if validated["catalog_repository"] != auth.policy.repository:
             raise ValueError("request catalog repository is not allowlisted")
         self.corroborator.corroborate(auth)
+        if on_authenticated is not None:
+            on_authenticated()
         self.replay.consume(auth.claims["jti"], auth.claims["exp"])
         digest = request_digest(validated)
         leader = self._coordinator.enter(digest, deadline)
@@ -151,6 +158,7 @@ class ObserverService:
     def _execute(self, request: dict[str, Any], claims: dict[str, Any], digest: str, deadline: float) -> bytes:
         runs = self.config.state_root / "runs"
         runs.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._retain_cache(runs)
         target = self._target(request, digest)
         temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=runs))
         os.chmod(temporary, 0o700)
@@ -164,7 +172,10 @@ class ObserverService:
             artifacts = self.runner.run(
                 temporary, {"request": request, "github_attestation": github_attestation}, deadline=deadline,
             )
-            validate_artifact_schemas(artifacts, challenge=request["challenge"]["value"])
+            validate_artifact_schemas(
+                artifacts, challenge=request["challenge"]["value"],
+                scenario_contract_digest=request["scenario_contract_digest"],
+            )
             unsigned = {
                 "schema_version": 1, "challenge": request["challenge"]["value"],
                 "signed_at": datetime.fromtimestamp(self.now(), timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -193,37 +204,71 @@ class ObserverService:
                 shutil.rmtree(temporary)
             raise
 
+    def _retain_cache(self, runs: Path) -> None:
+        """Bound observer-owned cache entries without following hostile links."""
+        entries: list[tuple[float, int, Path]] = []
+        for path in runs.iterdir():
+            info = path.lstat()
+            if path.name.startswith(".pending-"):
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+                    raise ValueError("observer cache contains an untrusted pending entry")
+                continue
+            if path.name.startswith(".expired-"):
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+                    raise ValueError("observer cache contains an untrusted retired entry")
+                shutil.rmtree(path)
+                continue
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                raise ValueError("observer cache contains an untrusted entry")
+            children = list(path.iterdir())
+            if len(children) != 1 or children[0].name != "response.json":
+                raise ValueError("observer cache entry is incomplete")
+            response_info = children[0].lstat()
+            if not stat.S_ISREG(response_info.st_mode) or response_info.st_uid != os.geteuid() or response_info.st_nlink != 1:
+                raise ValueError("observer cache response is untrusted")
+            entries.append((response_info.st_mtime, response_info.st_size, path))
+        total = sum(size for _, size, _ in entries)
+        for modified, size, path in sorted(entries):
+            if len(entries) < MAX_CACHE_RUNS and total + MAX_RESPONSE_BYTES <= MAX_CACHE_BYTES:
+                break
+            shutil.rmtree(path)
+            entries.remove((modified, size, path))
+            total -= size
+
 
 def validate_request(value: Any, config: Config) -> dict[str, Any]:
     fields = {
         "schema_version", "purpose", "catalog_repository", "cli_release_repository",
         "cli_release_tag", "release_manifest_digest", "release_checksums_digest",
-        "directory_digest", "github", "challenge",
+        "directory_digest", "scenario_contract_digest", "github", "challenge",
     }
     if not isinstance(value, dict) or set(value) != fields or value.get("schema_version") != 1 or value.get("purpose") != "stable-launch-e2e":
         raise ValueError("observer request is not canonical")
     if value.get("cli_release_repository") != config.cli_release_repository or value.get("cli_release_tag") != config.cli_release_tag:
         raise ValueError("observer request release identity is not allowed")
-    if not all(DIGEST.fullmatch(str(value.get(key))) for key in ("release_manifest_digest", "release_checksums_digest", "directory_digest")):
+    if not all(DIGEST.fullmatch(str(value.get(key))) for key in ("release_manifest_digest", "release_checksums_digest", "directory_digest", "scenario_contract_digest")):
         raise ValueError("observer request digests are invalid")
     github, challenge = value.get("github"), value.get("challenge")
     if not isinstance(github, dict) or set(github) != {"sha", "run_id", "run_attempt"}:
         raise ValueError("observer request GitHub identity is invalid")
     if not HEX40.fullmatch(str(github["sha"])) or not str(github["run_id"]).isdigit() or not str(github["run_attempt"]).isdigit():
         raise ValueError("observer request GitHub identity is invalid")
-    challenge_fields = {"value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest", "root_id"}
+    challenge_fields = {"value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest", "scenario_contract_digest", "root_id"}
     if not isinstance(challenge, dict) or set(challenge) != challenge_fields or not all(isinstance(item, str) for item in challenge.values()):
         raise ValueError("observer request challenge is invalid")
     if any(challenge[a] != github[b] for a, b in (("github_sha", "sha"), ("run_id", "run_id"), ("run_attempt", "run_attempt"))):
         raise ValueError("observer request challenge identity differs")
     if challenge["release_manifest_digest"] != value["release_manifest_digest"] or challenge["directory_digest"] != value["directory_digest"]:
         raise ValueError("observer request challenge digests differ")
+    if challenge["scenario_contract_digest"] != value["scenario_contract_digest"]:
+        raise ValueError("observer request scenario contract differs")
     if not all(HEX64.fullmatch(challenge[key]) for key in ("value", "nonce", "root_id")):
         raise ValueError("observer request challenge is invalid")
     framed = canonical_json({
         "github_sha": challenge["github_sha"], "run_id": challenge["run_id"],
         "run_attempt": challenge["run_attempt"], "release_manifest_digest": challenge["release_manifest_digest"],
         "directory_digest": challenge["directory_digest"], "root_id": challenge["root_id"], "nonce": challenge["nonce"],
+        "scenario_contract_digest": challenge["scenario_contract_digest"],
     })
     if challenge["value"] != hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest():
         raise ValueError("observer request challenge is invalid")

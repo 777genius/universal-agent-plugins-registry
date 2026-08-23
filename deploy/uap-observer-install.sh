@@ -16,7 +16,7 @@ untrusted_caddy_archive=${6:?$usage}
 untrusted_caddy_config=${7:?$usage}
 caddy_config_digest=${8:?$usage}
 stage_root=/opt/uap-observer-source.new
-closure_digest=66b8e5db2bd312e43087ba79284da6bd645ba9642a91d40eafb30bb6bc7a38ef
+closure_digest=63c40563730d6dc3ad672d26fbde32e38017529597f97efd1a55871ecb2d23da
 activation_started=0
 activation_complete=0
 activated_paths=
@@ -37,10 +37,14 @@ cleanup() {
     set -e
   fi
   rm -rf /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
+  rm -rf "/opt/uap-observer-closures/.new-$closure_digest"
+  rm -f /opt/uap-observer-current.new
   rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
     /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
     /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
-    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
+    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new \
+    /etc/systemd/system/uap-observer-runner.service.d/egress.conf.new \
+    /etc/systemd/system/uap-observer.service.d/egress.conf.new
   for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
   for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do rm -f "/etc/systemd/system/$unit.new"; done
   exit "$status"
@@ -87,8 +91,8 @@ caddy_binary=$stage_root/caddy
 caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
-runner_digest=c8381582ba13608963e2cbf00e97cac036a5d4a2a8d309f006371cf92b91edf8
-adapter_digest=2821c820005e07ebeec588b24fabd8c7dfbebdb23d475ba0dbabcbb705356a95
+runner_digest=8be5c091aa02182522f975f121c857469d340f55db9a6f0d84170986fc52667c
+adapter_digest=97ffd6b54e08ce245d2dfa9690ac442abe35e77f1be63f03d56882468d15da82
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 
@@ -110,16 +114,39 @@ test "$(stat -c '%u:%a' "$adapter_config")" = "0:400"
 getent group uap-observer-signer-ipc >/dev/null || groupadd --system uap-observer-signer-ipc
 getent group uap-observer-runner-ipc >/dev/null || groupadd --system uap-observer-runner-ipc
 getent group uap-observer-adapter-config >/dev/null || groupadd --system uap-observer-adapter-config
+install -d -o root -g root -m 0755 /var/empty
 for identity in codex cursor kiro control; do
   getent group "uap-observer-$identity" >/dev/null || groupadd --system "uap-observer-$identity"
-  id "uap-observer-$identity" >/dev/null 2>&1 || useradd --system --gid "uap-observer-$identity" --home-dir /nonexistent --shell /usr/sbin/nologin "uap-observer-$identity"
+  id "uap-observer-$identity" >/dev/null 2>&1 || useradd --system --gid "uap-observer-$identity" --home-dir "/var/empty/uap-observer-$identity" --shell /usr/sbin/nologin "uap-observer-$identity"
   usermod -a -G uap-observer-adapter-config "uap-observer-$identity"
+  install -d -o "uap-observer-$identity" -g "uap-observer-$identity" -m 0700 "/var/empty/uap-observer-$identity"
 done
 getent group uap-observer >/dev/null || groupadd --system uap-observer
 getent group caddy >/dev/null || groupadd --system caddy
 id caddy >/dev/null 2>&1 || useradd --system --gid caddy --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy
 id uap-observer >/dev/null 2>&1 || useradd --system --gid uap-observer --home-dir /nonexistent --shell /usr/sbin/nologin uap-observer
 usermod -a -G uap-observer-signer-ipc,uap-observer-runner-ipc uap-observer
+
+identity_uids=
+identity_gids=
+for identity in codex cursor kiro control; do
+  account="uap-observer-$identity"
+  uid=$(id -u "$account")
+  gid=$(id -g "$account")
+  test "$uid" -ne 0
+  test "$(getent passwd "$account" | cut -d: -f6)" = "/var/empty/$account"
+  shell=$(getent passwd "$account" | cut -d: -f7)
+  case "$shell" in /usr/sbin/nologin|/sbin/nologin|/bin/false) ;; *) echo "adapter login shell differs" >&2; exit 1;; esac
+  test "$(getent group "$account" | cut -d: -f3)" = "$gid"
+  test "$(stat -c '%u:%g:%a' "/var/empty/$account")" = "$uid:$gid:700"
+  groups=$(id -G "$account")
+  config_gid=$(getent group uap-observer-adapter-config | cut -d: -f3)
+  test "$(printf '%s\n' $groups | sort -n | tr '\n' ' ')" = "$(printf '%s\n' "$gid" "$config_gid" | sort -n | uniq | tr '\n' ' ')"
+  case " $identity_uids " in *" $uid "*) echo "adapter UIDs are not distinct" >&2; exit 1;; esac
+  case " $identity_gids " in *" $gid "*) echo "adapter GIDs are not distinct" >&2; exit 1;; esac
+  identity_uids="$identity_uids $uid"
+  identity_gids="$identity_gids $gid"
+done
 
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
   if systemctl is-active --quiet "$unit"; then
@@ -148,6 +175,33 @@ python3 -m venv /opt/uap-observer-venv.new
 /opt/uap-observer-venv.new/bin/python -m jsonschema -i "$adapter_config" "$source_root/deploy/uap-observer-adapter-config.schema.json"
 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -c 'import json,sys; from observer.fixed_adapters import validate_config; validate_config(json.load(open(sys.argv[1], encoding="utf-8")))' "$adapter_config"
 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -c 'import sys; from pathlib import Path; from observer.config import Config; Config.load(Path(sys.argv[1]))' "$observer_config"
+
+# Resolve only the reviewed service hosts at install time. The resulting hosts
+# file and cgroup-BPF allowlist remove runtime DNS and arbitrary IP egress from
+# the observer and adapter runner.
+python3 - "$adapter_config" "$observer_config" "$stage_root/hosts" "$stage_root/egress-addresses" <<'PY'
+import ipaddress,json,socket,sys
+from pathlib import Path
+from urllib.parse import urlsplit
+adapter=json.load(open(sys.argv[1], encoding="utf-8"))
+observer=json.load(open(sys.argv[2], encoding="utf-8"))
+urls=[item["endpoint"] for item in adapter["matrix"]]
+urls += [adapter["chatgpt"]["mcp_endpoint"], observer["jwks_url"], observer["github_api_url"]]
+host_values={urlsplit(url).hostname for url in urls}
+if None in host_values:
+    raise SystemExit("observer egress hostname is invalid")
+hosts=sorted(host_values)
+resolved={}
+for host in hosts:
+    values=sorted({str(ipaddress.ip_address(item[4][0])) for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
+    if not values:
+        raise SystemExit("observer egress hostname did not resolve")
+    resolved[host]=values
+Path(sys.argv[3]).write_text("127.0.0.1 localhost\n::1 localhost\n" + "".join(f"{address} {host}\n" for host in hosts for address in resolved[host]))
+Path(sys.argv[4]).write_text("".join(f"{address}\n" for values in resolved.values() for address in values))
+PY
+chown root:root "$stage_root/hosts" "$stage_root/egress-addresses"
+chmod 0444 "$stage_root/hosts" "$stage_root/egress-addresses"
 
 test ! -e /opt/uap-observer-runtime.new
 install -d -o root -g root -m 0755 /opt/uap-observer-runtime.new/observer /opt/uap-observer-runtime.new/tests/e2e/schemas
@@ -183,9 +237,9 @@ artifacts = {
 }
 value = {
     "schema_version": 1,
-    "config": {"path": "/etc/uap-observer-adapter-config.json", "sha256": sys.argv[2]},
+    "config": {"path": "/opt/uap-observer-current/etc/uap-observer-adapter-config.json", "sha256": sys.argv[2]},
     "artifacts": {
-        artifact: {"path": f"/usr/local/libexec/uap-observer-adapter-{name}", "sha256": "sha256:" + sys.argv[1]}
+        artifact: {"path": f"/opt/uap-observer-current/libexec/uap-observer-adapter-{name}", "sha256": "sha256:" + sys.argv[1]}
         for artifact, name in artifacts.items()
     },
 }
@@ -199,6 +253,16 @@ install -d -o root -g root -m 0755 /etc/caddy
 install -o root -g caddy -m 0640 "$caddy_config" /etc/caddy/Caddyfile.new
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
   install -o root -g root -m 0644 "$source_root/deploy/$unit" "/etc/systemd/system/$unit.new"
+done
+for service in uap-observer uap-observer-runner; do
+  install -d -o root -g root -m 0755 "/etc/systemd/system/$service.service.d"
+  {
+    printf '%s\n' '[Service]' 'IPAddressDeny=any'
+    if [ "$service" = uap-observer ]; then printf '%s\n' 'IPAddressAllow=127.0.0.0/8 ::1/128'; fi
+    while read -r address; do printf 'IPAddressAllow=%s\n' "$address"; done < "$stage_root/egress-addresses"
+  } > "/etc/systemd/system/$service.service.d/egress.conf.new"
+  chown root:root "/etc/systemd/system/$service.service.d/egress.conf.new"
+  chmod 0644 "/etc/systemd/system/$service.service.d/egress.conf.new"
 done
 
 (cd /opt/uap-observer-runtime.new && /opt/uap-observer-venv.new/bin/python -c 'import cryptography,jsonschema; import observer.http_server')
@@ -218,41 +282,46 @@ cmp "$observer_config" /etc/uap-observer.json.new
 cmp "$adapter_config" /etc/uap-observer-adapter-config.json.new
 cmp "$caddy_config" /etc/caddy/Caddyfile.new
 
-for destination in \
-  /opt/uap-observer-venv /opt/uap-observer-runtime \
-  /usr/local/libexec/uap-observer-runner /usr/local/libexec/uap-observer-fixed-adapter \
-  /usr/local/libexec/uap-observer-adapter-runtime /usr/local/libexec/uap-observer-adapter-notion \
-  /usr/local/libexec/uap-observer-adapter-chatgpt /usr/local/libexec/uap-observer-adapter-consent \
-  /usr/local/libexec/uap-observer-attest-chatgpt /usr/local/libexec/uap-observer-provision-profile \
-  /usr/local/libexec/uap-observer-attest-consent \
-  /usr/local/bin/caddy /etc/uap-observer.json /etc/uap-observer-adapter-config.json \
-  /etc/uap-observer-adapters.json /etc/caddy/Caddyfile \
-  /etc/systemd/system/uap-observer.service /etc/systemd/system/uap-observer-signer.service \
-  /etc/systemd/system/uap-observer-runner.service /etc/systemd/system/uap-observer-runner.socket \
-  /etc/systemd/system/uap-observer-caddy.service
-do
-  rm -rf "$destination.previous"
-done
-
-activation_started=1
-activate /opt/uap-observer-venv.new /opt/uap-observer-venv
-activate /opt/uap-observer-runtime.new /opt/uap-observer-runtime
-activate /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-runner
-activate /usr/local/libexec/uap-observer-fixed-adapter.new /usr/local/libexec/uap-observer-fixed-adapter
+# Build one immutable, complete version. No consumer references it until the
+# single current-pointer rename below.
+install -d -o root -g root -m 0755 /opt/uap-observer-closures
+closure_stage="/opt/uap-observer-closures/.new-$closure_digest"
+closure_final="/opt/uap-observer-closures/$closure_digest"
+test ! -e "$closure_stage"
+test ! -e "$closure_final"
+install -d -o root -g root -m 0755 "$closure_stage/libexec" "$closure_stage/bin" "$closure_stage/etc"
+mv /opt/uap-observer-venv.new "$closure_stage/venv"
+mv /opt/uap-observer-runtime.new "$closure_stage/runtime"
+mv /usr/local/libexec/uap-observer-runner.new "$closure_stage/libexec/uap-observer-runner"
+mv /usr/local/libexec/uap-observer-fixed-adapter.new "$closure_stage/libexec/uap-observer-fixed-adapter"
 for name in runtime notion chatgpt consent; do
-  activate "/usr/local/libexec/uap-observer-adapter-$name.new" "/usr/local/libexec/uap-observer-adapter-$name"
+  mv "/usr/local/libexec/uap-observer-adapter-$name.new" "$closure_stage/libexec/uap-observer-adapter-$name"
 done
-activate /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-chatgpt
-activate /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-attest-consent
-activate /usr/local/libexec/uap-observer-provision-profile.new /usr/local/libexec/uap-observer-provision-profile
-activate /usr/local/bin/caddy.new /usr/local/bin/caddy
-activate /etc/uap-observer.json.new /etc/uap-observer.json
-activate /etc/uap-observer-adapter-config.json.new /etc/uap-observer-adapter-config.json
-activate /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
-activate /etc/uap-observer-adapters.json.new /etc/uap-observer-adapters.json
+mv /usr/local/libexec/uap-observer-attest-chatgpt.new "$closure_stage/libexec/uap-observer-attest-chatgpt"
+mv /usr/local/libexec/uap-observer-attest-consent.new "$closure_stage/libexec/uap-observer-attest-consent"
+mv /usr/local/libexec/uap-observer-provision-profile.new "$closure_stage/libexec/uap-observer-provision-profile"
+mv /usr/local/bin/caddy.new "$closure_stage/bin/caddy"
+mv /etc/uap-observer.json.new "$closure_stage/etc/uap-observer.json"
+mv /etc/uap-observer-adapter-config.json.new "$closure_stage/etc/uap-observer-adapter-config.json"
+mv /etc/uap-observer-adapters.json.new "$closure_stage/etc/uap-observer-adapters.json"
+mv /etc/caddy/Caddyfile.new "$closure_stage/etc/Caddyfile"
+mv "$stage_root/hosts" "$closure_stage/etc/hosts"
+printf '%s\n' "$closure_digest" > "$closure_stage/.complete"
+chown -R root "$closure_stage"
+chmod -R a-w "$closure_stage"
+mv "$closure_stage" "$closure_final"
+
+# Unit definitions are stable bootstrap files; all release-varying paths flow
+# through the immutable closure pointer.
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
-  activate "/etc/systemd/system/$unit.new" "/etc/systemd/system/$unit"
+  mv "/etc/systemd/system/$unit.new" "/etc/systemd/system/$unit"
+done
+for service in uap-observer uap-observer-runner; do
+  mv "/etc/systemd/system/$service.service.d/egress.conf.new" "/etc/systemd/system/$service.service.d/egress.conf"
 done
 systemctl daemon-reload
+activation_started=1
+ln -s "uap-observer-closures/$closure_digest" /opt/uap-observer-current.new
+mv -T /opt/uap-observer-current.new /opt/uap-observer-current
 activation_complete=1
 echo "observer files installed; provision the root key and reviewed adapters before enabling services"

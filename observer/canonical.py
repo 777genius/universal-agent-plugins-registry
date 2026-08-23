@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import unquote, urlsplit
 
 SIGNATURE_DOMAIN = b"UAP-STABLE-LAUNCH-OBSERVER-BUNDLE-V1\0"
 ARTIFACT_NAMES = {
@@ -27,6 +27,9 @@ INLINE_CREDENTIAL = re.compile(
 )
 HTTP_URL = re.compile(r"(?i)https?://[^\s,;\"']+")
 REDACTION = re.compile(r"^<redacted:(?:credential|absolute-path):sha256:[a-f0-9]{64}>$")
+GITHUB_TOKEN = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})\b")
+JWT_TOKEN = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+AWS_KEY = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -45,12 +48,11 @@ def _safe_http_url(value: str) -> bool:
     if not re.fullmatch(r"https?://[^\s]+", value, re.IGNORECASE):
         return False
     parsed = urlsplit(value)
-    sensitive_parameters = any(
-        FORBIDDEN_KEY.search(key) or FORBIDDEN_KEY.search(parameter_value) or INLINE_CREDENTIAL.search(parameter_value)
-        for section in (parsed.query, parsed.fragment)
-        for key, parameter_value in parse_qsl(section, keep_blank_values=True)
+    return (
+        parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+        and not parsed.username and not parsed.password
+        and not parsed.query and not parsed.fragment
     )
-    return parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not parsed.username and not parsed.password and not sensitive_parameters
 
 
 def validate_redacted(value: Any, *, key: str | None = None) -> None:
@@ -71,24 +73,16 @@ def validate_redacted(value: Any, *, key: str | None = None) -> None:
             validate_redacted(child, key=key)
         return
     if isinstance(value, str):
-        if BEARER.search(value) or URL_CREDENTIAL.search(value):
+        if BEARER.search(value) or URL_CREDENTIAL.search(value) or GITHUB_TOKEN.search(value) or JWT_TOKEN.search(value) or AWS_KEY.search(value):
             raise ValueError("evidence contains authorization material")
         if REDACTION.fullmatch(value) or SHA_REFERENCE.fullmatch(value) or _safe_http_url(value):
             return
         parsed = urlsplit(value)
         for match in HTTP_URL.finditer(value):
             matched = urlsplit(match.group(0))
-            if matched.username or matched.password or any(
-                FORBIDDEN_KEY.search(name) or FORBIDDEN_KEY.search(parameter_value) or INLINE_CREDENTIAL.search(parameter_value)
-                for section in (matched.query, matched.fragment)
-                for name, parameter_value in parse_qsl(section, keep_blank_values=True)
-            ):
+            if matched.username or matched.password or matched.query or matched.fragment:
                 raise ValueError("evidence contains URL credential material")
-        if any(
-            FORBIDDEN_KEY.search(name) or FORBIDDEN_KEY.search(parameter_value) or INLINE_CREDENTIAL.search(parameter_value)
-            for section in (parsed.query, parsed.fragment)
-            for name, parameter_value in parse_qsl(section, keep_blank_values=True)
-        ):
+        if parsed.scheme and (parsed.query or parsed.fragment):
             raise ValueError("evidence contains URL credential material")
         if parsed.scheme in {"http", "https"} and (parsed.username or parsed.password):
             raise ValueError("evidence contains URL credential material")
@@ -96,6 +90,17 @@ def validate_redacted(value: Any, *, key: str | None = None) -> None:
             raise ValueError("evidence contains credential-like material")
         if UNSAFE_URI.search(value) or POSIX_PATH.search(value) or WINDOWS_PATH.search(value):
             raise ValueError("evidence contains an absolute path")
+        decoded = value
+        for _ in range(3):
+            candidate = unquote(decoded)
+            if candidate == decoded:
+                break
+            decoded = candidate
+            if (
+                GITHUB_TOKEN.search(decoded) or JWT_TOKEN.search(decoded) or AWS_KEY.search(decoded)
+                or UNSAFE_URI.search(decoded) or POSIX_PATH.search(decoded) or WINDOWS_PATH.search(decoded)
+            ):
+                raise ValueError("evidence contains encoded credential or absolute path")
 
 
 def validate_artifacts(value: Any) -> dict[str, Any]:

@@ -12,8 +12,8 @@
   "cli_release_tag": "agentplugins-v0.1.13",
   "signer_socket": "/run/uap-observer-signer/sign.sock",
   "runner_socket": "/run/uap-observer-runner.sock",
-  "runner_source_path": "/usr/local/libexec/uap-observer-runner",
-  "runner_source_digest": "sha256:c8381582ba13608963e2cbf00e97cac036a5d4a2a8d309f006371cf92b91edf8",
+  "runner_source_path": "/opt/uap-observer-current/libexec/uap-observer-runner",
+  "runner_source_digest": "sha256:8be5c091aa02182522f975f121c857469d340f55db9a6f0d84170986fc52667c",
   "runner_user": "root",
   "runner_timeout_seconds": 840,
   "policies": [

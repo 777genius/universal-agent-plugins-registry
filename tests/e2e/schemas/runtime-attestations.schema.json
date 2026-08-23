@@ -38,7 +38,7 @@
           "operation_mode": {"enum": ["read-only", "synthetic"]},
           "auth_origin": {"enum": ["fresh-dedicated-identity", "none"]},
           "cleanup_outcome": {"const": "cleaned"},
-          "no_real_project_proof": {"$ref": "consent.schema.json#/properties/no_real_project_proof"},
+          "no_real_project_proof": {"allOf": [{"$ref": "consent.schema.json#/properties/no_real_project_proof"}, {"required": ["enforcement"]}]},
           "started_at": {"type": "string", "format": "date-time"},
           "observed_at": {"type": "string", "format": "date-time"},
           "client_id": {"type": "string", "minLength": 1},
@@ -53,13 +53,14 @@
           "native_app_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "native_mcp_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "native_discovery_evidence": {"$ref": "#/$defs/nativeDiscoveryEvidence"},
-          "github_attestation": {"type": "object", "required": ["repository", "sha", "run_id", "run_attempt", "workflow", "job", "challenge"], "properties": {"repository": {"type": "string"}, "sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"}, "run_id": {"type": ["string", "integer"]}, "run_attempt": {"type": ["string", "integer"]}, "workflow": {"const": "launch-evidence-e2e.yml"}, "job": {"const": "enforced-stable-gate"}, "challenge": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false},
+          "public_mcp_evidence": {"$ref": "#/$defs/publicMcpDiscoveryEvidence"},
+          "github_attestation": {"type": "object", "required": ["repository", "sha", "run_id", "run_attempt", "workflow", "job", "challenge"], "properties": {"repository": {"type": "string"}, "sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"}, "run_id": {"type": ["string", "integer"]}, "run_attempt": {"type": ["string", "integer"]}, "workflow": {"const": "launch-evidence-e2e.yml"}, "job": {"const": "protected-observer-inputs"}, "challenge": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false},
           "tuple": {"$ref": "launch-evidence.schema.json#/$defs/tuple"}
         },
         "allOf": [
           {
             "if": {"properties": {"outcome": {"const": "passed"}}, "required": ["outcome"]},
-            "then": {"required": ["challenge", "run_id", "run_attempt", "scenario_id", "started_at", "observed_at", "client_id", "application_id", "endpoint", "command_traces", "github_attestation", "identity_id", "consent_artifact_digest", "runtime_invocation", "discovery_verified", "isolated_identity", "manager_observation", "native_observation", "receipt_reconciled", "native_discovery_reconciled", "native_discovery_evidence", "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof"], "properties": {"runtime_invocation": {"const": true}, "discovery_verified": {"const": true}, "isolated_identity": {"const": true}, "receipt_reconciled": {"const": true}, "native_discovery_reconciled": {"const": true}, "tuple": {"$ref": "launch-evidence.schema.json#/$defs/completeTuple"}}}
+            "then": {"required": ["challenge", "run_id", "run_attempt", "scenario_id", "started_at", "observed_at", "client_id", "application_id", "endpoint", "command_traces", "github_attestation", "identity_id", "consent_artifact_digest", "runtime_invocation", "discovery_verified", "isolated_identity", "manager_observation", "native_observation", "receipt_reconciled", "native_discovery_reconciled", "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof"], "properties": {"runtime_invocation": {"const": true}, "discovery_verified": {"const": true}, "isolated_identity": {"const": true}, "receipt_reconciled": {"const": true}, "native_discovery_reconciled": {"const": true}, "tuple": {"$ref": "launch-evidence.schema.json#/$defs/completeTuple"}}}
           },
           {
             "if": {"properties": {"outcome": {"const": "passed"}, "plugin": {"const": "notion"}}, "required": ["outcome", "plugin"]},
@@ -67,7 +68,11 @@
           },
           {
             "if": {"properties": {"outcome": {"const": "passed"}, "client": {"const": "chatgpt"}}, "required": ["outcome", "client"]},
-            "then": {"required": ["consent_attested", "isolated_identity"], "properties": {"consent_attested": {"const": true}, "isolated_identity": {"const": true}}}
+            "then": {"required": ["consent_attested", "isolated_identity", "public_mcp_evidence"], "properties": {"consent_attested": {"const": true}, "isolated_identity": {"const": true}}}
+          },
+          {
+            "if": {"properties": {"outcome": {"const": "passed"}, "client": {"enum": ["codex", "cursor", "kiro"]}}, "required": ["outcome", "client"]},
+            "then": {"required": ["native_discovery_evidence"]}
           }
         ],
         "additionalProperties": false
@@ -77,7 +82,7 @@
   "$defs": {
     "nativeDiscoveryEvidence": {
       "type": "object",
-      "required": ["basis", "observer", "client", "version_operation", "discovery_operation"],
+      "required": ["basis", "observer", "client", "version_operation", "discovery_operation", "invocation_operation"],
       "properties": {
         "basis": {"const": "protected_external_observer"},
         "observer": {"const": "native-client-command-v1"},
@@ -93,7 +98,29 @@
           "required": ["operation", "argv", "discovered", "product_id"],
           "properties": {"operation": {"enum": ["discovery", "list"]}, "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "discovered": {"const": true}, "product_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}},
           "additionalProperties": false
+        },
+        "invocation_operation": {
+          "type": "object",
+          "required": ["operation", "tool", "product_id", "marker_digest", "succeeded"],
+          "properties": {
+            "operation": {"const": "tool_call"}, "tool": {"type": "string", "minLength": 1},
+            "product_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+            "marker_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}, "succeeded": {"const": true}
+          },
+          "additionalProperties": false
         }
+      },
+      "additionalProperties": false
+    },
+    "publicMcpDiscoveryEvidence": {
+      "type": "object",
+      "required": ["basis", "observer", "endpoint", "protocol_version", "initialize", "list", "read"],
+      "properties": {
+        "basis": {"const": "protected_external_observer"}, "observer": {"const": "public-mcp-command-v1"},
+        "endpoint": {"const": "https://docs.mcp.cloudflare.com/mcp"}, "protocol_version": {"const": "2025-06-18"},
+        "initialize": {"type": "object", "required": ["method", "passed"], "properties": {"method": {"const": "initialize"}, "passed": {"const": true}}, "additionalProperties": false},
+        "list": {"type": "object", "required": ["method", "required_name", "passed"], "properties": {"method": {"const": "tools/list"}, "required_name": {"const": "search_cloudflare_documentation"}, "passed": {"const": true}}, "additionalProperties": false},
+        "read": {"type": "object", "required": ["method", "name", "read_only", "marker_digest", "passed"], "properties": {"method": {"const": "tools/call"}, "name": {"const": "search_cloudflare_documentation"}, "read_only": {"const": true}, "marker_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}, "passed": {"const": true}}, "additionalProperties": false}
       },
       "additionalProperties": false
     },

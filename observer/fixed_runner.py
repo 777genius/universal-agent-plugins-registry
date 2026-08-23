@@ -40,9 +40,9 @@ ARTIFACT_IDENTITIES = {
     "chatgpt-cloudflare-attestation.json": ("control",),
     "consent.json": ("control",),
 }
-FIXED_CONFIG = Path("/etc/uap-observer-adapter-config.json")
+FIXED_CONFIG = Path("/opt/uap-observer-current/etc/uap-observer-adapter-config.json")
 FIXED_ENTRYPOINTS = {
-    artifact: Path(f"/usr/local/libexec/uap-observer-adapter-{name}")
+        artifact: Path(f"/opt/uap-observer-current/libexec/uap-observer-adapter-{name}")
     for artifact, name in {
         "runtime-attestations.json": "runtime", "notion-oauth-attestations.json": "notion",
         "chatgpt-cloudflare-attestation.json": "chatgpt", "consent.json": "consent",
@@ -147,33 +147,45 @@ def kill_process_group(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def delegated_job_cgroup() -> Path:
-    controllers = Path("/sys/fs/cgroup/cgroup.controllers")
+def delegated_job_cgroup(
+    cgroup_root: Path = Path("/sys/fs/cgroup"), cgroup_file: Path = Path("/proc/self/cgroup"),
+) -> Path:
+    controllers = cgroup_root / "cgroup.controllers"
     if not controllers.is_file():
         raise ValueError("reviewed runner requires delegated cgroup v2")
-    relative = None
-    for line in Path("/proc/self/cgroup").read_text().splitlines():
+    relative: str | None = None
+    for line in cgroup_file.read_text().splitlines():
         if line.startswith("0::/"):
             relative = line[3:]
             break
-    if relative is None or ".." in Path(relative).parts:
+    if relative is None or not relative.startswith("/") or ".." in Path(relative).parts:
         raise ValueError("reviewed runner cgroup identity is invalid")
-    parent = Path("/sys/fs/cgroup") / relative
+    # cgroup paths are namespace-absolute.  Joining an absolute Path would
+    # silently discard cgroup_root, so make it explicitly root-relative.
+    parent = cgroup_root.joinpath(*Path(relative).parts[1:])
+    if parent != cgroup_root and cgroup_root not in parent.parents:
+        raise ValueError("reviewed runner cgroup escaped the cgroup v2 mount")
     target = parent / f"uap-job-{os.getpid()}-{secrets.token_hex(8)}"
     target.mkdir(mode=0o700)
     return target
 
 
-def destroy_job_cgroup(target: Path) -> None:
+def destroy_job_cgroup(
+    target: Path, *, kill: Any | None = None, events: Any | None = None,
+    remove: Any | None = None,
+) -> None:
+    kill = kill or (lambda: (target / "cgroup.kill").write_text("1"))
+    events = events or (lambda: (target / "cgroup.events").read_text())
+    remove = remove or target.rmdir
     try:
-        (target / "cgroup.kill").write_text("1")
+        kill()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if "populated 0" in (target / "cgroup.events").read_text():
+            if "populated 0" in events():
                 break
             time.sleep(0.01)
     finally:
-        target.rmdir()
+        remove()
 
 
 def tombstone_record(root: Path, challenge: str) -> None:
@@ -222,7 +234,24 @@ class ReviewedRunner:
             self._config_gid = grp.getgrnam("uap-observer-adapter-config").gr_gid
             for identity in ("codex", "cursor", "kiro", "control"):
                 account = pwd.getpwnam(f"uap-observer-{identity}")
+                group = grp.getgrnam(f"uap-observer-{identity}")
+                expected_home = f"/var/empty/uap-observer-{identity}"
+                if (
+                    account.pw_uid == 0 or account.pw_gid != group.gr_gid
+                    or account.pw_dir != expected_home
+                    or account.pw_shell not in {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false"}
+                ):
+                    raise ValueError("reviewed adapter execution identity differs")
+                home = os.stat(expected_home, follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(home.st_mode) or home.st_uid != account.pw_uid
+                    or home.st_gid != account.pw_gid or stat.S_IMODE(home.st_mode) != 0o700
+                    or set(os.getgrouplist(account.pw_name, account.pw_gid)) != {account.pw_gid, self._config_gid}
+                ):
+                    raise ValueError("reviewed adapter home or groups differ")
                 self._identities[identity] = (account.pw_uid, account.pw_gid)
+            if len({uid for uid, _ in self._identities.values()}) != 4 or len({gid for _, gid in self._identities.values()}) != 4:
+                raise ValueError("reviewed adapter execution identities are not distinct")
         else:
             self._identities = {identity: (os.geteuid(), os.getegid()) for identity in ("codex", "cursor", "kiro", "control")}
             self._config_gid = os.getegid()
@@ -395,7 +424,7 @@ def main() -> int:
     allowed_uid = pwd.getpwnam("uap-observer").pw_uid
     adapter_gid = grp.getgrnam("uap-observer-adapter-config").gr_gid
     listener = socket.socket(fileno=args.socket_fd)
-    adapters = load_adapters(Path("/etc/uap-observer-adapters.json"), adapter_gid=adapter_gid, enforce_fixed=True)
+    adapters = load_adapters(Path("/opt/uap-observer-current/etc/uap-observer-adapters.json"), adapter_gid=adapter_gid, enforce_fixed=True)
     serve(listener, ReviewedRunner(adapters, Path("/var/lib/uap-observer/jobs")), allowed_uid)
     return 0
 

@@ -5,9 +5,11 @@ After=local-fs.target
 
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/test -f /opt/uap-observer-current/.complete
 User=root
 Group=root
-ExecStart=/opt/uap-observer-venv/bin/python /usr/local/libexec/uap-observer-runner --socket-fd 3
+ExecStart=/opt/uap-observer-current/venv/bin/python /opt/uap-observer-current/libexec/uap-observer-runner --socket-fd 3
+Environment=UAP_OBSERVER_ISOLATION=systemd-mount-namespace-v1
 WorkingDirectory=/
 KillMode=control-group
 Delegate=pids
@@ -37,6 +39,9 @@ RemoveIPC=yes
 TasksMax=64
 MemoryMax=2G
 CPUQuota=200%
-InaccessiblePaths=-/var/lib/uap-observer/state -/run/uap-observer-signer -/etc/uap-observer-ed25519.key -/var/run/docker.sock -/run/docker.sock
+InaccessiblePaths=-/root -/home -/srv -/mnt -/media -/workspace -/workspaces -/projects -/data -/run/user -/var/lib -/opt -/run/uap-observer-signer -/etc/uap-observer-ed25519.key -/var/run/docker.sock -/run/docker.sock
+BindPaths=/var/lib/uap-observer/jobs /var/lib/uap-observer/workspaces /var/lib/uap-observer/profiles /var/lib/uap-observer-human/pending /var/lib/uap-observer-human/consumed /var/lib/uap-observer-consent/pending /var/lib/uap-observer-consent/consumed
+BindReadOnlyPaths=/opt/uap-observer-current
+BindReadOnlyPaths=/opt/uap-observer-current/etc/hosts:/etc/hosts
 ReadWritePaths=/var/lib/uap-observer/jobs /var/lib/uap-observer/workspaces /var/lib/uap-observer/profiles /var/lib/uap-observer-human/pending /var/lib/uap-observer-human/consumed /var/lib/uap-observer-consent/pending /var/lib/uap-observer-consent/consumed
 UMask=0077

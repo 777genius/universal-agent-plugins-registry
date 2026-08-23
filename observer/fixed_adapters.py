@@ -33,11 +33,12 @@ ENTRYPOINT_ARTIFACT = {
     "uap-observer-adapter-chatgpt": "chatgpt-cloudflare-attestation.json",
     "uap-observer-adapter-consent": "consent.json",
 }
-CONFIG_PATH = Path("/etc/uap-observer-adapter-config.json")
+CONFIG_PATH = Path("/opt/uap-observer-current/etc/uap-observer-adapter-config.json")
 CONSENT_DIRECTORY = Path("/var/lib/uap-observer-consent/pending")
-PRIVACY_PROOF = {
+PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,
     "credential_material_exported": False, "auth_copied": False,
+    "enforcement": "systemd-mount-namespace-v1",
 }
 MAX_FILE = 4 << 20
 MAX_STDOUT = 1 << 20
@@ -188,10 +189,8 @@ def validate_config(value: dict[str, Any]) -> None:
     } != {(hero, client) for hero in HEROES for client in CLIENTS}:
         raise ValueError("adapter hero matrix differs")
     common_fields = {"plugin", "client", "tuple", "application_id", "endpoint"}
-    notion_fields = common_fields | {"projection_receipt_digest", "native_app_digest", "native_mcp_digest"}
     for item in matrix:
-        expected = notion_fields if item.get("plugin") == "notion" else common_fields
-        if set(item) != expected or not isinstance(item.get("application_id"), str) or not str(item.get("endpoint", "")).startswith("https://"):
+        if set(item) != common_fields or not isinstance(item.get("application_id"), str) or not str(item.get("endpoint", "")).startswith("https://"):
             raise ValueError("adapter matrix entry is not canonical")
     root = Path(str(value.get("workspace_root")))
     if not root.is_absolute() or root != Path("/var/lib/uap-observer/workspaces"):
@@ -199,7 +198,8 @@ def validate_config(value: dict[str, Any]) -> None:
     chat = value.get("chatgpt")
     chat_fields = {
         "app_binding_path", "app_binding_sha256", "app_id", "mcp_endpoint",
-        "human_attestation_directory", "tuple", "client_version", "projection_receipt_digest",
+        "human_attestation_directory", "tuple", "client_version",
+        "projection_receipt_path", "projection_receipt_sha256",
     }
     if not isinstance(chat, dict) or set(chat) != chat_fields:
         raise ValueError("ChatGPT adapter config is not canonical")
@@ -212,6 +212,7 @@ def validate_request_policy(config: dict[str, Any], request: dict[str, Any]) -> 
     fields = {
         "catalog_repository", "cli_release_repository", "cli_release_tag",
         "release_manifest_digest", "release_checksums_digest", "directory_digest",
+        "scenario_contract_digest",
     }
     if not isinstance(policy, dict) or set(policy) != fields or any(request.get(key) != policy[key] for key in fields):
         raise ValueError("adapter request differs from digest-pinned policy")
@@ -230,15 +231,33 @@ def consent_record(config: dict[str, Any], request: dict[str, Any], owner_uid: i
         "purpose": "stable-launch-e2e", "consent": True, "mode": "enforced",
         "challenge": challenge["value"], "run_id": github["run_id"],
         "run_attempt": github["run_attempt"], "catalog_sha": github["sha"],
+        "scenario_contract_digest": request["scenario_contract_digest"],
         "pseudonymous_workspace_id": challenge["root_id"],
         "dedicated_identity": True, "disposable_project_status": "disposed",
-        "cleanup_outcome": "cleaned", "no_real_project_proof": PRIVACY_PROOF,
+        "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
     }
     if record.get("schema_version") != 1 or any(record.get(key) != expected_value for key, expected_value in expected.items()):
         raise ValueError("consent record is not bound to this disposable run")
     if record.get("operation_mode") not in {"read-only", "synthetic"} or record.get("auth_origin") not in {"fresh-dedicated-identity", "none"}:
         raise ValueError("consent record privacy identity is invalid")
     return record
+
+
+def isolation_proof() -> dict[str, Any]:
+    """Derive the privacy result from the service's fail-closed mount boundary."""
+    if os.environ.get("UAP_OBSERVER_ISOLATION") != "systemd-mount-namespace-v1":
+        raise ValueError("reviewed adapter mount isolation was not established")
+    for path in (
+        Path("/root"), Path("/home"), Path("/srv"), Path("/mnt"), Path("/media"),
+        Path("/workspace"), Path("/workspaces"), Path("/projects"), Path("/data"), Path("/run/user"),
+    ):
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        except (FileNotFoundError, PermissionError):
+            continue
+        os.close(descriptor)
+        raise ValueError("reviewed adapter can see a masked host storage root")
+    return dict(PRIVACY_RESULT)
 
 
 def verified_executable(item: dict[str, Any], owner_uid: int) -> Path:
@@ -317,12 +336,40 @@ def identity_in_collection(value: Any, plugin: str, collections: set[str]) -> bo
     return False
 
 
-def manager_receipt_present(value: Any, plugin: str) -> bool:
-    return identity_in_collection(value, plugin, {"products", "receipts", "plugins", "installations", "entries"})
+def _static_tuple(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {key: child for key, child in value.items() if key not in {"observed_at", "client_version"}}
 
 
-def native_discovery_present(value: Any, plugin: str) -> bool:
+def exact_observed_identity(value: Any, plugin: str, collections: set[str], approved_tuple: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    for key in collections:
+        collection = value.get(key)
+        candidates = list(collection.items()) if isinstance(collection, dict) else [(None, item) for item in collection] if isinstance(collection, list) else []
+        for record_key, candidate in candidates:
+            if (
+                isinstance(candidate, dict) and (record_key == plugin or exact_identity_record(candidate, plugin))
+                and _static_tuple(candidate.get("tuple")) == _static_tuple(approved_tuple)
+            ):
+                return candidate
+    return None
+
+
+def manager_receipt_present(value: Any, plugin: str, approved_tuple: dict[str, Any] | None = None) -> bool:
+    if approved_tuple is None:
+        return identity_in_collection(value, plugin, {"products", "receipts", "plugins", "installations", "entries"})
+    return exact_observed_identity(value, plugin, {"products", "receipts", "plugins", "installations", "entries"}, approved_tuple) is not None
+
+
+def native_discovery_present(value: Any, plugin: str, approved_tuple: dict[str, Any] | None = None) -> bool:
     values = value if isinstance(value, list) else [value]
+    if approved_tuple is not None:
+        return any(
+            exact_observed_identity(item, plugin, {"servers", "mcp_servers", "mcpServers", "connections", "entries"}, approved_tuple) is not None
+            for item in values
+        )
     return any(
         exact_identity_record(item, plugin) or
         identity_in_collection(item, plugin, {"servers", "mcp_servers", "mcpServers", "connections", "entries"})
@@ -412,7 +459,10 @@ def terminate_group(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def invoke(item: dict[str, Any], plugin: str, client: str, challenge: str, workspace: Path, owner_uid: int) -> tuple[dict[str, Any], list[str], str, str]:
+def invoke(
+    item: dict[str, Any], plugin: str, client: str, challenge: str, workspace: Path,
+    owner_uid: int, approved_tuple: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str], str, str]:
     binary = verified_executable(item, owner_uid)
     profile = Path(item["profile"])
     expected_marker = f"UAP_OBSERVER_OK {client} {plugin} {challenge}"
@@ -430,8 +480,8 @@ def invoke(item: dict[str, Any], plugin: str, client: str, challenge: str, works
     manager_inventory = profile / ".agentplugins" / "receipts.json"
     profile_uid = os.geteuid()
     manager_before = json.loads(read_regular(manager_inventory, None, owner_uid=profile_uid, mode=0o600))
-    if not manager_receipt_present(manager_before, plugin):
-        raise ValueError("manager receipt does not contain the exact product identity")
+    if not manager_receipt_present(manager_before, plugin, approved_tuple):
+        raise ValueError("manager receipt does not contain the exact approved release identity")
     version_stdout, _, _ = run_client([str(binary), "--version"], workspace=workspace, environment=environment, timeout=10)
     if len(version_stdout) > 4096:
         raise ValueError("fixed client version observation failed")
@@ -441,19 +491,19 @@ def invoke(item: dict[str, Any], plugin: str, client: str, challenge: str, works
     discovery_argv = [str(binary), *CLIENT_DISCOVERY_ARGUMENTS[client]]
     native_before_bytes, _, _ = run_client(discovery_argv, workspace=workspace, environment=environment, timeout=10)
     native_before = parsed_json_stream(native_before_bytes)
-    if not native_discovery_present(native_before, plugin):
-        raise ValueError("native discovery did not contain the exact product identity")
+    if not native_discovery_present(native_before, plugin, approved_tuple):
+        raise ValueError("native discovery did not contain the exact approved release identity")
     stdout, started, ended = run_client(argv, workspace=workspace, environment=environment)
     invocation = parsed_json_stream(stdout)
     if not successful_marker_event(invocation, expected_marker) or not successful_tool_event(invocation, tool, plugin):
         raise ValueError("fixed client did not emit a successful exact tool invocation")
     native_after_bytes, _, _ = run_client(discovery_argv, workspace=workspace, environment=environment, timeout=10)
     native_after = parsed_json_stream(native_after_bytes)
-    if not native_discovery_present(native_after, plugin):
+    if not native_discovery_present(native_after, plugin, approved_tuple):
         raise ValueError("native discovery disappeared after invocation")
     manager_after_bytes = read_regular(manager_inventory, None, owner_uid=profile_uid, mode=0o600)
     manager_after = json.loads(manager_after_bytes)
-    if not manager_receipt_present(manager_after, plugin):
+    if not manager_receipt_present(manager_after, plugin, approved_tuple):
         raise ValueError("manager receipt disappeared after invocation")
     marker = {
         "client_version": client_version, "client_id": item["client_id"],
@@ -486,11 +536,13 @@ def complete_tuple(item: dict[str, Any], marker: dict[str, Any], observed_at: st
 
 def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request: dict[str, Any], github: dict[str, Any], consent: dict[str, Any], workspace: Path, owner_uid: int) -> dict[str, Any]:
     plugin, client, challenge = item["plugin"], item["client"], request["challenge"]["value"]
-    marker, argv, started, observed = invoke(client_config, plugin, client, challenge, workspace, owner_uid)
+    marker, argv, started, observed = invoke(
+        client_config, plugin, client, challenge, workspace, owner_uid, item["tuple"],
+    )
     digest = lambda name: marker[name] if isinstance(marker.get(name), str) and str(marker[name]).startswith("sha256:") else (_ for _ in ()).throw(ValueError("fixed client digest marker is invalid"))
     safe_trace = [client, "protected-runtime-check", plugin, sha256(canonical_json(argv))]
     record = {
-        "plugin": plugin, "client": client, "level": "runtime", "outcome": "passed",
+        "plugin": plugin, "client": client, "level": "oauth" if plugin == "notion" else "runtime", "outcome": "passed",
         "reason": "fixed protected disposable runtime marker verified", "tuple": complete_tuple(item, marker, observed),
         "challenge": challenge, "run_id": request["github"]["run_id"], "run_attempt": request["github"]["run_attempt"],
         "scenario_id": "hero_5x3_runtime", "started_at": started, "observed_at": observed,
@@ -514,13 +566,13 @@ def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request:
         "pseudonymous_identity_id": consent["pseudonymous_identity_id"],
         "pseudonymous_workspace_id": consent["pseudonymous_workspace_id"], "dedicated_identity": True,
         "disposable_project_status": "disposed", "operation_mode": consent["operation_mode"],
-        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": PRIVACY_PROOF,
+        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
     }
     if plugin == "notion":
         record.update({
             "consent_attested": True, "oauth_artifact_approved": True,
-            "projection_receipt_digest": item["projection_receipt_digest"],
-            "native_app_digest": item["native_app_digest"], "native_mcp_digest": item["native_mcp_digest"],
+            "projection_receipt_digest": marker["manager_after_digest"],
+            "native_app_digest": marker["manager_after_digest"], "native_mcp_digest": marker["native_after_digest"],
         })
     return record
 
@@ -530,7 +582,7 @@ def inconclusive_runtime_record(item: dict[str, Any], request: dict[str, Any], c
     tuple_value = dict(item["tuple"])
     tuple_value["observed_at"] = observed
     return {
-        "plugin": item["plugin"], "client": item["client"], "level": "runtime",
+        "plugin": item["plugin"], "client": item["client"], "level": "oauth" if item["plugin"] == "notion" else "runtime",
         "outcome": "inconclusive", "reason": reason, "tuple": tuple_value,
         "challenge": request["challenge"]["value"], "run_id": request["github"]["run_id"],
         "run_attempt": request["github"]["run_attempt"], "scenario_id": "hero_5x3_runtime",
@@ -540,7 +592,7 @@ def inconclusive_runtime_record(item: dict[str, Any], request: dict[str, Any], c
         "pseudonymous_workspace_id": consent["pseudonymous_workspace_id"],
         "dedicated_identity": True, "disposable_project_status": "disposed",
         "operation_mode": consent["operation_mode"], "auth_origin": consent["auth_origin"],
-        "cleanup_outcome": "cleaned", "no_real_project_proof": PRIVACY_PROOF,
+        "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
     }
 
 
@@ -676,6 +728,12 @@ def chatgpt_artifact(config: dict[str, Any], request: dict[str, Any], github: di
     binding = load_json(binding_path, chat["app_binding_sha256"], owner_uid=owner_uid, mode=0o640)
     if binding != {"apps": {"cloudflare-docs": {"id": chat["app_id"]}}} or chat["mcp_endpoint"] != MCP_ENDPOINT:
         raise ValueError("ChatGPT app binding differs")
+    receipt = load_json(Path(chat["projection_receipt_path"]), chat["projection_receipt_sha256"], owner_uid=owner_uid, mode=0o640)
+    if (
+        receipt.get("product_id") != "cloudflare-docs" or receipt.get("application_id") != chat["app_id"]
+        or _static_tuple(receipt.get("tuple")) != _static_tuple(chat["tuple"])
+    ):
+        raise ValueError("ChatGPT projection receipt differs from the approved release identity")
     initialized, session = mcp_call(MCP_ENDPOINT, 1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "uap-observer", "version": "1"}})
     if not session or initialized.get("protocolVersion") != "2025-06-18":
         raise ValueError("Cloudflare MCP initialize contract differs")
@@ -712,14 +770,14 @@ def chatgpt_artifact(config: dict[str, Any], request: dict[str, Any], github: di
         "github_attestation": github, "identity_id": consent["pseudonymous_identity_id"],
         "consent_artifact_digest": sha256(exported_json(consent)), "runtime_invocation": True, "discovery_verified": True,
         "consent_attested": True, "isolated_identity": True, "registered_app_binding": True, "ui_activation": True, "read_only": True,
-        "projection_receipt_digest": chat["projection_receipt_digest"], "native_app_digest": binding_digest,
+        "projection_receipt_digest": sha256(canonical_json(receipt)), "native_app_digest": binding_digest,
         "native_mcp_digest": mcp_digest, "public_mcp_evidence": public_mcp,
         "manager_observation": {"observer": "fixed-adapter-v1", "before_digest": binding_digest, "after_digest": binding_digest, "observed_at": observed},
         "native_observation": {"observer": "public-cloudflare-mcp-v1", "before_digest": mcp_digest, "after_digest": mcp_digest, "observed_at": observed},
         "receipt_reconciled": True, "native_discovery_reconciled": True,
         "pseudonymous_identity_id": consent["pseudonymous_identity_id"], "pseudonymous_workspace_id": consent["pseudonymous_workspace_id"],
         "dedicated_identity": True, "disposable_project_status": "disposed", "operation_mode": "read-only",
-        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": PRIVACY_PROOF,
+        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
     }
     return {"schema_version": 1, "attestations": [record]}
 

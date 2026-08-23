@@ -39,7 +39,9 @@ def _validators() -> tuple[Draft202012Validator, Draft202012Validator]:
     )
 
 
-def validate_artifact_schemas(artifacts: dict[str, Any], *, challenge: str) -> None:
+def validate_artifact_schemas(
+    artifacts: dict[str, Any], *, challenge: str, scenario_contract_digest: str | None = None,
+) -> None:
     if set(artifacts) != ARTIFACT_NAMES:
         raise ValueError("observer artifact set is not canonical")
     runtime, consent_validator = _validators()
@@ -58,3 +60,5 @@ def validate_artifact_schemas(artifacts: dict[str, Any], *, challenge: str) -> N
         raise ValueError("consent.json does not match the reviewed schema")
     if artifacts["consent.json"].get("challenge") != challenge:
         raise ValueError("consent.json is not challenge-bound")
+    if scenario_contract_digest is not None and artifacts["consent.json"].get("scenario_contract_digest") != scenario_contract_digest:
+        raise ValueError("consent.json is not scenario-contract-bound")

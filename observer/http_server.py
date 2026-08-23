@@ -24,6 +24,10 @@ MAX_CONNECTIONS = 16
 END_TO_END_SECONDS = 900
 
 
+class VerifiedRateLimitError(ValueError):
+    pass
+
+
 class SlidingWindowRateLimiter:
     def __init__(self, limit: int = 30, window_seconds: float = 60):
         self.limit, self.window_seconds = limit, window_seconds
@@ -37,6 +41,31 @@ class SlidingWindowRateLimiter:
             if len(self._requests) >= self.limit:
                 return False
             self._requests.append(now)
+            return True
+
+
+class PerSourceRateLimiter:
+    def __init__(self, limit: int = 30, window_seconds: float = 60, max_sources: int = 1024):
+        self.limit, self.window_seconds, self.max_sources = limit, window_seconds, max_sources
+        self._sources: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, source: str, now: float) -> bool:
+        with self._lock:
+            for key in list(self._sources):
+                values = self._sources[key]
+                while values and values[0] <= now - self.window_seconds:
+                    values.popleft()
+                if not values:
+                    del self._sources[key]
+            values = self._sources.setdefault(source, deque())
+            if len(values) >= self.limit:
+                return False
+            if len(self._sources) > self.max_sources:
+                oldest = min(self._sources, key=lambda key: self._sources[key][-1])
+                if oldest != source:
+                    del self._sources[oldest]
+            values.append(now)
             return True
 
 
@@ -66,7 +95,8 @@ class ObserverHandler(BaseHTTPRequestHandler):
         if self.path != ROUTE:
             self._json_error(404, "not found")
             return
-        if not self.server.rate_limiter.allow(started):  # type: ignore[attr-defined]
+        source = str(self.client_address[0])
+        if not self.server.source_rate_limiter.allow(source, started):  # type: ignore[attr-defined]
             self._json_error(429, "rate limit exceeded", retry_after="60")
             return
         try:
@@ -85,7 +115,13 @@ class ObserverHandler(BaseHTTPRequestHandler):
             self._json_error(400, "request rejected")
             return
         try:
-            response = self.service.observe(request, authorization[7:], deadline=started + END_TO_END_SECONDS)
+            def charge_verified_caller() -> None:
+                if not self.server.rate_limiter.allow(time.monotonic()):  # type: ignore[attr-defined]
+                    raise VerifiedRateLimitError("verified caller rate limit exceeded")
+            response = self.service.observe(
+                request, authorization[7:], deadline=started + END_TO_END_SECONDS,
+                on_authenticated=charge_verified_caller,
+            )
             if len(response) > MAX_RESPONSE_BYTES:
                 raise ValueError("observer response exceeds size bound")
         except AuthenticationError:
@@ -93,6 +129,9 @@ class ObserverHandler(BaseHTTPRequestHandler):
             return
         except RequestValidationError:
             self._json_error(400, "request rejected")
+            return
+        except VerifiedRateLimitError:
+            self._json_error(429, "rate limit exceeded", retry_after="60")
             return
         except WorkBusyError:
             self._json_error(409, "observer busy", retry_after="30")
@@ -175,7 +214,10 @@ class BoundedThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
     def __init__(self, *args: Any, **kwargs: Any):
         self._connections = threading.BoundedSemaphore(MAX_CONNECTIONS)
-        self.rate_limiter = SlidingWindowRateLimiter()
+        self.source_rate_limiter = PerSourceRateLimiter()
+        # This scarce global execution bucket is charged only by the callback
+        # reached after OIDC signature and exact claim validation.
+        self.rate_limiter = SlidingWindowRateLimiter(limit=6, window_seconds=60)
         super().__init__(*args, **kwargs)
 
     def process_request(self, request: socket.socket, client_address: Any) -> None:

@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--run-attempt", required=True)
     parser.add_argument("--catalog-sha", required=True)
     parser.add_argument("--request-digest", required=True)
+    parser.add_argument("--scenario-contract-digest", required=True)
     parser.add_argument("--identity-id", required=True)
     parser.add_argument("--logical-root-id", required=True)
     parser.add_argument("--operation-mode", choices=("read-only", "synthetic"), required=True)
@@ -46,7 +47,7 @@ def main() -> int:
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("consent helper must run as root")
-    if not HEX64.fullmatch(args.challenge) or not re.fullmatch(r"[a-f0-9]{40}", args.catalog_sha) or not DIGEST.fullmatch(args.request_digest):
+    if not HEX64.fullmatch(args.challenge) or not re.fullmatch(r"[a-f0-9]{40}", args.catalog_sha) or not DIGEST.fullmatch(args.request_digest) or not DIGEST.fullmatch(args.scenario_contract_digest):
         raise SystemExit("consent identity is invalid")
     if not args.run_id.isdigit() or not args.run_attempt.isdigit() or not HEX64.fullmatch(args.identity_id) or not HEX64.fullmatch(args.logical_root_id):
         raise SystemExit("consent identity is invalid")
@@ -58,12 +59,13 @@ def main() -> int:
         "schema_version": 1, "purpose": "stable-launch-e2e", "consent": True,
         "mode": "enforced", "challenge": args.challenge, "run_id": args.run_id,
         "run_attempt": args.run_attempt, "catalog_sha": args.catalog_sha,
+        "scenario_contract_digest": args.scenario_contract_digest,
         "request_digest": args.request_digest, "dedicated_identity": True,
         "pseudonymous_identity_id": args.identity_id,
         "pseudonymous_workspace_id": args.logical_root_id,
         "disposable_project_status": "disposed", "operation_mode": args.operation_mode,
         "auth_origin": args.auth_origin, "cleanup_outcome": "cleaned",
-        "no_real_project_proof": privacy,
+        "no_real_project_proof": {**privacy, "enforcement": "systemd-mount-namespace-v1"},
     }
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     group_id = grp.getgrnam("uap-observer-adapter-config").gr_gid

@@ -4,11 +4,12 @@ After=local-fs.target
 
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/test -f /opt/uap-observer-current/.complete
 User=root
 Group=uap-observer-signer-ipc
-ExecStart=/opt/uap-observer-venv/bin/python /opt/uap-observer-runtime/uap-observer-signer.py
-WorkingDirectory=/opt/uap-observer-runtime
-Environment=PYTHONPATH=/opt/uap-observer-runtime
+ExecStart=/opt/uap-observer-current/venv/bin/python /opt/uap-observer-current/runtime/uap-observer-signer.py
+WorkingDirectory=/opt/uap-observer-current/runtime
+Environment=PYTHONPATH=/opt/uap-observer-current/runtime
 RuntimeDirectory=uap-observer-signer
 RuntimeDirectoryMode=0750
 Restart=on-failure
@@ -33,7 +34,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 RestrictRealtime=yes
 RemoveIPC=yes
-ReadOnlyPaths=/etc/uap-observer-ed25519.key /opt/uap-observer-runtime /opt/uap-observer-venv
+ReadOnlyPaths=/etc/uap-observer-ed25519.key /opt/uap-observer-current
 UMask=0077
 
 [Install]

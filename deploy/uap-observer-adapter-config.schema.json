@@ -6,14 +6,15 @@
     "schema_version": {"const": 1},
     "request_policy": {
       "type": "object",
-      "required": ["catalog_repository", "cli_release_repository", "cli_release_tag", "release_manifest_digest", "release_checksums_digest", "directory_digest"],
+      "required": ["catalog_repository", "cli_release_repository", "cli_release_tag", "release_manifest_digest", "release_checksums_digest", "directory_digest", "scenario_contract_digest"],
       "properties": {
         "catalog_repository": {"const": "777genius/universal-agent-plugins"},
         "cli_release_repository": {"const": "777genius/plugin-kit-ai"},
         "cli_release_tag": {"const": "agentplugins-v0.1.13"},
         "release_manifest_digest": {"const": "sha256:f13de10e96296bf6d68de4298fd2349bf75597a64544fa7e99b5bfbf34c3641c"},
         "release_checksums_digest": {"const": "sha256:d682e61936a9d8ba891a2a036f0714ee96beb87cd96ccb2f24d334ca52158590"},
-        "directory_digest": {"$ref": "#/$defs/digest"}
+        "directory_digest": {"$ref": "#/$defs/digest"},
+        "scenario_contract_digest": {"$ref": "#/$defs/digest"}
       },
       "additionalProperties": false
     },
@@ -38,7 +39,7 @@
     },
     "chatgpt": {
       "type": "object",
-      "required": ["app_binding_path", "app_binding_sha256", "app_id", "mcp_endpoint", "human_attestation_directory", "tuple", "client_version", "projection_receipt_digest"],
+      "required": ["app_binding_path", "app_binding_sha256", "app_id", "mcp_endpoint", "human_attestation_directory", "tuple", "client_version", "projection_receipt_path", "projection_receipt_sha256"],
       "properties": {
         "app_binding_path": {"type": "string", "pattern": "^/"},
         "app_binding_sha256": {"$ref": "#/$defs/digest"},
@@ -46,7 +47,8 @@
         "mcp_endpoint": {"const": "https://docs.mcp.cloudflare.com/mcp"},
         "human_attestation_directory": {"const": "/var/lib/uap-observer-human/pending"},
         "tuple": {"type": "object"}, "client_version": {"type": "string", "minLength": 1},
-        "projection_receipt_digest": {"$ref": "#/$defs/digest"}
+        "projection_receipt_path": {"type": "string", "pattern": "^/"},
+        "projection_receipt_sha256": {"$ref": "#/$defs/digest"}
       },
       "additionalProperties": false
     }
@@ -77,8 +79,7 @@
       "properties": {
         "plugin": {"enum": ["agent-code-navigator", "context7", "cloudflare-docs", "chrome-devtools", "notion"]},
         "client": {"enum": ["codex", "cursor", "kiro"]}, "tuple": {"type": "object"},
-        "application_id": {"type": "string", "minLength": 1}, "endpoint": {"type": "string", "pattern": "^https://"},
-        "projection_receipt_digest": {"$ref": "#/$defs/digest"}, "native_app_digest": {"$ref": "#/$defs/digest"}, "native_mcp_digest": {"$ref": "#/$defs/digest"}
+        "application_id": {"type": "string", "minLength": 1}, "endpoint": {"type": "string", "pattern": "^https://"}
       },
       "additionalProperties": false
     }
