@@ -744,6 +744,45 @@ class DirectoryDomainTests(unittest.TestCase):
                     [("zz-community/zz-community-product", 1)],
                 )
 
+    def test_reactivating_distribution_does_not_revalidate_revoked_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source, _repository, _package, _revision = self.local_external_release(Path(tmp))
+            distribution = self.isolate_external_product(source)
+            distribution["release_policies"][0]["status"] = "revoked"
+            previous = copy.deepcopy(source)
+            previous["distributions"][0]["status"] = "suspended"
+            acquirer = mock.Mock(side_effect=AssertionError("revoked release was reacquired"))
+
+            self.assertEqual(
+                registry.validate_changed_external_releases(source, previous, acquirer=acquirer),
+                [],
+            )
+            acquirer.assert_not_called()
+
+    def test_changed_revoked_release_validates_identity_without_runtime_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source, repository, package, _revision = self.local_external_release(Path(tmp))
+            distribution = self.isolate_external_product(source)
+            distribution["release_policies"][0]["status"] = "revoked"
+            (package / "mcp.json").write_text(json.dumps({
+                "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+                "mcpServers": {"fixture": {
+                    "type": "stdio", "command": "npx", "args": ["fixture-runtime@1.2.3"],
+                }},
+            }) + "\n")
+            revision = self.commit_fixture_change(repository, "revoke historical live npx release")
+            release = distribution["releases"][0]
+            release["package_source"]["revision"] = revision
+            release["tree_digest"] = registry.directory_tree_digest(package)
+            release["components"] = registry.validated_package_facts(package)["components"]
+
+            self.assertEqual(
+                registry.validate_changed_external_releases(
+                    source, self.source(), repository_overrides={"example/external": repository},
+                ),
+                [("zz-community/zz-community-product", 1)],
+            )
+
     def test_capability_relaxation_revalidates_external_release_but_display_edits_do_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source, repository, _package, _revision = self.local_external_release(Path(tmp))

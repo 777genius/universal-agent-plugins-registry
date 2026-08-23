@@ -855,6 +855,8 @@ def policy_eligibility_broadened(
     old_policy: dict[str, object] | None,
 ) -> bool:
     """Whether mutable release policy exposes the same bytes more broadly."""
+    if distribution["status"] != "active" or policy["status"] != "active":
+        return False
     if old_distribution is None or old_policy is None:
         return True
     if distribution["kind"] != old_distribution["kind"] or distribution["packager"] != old_distribution["packager"]:
@@ -863,8 +865,6 @@ def policy_eligibility_broadened(
         return True
     if old_policy["status"] != "active" and policy["status"] == "active":
         return True
-    if distribution["status"] != "active" or policy["status"] != "active":
-        return False
     target_keys = {
         (target["client"], scope)
         for target in policy["targets"] for scope in target["scopes"]
@@ -989,10 +989,12 @@ def validate_changed_local_releases(
             continue
         label = f"{identity[0]}@{identity[1]}"
         revision = package_source["revision"]
+        require_closed_runtime = _policy_for(distribution, identity[1])["status"] != "revoked"
         if revision is None:
             validate_release_package(
                 repository_root / package_source["path"], release,
                 label=label, allow_unresolved_revision=True,
+                require_closed_runtime=require_closed_runtime,
             )
         else:
             temporary = None
@@ -1003,6 +1005,7 @@ def validate_changed_local_releases(
                 validate_release_package(
                     Path(temporary.name) / "checkout" / package_source["path"],
                     release, label=label,
+                    require_closed_runtime=require_closed_runtime,
                 )
             except RegistryError:
                 raise
@@ -1040,6 +1043,7 @@ def validate_changed_external_releases(
     )
     for identity in changed:
         release = current[identity]
+        distribution = next(item for item in source["distributions"] if item["id"] == identity[0])
         package_source = release["package_source"]
         label = f"{identity[0]}@{identity[1]}"
         source_repository = validate_repository(package_source["repository"])
@@ -1051,7 +1055,10 @@ def validate_changed_external_releases(
             temporary = acquirer(source_repository, revision, package_path, overrides.get(source_repository))
             package_root = Path(temporary.name) / "checkout" / package_path
             require(package_root.is_dir(), f"{label}: reacquired package path is unavailable")
-            validate_release_package(package_root, release, label=label)
+            validate_release_package(
+                package_root, release, label=label,
+                require_closed_runtime=_policy_for(distribution, identity[1])["status"] != "revoked",
+            )
         except RegistryError:
             raise
         except Exception as error:
