@@ -8,9 +8,16 @@
     "external_pr_evidence": {"$ref": "external-pr-evidence.schema.json"},
     "attestations": {
       "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "oneOf": [
+        {"minItems": 1, "maxItems": 1},
+        {"minItems": 3, "maxItems": 3},
+        {"minItems": 12, "maxItems": 12}
+      ],
       "items": {
         "type": "object",
-        "required": ["plugin", "client", "level", "outcome", "reason", "tuple", "challenge", "run_id", "run_attempt", "scenario_id", "identity_id", "consent_artifact_digest", "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof"],
+        "required": ["plugin", "client", "level", "outcome", "reason", "tuple", "challenge", "run_id", "run_attempt", "scenario_id", "identity_id", "consent_artifact_digest", "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof", "release_manifest_digest", "release_checksums_digest", "directory_digest", "scenario_contract_digest"],
         "properties": {
           "plugin": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
           "client": {"enum": ["codex", "cursor", "kiro", "chatgpt"]},
@@ -21,6 +28,10 @@
           "isolated_identity": {"type": "boolean"},
           "identity_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
           "consent_artifact_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "release_manifest_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "release_checksums_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "directory_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "scenario_contract_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "runtime_invocation": {"type": "boolean"},
           "discovery_verified": {"type": "boolean"},
           "oauth_artifact_approved": {"type": "boolean"},

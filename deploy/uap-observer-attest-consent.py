@@ -65,7 +65,7 @@ def main() -> int:
         "pseudonymous_workspace_id": args.logical_root_id,
         "disposable_project_status": "disposed", "operation_mode": args.operation_mode,
         "auth_origin": args.auth_origin, "cleanup_outcome": "cleaned",
-        "no_real_project_proof": {**privacy, "enforcement": "systemd-mount-namespace-v1"},
+        "no_real_project_proof": {**privacy, "enforcement": "systemd-positive-mount-allowlist-v1"},
     }
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     group_id = grp.getgrnam("uap-observer-adapter-config").gr_gid

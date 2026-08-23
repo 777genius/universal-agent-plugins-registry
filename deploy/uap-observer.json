@@ -13,7 +13,7 @@
   "signer_socket": "/run/uap-observer-signer/sign.sock",
   "runner_socket": "/run/uap-observer-runner.sock",
   "runner_source_path": "/opt/uap-observer-current/libexec/uap-observer-runner",
-  "runner_source_digest": "sha256:8be5c091aa02182522f975f121c857469d340f55db9a6f0d84170986fc52667c",
+  "runner_source_digest": "sha256:06e666cbe50134032751cf7fab28eea496c47299ecf62b1b62bcfc62e5d8e455",
   "runner_user": "root",
   "runner_timeout_seconds": 840,
   "policies": [

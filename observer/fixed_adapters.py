@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import selectors
 import shutil
 import signal
@@ -38,10 +39,11 @@ CONSENT_DIRECTORY = Path("/var/lib/uap-observer-consent/pending")
 PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,
     "credential_material_exported": False, "auth_copied": False,
-    "enforcement": "systemd-mount-namespace-v1",
+    "enforcement": "systemd-positive-mount-allowlist-v1",
 }
 MAX_FILE = 4 << 20
 MAX_STDOUT = 1 << 20
+KILL_WAIT_SECONDS = 2.0
 COMMAND_SECONDS = 45
 HUMAN_WAIT_SECONDS = 300
 MCP_ENDPOINT = "https://docs.mcp.cloudflare.com/mcp"
@@ -218,6 +220,14 @@ def validate_request_policy(config: dict[str, Any], request: dict[str, Any]) -> 
         raise ValueError("adapter request differs from digest-pinned policy")
 
 
+def evidence_bindings(request: dict[str, Any]) -> dict[str, str]:
+    fields = (
+        "release_manifest_digest", "release_checksums_digest", "directory_digest",
+        "scenario_contract_digest",
+    )
+    return {field: request[field] for field in fields}
+
+
 def consent_record(config: dict[str, Any], request: dict[str, Any], owner_uid: int) -> dict[str, Any]:
     item = config["consent_record"]
     if item != {"directory": str(CONSENT_DIRECTORY)}:
@@ -234,7 +244,7 @@ def consent_record(config: dict[str, Any], request: dict[str, Any], owner_uid: i
         "scenario_contract_digest": request["scenario_contract_digest"],
         "pseudonymous_workspace_id": challenge["root_id"],
         "dedicated_identity": True, "disposable_project_status": "disposed",
-        "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
+        "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(config),
     }
     if record.get("schema_version") != 1 or any(record.get(key) != expected_value for key, expected_value in expected.items()):
         raise ValueError("consent record is not bound to this disposable run")
@@ -243,20 +253,68 @@ def consent_record(config: dict[str, Any], request: dict[str, Any], owner_uid: i
     return record
 
 
-def isolation_proof() -> dict[str, Any]:
-    """Derive the privacy result from the service's fail-closed mount boundary."""
-    if os.environ.get("UAP_OBSERVER_ISOLATION") != "systemd-mount-namespace-v1":
-        raise ValueError("reviewed adapter mount isolation was not established")
-    for path in (
-        Path("/root"), Path("/home"), Path("/srv"), Path("/mnt"), Path("/media"),
-        Path("/workspace"), Path("/workspaces"), Path("/projects"), Path("/data"), Path("/run/user"),
-    ):
+def _mount_path(value: str) -> str:
+    return re.sub(
+        r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), value,
+    )
+
+
+def verify_positive_mount_namespace(mountinfo: str, *, fixed_paths: tuple[str, ...] = ()) -> None:
+    """Prove every non-kernel filesystem is mounted at an explicit runtime path."""
+    if len(mountinfo) > (1 << 20):
+        raise ValueError("mount namespace description exceeds size bound")
+    allowed = (
+        "/opt/uap-observer-current", "/usr/bin", "/usr/lib", "/usr/lib64",
+        "/lib", "/lib64",
+        "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/hosts", "/etc/ssl", "/etc/pki",
+        "/var/lib/uap-observer/jobs", "/var/lib/uap-observer/workspaces", "/var/lib/uap-observer/profiles",
+        "/var/lib/uap-observer-human/pending", "/var/lib/uap-observer-human/consumed",
+        "/var/lib/uap-observer-consent/pending", "/var/lib/uap-observer-consent/consumed",
+    )
+    kernel_filesystems = {
+        "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
+        "hugetlbfs", "securityfs", "tracefs", "pstore", "bpf", "autofs", "ramfs",
+    }
+    kernel_targets = ("/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/run/credentials", "/run/systemd")
+    root_seen = False
+    for line in mountinfo.splitlines():
+        fields = line.split()
         try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-        except (FileNotFoundError, PermissionError):
+            separator = fields.index("-")
+            source_root, target = _mount_path(fields[3]), _mount_path(fields[4])
+            filesystem = fields[separator + 1]
+        except (ValueError, IndexError):
+            raise ValueError("mount namespace description is malformed") from None
+        if target == "/":
+            if filesystem not in {"tmpfs", "ramfs"}:
+                raise ValueError("mount namespace root is not an empty synthetic filesystem")
+            root_seen = True
             continue
-        os.close(descriptor)
-        raise ValueError("reviewed adapter can see a masked host storage root")
+        if filesystem in kernel_filesystems and any(target == prefix or target.startswith(prefix + "/") for prefix in kernel_targets):
+            continue
+        matched = next((prefix for prefix in allowed if target == prefix or target.startswith(prefix + "/")), None)
+        if matched is None and target not in fixed_paths:
+            raise ValueError(f"mount namespace exposes a non-allowlisted filesystem at {target}")
+        if target in fixed_paths and source_root != target:
+            raise ValueError(f"fixed runtime input at {target} is an alternate-path bind")
+        closure_alias = matched in {"/opt/uap-observer-current", "/etc/hosts"} and source_root.startswith("/opt/uap-observer-closures/")
+        same_source = matched is not None and (source_root == matched or source_root.startswith(matched + "/"))
+        if target not in fixed_paths and not same_source and not closure_alias:
+            raise ValueError(f"allowlisted runtime path at {target} has a foreign mount source")
+    if not root_seen:
+        raise ValueError("mount namespace root was not identified")
+
+
+def isolation_proof(config: dict[str, Any]) -> dict[str, Any]:
+    """Derive the privacy result from the kernel's effective positive allowlist."""
+    if os.environ.get("UAP_OBSERVER_ISOLATION") != "systemd-positive-mount-allowlist-v1":
+        raise ValueError("reviewed adapter mount isolation was not established")
+    mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    fixed_paths = (
+        config["git"]["binary"], *(item["binary"] for item in config["clients"].values()),
+        config["chatgpt"]["app_binding_path"], config["chatgpt"]["projection_receipt_path"],
+    )
+    verify_positive_mount_namespace(mountinfo, fixed_paths=tuple(fixed_paths))
     return dict(PRIVACY_RESULT)
 
 
@@ -450,13 +508,20 @@ def run_client(argv: list[str], *, workspace: Path, environment: dict[str, str],
     return bytes(output), started, ended
 
 
-def terminate_group(process: subprocess.Popen[bytes]) -> None:
+def terminate_group(
+    process: subprocess.Popen[bytes], *, wait_seconds: float = KILL_WAIT_SECONDS,
+    fatal: Any = os._exit,
+) -> None:
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     if process.poll() is None:
-        process.wait()
+        try:
+            process.wait(timeout=wait_seconds)
+        except subprocess.TimeoutExpired:
+            fatal(70)
+            raise RuntimeError("fatal adapter cleanup callback returned")
 
 
 def invoke(
@@ -534,7 +599,7 @@ def complete_tuple(item: dict[str, Any], marker: dict[str, Any], observed_at: st
     return value
 
 
-def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request: dict[str, Any], github: dict[str, Any], consent: dict[str, Any], workspace: Path, owner_uid: int) -> dict[str, Any]:
+def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request: dict[str, Any], github: dict[str, Any], consent: dict[str, Any], workspace: Path, owner_uid: int, *, mount_config: dict[str, Any] | None = None) -> dict[str, Any]:
     plugin, client, challenge = item["plugin"], item["client"], request["challenge"]["value"]
     marker, argv, started, observed = invoke(
         client_config, plugin, client, challenge, workspace, owner_uid, item["tuple"],
@@ -566,7 +631,8 @@ def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request:
         "pseudonymous_identity_id": consent["pseudonymous_identity_id"],
         "pseudonymous_workspace_id": consent["pseudonymous_workspace_id"], "dedicated_identity": True,
         "disposable_project_status": "disposed", "operation_mode": consent["operation_mode"],
-        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
+        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(mount_config or {}),
+        **evidence_bindings(request),
     }
     if plugin == "notion":
         record.update({
@@ -577,7 +643,10 @@ def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request:
     return record
 
 
-def inconclusive_runtime_record(item: dict[str, Any], request: dict[str, Any], consent: dict[str, Any], *, reason: str) -> dict[str, Any]:
+def inconclusive_runtime_record(
+    item: dict[str, Any], request: dict[str, Any], github: dict[str, Any],
+    consent: dict[str, Any], *, reason: str, mount_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     observed = utc_now()
     tuple_value = dict(item["tuple"])
     tuple_value["observed_at"] = observed
@@ -592,7 +661,8 @@ def inconclusive_runtime_record(item: dict[str, Any], request: dict[str, Any], c
         "pseudonymous_workspace_id": consent["pseudonymous_workspace_id"],
         "dedicated_identity": True, "disposable_project_status": "disposed",
         "operation_mode": consent["operation_mode"], "auth_origin": consent["auth_origin"],
-        "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
+        "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(mount_config or {}),
+        "github_attestation": github, **evidence_bindings(request),
     }
 
 
@@ -617,11 +687,12 @@ def runtime_artifact(config: dict[str, Any], request: dict[str, Any], github: di
                 result = subprocess.run([str(git), "init", "--quiet", str(workspace)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False, shell=False)
                 if result.returncode != 0 or not (workspace / ".git").is_dir():
                     raise ValueError("disposable Git root creation failed")
-                record = runtime_record(item, client_config, request, github, consent, workspace, owner_uid)
+                record = runtime_record(item, client_config, request, github, consent, workspace, owner_uid, mount_config=config)
             except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
                 record = inconclusive_runtime_record(
-                    item, request, consent,
+                    item, request, github, consent,
                     reason="fixed client discovery or challenge-bound tool invocation was not independently verified",
+                    mount_config=config,
                 )
         finally:
             shutil.rmtree(workspace, ignore_errors=True)
@@ -777,7 +848,8 @@ def chatgpt_artifact(config: dict[str, Any], request: dict[str, Any], github: di
         "receipt_reconciled": True, "native_discovery_reconciled": True,
         "pseudonymous_identity_id": consent["pseudonymous_identity_id"], "pseudonymous_workspace_id": consent["pseudonymous_workspace_id"],
         "dedicated_identity": True, "disposable_project_status": "disposed", "operation_mode": "read-only",
-        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(),
+        "auth_origin": consent["auth_origin"], "cleanup_outcome": "cleaned", "no_real_project_proof": isolation_proof(config),
+        **evidence_bindings(request),
     }
     return {"schema_version": 1, "attestations": [record]}
 

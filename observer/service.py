@@ -102,9 +102,9 @@ class ObserverService:
         if validated["catalog_repository"] != auth.policy.repository:
             raise ValueError("request catalog repository is not allowlisted")
         self.corroborator.corroborate(auth)
+        self.replay.consume(auth.claims["jti"], auth.claims["exp"])
         if on_authenticated is not None:
             on_authenticated()
-        self.replay.consume(auth.claims["jti"], auth.claims["exp"])
         digest = request_digest(validated)
         leader = self._coordinator.enter(digest, deadline)
         if not leader:
@@ -175,6 +175,7 @@ class ObserverService:
             validate_artifact_schemas(
                 artifacts, challenge=request["challenge"]["value"],
                 scenario_contract_digest=request["scenario_contract_digest"],
+                expected_bindings=request,
             )
             unsigned = {
                 "schema_version": 1, "challenge": request["challenge"]["value"],

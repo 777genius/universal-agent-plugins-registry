@@ -118,7 +118,7 @@ class Config:
             self.state_root: Path("/var/lib/uap-observer/state"),
             self.signer_socket: Path("/run/uap-observer-signer/sign.sock"),
             self.runner_socket: Path("/run/uap-observer-runner.sock"),
-            self.runner_source_path: Path("/usr/local/libexec/uap-observer-runner"),
+            self.runner_source_path: Path("/opt/uap-observer-current/libexec/uap-observer-runner"),
         }
         if any(actual != expected for actual, expected in fixed_paths.items()):
             raise ValueError("observer protected path differs")

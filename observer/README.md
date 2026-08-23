@@ -17,8 +17,13 @@ then drops it to one of four separate `uap-observer-{codex,cursor,kiro,control}`
 UIDs. A client can traverse only its own `0700` profile/workspace and cannot read
 another client's dedicated auth. Those UIDs cannot move processes into the
 delegated parent. The supervisor kills the complete job cgroup
-on success, failure, spawn error, or timeout. The
-runner cannot read observer state, the signing socket/key, or Docker sockets.
+on success, failure, spawn error, or timeout; a stuck reap or populated cgroup
+terminates the supervisor so systemd owns final control-group cleanup. The
+runner starts on an empty synthetic root and bind-mounts only reviewed system
+libraries, fixed tools, copied profiles, disposable workspaces, and output
+paths. Each adapter verifies the effective kernel mount table against that
+positive allowlist before making the no-real-project claim. It cannot read
+observer state, broad workspace roots, the signing socket/key, or Docker sockets.
 Runner output must be the four allowlisted JSON artifacts and is rejected if it
 contains credential-like values, absolute paths, or path URI variants.
 
@@ -30,6 +35,9 @@ accepted only after canonical JSON, challenge, schema, freshness, key identity,
 and Ed25519 signature verification. The private key is held only by the separate
 root signer service; both privileged sockets authenticate the observer UID with
 Linux `SO_PEERCRED`.
+The scarce application execution bucket is charged only after OIDC validation,
+public-run corroboration, and single-use-token consumption, so tokenless,
+invalid, and replayed requests cannot exhaust authenticated capacity.
 
 Install the complete reviewed checkout at `/opt/uap-observer`. Replace the
 public-key placeholder in a separate root-owned observer config and provision a
@@ -41,7 +49,10 @@ never argv, environment, or secrets. Run
 The installer creates the exact hardlinks and digest-pinned manifest, fails
 closed on placeholders, first copies every hash-locked input into a root-only
 staging closure, verifies that closure and both external configs, verifies the
-installed tree before daemon reload, creates dedicated service identities and IPC
+final `0644`/`0640`/`0755` installed modes through the runtime startup checks,
+and journals every prior systemd unit/drop-in before replacement. Any mutation
+or daemon-reload failure restores the exact previous bootstrap state before the
+closure pointer can move. The installer creates dedicated service identities and IPC
 groups, and installs dependencies into an isolated venv using
 `requirements.lock` with `--require-hashes --no-deps`. It does not enable or
 start services. The Caddy input must be the official Linux amd64 v2.11.4
@@ -74,6 +85,10 @@ then reads a short-lived challenge/request-bound root-owned human attestation
 created with `O_EXCL` by `uap-observer-attest-chatgpt`; the supervisor atomically
 tombstones it after adapter success. No real user project, copied auth, raw provider
 output, cookies, or tokens are accepted into evidence.
+The signer accepts only the exact Phase 6 artifact set: twelve non-Notion
+runtime pairs, three Notion pairs, and one ChatGPT UI pair, all uniquely and
+cross-bound to the consent, challenge, run, directory/release identities, and
+pseudonyms.
 
 Run focused tests with:
 

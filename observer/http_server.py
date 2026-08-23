@@ -95,10 +95,6 @@ class ObserverHandler(BaseHTTPRequestHandler):
         if self.path != ROUTE:
             self._json_error(404, "not found")
             return
-        source = str(self.client_address[0])
-        if not self.server.source_rate_limiter.allow(source, started):  # type: ignore[attr-defined]
-            self._json_error(429, "rate limit exceeded", retry_after="60")
-            return
         try:
             authorizations = self.headers.get_all("Authorization", [])
             if len(authorizations) != 1:
@@ -214,9 +210,9 @@ class BoundedThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
     def __init__(self, *args: Any, **kwargs: Any):
         self._connections = threading.BoundedSemaphore(MAX_CONNECTIONS)
-        self.source_rate_limiter = PerSourceRateLimiter()
         # This scarce global execution bucket is charged only by the callback
-        # reached after OIDC signature and exact claim validation.
+        # reached after OIDC validation, public-run corroboration, and replay
+        # rejection. Tokenless, invalid, and replayed requests cannot drain it.
         self.rate_limiter = SlidingWindowRateLimiter(limit=6, window_seconds=60)
         super().__init__(*args, **kwargs)
 

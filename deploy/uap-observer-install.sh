@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+install_lib="$script_dir/uap-observer-install-lib.sh"
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 5b252f9be97da7f890e01fa30ef799dd472c7620eef3213c2b96c093ad0231a1
+. "$install_lib"
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "installer must run as root" >&2
   exit 1
@@ -16,51 +21,57 @@ untrusted_caddy_archive=${6:?$usage}
 untrusted_caddy_config=${7:?$usage}
 caddy_config_digest=${8:?$usage}
 stage_root=/opt/uap-observer-source.new
-closure_digest=63c40563730d6dc3ad672d26fbde32e38017529597f97efd1a55871ecb2d23da
+closure_digest=2d012f7f6100e83666e44acdd0571d127dfe6534fc6814d239b4a7920da7df47
 activation_started=0
 activation_complete=0
-activated_paths=
+systemd_mutation_started=0
+closure_published=0
+install -d -o root -g root -m 0755 /run/lock
+exec 9>/run/lock/uap-observer-install.lock
+flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
+if [ -d "$stage_root" ]; then
+  if [ -f "$stage_root/rollback-required" ] && [ -f "$stage_root/systemd-backup/manifest" ]; then
+    if [ "$(readlink /opt/uap-observer-current 2>/dev/null || true)" != "uap-observer-closures/$closure_digest" ]; then
+      restore_observer_systemd "$stage_root/systemd-backup" /etc/systemd/system
+      systemctl daemon-reload
+      rm -rf "/opt/uap-observer-closures/$closure_digest"
+    fi
+  fi
+  rm -rf "$stage_root" /opt/uap-observer-venv.new /opt/uap-observer-runtime.new "/opt/uap-observer-closures/.new-$closure_digest"
+  rm -f /opt/uap-observer-current.new
+  rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
+    /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
+    /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
+    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
+  for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
+fi
 test ! -e "$stage_root"
 install -d -o root -g root -m 0700 "$stage_root"
 cleanup() {
   status=${1:-1}
   trap - EXIT HUP INT TERM
-  if [ "$activation_started" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
+  if [ "$systemd_mutation_started" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
     set +e
-    for destination in $activated_paths; do
-      rm -rf "$destination"
-      if [ -e "$destination.previous" ] || [ -L "$destination.previous" ]; then
-        mv "$destination.previous" "$destination"
-      fi
-    done
+    restore_observer_systemd "$systemd_backup" /etc/systemd/system
     systemctl daemon-reload
     set -e
   fi
   rm -rf /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
   rm -rf "/opt/uap-observer-closures/.new-$closure_digest"
+  if [ "$closure_published" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
+    rm -rf "/opt/uap-observer-closures/$closure_digest"
+  fi
   rm -f /opt/uap-observer-current.new
   rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
     /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
     /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
-    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new \
-    /etc/systemd/system/uap-observer-runner.service.d/egress.conf.new \
-    /etc/systemd/system/uap-observer.service.d/egress.conf.new
+    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
   for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
-  for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do rm -f "/etc/systemd/system/$unit.new"; done
   exit "$status"
 }
 trap 'cleanup $?' EXIT
 trap 'exit 1' HUP INT TERM
 
-activate() {
-  staged=$1
-  destination=$2
-  if [ -e "$destination" ] || [ -L "$destination" ]; then
-    mv "$destination" "$destination.previous"
-  fi
-  activated_paths="$destination $activated_paths"
-  mv "$staged" "$destination"
-}
 install -D -o root -g root -m 0444 "$untrusted_source_root/deploy/uap-observer-runtime.sha256" "$stage_root/deploy/uap-observer-runtime.sha256"
 test "$(sha256sum "$stage_root/deploy/uap-observer-runtime.sha256" | cut -d' ' -f1)" = "$closure_digest"
 while read -r expected relative extra; do
@@ -91,8 +102,8 @@ caddy_binary=$stage_root/caddy
 caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
-runner_digest=8be5c091aa02182522f975f121c857469d340f55db9a6f0d84170986fc52667c
-adapter_digest=97ffd6b54e08ce245d2dfa9690ac442abe35e77f1be63f03d56882468d15da82
+runner_digest=06e666cbe50134032751cf7fab28eea496c47299ecf62b1b62bcfc62e5d8e455
+adapter_digest=804d2e85c8bd74e497beb16c6df6f13396c88858ee439f06f3394369f9d8d400
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 
@@ -251,18 +262,28 @@ chmod 0644 /etc/uap-observer-adapters.json.new
 
 install -d -o root -g root -m 0755 /etc/caddy
 install -o root -g caddy -m 0640 "$caddy_config" /etc/caddy/Caddyfile.new
+systemd_stage="$stage_root/systemd"
+install -d -o root -g root -m 0700 "$systemd_stage/uap-observer.service.d" "$systemd_stage/uap-observer-runner.service.d"
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
-  install -o root -g root -m 0644 "$source_root/deploy/$unit" "/etc/systemd/system/$unit.new"
+  install -o root -g root -m 0644 "$source_root/deploy/$unit" "$systemd_stage/$unit"
 done
 for service in uap-observer uap-observer-runner; do
-  install -d -o root -g root -m 0755 "/etc/systemd/system/$service.service.d"
   {
     printf '%s\n' '[Service]' 'IPAddressDeny=any'
     if [ "$service" = uap-observer ]; then printf '%s\n' 'IPAddressAllow=127.0.0.0/8 ::1/128'; fi
     while read -r address; do printf 'IPAddressAllow=%s\n' "$address"; done < "$stage_root/egress-addresses"
-  } > "/etc/systemd/system/$service.service.d/egress.conf.new"
-  chown root:root "/etc/systemd/system/$service.service.d/egress.conf.new"
-  chmod 0644 "/etc/systemd/system/$service.service.d/egress.conf.new"
+    if [ "$service" = uap-observer-runner ]; then
+      python3 - "$adapter_config" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1], encoding="utf-8"))
+paths=[value["git"]["binary"], *(item["binary"] for item in value["clients"].values()), value["chatgpt"]["app_binding_path"], value["chatgpt"]["projection_receipt_path"]]
+for path in sorted(set(paths)):
+    print(f"BindReadOnlyPaths={path}")
+PY
+    fi
+  } > "$systemd_stage/$service.service.d/egress.conf"
+  chown root:root "$systemd_stage/$service.service.d/egress.conf"
+  chmod 0644 "$systemd_stage/$service.service.d/egress.conf"
 done
 
 (cd /opt/uap-observer-runtime.new && /opt/uap-observer-venv.new/bin/python -c 'import cryptography,jsonschema; import observer.http_server')
@@ -276,7 +297,7 @@ for name in runtime notion chatgpt consent; do
   test "$(stat -c '%d:%i' "/usr/local/libexec/uap-observer-adapter-$name.new")" = "$adapter_inode"
 done
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
-  cmp "$source_root/deploy/$unit" "/etc/systemd/system/$unit.new"
+  cmp "$source_root/deploy/$unit" "$systemd_stage/$unit"
 done
 cmp "$observer_config" /etc/uap-observer.json.new
 cmp "$adapter_config" /etc/uap-observer-adapter-config.json.new
@@ -307,19 +328,42 @@ mv /etc/uap-observer-adapters.json.new "$closure_stage/etc/uap-observer-adapters
 mv /etc/caddy/Caddyfile.new "$closure_stage/etc/Caddyfile"
 mv "$stage_root/hosts" "$closure_stage/etc/hosts"
 printf '%s\n' "$closure_digest" > "$closure_stage/.complete"
-chown -R root "$closure_stage"
-chmod -R a-w "$closure_stage"
+apply_observer_closure_modes "$closure_stage"
+unit_validation="$stage_root/unit-validation"
+install -d -o root -g root -m 0700 "$unit_validation"
+for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
+  sed "s|/opt/uap-observer-current|$closure_stage|g" "$systemd_stage/$unit" > "$unit_validation/$unit"
+done
+systemd-analyze verify "$unit_validation"/*.service "$unit_validation"/*.socket
+PYTHONPATH="$closure_stage/runtime" "$closure_stage/venv/bin/python" - "$closure_stage" "$runner_digest" "$adapter_digest" <<'PY'
+import grp,hashlib,sys
+from pathlib import Path
+from observer.config import Config
+from observer.fixed_runner import Adapter, ARTIFACT_ORDER, ReviewedRunner, read_owned_regular
+from observer.runner import SocketRunner
+root=Path(sys.argv[1])
+Config.load(root / "etc/uap-observer.json")
+SocketRunner(Path("/run/unused-validation.sock"), root / "libexec/uap-observer-runner", "sha256:" + sys.argv[2], 840)
+gid=grp.getgrnam("uap-observer-adapter-config").gr_gid
+config=root / "etc/uap-observer-adapter-config.json"
+encoded=read_owned_regular(config, 4 << 20, owner_uid=0, exact_mode=0o640, group_gid=gid)
+config_digest="sha256:" + hashlib.sha256(encoded).hexdigest()
+adapters=tuple(Adapter(name, root / f"libexec/uap-observer-adapter-{kind}", "sha256:" + sys.argv[3], config, config_digest) for name,kind in zip(ARTIFACT_ORDER,("runtime","notion","chatgpt","consent")))
+ReviewedRunner(adapters, Path("/var/lib/uap-observer/jobs"))
+PY
 mv "$closure_stage" "$closure_final"
+closure_published=1
 
 # Unit definitions are stable bootstrap files; all release-varying paths flow
 # through the immutable closure pointer.
-for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
-  mv "/etc/systemd/system/$unit.new" "/etc/systemd/system/$unit"
-done
-for service in uap-observer uap-observer-runner; do
-  mv "/etc/systemd/system/$service.service.d/egress.conf.new" "/etc/systemd/system/$service.service.d/egress.conf"
-done
-systemctl daemon-reload
+systemd_backup="$stage_root/systemd-backup"
+journal_observer_systemd "$systemd_backup" /etc/systemd/system
+sync -f "$systemd_backup/manifest"
+printf '%s\n' rollback-required > "$stage_root/rollback-required"
+sync -f "$stage_root/rollback-required"
+systemd_mutation_started=1
+activate_observer_systemd "$systemd_stage" /etc/systemd/system
+reload_observer_systemd systemctl
 activation_started=1
 ln -s "uap-observer-closures/$closure_digest" /opt/uap-observer-current.new
 mv -T /opt/uap-observer-current.new /opt/uap-observer-current

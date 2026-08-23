@@ -34,7 +34,7 @@
         "absolute_paths_exported": {"const": false},
         "credential_material_exported": {"const": false},
         "auth_copied": {"const": false},
-        "enforcement": {"const": "systemd-mount-namespace-v1"}
+        "enforcement": {"const": "systemd-positive-mount-allowlist-v1"}
       },
       "additionalProperties": false
     }

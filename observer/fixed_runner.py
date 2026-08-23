@@ -26,6 +26,8 @@ from typing import Any
 MAX_MESSAGE = 8 << 20
 MAX_ADAPTER_OUTPUT = 4 << 20
 RUNNER_TOTAL_SECONDS = 840
+KILL_WAIT_SECONDS = 2.0
+CGROUP_EMPTY_WAIT_SECONDS = 5.0
 ARTIFACT_NAMES = {
     "runtime-attestations.json", "notion-oauth-attestations.json",
     "chatgpt-cloudflare-attestation.json", "consent.json",
@@ -138,13 +140,20 @@ def write_new_owned(path: Path, value: bytes, *, uid: int | None = None, gid: in
         os.close(parent_fd)
 
 
-def kill_process_group(process: subprocess.Popen[bytes]) -> None:
+def kill_process_group(
+    process: subprocess.Popen[bytes], *, wait_seconds: float = KILL_WAIT_SECONDS,
+    fatal: Any = os._exit,
+) -> None:
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     if process.poll() is None:
-        process.wait()
+        try:
+            process.wait(timeout=wait_seconds)
+        except subprocess.TimeoutExpired:
+            fatal(70)
+            raise RuntimeError("fatal runner cleanup callback returned")
 
 
 def delegated_job_cgroup(
@@ -172,20 +181,26 @@ def delegated_job_cgroup(
 
 def destroy_job_cgroup(
     target: Path, *, kill: Any | None = None, events: Any | None = None,
-    remove: Any | None = None,
+    remove: Any | None = None, wait_seconds: float = CGROUP_EMPTY_WAIT_SECONDS,
+    fatal: Any = os._exit,
 ) -> None:
     kill = kill or (lambda: (target / "cgroup.kill").write_text("1"))
     events = events or (lambda: (target / "cgroup.events").read_text())
     remove = remove or target.rmdir
+    kill()
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        if "populated 0" in events():
+            break
+        if time.monotonic() >= deadline:
+            fatal(70)
+            raise RuntimeError("fatal runner cleanup callback returned")
+        time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
     try:
-        kill()
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if "populated 0" in events():
-                break
-            time.sleep(0.01)
-    finally:
         remove()
+    except OSError:
+        # Once cgroup.events proves the group empty, removal is advisory.
+        pass
 
 
 def tombstone_record(root: Path, challenge: str) -> None:

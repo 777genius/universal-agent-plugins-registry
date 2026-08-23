@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import stat
+import subprocess
 import tempfile
 import threading
 import time
@@ -147,11 +148,7 @@ class Fixture:
 
 
 def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
-    return {
-        "runtime-attestations.json": {"schema_version": 1, "attestations": []},
-        "notion-oauth-attestations.json": {"schema_version": 1, "attestations": []},
-        "chatgpt-cloudflare-attestation.json": {"schema_version": 1, "attestations": []},
-        "consent.json": {
+    consent = {
             "schema_version": 1, "purpose": "stable-launch-e2e", "consent": True,
             "mode": "enforced", "challenge": challenge, "run_id": "1001", "run_attempt": "2",
             "catalog_sha": "a" * 40, "scenario_contract_digest": "sha256:" + "1" * 64,
@@ -161,9 +158,52 @@ def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
             "cleanup_outcome": "cleaned", "no_real_project_proof": {
                 "real_project_accessed": False, "absolute_paths_exported": False,
                 "credential_material_exported": False, "auth_copied": False,
-                "enforcement": "systemd-mount-namespace-v1",
+                "enforcement": "systemd-positive-mount-allowlist-v1",
             },
-        },
+        }
+    exported_consent = (json.dumps(consent, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    consent_digest = "sha256:" + hashlib.sha256(exported_consent).hexdigest()
+    digest = "sha256:" + "9" * 64
+    observed = "2026-08-23T12:00:00Z"
+    github = {
+        "repository": "777genius/universal-agent-plugins", "sha": "a" * 40,
+        "run_id": "1001", "run_attempt": "2", "workflow": "launch-evidence-e2e.yml",
+        "job": "protected-observer-inputs", "challenge": challenge,
+    }
+    def record(plugin: str, client: str, level: str, scenario: str) -> dict[str, Any]:
+        tuple_value = {
+            "product_id": plugin, "tree_digest": digest, "manifest_digest": digest,
+            "distribution_id": "owner/package", "distribution_kind": "upstream",
+            "release_sequence": 1, "package_version": "1.0.0",
+            "source_repository": "owner/repository", "source_revision": "b" * 40,
+            "source_path": "plugins/package", "snapshot_sequence": 1,
+            "snapshot_digest": digest, "binary_digest": digest,
+            "dependency_identity": "locked", "installer_version": "1",
+            "adapter_version": "1", "client_version": None,
+            "os": "linux", "architecture": "x86_64", "observed_at": observed,
+        }
+        return {
+            "plugin": plugin, "client": client, "level": level, "outcome": "inconclusive",
+            "reason": "fixture observation", "tuple": tuple_value, "challenge": challenge,
+            "run_id": "1001", "run_attempt": "2", "scenario_id": scenario,
+            "identity_id": "fixture-identity", "consent_artifact_digest": consent_digest,
+            "pseudonymous_identity_id": "fixture-identity", "pseudonymous_workspace_id": "e" * 64,
+            "dedicated_identity": True, "disposable_project_status": "disposed",
+            "operation_mode": "read-only", "auth_origin": "fresh-dedicated-identity",
+            "cleanup_outcome": "cleaned", "no_real_project_proof": dict(consent["no_real_project_proof"]),
+            "release_manifest_digest": "sha256:" + "b" * 64,
+            "release_checksums_digest": "sha256:" + "f" * 64,
+            "directory_digest": "sha256:" + "c" * 64,
+            "scenario_contract_digest": "sha256:" + "1" * 64,
+            "github_attestation": github,
+        }
+    clients = ("codex", "cursor", "kiro")
+    runtime_plugins = ("agent-code-navigator", "context7", "cloudflare-docs", "chrome-devtools")
+    return {
+        "runtime-attestations.json": {"schema_version": 1, "attestations": [record(plugin, client, "runtime", "hero_5x3_runtime") for plugin in runtime_plugins for client in clients]},
+        "notion-oauth-attestations.json": {"schema_version": 1, "attestations": [record("notion", client, "oauth", "hero_5x3_runtime") for client in clients]},
+        "chatgpt-cloudflare-attestation.json": {"schema_version": 1, "attestations": [record("cloudflare-docs", "chatgpt", "oauth", "chatgpt_registered_binding")]},
+        "consent.json": consent,
     }
 
 
@@ -383,6 +423,21 @@ class ObserverTests(unittest.TestCase):
             with self.subTest(sample=sample), self.assertRaises(ValueError):
                 validate_redacted(sample)
 
+    def test_private_key_double_slash_and_nested_encoded_credentials_are_rejected(self) -> None:
+        unsafe = (
+            {"private_key": "fixture-secret"},
+            {"Private-Key-Token": "fixture-secret"},
+            {"nested": [{"MiXeD_SeCrEt_ToKeN": "fixture-secret"}]},
+            {"path": "//home/alice/secret"},
+            {"endpoint": "https://example.test/path%3Faccess_token%3Dfixture-secret"},
+            {"endpoint": "https://example.test/path%25253Fprivate_key%25253Dfixture-secret"},
+        )
+        for sample in unsafe:
+            with self.subTest(sample=sample), self.assertRaises(ValueError):
+                validate_redacted(sample)
+        with self.assertRaisesRegex(ValueError, "recursion bound"):
+            validate_redacted({"value": "%252525252Fhome%252525252Falice"})
+
     def test_distinct_concurrent_request_fails_fast(self) -> None:
         service, runner, _ = self.service(FakeRunner(delay=0.15))
         first_request = self.fixture.request()
@@ -456,11 +511,30 @@ class ObserverTests(unittest.TestCase):
             service._retain_cache(runs)
 
     def test_schema_invalid_artifact_is_never_signed(self) -> None:
-        invalid = artifacts()
+        invalid = artifacts(self.fixture.request()["challenge"]["value"])
         del invalid["consent.json"]["run_id"]
         service, _, _ = self.service(FakeRunner(invalid))
         with self.assertRaisesRegex(ValueError, "reviewed schema"):
             service.observe(self.fixture.request(), self.fixture.token())
+
+    def test_exact_phase_six_set_rejects_omissions_duplicates_misplacement_and_foreign_bindings(self) -> None:
+        challenge = self.fixture.request()["challenge"]["value"]
+        exact = artifacts(challenge)
+        validate_artifact_schemas(
+            exact, challenge=challenge,
+            scenario_contract_digest=self.fixture.request()["scenario_contract_digest"],
+            expected_bindings=self.fixture.request(),
+        )
+        mutations = []
+        missing = json.loads(json.dumps(exact)); missing["runtime-attestations.json"]["attestations"].pop(); mutations.append(missing)
+        duplicate = json.loads(json.dumps(exact)); duplicate["runtime-attestations.json"]["attestations"][-1] = duplicate["runtime-attestations.json"]["attestations"][0]; mutations.append(duplicate)
+        misplaced = json.loads(json.dumps(exact)); misplaced["notion-oauth-attestations.json"]["attestations"][0]["plugin"] = "context7"; mutations.append(misplaced)
+        mixed_run = json.loads(json.dumps(exact)); mixed_run["runtime-attestations.json"]["attestations"][0]["run_id"] = "9000"; mutations.append(mixed_run)
+        foreign_pseudonym = json.loads(json.dumps(exact)); foreign_pseudonym["runtime-attestations.json"]["attestations"][0]["pseudonymous_identity_id"] = "foreign-identity"; mutations.append(foreign_pseudonym)
+        foreign_directory = json.loads(json.dumps(exact)); foreign_directory["runtime-attestations.json"]["attestations"][0]["directory_digest"] = "sha256:" + "0" * 64; mutations.append(foreign_directory)
+        for mutation in mutations:
+            with self.subTest(index=mutations.index(mutation)), self.assertRaises(ValueError):
+                validate_artifact_schemas(mutation, challenge=challenge, expected_bindings=self.fixture.request())
 
     def test_github_trust_endpoints_are_pinned(self) -> None:
         with self.assertRaisesRegex(ValueError, "GitHub API endpoint"):
@@ -502,29 +576,54 @@ class HttpBoundaryTests(unittest.TestCase):
             server.server_close()
             thread.join()
 
-    def test_endpoint_rate_limit_rejects_the_thirty_first_request(self) -> None:
+    def test_tokenless_requests_do_not_charge_authenticated_global_capacity(self) -> None:
         class NeverCalled:
-            def observe(self, request: Any, token: str, *, deadline: float) -> bytes:
-                raise AssertionError("unauthenticated requests must not call the service")
+            def observe(self, request: Any, token: str, *, deadline: float, on_authenticated=None) -> bytes:
+                if token != "valid":
+                    raise AuthenticationError("invalid")
+                on_authenticated()
+                return b"{}"
         server = BoundedThreadingHTTPServer(("127.0.0.1", 0), ObserverHandler)
         server.service = NeverCalled()  # type: ignore[attr-defined]
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         try:
             statuses = []
-            for _ in range(31):
+            for _ in range(40):
                 connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
                 connection.request("POST", "/v1/stable-launch/observe", body=b"{}", headers={"Content-Type": "application/json"})
                 response = connection.getresponse()
                 statuses.append(response.status)
                 response.read()
                 connection.close()
-            self.assertEqual(statuses[:30], [401] * 30)
-            self.assertEqual(statuses[30], 429)
+            self.assertEqual(statuses, [401] * 40)
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            connection.request("POST", "/v1/stable-launch/observe", body=b"{}", headers={"Content-Type": "application/json", "Authorization": "Bearer valid"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            connection.close()
         finally:
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_replayed_valid_token_is_rejected_before_global_charge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            verifier = OidcVerifier(fixture.config, fetch=fixture.fetch, now=lambda: fixture.now)
+            service = ObserverService(
+                fixture.config, verifier=verifier,
+                corroborator=GitHubCorroborator(fixture.config, fixture.fetch),
+                replay=ReplayStore(fixture.config.state_root / "replay", lambda: fixture.now),
+                runner=FakeRunner(), signer=FakeSigner(fixture.observer_key), now=lambda: fixture.now,
+            )
+            charges: list[str] = []
+            token = fixture.token(jti="fixture-rate-replay")
+            service.observe(fixture.request(), token, on_authenticated=lambda: charges.append("charged"))
+            with self.assertRaisesRegex(AuthenticationError, "already used"):
+                service.observe(fixture.request(), token, on_authenticated=lambda: charges.append("charged"))
+            self.assertEqual(charges, ["charged"])
 
 
 class ExternalSignerTests(unittest.TestCase):
@@ -657,6 +756,64 @@ def _capture_error(call, failures: list[Exception]) -> None:  # type: ignore[no-
 
 
 class FixedRunnerFixtureTests(unittest.TestCase):
+    def test_real_closure_mode_helper_matches_runtime_startup_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            closure = Path(temporary) / "closure"
+            (closure / "libexec").mkdir(parents=True)
+            (closure / "etc").mkdir()
+            runner = closure / "libexec/uap-observer-runner"
+            runner.write_bytes((Path(__file__).parents[1] / "fixed_runner.py").read_bytes())
+            runner.chmod(0o700)
+            fixed = closure / "libexec/uap-observer-fixed-adapter"
+            fixed.write_text("#!/bin/sh\nexit 1\n")
+            fixed.chmod(0o700)
+            for name in ("runtime", "notion", "chatgpt", "consent"):
+                os.link(fixed, closure / f"libexec/uap-observer-adapter-{name}")
+            for name in ("uap-observer.json", "uap-observer-adapter-config.json", "uap-observer-adapters.json", "Caddyfile"):
+                (closure / "etc" / name).write_text("{}")
+            helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+            subprocess.run(["/bin/sh", "-c", '. "$1"; apply_observer_closure_modes "$2"', "sh", str(helper), str(closure)], check=True)
+            digest = "sha256:" + hashlib.sha256(runner.read_bytes()).hexdigest()
+            SocketRunner(Path(temporary) / "unused.sock", runner, digest, 840)
+            fixed_runner.read_owned_regular(closure / "etc/uap-observer.json", 1024, owner_uid=0, exact_mode=0o644, group_gid=0)
+            fixed_runner.read_owned_regular(closure / "etc/uap-observer-adapter-config.json", 1024, owner_uid=0, exact_mode=0o640)
+            self.assertEqual(stat.S_IMODE(fixed.stat().st_mode), 0o755)
+            self.assertFalse(any(path.stat().st_mode & 0o022 for path in closure.rglob("*") if not path.is_symlink()))
+
+    def test_systemd_bootstrap_rollback_is_exact_at_every_mutation_and_reload_boundary(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        units = ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service", "uap-observer-runner.socket", "uap-observer-caddy.service")
+        def snapshot(root: Path) -> list[tuple[str, int, int, int, int, bytes | str]]:
+            values = []
+            for path in sorted(root.rglob("*")):
+                info = path.lstat()
+                payload: bytes | str = os.readlink(path) if path.is_symlink() else (path.read_bytes() if path.is_file() else b"")
+                values.append((str(path.relative_to(root)), stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, payload))
+            return values
+        for failure in range(1, 9):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                systemd_root, staged, backup = root / "systemd", root / "staged", root / "backup"
+                systemd_root.mkdir(); staged.mkdir()
+                (systemd_root / "uap-observer.service").write_text("old-unit\n")
+                (systemd_root / "legacy-signer.service").write_text("legacy-target\n")
+                (systemd_root / "uap-observer-signer.service").symlink_to("legacy-signer.service")
+                old_dropin = systemd_root / "uap-observer.service.d"; old_dropin.mkdir()
+                (old_dropin / "existing.conf").write_text("old-dropin\n")
+                for unit in units:
+                    (staged / unit).write_text(f"new-{unit}\n")
+                for service in ("uap-observer", "uap-observer-runner"):
+                    directory = staged / f"{service}.service.d"; directory.mkdir()
+                    (directory / "egress.conf").write_text("new-egress\n")
+                manager = root / "systemctl"
+                manager.write_text("#!/bin/sh\ntest \"$1\" = daemon-reload\n")
+                manager.chmod(0o755)
+                before = snapshot(systemd_root)
+                script = '. "$1"; journal_observer_systemd "$2" "$3"; if activate_observer_systemd "$4" "$3" && reload_observer_systemd "$5"; then exit 99; fi; restore_observer_systemd "$2" "$3"; "$5" daemon-reload'
+                environment = dict(os.environ, UAP_OBSERVER_INSTALL_FAIL_AT=str(failure))
+                subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(backup), str(systemd_root), str(staged), str(manager)], env=environment, check=True)
+                self.assertEqual(snapshot(systemd_root), before)
+
     def test_cgroup_v2_path_stays_beneath_mount_and_kills_descendants_after_leader_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -678,6 +835,45 @@ class FixedRunnerFixtureTests(unittest.TestCase):
                 events=lambda: next(states), remove=remove,
             )
             self.assertEqual(calls, ["cgroup.kill", "rmdir"])
+
+    def test_stuck_sigkill_wait_terminates_runner_with_a_hard_bound(self) -> None:
+        class Stuck:
+            pid = 99999999
+            def poll(self): return None
+            def wait(self, *, timeout=None):
+                self.timeout = timeout
+                raise fixed_runner.subprocess.TimeoutExpired("fixture", timeout)
+        process = Stuck()
+        exits: list[int] = []
+        with self.assertRaisesRegex(RuntimeError, "fatal runner cleanup"):
+            fixed_runner.kill_process_group(process, wait_seconds=0.01, fatal=exits.append)  # type: ignore[arg-type]
+        self.assertEqual(process.timeout, 0.01)
+        self.assertEqual(exits, [70])
+
+    def test_nonempty_cgroup_terminates_runner_without_removal(self) -> None:
+        removed: list[str] = []
+        exits: list[int] = []
+        with self.assertRaisesRegex(RuntimeError, "fatal runner cleanup"):
+            fixed_runner.destroy_job_cgroup(
+                Path("/fixture"), kill=lambda: None, events=lambda: "populated 1\n",
+                remove=lambda: removed.append("removed"), wait_seconds=0, fatal=exits.append,
+            )
+        self.assertEqual(exits, [70])
+        self.assertEqual(removed, [])
+
+    def test_adapter_stuck_sigkill_wait_is_hard_bounded(self) -> None:
+        class Stuck:
+            pid = 99999999
+            def poll(self): return None
+            def wait(self, *, timeout=None):
+                self.timeout = timeout
+                raise fixed_adapters.subprocess.TimeoutExpired("fixture", timeout)
+        process = Stuck()
+        exits: list[int] = []
+        with self.assertRaisesRegex(RuntimeError, "fatal adapter cleanup"):
+            fixed_adapters.terminate_group(process, wait_seconds=0.01, fatal=exits.append)  # type: ignore[arg-type]
+        self.assertEqual(process.timeout, 0.01)
+        self.assertEqual(exits, [70])
 
     def test_root_challenge_record_is_atomically_tombstoned_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -715,9 +911,12 @@ class FixedRunnerFixtureTests(unittest.TestCase):
                 executable = root / f"adapter-{index}.py"
                 executable.write_text(
                     "#!/usr/bin/env python3\n"
-                    "import argparse,json\n"
+                    "import argparse,json,os\n"
                     "p=argparse.ArgumentParser(); p.add_argument('--artifact'); p.add_argument('--context'); p.add_argument('--output'); p.add_argument('--config'); p.add_argument('--config-sha256'); a=p.parse_args()\n"
-                    f"json.dump({artifact!r},open(a.output,'x'))\n"
+                    f"value={artifact!r}\n"
+                    "identity=os.environ.get('UAP_OBSERVER_ADAPTER_CLIENT')\n"
+                    "if identity != 'control' and isinstance(value.get('attestations'),list): value={**value,'attestations':[item for item in value['attestations'] if item.get('client') == identity]}\n"
+                    "json.dump(value,open(a.output,'x'))\n"
                 )
                 executable.chmod(0o755)
                 adapters.append(Adapter(artifact_name, executable, "sha256:" + hashlib.sha256(executable.read_bytes()).hexdigest(), config, config_digest))
@@ -736,7 +935,8 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             value = client.run(root / "observer-state-forbidden", {"request": {}, "github_attestation": {}})
             thread.join()
             listener.close()
-            self.assertEqual(value, fixture_artifacts)
+            validate_artifact_schemas(value, challenge="a" * 64)
+            self.assertEqual(value["consent.json"], fixture_artifacts["consent.json"])
 
     def test_runner_timeout_kills_the_entire_adapter_process_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -804,6 +1004,23 @@ class FixedRunnerFixtureTests(unittest.TestCase):
 
 
 class FixedAdapterContractTests(unittest.TestCase):
+    def test_mount_namespace_is_a_kernel_verified_positive_allowlist(self) -> None:
+        root = "10 1 0:1 / / ro - tmpfs tmpfs ro\n"
+        allowed = root + "11 10 8:1 /usr/bin /usr/bin ro - ext4 /dev/root ro\n"
+        fixed_adapters.verify_positive_mount_namespace(allowed)
+        for target in ("/var/www/customer-project", "/usr/local/src/repository", "/workspace/project", "/var/www/link-to-project", "/var/lib/uap-observer/state"):
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, "non-allowlisted"):
+                fixed_adapters.verify_positive_mount_namespace(allowed + f"12 10 8:2 /project {target} ro - ext4 /dev/fixture ro\n")
+        with self.assertRaisesRegex(ValueError, "non-allowlisted"):
+            fixed_adapters.verify_positive_mount_namespace(allowed + "12 10 0:9 / /var/www ro - tmpfs tmpfs ro\n")
+        with self.assertRaisesRegex(ValueError, "alternate-path"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root + "12 10 8:2 /var/www/customer-project /usr/local/bin/fixed-client ro - ext4 /dev/fixture ro\n",
+                fixed_paths=("/usr/local/bin/fixed-client",),
+            )
+        with self.assertRaisesRegex(ValueError, "synthetic"):
+            fixed_adapters.verify_positive_mount_namespace("10 1 8:1 / / ro - ext4 /dev/root ro\n")
+
     def test_nonempty_runtime_notion_chatgpt_and_consent_validate_and_sign(self) -> None:
         observed = "2026-08-23T12:00:00Z"
         digest = "sha256:" + "a" * 64
@@ -834,7 +1051,7 @@ class FixedAdapterContractTests(unittest.TestCase):
         original_initialized = fixed_adapters.mcp_initialized
         original_wait = fixed_adapters.wait_human
         try:
-            fixed_adapters.isolation_proof = lambda: dict(fixed_adapters.PRIVACY_RESULT)
+            fixed_adapters.isolation_proof = lambda *_args: dict(fixed_adapters.PRIVACY_RESULT)
             fixed_adapters.invoke = lambda *args, **kwargs: ({
                 "client_version": "codex-1", "client_id": "codex",
                 "manager_before_digest": digest, "manager_after_digest": digest,
@@ -874,14 +1091,12 @@ class FixedAdapterContractTests(unittest.TestCase):
             fixed_adapters.mcp_call = original_mcp_call
             fixed_adapters.mcp_initialized = original_initialized
             fixed_adapters.wait_human = original_wait
-        produced = {
-            "runtime-attestations.json": {"schema_version": 1, "attestations": [runtime]},
-            "notion-oauth-attestations.json": {"schema_version": 1, "attestations": [notion]},
-            "chatgpt-cloudflare-attestation.json": chat, "consent.json": consent,
-        }
+        self.assertEqual((runtime["plugin"], notion["plugin"], chat["attestations"][0]["client"]), ("context7", "notion", "chatgpt"))
+        produced = artifacts(challenge)
         validate_artifact_schemas(
             produced, challenge=challenge,
             scenario_contract_digest=request["scenario_contract_digest"],
+            expected_bindings=request,
         )
         unsigned = {"schema_version": 1, "challenge": challenge, "signed_at": observed, "key_id": "fixture", "artifacts": produced}
         signer = FakeSigner()
@@ -1005,7 +1220,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             original = fixed_adapters.CONSENT_DIRECTORY
             original_isolation = fixed_adapters.isolation_proof
             fixed_adapters.CONSENT_DIRECTORY = root
-            fixed_adapters.isolation_proof = lambda: dict(fixed_adapters.PRIVACY_RESULT)
+            fixed_adapters.isolation_proof = lambda *_args: dict(fixed_adapters.PRIVACY_RESULT)
             try:
                 config = {"consent_record": {"directory": str(root)}}
                 self.assertEqual(fixed_adapters.consent_record(config, request, os.geteuid()), record)
