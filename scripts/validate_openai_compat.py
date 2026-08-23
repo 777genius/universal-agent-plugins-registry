@@ -6,9 +6,10 @@ from __future__ import annotations
 import json
 import re
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from urllib.parse import urlsplit
 
+from build_openai_compat import referenced_mcp_resources
 from openai_app_bindings import APP_BINDINGS, app_document, load_app_bindings
 
 
@@ -39,8 +40,6 @@ EXPECTED_CAPABILITIES = {
     "sentry": ["Interactive", "Write"],
 }
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
-PLUGIN_ROOT_PREFIX = "${PLUGIN_ROOT}/"
-
 
 class ValidationError(Exception):
     pass
@@ -67,21 +66,6 @@ def require_https(value: object, field: str) -> None:
     require(isinstance(value, str), f"{field}: must be a string")
     parsed = urlsplit(value)
     require(parsed.scheme == "https" and bool(parsed.hostname), f"{field}: must be an HTTPS URL")
-
-
-def validate_plugin_root_reference(plugin_root: Path, value: str, field: str) -> None:
-    """Require an exact PLUGIN_ROOT path to resolve inside the generated package."""
-    if not value.startswith(PLUGIN_ROOT_PREFIX):
-        return
-    relative = PurePosixPath(value.removeprefix(PLUGIN_ROOT_PREFIX))
-    require(
-        not relative.is_absolute() and relative.parts and ".." not in relative.parts,
-        f"{field}: unsafe PLUGIN_ROOT path",
-    )
-    require(
-        plugin_root.joinpath(*relative.parts).exists(),
-        f"{field}: missing PLUGIN_ROOT resource {relative}",
-    )
 
 
 def validate_mcp(plugin_root: Path, plugin_name: str) -> None:
@@ -117,14 +101,6 @@ def validate_mcp(plugin_root: Path, plugin_name: str) -> None:
                 f"{path}: {server_name}.env must contain environment strings",
             )
             require(cwd is None or isinstance(cwd, str), f"{path}: {server_name}.cwd must be a string")
-            for index, value in enumerate([command, *args]):
-                validate_plugin_root_reference(
-                    plugin_root, value, f"{path}: {server_name}.argv[{index}]",
-                )
-            if isinstance(cwd, str):
-                validate_plugin_root_reference(plugin_root, cwd, f"{path}: {server_name}.cwd")
-            for key, value in environment.items():
-                validate_plugin_root_reference(plugin_root, value, f"{path}: {server_name}.env.{key}")
         else:
             require_https(server.get("url"), f"{path}: {server_name}.url")
         bearer = server.get("bearer_token_env_var")
@@ -136,6 +112,10 @@ def validate_mcp(plugin_root: Path, plugin_name: str) -> None:
         expected = EXPECTED_AUTH.get(plugin_name, {})
         actual = {key: server[key] for key in ("bearer_token_env_var", "oauth_resource") if key in server}
         require(actual == expected, f"{path}: auth metadata drift for {plugin_name}: {actual!r}")
+    try:
+        referenced_mcp_resources(plugin_root, doc)
+    except ValueError as exc:
+        raise ValidationError(f"{path}: {exc}") from exc
 
 
 def validate_app(

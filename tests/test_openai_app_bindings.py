@@ -613,7 +613,7 @@ class OpenAIAppBindingTests(unittest.TestCase):
         self.assertTrue({"chrome-devtools", "context7"}.issubset(expected))
         self.assertTrue({"firebase", "hubspot-developer"}.isdisjoint(expected))
 
-    def test_locked_runtime_extensions_are_complete_in_generated_packages(self) -> None:
+    def test_referenced_runtime_closures_are_complete_in_generated_packages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             plugins = root / "plugins"
@@ -645,7 +645,85 @@ class OpenAIAppBindingTests(unittest.TestCase):
                 plugin / "io.github.777genius.agentplugins" / "runtime" / "launcher.mjs"
             ).unlink()
 
-            with self.assertRaisesRegex(ValidationError, "missing PLUGIN_ROOT resource"):
+            with self.assertRaisesRegex(ValidationError, "missing plugin resource"):
+                validate_plugin(plugin, {})
+
+    def test_resource_projection_supports_inline_and_direct_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            output = root / "output"
+            (source / "bin").mkdir(parents=True)
+            (source / "bin" / "server").write_text("server")
+            (source / "bin" / "helper").write_text("runtime closure")
+            (source / "config.json").write_text("{}")
+            (source / "first.txt").write_text("first")
+            (source / "second.txt").write_text("second")
+            mcp = {"mcpServers": {"demo": {
+                "type": "stdio",
+                "command": "./bin/server",
+                "args": ["--config=${PLUGIN_ROOT}/config.json"],
+                "env": {
+                    "PAIR": "${PLUGIN_ROOT}/first.txt:${PLUGIN_ROOT}/second.txt",
+                },
+            }}}
+
+            builder.copy_mcp_resources(source, output, mcp)
+
+            self.assertEqual(
+                builder.tree_files(output),
+                {
+                    "bin/helper": b"runtime closure",
+                    "bin/server": b"server",
+                    "config.json": b"{}",
+                    "first.txt": b"first",
+                    "second.txt": b"second",
+                },
+            )
+
+    def test_resource_projection_rejects_unsafe_or_ambiguous_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            (source / "config").write_text("short")
+            (source / "config,prod").write_text("long")
+            (source / "assets").mkdir()
+            (source / "assets" / "icon.png").write_bytes(b"portable")
+            outside = root / "outside"
+            outside.write_text("outside")
+            (source / "link").symlink_to(outside)
+            cases = {
+                "traversal": "${PLUGIN_ROOT}/../outside",
+                "absolute": "${PLUGIN_ROOT}//etc/passwd",
+                "cross root": "${PLUGIN_ROOT}/${PLUGIN_DATA}/state",
+                "symlink": "${PLUGIN_ROOT}/link",
+                "ambiguous": "${PLUGIN_ROOT}/config,prod",
+                "host collision": "${PLUGIN_ROOT}/assets/icon.png",
+                "missing": "${PLUGIN_ROOT}/missing.json",
+            }
+            for name, argument in cases.items():
+                mcp = {"mcpServers": {"demo": {
+                    "type": "stdio", "command": "demo", "args": [argument],
+                }}}
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    builder.copy_mcp_resources(source, root / "output", mcp)
+
+    def test_validator_checks_every_inline_plugin_root_occurrence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugins = root / "plugins"
+            builder.build(plugins, root / "marketplace.json")
+            plugin = plugins / "chrome-devtools"
+            mcp_path = plugin / ".mcp.json"
+            mcp = json.loads(mcp_path.read_text())
+            server = mcp["mcpServers"]["chrome-devtools"]
+            server["args"].append(
+                "--pair=${PLUGIN_ROOT}/README.md:${PLUGIN_ROOT}/missing.json"
+            )
+            mcp_path.write_text(json.dumps(mcp))
+
+            with self.assertRaisesRegex(ValidationError, "missing plugin resource"):
                 validate_plugin(plugin, {})
 
     @staticmethod
