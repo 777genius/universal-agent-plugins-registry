@@ -90,13 +90,19 @@ disposable observers may pass lifecycle, materialization, fault, and
 postcondition rows, but those rows always carry a null client version and
 explicitly deny native discovery and runtime proof.
 
-The primary signed artifact must contain exactly 26 `all_26_info` discovery
-records, one per product, all using the supported GitHub Copilot CLI lifecycle.
-Each pass binds native `copilot --version` and marketplace discovery to the
-exact `add`, `info`, `remove` lifecycle. A copied client file, manager receipt,
-or Cursor fixture is not discovery evidence. If the released Agent Plugins CLI
-cannot expose the required reconciliation, the gate fails closed until a newer
-release provides that contract. Notion is forbidden in the primary artifact;
+The external signed artifacts contain only the 15 hero runtime observations,
+the separate Notion and ChatGPT/OAuth observations, consent, and external-PR
+evidence. They cannot supply an `all_26_info` discovery pass.
+
+The protected GitHub job installs exact `@github/copilot@1.0.80` on Node 22,
+runs `npm audit signatures`, verifies registry integrity and
+`copilot --version`, and then runs every product's `add`, `info`, and
+`remove` lifecycle directly. An info pass requires the released Agent Plugins
+CLI to reconcile the receipt plus exact native `copilot --version` and
+`copilot plugin list` argv/product identity. A copied client file, fixture, or
+external discovery record cannot pass. Release 0.1.12 therefore fails closed
+until the required 0.1.13 contract is released. Notion is forbidden in the
+primary artifact;
 its separate artifact must contain exactly three passed runtime records for
 Codex, Cursor, and Kiro.
 

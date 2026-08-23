@@ -417,16 +417,38 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
 
     def test_all_package_native_proof_is_exact_copilot_lifecycle(self) -> None:
         valid = {
-            "level": "discovery", "client": "copilot", "lifecycle_verified": True,
-            "lifecycle_operations": ["add", "info", "remove"],
+            "basis": "native_client_command",
+            "version_operation": {
+                "argv": ["copilot", "--version"], "observed_client_version": "1.0.80",
+            },
+            "discovery_operation": {
+                "argv": ["copilot", "plugin", "list"], "discovered": True,
+                "product_id": "context7@agentplugins-f36027996b7a",
+            },
         }
-        self.assertTrue(e2e.LaunchHarness.protected_copilot_lifecycle(valid))
-        for mutation in (
-            {"client": "cursor"},
-            {"lifecycle_verified": False},
-            {"lifecycle_operations": ["add", "remove"]},
+        validate = lambda evidence: e2e.authoritative_repository_copilot_evidence(
+            evidence, client_version="1.0.80", product_id="context7", expected_version="1.0.80",
+        )
+        self.assertTrue(validate(valid))
+        for path, value in (
+            (("basis",), "protected_external_observer"),
+            (("version_operation", "argv"), ["sh", "-c", "copilot --version"]),
+            (("version_operation", "observed_client_version"), "1.0.79"),
+            (("discovery_operation", "argv"), ["copilot", "plugin", "list", "--fixture"]),
+            (("discovery_operation", "product_id"), "context7"),
+            (("discovery_operation", "product_id"), "context7@agentplugins-xyz"),
+            (("discovery_operation", "product_id"), "other@agentplugins-f36027996b7a"),
+            (("discovery_operation", "discovered"), False),
         ):
-            self.assertFalse(e2e.LaunchHarness.protected_copilot_lifecycle({**valid, **mutation}))
+            mutated = json.loads(json.dumps(valid))
+            target = mutated
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            self.assertFalse(validate(mutated), path)
+        self.assertFalse(e2e.authoritative_repository_copilot_evidence(
+            valid, client_version="1.0.79", product_id="context7", expected_version="1.0.80",
+        ))
         harness = self.fixture_harness()
         with mock.patch.object(harness, "directory_release", return_value={}):
             client, _ = harness.all_package_client("context7")
@@ -434,6 +456,128 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         harness.config = {**harness.config, "all_package_client": "cursor"}
         with self.assertRaisesRegex(ValueError, "GitHub Copilot CLI"):
             harness.all_package_client("context7")
+
+    def test_copilot_installation_metadata_is_exact_and_confined(self) -> None:
+        config = e2e.read_production_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "run"
+            root.mkdir()
+            executable = root / "copilot"
+            executable.write_bytes(b"exact copilot executable")
+            executable.chmod(0o755)
+            metadata_path = root / "copilot-metadata.json"
+            metadata_path.write_text("{}")
+            metadata = {
+                "schema_version": 1,
+                "package": config["copilot_cli_package"],
+                "version": config["copilot_cli_version"],
+                "integrity": config["copilot_cli_integrity"],
+                "node_major": 22,
+                "signature_audit": True,
+                "version_argv": ["copilot", "--version"],
+                "observed_version": "1.0.80",
+                "executable_digest": e2e.sha256_file(executable),
+                "version_stdout_digest": "sha256:" + "a" * 64,
+            }
+            validate = lambda value, path=executable: e2e.valid_copilot_installation(
+                path, metadata_path, value, root, config,
+            )
+            self.assertTrue(validate(metadata))
+            for key, replacement in (
+                ("version", "1.0.79"),
+                ("integrity", "sha512-untrusted"),
+                ("signature_audit", False),
+                ("observed_version", "1.0.79"),
+                ("executable_digest", "sha256:" + "b" * 64),
+            ):
+                self.assertFalse(validate({**metadata, key: replacement}), key)
+            outside = Path(tmp) / "outside-copilot"
+            outside.write_bytes(executable.read_bytes())
+            outside.chmod(0o755)
+            self.assertFalse(validate(metadata, outside))
+            escaped_link = root / "escaped-copilot"
+            escaped_link.symlink_to(outside)
+            self.assertFalse(validate(metadata, escaped_link))
+
+    def test_external_observer_schema_cannot_supply_all_package_discovery(self) -> None:
+        schema = json.loads((ROOT / "tests/e2e/schemas/runtime-attestations.schema.json").read_text())
+        item = schema["properties"]["attestations"]["items"]
+        self.assertNotIn("copilot", item["properties"]["client"]["enum"])
+        self.assertNotIn("discovery", item["properties"]["level"]["enum"])
+        self.assertNotIn("all_26_info", item["properties"]["scenario_id"]["enum"])
+        self.assertNotIn("lifecycle_verified", item["properties"])
+        self.assertNotIn("lifecycle_operations", item["properties"])
+        self.assertNotIn("copilot", schema["$defs"]["nativeDiscoveryEvidence"]["properties"]["client"]["enum"])
+        launch = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
+        discovery_rule = launch["properties"]["matrix"]["items"]["allOf"][0]
+        self.assertEqual(discovery_rule["then"]["properties"]["details"]["properties"]["evidence_basis"]["const"], "native_client_command")
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / "external.json"
+            artifact.write_text(json.dumps({
+                "schema_version": 1,
+                "attestations": [{
+                    "plugin": "context7", "client": "copilot",
+                    "level": "discovery", "outcome": "passed",
+                }],
+            }))
+            with self.assertRaisesRegex(ValueError, "unsupported level"):
+                self.fixture_harness()._load_attestations(artifact)
+
+    def test_all_package_info_fails_closed_on_incomplete_native_copilot_result(self) -> None:
+        digest = "sha256:" + "a" * 64
+        release = {
+            "tree_digest": digest, "manifest_digest": digest,
+            "distribution_id": "fixture/upstream", "distribution_kind": "upstream",
+            "release_sequence": 1, "package_version": "1.0.0",
+            "source_repository": "owner/repository", "source_revision": "b" * 40,
+            "source_path": "plugins/fixture",
+        }
+        products = [{"id": f"plugin-{index}"} for index in range(26)]
+
+        def run_with(mutate):
+            harness = self.fixture_harness()
+            harness.snapshot = {"products": products}
+            harness.snapshot_digest = digest
+            harness.config = {**harness.config, "all_package_operations": ["info"]}
+
+            def command(argv, _sandbox, _clients):
+                plugin = argv[1]
+                value = {
+                    "tree_digest": digest, "receipt_reconciled": True,
+                    "native_discovery_reconciled": True, "native_identity_state": "managed",
+                    "client_version": "1.0.80",
+                    "native_discovery_evidence": {
+                        "basis": "native_client_command",
+                        "version_operation": {
+                            "argv": ["copilot", "--version"], "observed_client_version": "1.0.80",
+                        },
+                        "discovery_operation": {
+                            "argv": ["copilot", "plugin", "list"], "discovered": True,
+                            "product_id": f"{plugin}@agentplugins-f36027996b7a",
+                        },
+                    },
+                }
+                mutate(value)
+                return "passed", value, "reconciled"
+
+            with mock.patch.object(harness, "fresh_sandbox", return_value=Path("/tmp/disposable")), \
+                    mock.patch.object(harness, "all_package_client", return_value=("copilot", release)), \
+                    mock.patch.object(harness, "directory_release", return_value=release), \
+                    mock.patch.object(harness, "command_matches_release", return_value=True), \
+                    mock.patch.object(harness, "command", side_effect=command):
+                harness.all_package_matrix()
+            return harness.rows
+
+        self.assertTrue(all(row["outcome"] == "passed" for row in run_with(lambda _value: None)))
+        self.assertTrue(all(row["details"]["native_identity_state"] == "managed" for row in run_with(lambda _value: None)))
+        for mutation in (
+            lambda value: value.pop("client_version"),
+            lambda value: value.update(native_identity_state="copied"),
+            lambda value: value["native_discovery_evidence"]["version_operation"].update(observed_client_version="1.0.79"),
+            lambda value: value["native_discovery_evidence"]["discovery_operation"].update(argv=["sh", "-c", "copilot plugin list"]),
+            lambda value: value["native_discovery_evidence"]["discovery_operation"].update(product_id="plugin-0"),
+        ):
+            self.assertTrue(all(row["outcome"] == "failed" for row in run_with(mutation)))
 
     def test_notion_records_are_exact_separate_and_all_passed(self) -> None:
         expected = {("notion", client, "runtime"): {"outcome": "passed"} for client in ("codex", "cursor", "kiro")}

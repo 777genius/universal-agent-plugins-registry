@@ -97,7 +97,11 @@
         },
         "allOf": [
           {
-            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"enum": ["discovery", "runtime", "oauth"]}}, "required": ["outcome", "level"]},
+            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"const": "discovery"}}, "required": ["outcome", "level"]},
+            "then": {"properties": {"tuple": {"$ref": "#/$defs/completeTuple"}, "details": {"required": ["evidence_basis", "runtime_proof", "native_discovery_proof", "native_discovery_evidence", "native_identity_state", "copilot_package"], "properties": {"evidence_basis": {"const": "native_client_command"}, "runtime_proof": {"const": false}, "native_discovery_proof": {"const": true}, "native_identity_state": {"const": "managed"}}}}}
+          },
+          {
+            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"enum": ["runtime", "oauth"]}}, "required": ["outcome", "level"]},
             "then": {"properties": {"tuple": {"$ref": "#/$defs/completeTuple"}, "details": {"required": ["evidence_basis", "native_discovery_proof"], "properties": {"evidence_basis": {"const": "protected_external_observer"}, "native_discovery_proof": {"const": true}}}}}
           },
           {

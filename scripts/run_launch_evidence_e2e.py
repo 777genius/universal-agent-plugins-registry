@@ -179,6 +179,31 @@ def authoritative_native_client_evidence(
     )
 
 
+def authoritative_repository_copilot_evidence(
+    evidence: Any, *, client_version: Any, product_id: str, expected_version: str,
+) -> bool:
+    """Validate native Copilot commands executed directly by Agent Plugins."""
+    if (
+        not isinstance(evidence, dict)
+        or set(evidence) != {"basis", "version_operation", "discovery_operation"}
+        or evidence.get("basis") != "native_client_command"
+    ):
+        return False
+    version = evidence.get("version_operation")
+    discovery = evidence.get("discovery_operation")
+    return bool(
+        client_version == expected_version
+        and isinstance(version, dict)
+        and set(version) == {"argv", "observed_client_version"}
+        and version.get("argv") == ["copilot", "--version"]
+        and version.get("observed_client_version") == expected_version
+        and isinstance(discovery, dict)
+        and set(discovery) == {"argv", "discovered", "product_id"}
+        and discovery.get("argv") == ["copilot", "plugin", "list"]
+        and discovery.get("discovered") is True
+        and re.fullmatch(re.escape(product_id) + r"@agentplugins-[a-f0-9]{12}", str(discovery.get("product_id", "")))
+    )
+
 def read_production_config() -> dict[str, Any]:
     value = json.loads(PRODUCTION_CONFIG.read_text())
     if (
@@ -187,12 +212,48 @@ def read_production_config() -> dict[str, Any]:
         or value.get("cli_release_repository") != TRUSTED_CLI_RELEASE_REPOSITORY
         or value.get("cli_release_tag") != TRUSTED_CLI_RELEASE_TAG
         or value.get("cli_release_workflow") != TRUSTED_CLI_RELEASE_WORKFLOW
+        or value.get("copilot_cli_package") != "@github/copilot"
+        or value.get("copilot_cli_version") != "1.0.80"
+        or value.get("copilot_cli_integrity") != "sha512-6tf93ZF56KOiTTAjK/UhLZkl1W543IzaTQly288kockJZFswpRTnQEI00Yvacpb39DTvTYu3/ha9SeKpo/pgZQ=="
+        or value.get("copilot_node_major") != 22
     ):
         raise ValueError("checked-in production repository configuration is invalid")
     origin = urlsplit(str(value.get("production_origin", "")))
     if origin.scheme != "https" or not origin.hostname or origin.query or origin.fragment or origin.username or origin.password:
         raise ValueError("checked-in production Directory origin is invalid")
     return value
+
+def valid_copilot_installation(
+    executable: Path | None, metadata_path: Path | None, metadata: Any,
+    run_root: Path | None, config: dict[str, Any],
+) -> bool:
+    expected = {
+        "schema_version": 1,
+        "package": config["copilot_cli_package"],
+        "version": config["copilot_cli_version"],
+        "integrity": config["copilot_cli_integrity"],
+        "node_major": config["copilot_node_major"],
+        "signature_audit": True,
+        "version_argv": ["copilot", "--version"],
+        "observed_version": config["copilot_cli_version"],
+    }
+    return bool(
+        executable
+        and metadata_path
+        and run_root
+        and executable.is_file()
+        and os.access(executable, os.X_OK)
+        and metadata_path.is_file()
+        and executable.is_relative_to(run_root)
+        and metadata_path.is_relative_to(run_root)
+        and executable.resolve().is_relative_to(run_root)
+        and metadata_path.resolve().is_relative_to(run_root)
+        and isinstance(metadata, dict)
+        and set(metadata) == {*expected, "executable_digest", "version_stdout_digest"}
+        and all(metadata.get(key) == value for key, value in expected.items())
+        and metadata.get("executable_digest") == sha256_file(executable)
+        and DIGEST.fullmatch(str(metadata.get("version_stdout_digest", "")))
+    )
 
 
 def bounded_https_get(url: str, *, maximum: int, accept: str = "application/octet-stream", token: str | None = None) -> bytes:
@@ -940,6 +1001,8 @@ class LaunchHarness:
         challenge: dict[str, str] | None = None,
         native_observations: Path | None = None,
         observer_bundle_digest: str | None = None,
+        copilot_executable: Path | None = None,
+        copilot_metadata: Path | None = None,
     ) -> None:
         self.config = json.loads(SCENARIOS.read_text())
         if mode not in {"enforced", "fixture-only"}:
@@ -958,6 +1021,9 @@ class LaunchHarness:
         self.github_run_attempt = github_run_attempt
         self.native_observations = native_observations
         self.observer_bundle_digest = observer_bundle_digest
+        self.copilot_executable = Path(os.path.abspath(copilot_executable)) if copilot_executable else None
+        self.copilot_metadata_path = Path(os.path.abspath(copilot_metadata)) if copilot_metadata else None
+        self.copilot_metadata = json.loads(self.copilot_metadata_path.read_text()) if self.copilot_metadata_path else {}
         self.directory_environment: dict[str, str] = {}
         self.snapshot: dict[str, Any] = {}
         self.snapshot_digest: str | None = None
@@ -1081,6 +1147,7 @@ class LaunchHarness:
             if not self.native_observations or not self.native_observations.is_dir(): missing.append("native macOS/Linux/Windows and Node 22 observations")
             if not self.attestations: missing.append("runtime/OAuth attestations")
             if not self.observer_bundle_digest: missing.append("signed observer bundle digest")
+            if not self.copilot_executable or not self.copilot_metadata: missing.append("exact GitHub Copilot CLI executable and npm metadata")
             if not self.notion_oauth_supplied: missing.append("separate Notion OAuth artifact")
             if not self.chatgpt_attestation_supplied: missing.append("separate ChatGPT Cloudflare artifact")
             if not self.consent_digest: missing.append("consent artifact")
@@ -1098,6 +1165,11 @@ class LaunchHarness:
                 raise ValueError("binary checksum does not match exact executable")
         if self.mode == "enforced":
             config = read_production_config()
+            if not valid_copilot_installation(
+                self.copilot_executable, self.copilot_metadata_path,
+                self.copilot_metadata, self.run_root, config,
+            ):
+                raise ValueError("GitHub Copilot CLI metadata, integrity, executable, or version proof is invalid")
             validate_release_manifest(
                 self.release_manifest, repository=config["cli_release_repository"], tag=str(self.release_tag),
                 tag_commit=str(self.release_manifest.get("commit", "")),
@@ -1110,13 +1182,6 @@ class LaunchHarness:
                 "release_id": self.release_identity.get("release_id"), "immutable": True,
             } or not isinstance(self.release_identity.get("release_id"), int):
                 raise ValueError("GitHub release identity is mutable or does not match repository/tag/commit")
-            expected_discovery = {
-                (product["id"], self.all_package_client(product["id"])[0], "discovery")
-                for product in self.snapshot.get("products", [])
-            }
-            supplied_discovery = {key for key in self.attestations if key[2] == "discovery"}
-            if len(expected_discovery) != 26 or supplied_discovery != expected_discovery:
-                raise ValueError("primary signed runtime artifact must contain exactly 26 target-aware all-package discovery records")
 
     def fresh_sandbox(self, label: str) -> Path:
         if self.run_root is None:
@@ -1198,16 +1263,14 @@ class LaunchHarness:
         for record in records:
             self._reject_mutable_refs(record)
             key = (record["plugin"], record["client"], record["level"])
+            if record["level"] not in {"runtime", "oauth"}:
+                raise ValueError(f"external observer artifact contains unsupported level: {key}")
             if key in result:
                 raise ValueError(f"duplicate attestation tuple: {key}")
             if record.get("outcome") not in OUTCOMES:
                 raise ValueError(f"invalid attestation outcome: {key}")
             tuple_value = record.get("tuple", {})
-            expected_scenario = (
-                "chatgpt_registered_binding" if record["client"] == "chatgpt"
-                else "all_26_info" if record["level"] == "discovery"
-                else "hero_5x3_runtime"
-            )
+            expected_scenario = "chatgpt_registered_binding" if record["client"] == "chatgpt" else "hero_5x3_runtime"
             privacy_fields = (
                 "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity",
                 "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome",
@@ -1302,8 +1365,6 @@ class LaunchHarness:
                     product_id=record["plugin"], client=record["client"],
                 ):
                     raise ValueError(f"runtime pass lacks authoritative exact-version client discovery evidence: {key}")
-                if record["level"] == "discovery" and not self.protected_copilot_lifecycle(record):
-                    raise ValueError(f"all-package discovery pass lacks exact protected Copilot lifecycle proof: {key}")
                 for observation_name in ("manager_observation", "native_observation"):
                     observation = record.get(observation_name)
                     if not isinstance(observation, dict) or not all(isinstance(observation.get(field), str) and observation[field] for field in ("observer", "before_digest", "after_digest", "observed_at")):
@@ -1344,6 +1405,10 @@ class LaunchHarness:
         if not self.cli_available:
             return "inconclusive", None, "fixture-only non-runtime mode: Agent Plugins CLI binary was not supplied"
         env = isolated_environment(sandbox, clients, self.directory_environment)
+        if "copilot" in clients:
+            if not self.copilot_executable:
+                return "failed", None, "exact protected GitHub Copilot CLI executable was not supplied"
+            env["PATH"] = str(self.copilot_executable.parent) + os.pathsep + env.get("PATH", "")
         product_id = argv[1] if len(argv) > 1 else "unknown"
         before_state = observed_state_identity(env, product_id, clients)
         started_at = utc_now()
@@ -1625,16 +1690,6 @@ class LaunchHarness:
             and authoritative_native_client_evidence(native_evidence, client_version=client_version, client=client)
         )
 
-
-    @staticmethod
-    def protected_copilot_lifecycle(record: dict[str, Any]) -> bool:
-        return (
-            record.get("level") == "discovery"
-            and record.get("client") == "copilot"
-            and record.get("lifecycle_verified") is True
-            and record.get("lifecycle_operations") == ["add", "info", "remove"]
-        )
-
     def all_package_client(self, plugin: str) -> tuple[str, dict[str, Any]]:
         client = self.config["all_package_client"]
         if client != "copilot":
@@ -1673,13 +1728,30 @@ class LaunchHarness:
                     "command_trace": value.get("_launch_command_trace") if value else None,
                 }
                 if outcome == "passed" and operation == "info":
-                    record = self.attestations.get((plugin, client, "discovery"))
-                    if record is None or record.get("outcome") != "passed" or not self.info_reconciled(record, client):
-                        outcome, reason = "failed", "signed protected native client discovery/version observation was not supplied"
+                    config = read_production_config()
+                    client_version = find_value(value, {"client_version"}) if value else None
+                    native_evidence = find_value(value, {"native_discovery_evidence"}) if value else None
+                    if (
+                        find_value(value, {"receipt_reconciled"}) is not True
+                        or find_value(value, {"native_discovery_reconciled"}) is not True
+                        or find_value(value, {"native_identity_state"}) != "managed"
+                        or not authoritative_repository_copilot_evidence(
+                            native_evidence, client_version=client_version, product_id=plugin,
+                            expected_version=config["copilot_cli_version"],
+                        )
+                    ):
+                        outcome, reason = "failed", "Agent Plugins info omitted exact receipt and native Copilot discovery/version reconciliation"
                     else:
-                        tuple_value = record["tuple"]
-                        details = {**self.runtime_attestation_details(record), "resolution": release, "evidence_basis": "protected_external_observer", "runtime_proof": False, "native_discovery_proof": True, "operation": operation, "command_trace": value.get("_launch_command_trace") if value else None}
-                        reason = record.get("reason", "signed native discovery and exact client version reconciled")
+                        dependency = f"{config['copilot_cli_package']}@{config['copilot_cli_version']}#{config['copilot_cli_integrity']}"
+                        tuple_value = self.evidence_tuple(plugin, [client], client_version=client_version, dependency=dependency)
+                        details = {
+                            "evidence_basis": "native_client_command", "runtime_proof": False,
+                            "native_discovery_proof": True, "native_discovery_evidence": native_evidence,
+                            "native_identity_state": "managed",
+                            "copilot_package": self.copilot_metadata, "operation": operation,
+                            "resolution": release, "command_trace": value.get("_launch_command_trace"),
+                        }
+                        reason = "repository-owned Agent Plugins process reconciled exact native Copilot discovery"
                 if outcome == "passed" and resolved_digest != release["tree_digest"]:
                     outcome, reason = "failed", "CLI package digest does not match the signed Directory release"
                 self.add(f"all_26_{operation}", plugin, client, "discovery" if operation == "info" else "materialization", outcome, reason or "unknown result", tuple_value=tuple_value, details=details)
@@ -1720,7 +1792,7 @@ class LaunchHarness:
             "scenario_id", "run_id", "run_attempt", "pseudonymous_identity_id",
             "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status",
             "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof",
-            "native_discovery_evidence", "lifecycle_verified", "lifecycle_operations",
+            "native_discovery_evidence",
         )
         return {
             **{field: record[field] for field in fields if field in record},
@@ -2121,11 +2193,39 @@ def assert_redacted(value: dict[str, Any]) -> None:
             raise ValueError(f"synthetic client version cannot be promoted: {row.get('id')}")
         if native_level:
             native_evidence = details.get("native_discovery_evidence")
-            if details.get("evidence_basis") != "protected_external_observer" or not authoritative_native_client_evidence(
-                native_evidence, client_version=tuple_value.get("client_version"),
-                product_id=row.get("plugin"), client=row.get("client"),
-            ):
-                raise ValueError(f"passed native/runtime evidence lacks authoritative client operations: {row.get('id')}")
+            if row.get("level") == "discovery":
+                production = read_production_config()
+                expected_package = {
+                    "schema_version": 1, "package": production["copilot_cli_package"],
+                    "version": production["copilot_cli_version"], "integrity": production["copilot_cli_integrity"],
+                    "node_major": production["copilot_node_major"], "signature_audit": True,
+                    "version_argv": ["copilot", "--version"], "observed_version": production["copilot_cli_version"],
+                }
+                package = details.get("copilot_package")
+                expected_dependency = (
+                    f"{production['copilot_cli_package']}@{production['copilot_cli_version']}"
+                    f"#{production['copilot_cli_integrity']}"
+                )
+                if (
+                    row.get("scenario") != "all_26_info" or row.get("client") != "copilot"
+                    or details.get("evidence_basis") != "native_client_command"
+                    or details.get("native_identity_state") != "managed"
+                    or not isinstance(package, dict)
+                    or set(package) != {*expected_package, "executable_digest", "version_stdout_digest"}
+                    or any(package.get(key) != expected for key, expected in expected_package.items())
+                    or not DIGEST.fullmatch(str(package.get("executable_digest", "")))
+                    or not DIGEST.fullmatch(str(package.get("version_stdout_digest", "")))
+                    or tuple_value.get("dependency_identity") != expected_dependency
+                    or not authoritative_repository_copilot_evidence(
+                        native_evidence, client_version=tuple_value.get("client_version"),
+                        product_id=str(row.get("plugin")), expected_version=production["copilot_cli_version"],
+                    )
+                ):
+                    raise ValueError(f"passed discovery evidence lacks exact repository-owned Copilot operations: {row.get('id')}")
+            elif details.get("evidence_basis") != "protected_external_observer" or not authoritative_native_client_evidence(
+                    native_evidence, client_version=tuple_value.get("client_version"),
+                    product_id=row.get("plugin"), client=row.get("client")):
+                raise ValueError(f"passed runtime evidence lacks authoritative external client operations: {row.get('id')}")
             required = ("product_id", "tree_digest", "manifest_digest", "distribution_id", "distribution_kind", "release_sequence", "package_version", "source_repository", "source_revision", "source_path", "snapshot_sequence", "snapshot_digest", "binary_digest", "installer_version", "adapter_version", "client_version", "os", "architecture", "observed_at")
         else:
             if details.get("evidence_basis") != "repository_owned_disposable_observer" or details.get("runtime_proof") is not False or details.get("native_discovery_proof") is not False or tuple_value.get("client_version") is not None:
@@ -2223,6 +2323,8 @@ def main() -> int:
     parser.add_argument("--prepared-context", type=Path, help="workflow-prepared official release/Directory/challenge context")
     parser.add_argument("--asset-name", help="manifest-listed native binary asset for this runner")
     parser.add_argument("--native-observations", type=Path, help="directory containing six native and one Node 22 observations")
+    parser.add_argument("--copilot-executable", type=Path, help="exact local GitHub Copilot CLI executable")
+    parser.add_argument("--copilot-metadata", type=Path, help="validated npm signature/version/integrity metadata")
     parser.add_argument("--run-root", type=Path, required=True, help="nonexistent path reserved for this disposable run")
     parser.add_argument("--consent", type=Path, required=True, help="explicit stable-launch E2E consent artifact")
     parser.add_argument("--output", type=Path, required=True)
@@ -2311,6 +2413,7 @@ def main() -> int:
         github_run_attempt=github.get("run_attempt"), challenge=challenge,
         native_observations=args.native_observations,
         observer_bundle_digest=observer_bundle_digest,
+        copilot_executable=args.copilot_executable, copilot_metadata=args.copilot_metadata,
     ).export())
     assert_redacted(evidence)
     if args.run_root and args.output.resolve() != (args.run_root.resolve() / "evidence" / args.output.name):

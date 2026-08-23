@@ -13,8 +13,8 @@
         "required": ["plugin", "client", "level", "outcome", "reason", "tuple", "challenge", "run_id", "run_attempt", "scenario_id", "identity_id", "consent_artifact_digest", "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof"],
         "properties": {
           "plugin": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
-          "client": {"enum": ["codex", "cursor", "kiro", "copilot", "chatgpt"]},
-          "level": {"enum": ["runtime", "oauth", "discovery"]},
+          "client": {"enum": ["codex", "cursor", "kiro", "chatgpt"]},
+          "level": {"enum": ["runtime", "oauth"]},
           "outcome": {"enum": ["passed", "failed", "inconclusive", "not_applicable"]},
           "reason": {"type": "string", "minLength": 1},
           "consent_attested": {"type": "boolean"},
@@ -30,7 +30,7 @@
           "challenge": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "run_id": {"type": "string", "pattern": "^[0-9]+$"},
           "run_attempt": {"type": "string", "pattern": "^[0-9]+$"},
-          "scenario_id": {"enum": ["hero_5x3_runtime", "chatgpt_registered_binding", "all_26_info"]},
+          "scenario_id": {"enum": ["hero_5x3_runtime", "chatgpt_registered_binding"]},
           "pseudonymous_identity_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
           "pseudonymous_workspace_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
           "dedicated_identity": {"const": true},
@@ -52,8 +52,6 @@
           "projection_receipt_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "native_app_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "native_mcp_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-          "lifecycle_verified": {"type": "boolean"},
-          "lifecycle_operations": {"type": "array", "prefixItems": [{"const": "add"}, {"const": "info"}, {"const": "remove"}], "items": false, "minItems": 3, "maxItems": 3},
           "native_discovery_evidence": {"$ref": "#/$defs/nativeDiscoveryEvidence"},
           "github_attestation": {"type": "object", "required": ["repository", "sha", "run_id", "run_attempt", "workflow", "job", "challenge"], "properties": {"repository": {"type": "string"}, "sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"}, "run_id": {"type": ["string", "integer"]}, "run_attempt": {"type": ["string", "integer"]}, "workflow": {"const": "launch-evidence-e2e.yml"}, "job": {"const": "enforced-stable-gate"}, "challenge": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false},
           "tuple": {"$ref": "launch-evidence.schema.json#/$defs/tuple"}
@@ -62,10 +60,6 @@
           {
             "if": {"properties": {"outcome": {"const": "passed"}}, "required": ["outcome"]},
             "then": {"required": ["challenge", "run_id", "run_attempt", "scenario_id", "started_at", "observed_at", "client_id", "application_id", "endpoint", "command_traces", "github_attestation", "identity_id", "consent_artifact_digest", "runtime_invocation", "discovery_verified", "isolated_identity", "manager_observation", "native_observation", "receipt_reconciled", "native_discovery_reconciled", "native_discovery_evidence", "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof"], "properties": {"runtime_invocation": {"const": true}, "discovery_verified": {"const": true}, "isolated_identity": {"const": true}, "receipt_reconciled": {"const": true}, "native_discovery_reconciled": {"const": true}, "tuple": {"$ref": "launch-evidence.schema.json#/$defs/completeTuple"}}}
-          },
-          {
-            "if": {"properties": {"outcome": {"const": "passed"}, "level": {"const": "discovery"}}, "required": ["outcome", "level"]},
-            "then": {"required": ["lifecycle_verified", "lifecycle_operations"], "properties": {"client": {"const": "copilot"}, "lifecycle_verified": {"const": true}}}
           },
           {
             "if": {"properties": {"outcome": {"const": "passed"}, "plugin": {"const": "notion"}}, "required": ["outcome", "plugin"]},
@@ -87,7 +81,7 @@
       "properties": {
         "basis": {"const": "protected_external_observer"},
         "observer": {"const": "native-client-command-v1"},
-        "client": {"enum": ["codex", "cursor", "kiro", "copilot"]},
+        "client": {"enum": ["codex", "cursor", "kiro"]},
         "version_operation": {
           "type": "object",
           "required": ["operation", "argv", "observed_client_version"],
