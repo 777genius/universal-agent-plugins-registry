@@ -44,7 +44,11 @@ from directory_publication import (  # noqa: E402
     validate_snapshot_semantics,
     verify_envelope,
 )
-from launch_observer_signatures import verify_observer_bundle  # noqa: E402
+from launch_observer_signatures import (  # noqa: E402
+    sanitize_evidence,
+    validate_evidence_redaction,
+    verify_observer_bundle,
+)
 from build_registry import RegistryError, directory_tree_digest, resolve_directory  # noqa: E402
 
 
@@ -2054,6 +2058,7 @@ class LaunchHarness:
 
 def assert_redacted(value: dict[str, Any]) -> None:
     """Refuse evidence containing obvious credentials or absolute home paths."""
+    validate_evidence_redaction(value, context="evidence export")
     LaunchHarness._reject_mutable_refs(value)
     for row in value.get("matrix", []):
         if row.get("outcome") != "passed" or row.get("level") == "harness":
@@ -2238,7 +2243,7 @@ def main() -> int:
         args.directory_trust = PRODUCTION_DIRECTORY_TRUST
         if sha256_file(args.directory_snapshot) != directory["digest"]:
             raise ValueError("prepared staged Directory snapshot digest changed")
-    evidence = LaunchHarness(
+    evidence = sanitize_evidence(LaunchHarness(
         args.binary, args.attestations, mode=args.mode,
         binary_digest=args.binary_digest, expected_version=args.expected_version,
         directory_origin=args.directory_origin, directory_snapshot=args.directory_snapshot,
@@ -2251,7 +2256,7 @@ def main() -> int:
         github_run_attempt=github.get("run_attempt"), challenge=challenge,
         native_observations=args.native_observations,
         observer_bundle_digest=observer_bundle_digest,
-    ).export()
+    ).export())
     assert_redacted(evidence)
     if args.run_root and args.output.resolve() != (args.run_root.resolve() / "evidence" / args.output.name):
         raise ValueError("output must be inside the disposable evidence root")

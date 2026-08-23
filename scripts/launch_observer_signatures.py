@@ -5,16 +5,29 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 
 SIGNATURE_DOMAIN = b"UAP-STABLE-LAUNCH-OBSERVER-BUNDLE-V1\0"
 MAX_BUNDLE_AGE = timedelta(minutes=30)
-FORBIDDEN_KEY = re.compile(r"(?i)(?:token|secret|password|cookie|authorization|oauth[_-]?(?:code|state))")
-ABSOLUTE_PATH = re.compile(r"^(?:/(?!/)|[A-Za-z]:\\)")
+FORBIDDEN_KEY = re.compile(
+    r"(?i)(?:api[_-]?key|token|secret|passw(?:or)?d|cookie|authorization|oauth[_-]?(?:code|state))"
+)
+SENSITIVE_ARGUMENT = re.compile(
+    r"(?i)^(?:api[_-]?key|access[_-]?token|token|secret|passw(?:or)?d|cookie|"
+    r"auth(?:entication|orization)?|credential|oauth[_-]?(?:code|state|token))$"
+)
+ENVIRONMENT_ARGUMENT = re.compile(r"(?i)^(?:env|environment|env[_-]?var)$")
+ENVIRONMENT_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(=)(.*)$", re.DOTALL)
+SAFE_DIGEST = re.compile(r"^(?:sha256:)?[a-fA-F0-9]{40,128}$")
+POSIX_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9:/])/(?!/)[^\s,;]+")
+WINDOWS_ABSOLUTE_PATH = re.compile(r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\)[^\s,;]+")
+REDACTION = re.compile(r"^<redacted:(?:credential|absolute-path):sha256:[a-f0-9]{64}>$")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -25,20 +38,136 @@ def signed_payload(bundle: dict[str, Any]) -> bytes:
     return SIGNATURE_DOMAIN + canonical_json({key: value for key, value in bundle.items() if key != "signature"})
 
 
-def assert_bundle_redacted(value: Any) -> None:
+def _redaction(kind: str, value: str) -> str:
+    return f"<redacted:{kind}:sha256:{hashlib.sha256(value.encode()).hexdigest()}>"
+
+
+def _safe_reference(value: str) -> bool:
+    if SAFE_DIGEST.fullmatch(value) or REDACTION.fullmatch(value):
+        return True
+    parsed = urlsplit(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not parsed.username and not parsed.password
+
+
+def _argument_name(value: str) -> str:
+    return value.lstrip("-/").replace("_", "-")
+
+
+def _split_argument(value: str) -> tuple[str, str, str] | None:
+    stripped = value.lstrip("-/")
+    prefix = value[:len(value) - len(stripped)]
+    for separator in ("=", ":"):
+        if separator in stripped:
+            name, argument = stripped.split(separator, 1)
+            return prefix + name, separator, argument
+    return None
+
+
+def _sanitize_path_text(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        path = match.group(0)
+        return _redaction("absolute-path", path)
+
+    value = WINDOWS_ABSOLUTE_PATH.sub(replace, value)
+    return POSIX_ABSOLUTE_PATH.sub(replace, value)
+
+
+def _sanitize_credential_text(value: str) -> str:
+    value = re.sub(
+        r"(?i)\b(Bearer|Basic)\s+(\S+)",
+        lambda match: f"{match.group(1)} {_redaction('credential', match.group(2))}",
+        value,
+    )
+    parsed = urlsplit(value)
+    if parsed.scheme in {"http", "https"} and parsed.hostname and (parsed.username or parsed.password):
+        return _redaction("credential", value)
+    return value
+
+
+def sanitize_argv(argv: list[str]) -> list[str]:
+    """Return least-data command evidence while retaining flags and value digests."""
+    sanitized: list[str] = []
+    redact_next: str | None = None
+    for argument in argv:
+        if not isinstance(argument, str):
+            raise ValueError("command evidence argv must contain only strings")
+        if redact_next:
+            if REDACTION.fullmatch(argument):
+                sanitized.append(argument)
+            elif redact_next == "environment" and (environment := ENVIRONMENT_ASSIGNMENT.fullmatch(argument)):
+                value = environment.group(3)
+                if not REDACTION.fullmatch(value):
+                    value = _redaction("credential", value)
+                sanitized.append(environment.group(1) + "=" + value)
+            else:
+                sanitized.append(_redaction("credential", argument))
+            redact_next = None
+            continue
+        split = _split_argument(argument)
+        if split:
+            flag, separator, assigned = split
+            name = _argument_name(flag)
+            if SENSITIVE_ARGUMENT.fullmatch(name):
+                if assigned and not REDACTION.fullmatch(assigned):
+                    assigned = _redaction("credential", assigned)
+                sanitized.append(flag + separator + assigned)
+                continue
+            if ENVIRONMENT_ARGUMENT.fullmatch(name):
+                environment = ENVIRONMENT_ASSIGNMENT.fullmatch(assigned)
+                if environment:
+                    value = environment.group(3)
+                    if not REDACTION.fullmatch(value):
+                        value = _redaction("credential", value)
+                    sanitized.append(flag + separator + environment.group(1) + "=" + value)
+                    continue
+        name = _argument_name(argument)
+        if SENSITIVE_ARGUMENT.fullmatch(name):
+            sanitized.append(argument)
+            redact_next = "credential"
+            continue
+        if ENVIRONMENT_ARGUMENT.fullmatch(name):
+            sanitized.append(argument)
+            redact_next = "environment"
+            continue
+        environment = ENVIRONMENT_ASSIGNMENT.fullmatch(argument)
+        if environment and FORBIDDEN_KEY.search(environment.group(1)):
+            value = environment.group(3)
+            if not REDACTION.fullmatch(value):
+                value = _redaction("credential", value)
+            sanitized.append(environment.group(1) + "=" + value)
+            continue
+        sanitized.append(_sanitize_path_text(_sanitize_credential_text(argument)))
+    if redact_next:
+        raise ValueError("credential-like argv flag is missing its value")
+    return sanitized
+
+
+def sanitize_evidence(value: Any, *, key: str | None = None) -> Any:
+    """Recursively normalize evidence without retaining local paths or secrets."""
     if isinstance(value, dict):
-        for key, child in value.items():
-            if FORBIDDEN_KEY.search(key):
-                raise ValueError("protected observer bundle contains a credential-like field")
-            assert_bundle_redacted(child)
-    elif isinstance(value, list):
-        for child in value:
-            assert_bundle_redacted(child)
-    elif isinstance(value, str):
-        if ABSOLUTE_PATH.match(value):
-            raise ValueError("protected observer bundle contains an absolute local path")
-        if re.search(r"(?i)\bBearer\s+\S+", value) or re.search(r"https://[^/@\s]+:[^/@\s]+@", value):
-            raise ValueError("protected observer bundle contains credential material")
+        sanitized: dict[str, Any] = {}
+        for child_key, child in value.items():
+            if child_key == "argv":
+                if not isinstance(child, list):
+                    raise ValueError("command evidence argv must be a list")
+                sanitized[child_key] = sanitize_argv(child)
+            else:
+                sanitized[child_key] = sanitize_evidence(child, key=child_key)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_evidence(child, key=key) for child in value]
+    if isinstance(value, str):
+        if key and FORBIDDEN_KEY.search(key) and not _safe_reference(value):
+            return _redaction("credential", value)
+        return _sanitize_path_text(_sanitize_credential_text(value))
+    return value
+
+
+def validate_evidence_redaction(value: Any, *, context: str = "evidence") -> None:
+    """Fail closed when recursive normalization would remove private material."""
+    normalized = sanitize_evidence(value)
+    if normalized != value:
+        raise ValueError(f"{context} contains an absolute local path or credential material")
 
 
 def verify_observer_bundle(
@@ -67,7 +196,7 @@ def verify_observer_bundle(
     }
     if not isinstance(artifacts, dict) or set(artifacts) != expected_artifacts:
         raise ValueError("protected observer bundle has a non-canonical artifact set")
-    assert_bundle_redacted(artifacts)
+    validate_evidence_redaction(artifacts, context="protected observer bundle")
     try:
         public_key = base64.b64decode(public_key_base64, validate=True)
         signature = base64.b64decode(str(bundle["signature"]), validate=True)
