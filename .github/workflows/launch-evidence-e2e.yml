@@ -7,10 +7,12 @@ on:
       - "scripts/observe_launch_scenario.py"
       - "scripts/launch_observer_signatures.py"
       - "scripts/prepare_launch_evidence.py"
+      - "scripts/materialize_launch_evidence.py"
       - "scripts/observe_release_facade.py"
       - "tests/e2e/**"
       - "schemas/e2e/**"
       - "tests/test_run_launch_evidence_e2e.py"
+      - "tests/test_materialize_launch_evidence.py"
       - "tests/test_workflow_contracts.py"
       - ".github/workflows/launch-evidence-e2e.yml"
   workflow_call:
@@ -39,6 +41,16 @@ on:
         description: Exact 40-hex materialized ledger commit containing the staged bytes
         required: true
         type: string
+    outputs:
+      evidence_artifact_name:
+        description: Exact Actions transport artifact name
+        value: ${{ jobs.enforced-stable-gate.outputs.evidence_artifact_name }}
+      launch_evidence_digest:
+        description: SHA-256 of canonical launch-evidence.json
+        value: ${{ jobs.enforced-stable-gate.outputs.launch_evidence_digest }}
+      workflow_source_digest:
+        description: Exact protected workflow source commit attested by GitHub
+        value: ${{ jobs.enforced-stable-gate.outputs.workflow_source_digest }}
   workflow_dispatch:
     inputs:
       consent:
@@ -95,7 +107,7 @@ jobs:
           python scripts/run_launch_evidence_e2e.py --mode fixture-only \
             --consent tests/e2e/fixtures/fixture-only-consent.json \
             --run-root "$run_root" --output "$run_root/evidence/launch-evidence.json"
-          python -m unittest tests.test_run_launch_evidence_e2e tests.test_workflow_contracts
+          python -m unittest tests.test_run_launch_evidence_e2e tests.test_materialize_launch_evidence tests.test_workflow_contracts
 
   native-release:
     if: github.event_name != 'pull_request' && inputs.consent
@@ -275,7 +287,11 @@ jobs:
       actions: read
       contents: read
       id-token: write
-      attestations: read
+      attestations: write
+    outputs:
+      evidence_artifact_name: ${{ steps.bundle.outputs.artifact_name }}
+      launch_evidence_digest: ${{ steps.bundle.outputs.digest }}
+      workflow_source_digest: ${{ steps.bundle.outputs.source_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
@@ -376,9 +392,14 @@ jobs:
             "$RUN_ROOT/live-inputs/chatgpt-cloudflare-attestation.json"
           check-jsonschema --schemafile tests/e2e/schemas/consent.schema.json "$RUN_ROOT/live-inputs/consent.json"
       - name: Run repository-owned lifecycle and observer gate
+        id: bundle
         env:
           OBSERVER_ED25519_PUBLIC_KEY: ${{ vars.STABLE_LAUNCH_OBSERVER_ED25519_PUBLIC_KEY }}
           OBSERVER_KEY_ID: ${{ vars.STABLE_LAUNCH_OBSERVER_KEY_ID }}
+          PUBLICATION_ID: ${{ inputs.publication_id }}
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          PUBLICATION_SNAPSHOT_DIGEST: ${{ inputs.publication_snapshot_digest }}
+          PUBLICATION_SOURCE_COMMIT: ${{ inputs.publication_source_commit }}
         run: |
           python scripts/run_launch_evidence_e2e.py --prepared-context "$RUN_ROOT/context.json" \
             --asset-name agentplugins_0.1.12_linux_amd64 \
@@ -392,10 +413,28 @@ jobs:
             --copilot-metadata "$RUN_ROOT/copilot-metadata.json" \
             --output "$RUN_ROOT/evidence/launch-evidence.json"
           check-jsonschema --schemafile tests/e2e/schemas/launch-evidence.schema.json "$RUN_ROOT/evidence/launch-evidence.json"
-          (cd "$RUN_ROOT/evidence" && sha256sum launch-evidence.json signed-observer-bundle.json > SHA256SUMS && sha256sum --check SHA256SUMS)
+          python scripts/materialize_launch_evidence.py prepare-bundle \
+            --artifact-dir "$RUN_ROOT/evidence" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow "$GITHUB_REPOSITORY/.github/workflows/launch-evidence-e2e.yml" \
+            --source-ref refs/heads/main --source-digest "$GITHUB_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" --expected-publication-id "$PUBLICATION_ID" \
+            --expected-publication-sequence "$PUBLICATION_SEQUENCE" \
+            --expected-publication-snapshot-digest "$PUBLICATION_SNAPSHOT_DIGEST" \
+            --expected-publication-source-commit "$PUBLICATION_SOURCE_COMMIT" \
+            --output "$RUN_ROOT/materialized-evidence.json"
+          (cd "$RUN_ROOT/evidence" && sha256sum --check SHA256SUMS)
+          artifact_name="stable-launch-evidence-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
+          echo "digest=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["launch_evidence_digest"])' "$RUN_ROOT/materialized-evidence.json")" >> "$GITHUB_OUTPUT"
+          echo "source_digest=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Attest the canonical launch evidence
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.RUN_ROOT }}/evidence/launch-evidence.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: stable-launch-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.bundle.outputs.artifact_name }}
           path: ${{ env.RUN_ROOT }}/evidence
           if-no-files-found: error
           retention-days: 90

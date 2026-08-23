@@ -1,5 +1,13 @@
 {
   "repository": "777genius/universal-agent-plugins",
   "schema_version": 1,
-  "snapshot_lifetime_days": 30
+  "snapshot_lifetime_days": 30,
+  "trusted_evidence_workflows": [
+    {
+      "allow_self_hosted_runners": false,
+      "protected_source_ref": "refs/heads/main",
+      "source_digest_policy": "protected_workflow_source",
+      "workflow": "777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml"
+    }
+  ]
 }

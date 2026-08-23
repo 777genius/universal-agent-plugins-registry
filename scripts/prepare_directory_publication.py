@@ -48,6 +48,7 @@ from directory_publication_cas import CasError, validate_marker
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SCHEMA = ROOT / "schemas" / "directory-source.schema.json"
 EVIDENCE_ARTIFACT_SCHEMA = ROOT / "schemas" / "directory-evidence-artifact.schema.json"
+LAUNCH_EVIDENCE_SCHEMA = ROOT / "tests" / "e2e" / "schemas" / "launch-evidence.schema.json"
 CONFIG_FIELDS = {"schema_version", "repository", "snapshot_lifetime_days"}
 OPTIONAL_CONFIG_FIELDS = {"trusted_evidence_workflows", "trusted_external_evidence"}
 TRUSTED_WORKFLOW_FIELDS = {
@@ -80,7 +81,7 @@ def load_config(path: Path) -> dict[str, Any]:
         require(
             isinstance(item["workflow"], str) and "/.github/workflows/" in item["workflow"]
             and isinstance(item["protected_source_ref"], str) and item["protected_source_ref"].startswith("refs/heads/")
-            and item["source_digest_policy"] == "artifact_revision"
+            and item["source_digest_policy"] in {"artifact_revision", "protected_workflow_source"}
             and type(item["allow_self_hosted_runners"]) is bool,
             f"{path}: invalid trusted evidence workflow policy",
         )
@@ -291,6 +292,7 @@ def acquire_evidence_bytes(
 
 def verify_evidence_trust(
     pointer: dict[str, Any], config: dict[str, Any], temporary_root: Path, body: bytes,
+    attested_body: bytes | None = None, index_body: bytes | None = None,
 ) -> None:
     artifact = pointer["artifact"]
     trust = pointer["trust"]
@@ -305,13 +307,62 @@ def verify_evidence_trust(
     require(policy is not None, f"{pointer['id']}: evidence workflow has no reviewed trust policy")
     require(workflow.startswith(artifact["repository"] + "/.github/workflows/"), f"{pointer['id']}: workflow and artifact repositories differ")
     require(trust["source_ref"] == policy["protected_source_ref"], f"{pointer['id']}: evidence source ref is not trusted")
-    require(
-        policy["source_digest_policy"] == "artifact_revision" and trust["source_digest"] == artifact["revision"],
-        f"{pointer['id']}: evidence source digest does not match the exact artifact revision",
-    )
+    attested = trust.get("attested_artifact")
+    evidence_index = trust.get("evidence_index")
+    if policy["source_digest_policy"] == "artifact_revision":
+        require(
+            trust["source_digest"] == artifact["revision"] and attested is None and evidence_index is None,
+            f"{pointer['id']}: evidence source digest does not match the exact artifact revision",
+        )
+        verified_body = body
+    else:
+        require(
+            isinstance(attested, dict) and isinstance(evidence_index, dict)
+            and attested_body is not None and index_body is not None,
+            f"{pointer['id']}: protected workflow evidence lacks its attested launch artifact/index chain",
+        )
+        require(
+            artifact["repository"] == attested["repository"] == evidence_index["repository"]
+            and artifact["revision"] == attested["revision"] == evidence_index["revision"],
+            f"{pointer['id']}: evidence chain crosses repository revisions",
+        )
+        require("sha256:" + hashlib.sha256(attested_body).hexdigest() == attested["digest"], f"{pointer['id']}: attested launch artifact digest mismatch")
+        require("sha256:" + hashlib.sha256(index_body).hexdigest() == evidence_index["digest"], f"{pointer['id']}: evidence index digest mismatch")
+        launch = parse_json_bytes(attested_body, f"attested launch evidence for {pointer['id']}", max_bytes=MAX_EVIDENCE_BYTES)
+        require(isinstance(launch, dict) and canonical_json(launch) == attested_body, f"{pointer['id']}: attested launch evidence is not canonical JSON")
+        validate_with_schema(launch, LAUNCH_EVIDENCE_SCHEMA)
+        require(
+            launch["run"]["mode"] == "enforced"
+            and launch["run"]["runtime_claims"] is True
+            and launch["summary"]["required_gates_complete"] is True
+            and launch["summary"]["hero_runtime_results"] == 15,
+            f"{pointer['id']}: attested launch evidence did not pass the protected stable gate",
+        )
+        index = parse_json_bytes(index_body, f"evidence index for {pointer['id']}", max_bytes=MAX_EVIDENCE_BYTES)
+        require(isinstance(index, dict) and canonical_json(index) == index_body, f"{pointer['id']}: evidence index is not canonical JSON")
+        attested_path = Path(attested["path"])
+        require(attested_path.name == "launch-evidence.json", f"{pointer['id']}: attested artifact is not canonical launch evidence")
+        root = attested_path.parent.as_posix()
+        require(
+            evidence_index["path"] == f"{root}/directory-evidence/index.json"
+            and index.get("launch_evidence_digest") == attested["digest"]
+            and index.get("repository") == artifact["repository"]
+            and index.get("workflow") == workflow
+            and index.get("source_ref") == trust["source_ref"]
+            and index.get("source_digest") == trust["source_digest"],
+            f"{pointer['id']}: evidence index identity mismatch",
+        )
+        record = next((item for item in index.get("records", []) if item.get("id") == pointer["id"]), None)
+        require(
+            isinstance(record, dict)
+            and artifact["path"] == f"{root}/{record.get('path', '')}"
+            and artifact["digest"] == record.get("digest"),
+            f"{pointer['id']}: evidence leaf is not bound by the attested launch index",
+        )
+        verified_body = attested_body
     require(Path(GH).is_file(), f"reviewed evidence verifier is missing: {GH}")
     acquired = temporary_root / "verified-evidence.json"
-    acquired.write_bytes(body)
+    acquired.write_bytes(verified_body)
     command = [
         GH, "attestation", "verify", str(acquired), "--repo", artifact["repository"],
         "--signer-workflow", workflow, "--source-ref", trust["source_ref"],
@@ -333,6 +384,7 @@ def verified_evidence(
     require("trust" in pointer, f"{pointer['id']}: evidence has no trusted workflow or external-attestation path")
     artifact = pointer["artifact"]
     temporary, body = acquire_evidence_bytes(artifact, overrides.get(artifact["repository"]))
+    chained: list[tempfile.TemporaryDirectory[str]] = []
     try:
         require("sha256:" + hashlib.sha256(body).hexdigest() == artifact["digest"], f"{pointer['id']}: evidence artifact digest mismatch")
         # Parse the verified bytes directly; never derive signed fields from the
@@ -341,9 +393,31 @@ def verified_evidence(
         require(isinstance(payload, dict), f"{pointer['id']}: evidence artifact must be an object")
         validate_with_schema(payload, EVIDENCE_ARTIFACT_SCHEMA)
         require(payload["id"] == pointer["id"], f"{pointer['id']}: evidence artifact identity mismatch")
-        verify_evidence_trust(pointer, config, Path(temporary.name), body)
+        attested_body = None
+        index_body = None
+        trust = pointer["trust"]
+        if trust["kind"] == "github_actions" and "attested_artifact" in trust:
+            for name, destination in (("attested_artifact", "attested"), ("evidence_index", "index")):
+                chained_temporary, chained_body = acquire_evidence_bytes(
+                    trust[name], overrides.get(trust[name]["repository"]),
+                )
+                chained.append(chained_temporary)
+                require(
+                    "sha256:" + hashlib.sha256(chained_body).hexdigest() == trust[name]["digest"],
+                    f"{pointer['id']}: {destination} artifact digest mismatch",
+                )
+                if destination == "attested":
+                    attested_body = chained_body
+                else:
+                    index_body = chained_body
+        verify_evidence_trust(
+            pointer, config, Path(temporary.name), body,
+            attested_body=attested_body, index_body=index_body,
+        )
         return {**copy.deepcopy(payload), "artifact": copy.deepcopy(artifact)}
     finally:
+        for chained_temporary in chained:
+            chained_temporary.cleanup()
         temporary.cleanup()
 
 

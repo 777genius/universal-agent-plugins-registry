@@ -151,7 +151,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("release_tag", required.get("with", {}))
         self.assertEqual(required["permissions"], {
             "actions": "read",
-            "attestations": "read",
+            "attestations": "write",
             "contents": "read",
             "id-token": "write",
         })
@@ -162,7 +162,7 @@ class WorkflowContractTests(unittest.TestCase):
         launch = load(LAUNCH)
         expected = {
             "actions": "read",
-            "attestations": "read",
+            "attestations": "write",
             "contents": "read",
             "id-token": "write",
         }
@@ -261,7 +261,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(required["with"]["consent"], "true")
         self.assertEqual(required["permissions"], {
             "actions": "read",
-            "attestations": "read",
+            "attestations": "write",
             "contents": "read",
             "id-token": "write",
         })
@@ -302,6 +302,39 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("needs.record_launch_approval.result == 'success'", marker_if)
         self.assertNotIn("needs.sign.outputs.sequence == '1'", launch_if + record_if + marker_if)
         self.assertIn("needs.gate_launch_approval.result == 'success'", deploy_if)
+
+    def test_launch_evidence_is_attested_then_persisted_by_exact_two_ref_cas(self) -> None:
+        launch = load(LAUNCH)
+        live = load(LIVE)
+        publication = load(DIRECTORY_PUBLICATION)
+        enforced = launch["jobs"]["enforced-stable-gate"]
+        self.assertEqual(enforced["permissions"]["attestations"], "write")
+        self.assertIn("materialize_launch_evidence.py prepare-bundle", commands(enforced))
+        attestation = next(
+            step for step in enforced["steps"]
+            if step.get("name") == "Attest the canonical launch evidence"
+        )
+        self.assertEqual(
+            attestation["uses"],
+            "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+        )
+        self.assertEqual(
+            set(launch["on"]["workflow_call"]["outputs"]),
+            {"evidence_artifact_name", "launch_evidence_digest", "workflow_source_digest"},
+        )
+        self.assertEqual(
+            set(live["on"]["workflow_call"]["outputs"]),
+            {"evidence_artifact_name", "launch_evidence_digest", "workflow_source_digest"},
+        )
+        persist = publication["jobs"]["record_launch_approval"]
+        body = commands(persist)
+        self.assertIn("materialize_launch_evidence.py verify-bundle", body)
+        self.assertIn("--verify-attestation", body)
+        self.assertIn("materialize_launch_evidence.py commit", body)
+        self.assertIn("directory_publication_cas.py evidence-publish", body)
+        self.assertIn('--main-old "${EXPECTED_SOURCE_COMMIT}"', body)
+        self.assertIn('--ledger-old "${EXPECTED_LEDGER_COMMIT}"', body)
+        self.assertIn('--approval-tag "${marker_ref}"', body)
 
     def test_approved_refresh_skips_launch_but_keeps_exact_publication_gates(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)

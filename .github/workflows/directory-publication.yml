@@ -10,6 +10,7 @@ on:
       - "schemas/directory-*.schema.json"
       - "scripts/directory_publication.py"
       - "scripts/directory_publication_cas.py"
+      - "scripts/materialize_launch_evidence.py"
       - "scripts/prepare_directory_publication.py"
       - "scripts/sign_directory_publication.py"
       - ".github/workflows/directory-publication.yml"
@@ -739,18 +740,20 @@ jobs:
       publication_ledger_commit: ${{ needs.materialize_site.outputs.ledger_commit }}
     permissions:
       actions: read
-      attestations: read
+      attestations: write
       contents: read
       id-token: write
 
   record_launch_approval:
-    name: Record immutable protected launch approval
+    name: Persist evidence and record exact protected launch approval
     needs: [prepare, sign, materialize_site, gate_exact_staged_publication, required_stable_launch_evidence]
     if: ${{ always() && needs.sign.result == 'success' && needs.materialize_site.result == 'success' && needs.gate_exact_staged_publication.result == 'success' && needs.prepare.outputs.launch_approved == 'false' && needs.required_stable_launch_evidence.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: directory-publication
     permissions:
+      actions: read
+      attestations: read
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -762,22 +765,49 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.sign.outputs.marker_commit }}
           path: trusted-source
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate exact launch lineage and fresh protected heads
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install evidence validation dependencies
+        run: python3 -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.required_stable_launch_evidence.outputs.evidence_artifact_name }}
+          path: launch-evidence
+      - name: Validate exact launch lineage, bundle, and workflow attestation
         env:
           EXPECTED_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
           EXPECTED_PUBLICATION_ID: ${{ needs.sign.outputs.publication_id }}
+          EXPECTED_PUBLICATION_SEQUENCE: ${{ needs.sign.outputs.sequence }}
           EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
           EXPECTED_SOURCE_COMMIT: ${{ needs.sign.outputs.marker_commit }}
+          EXPECTED_EVIDENCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.launch_evidence_digest }}
+          WORKFLOW_SOURCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.workflow_source_digest }}
         run: |
+          test -x /usr/bin/git
+          test -x /usr/bin/gh
+          dpkg-query --show git gh
+          test -z "$(dpkg --verify git gh)"
           test "$(git -C approved-ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_COMMIT}"
           observed_ledger="$(git -C approved-ledger ls-remote --refs origin "refs/heads/${LEDGER_BRANCH}" | awk '{ print $1 }')"
           test "${observed_ledger}" = "${EXPECTED_LEDGER_COMMIT}"
           git -C trusted-source fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
           test "$(git -C trusted-source rev-parse refs/remotes/origin/main)" = "${EXPECTED_SOURCE_COMMIT}"
+          test "${WORKFLOW_SOURCE_DIGEST}" = "${{ github.sha }}"
+          python3 trusted-source/scripts/materialize_launch_evidence.py verify-bundle \
+            --artifact-dir launch-evidence --repository "${GITHUB_REPOSITORY}" \
+            --workflow "${GITHUB_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml" \
+            --source-ref refs/heads/main --source-digest "${WORKFLOW_SOURCE_DIGEST}" \
+            --expected-run-id "${GITHUB_RUN_ID}" --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
+            --expected-publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
+            --expected-publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
+            --expected-publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \
+            --verify-attestation --output verified-evidence.json
+          test "$(python3 -c 'import json; print(json.load(open("verified-evidence.json"))["launch_evidence_digest"])')" = "${EXPECTED_EVIDENCE_DIGEST}"
           python3 trusted-source/registry/publication/launch_approval.py \
             --repo approved-ledger \
             --contract trusted-source/registry/publication/launch-approved-marker.json \
@@ -788,6 +818,32 @@ jobs:
             --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
             --expected-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
             --expected-source-commit "${EXPECTED_SOURCE_COMMIT}"
+      - name: Create bounded ledger and mechanical main commits
+        env:
+          EXPECTED_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
+          EXPECTED_PUBLICATION_ID: ${{ needs.sign.outputs.publication_id }}
+          EXPECTED_PUBLICATION_SEQUENCE: ${{ needs.sign.outputs.sequence }}
+          EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
+          EXPECTED_SOURCE_COMMIT: ${{ needs.sign.outputs.marker_commit }}
+          WORKFLOW_SOURCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.workflow_source_digest }}
+        run: |
+          python3 trusted-source/scripts/materialize_launch_evidence.py commit \
+            --artifact-dir launch-evidence --repository "${GITHUB_REPOSITORY}" \
+            --workflow "${GITHUB_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml" \
+            --source-ref refs/heads/main --source-digest "${WORKFLOW_SOURCE_DIGEST}" \
+            --expected-run-id "${GITHUB_RUN_ID}" --expected-publication-id "${EXPECTED_PUBLICATION_ID}" \
+            --expected-publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
+            --expected-publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
+            --expected-publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \
+            --source-repo trusted-source --ledger-repo approved-ledger \
+            --main-parent "${EXPECTED_SOURCE_COMMIT}" --ledger-parent "${EXPECTED_LEDGER_COMMIT}" \
+            --output persistence.json
+          main_commit="$(python3 -c 'import json; print(json.load(open("persistence.json"))["main_commit"])')"
+          ledger_commit="$(python3 -c 'import json; print(json.load(open("persistence.json"))["ledger_commit"])')"
+          test "$(git -C trusted-source show -s --format=%P "${main_commit}")" = "${EXPECTED_SOURCE_COMMIT}"
+          test "$(git -C approved-ledger show -s --format=%P "${ledger_commit}")" = "${EXPECTED_LEDGER_COMMIT}"
+          test "$(git -C trusted-source diff --name-only "${EXPECTED_SOURCE_COMMIT}" "${main_commit}")" = registry/directory.json
+          git -C trusted-source fetch --no-tags ../approved-ledger "${ledger_commit}"
       - name: Acquire dedicated publisher token
         id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -796,24 +852,23 @@ jobs:
           private-key: ${{ secrets.DIRECTORY_PUBLISHER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-      - name: Create marker once or accept exact idempotent readback
+      - name: Atomically persist both refs and approve only the gated ledger
         env:
           EXPECTED_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
+          EXPECTED_SOURCE_COMMIT: ${{ needs.sign.outputs.marker_commit }}
           PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
         run: |
           marker_ref="$(python3 -c 'import json; print(json.load(open("trusted-source/registry/publication/launch-approved-marker.json"))["marker_ref"])')"
-          observed="$(git -C approved-ledger ls-remote --refs origin "${marker_ref}" | awk '{ print $1 }')"
-          if test -z "${observed}"; then
-            auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
-            GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-            GIT_CONFIG_VALUE_0="${auth_header}" \
-            git -C approved-ledger -c core.hooksPath=/dev/null push --atomic \
-              --force-with-lease="${marker_ref}:" origin \
-              "${EXPECTED_LEDGER_COMMIT}:${marker_ref}" || true
-            observed="$(git -C approved-ledger ls-remote --refs origin "${marker_ref}" | awk '{ print $1 }')"
-          fi
-          test "${observed}" = "${EXPECTED_LEDGER_COMMIT}"
+          main_commit="$(python3 -c 'import json; print(json.load(open("persistence.json"))["main_commit"])')"
+          ledger_commit="$(python3 -c 'import json; print(json.load(open("persistence.json"))["ledger_commit"])')"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="${auth_header}" \
+          python3 trusted-source/scripts/directory_publication_cas.py evidence-publish \
+            --repo trusted-source --main-old "${EXPECTED_SOURCE_COMMIT}" --main-new "${main_commit}" \
+            --ledger-old "${EXPECTED_LEDGER_COMMIT}" --ledger-new "${ledger_commit}" \
+            --approval-tag "${marker_ref}"
 
   gate_launch_approval:
     name: Require protected launch approval for this ledger lineage
