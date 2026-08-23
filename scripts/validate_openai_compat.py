@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from openai_app_bindings import APP_BINDINGS, app_document, load_app_bindings
@@ -39,6 +39,7 @@ EXPECTED_CAPABILITIES = {
     "sentry": ["Interactive", "Write"],
 }
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PLUGIN_ROOT_PREFIX = "${PLUGIN_ROOT}/"
 
 
 class ValidationError(Exception):
@@ -68,6 +69,21 @@ def require_https(value: object, field: str) -> None:
     require(parsed.scheme == "https" and bool(parsed.hostname), f"{field}: must be an HTTPS URL")
 
 
+def validate_plugin_root_reference(plugin_root: Path, value: str, field: str) -> None:
+    """Require an exact PLUGIN_ROOT path to resolve inside the generated package."""
+    if not value.startswith(PLUGIN_ROOT_PREFIX):
+        return
+    relative = PurePosixPath(value.removeprefix(PLUGIN_ROOT_PREFIX))
+    require(
+        not relative.is_absolute() and relative.parts and ".." not in relative.parts,
+        f"{field}: unsafe PLUGIN_ROOT path",
+    )
+    require(
+        plugin_root.joinpath(*relative.parts).exists(),
+        f"{field}: missing PLUGIN_ROOT resource {relative}",
+    )
+
+
 def validate_mcp(plugin_root: Path, plugin_name: str) -> None:
     """Validate one generated OpenAI MCP configuration."""
     path = plugin_root / ".mcp.json"
@@ -83,6 +99,32 @@ def validate_mcp(plugin_root: Path, plugin_name: str) -> None:
         require(transport in {"stdio", "http", "sse"}, f"{path}: invalid transport for {server_name}")
         if transport == "stdio":
             require(isinstance(server.get("command"), str) and server["command"], f"{path}: command required")
+            command = str(server["command"])
+            args = server.get("args", [])
+            environment = server.get("env", {})
+            cwd = server.get("cwd")
+            require(
+                isinstance(args, list) and all(isinstance(argument, str) for argument in args),
+                f"{path}: {server_name}.args must be an array of strings",
+            )
+            require(
+                isinstance(environment, dict)
+                and all(
+                    isinstance(key, str) and ENV_NAME.fullmatch(key)
+                    and isinstance(value, str)
+                    for key, value in environment.items()
+                ),
+                f"{path}: {server_name}.env must contain environment strings",
+            )
+            require(cwd is None or isinstance(cwd, str), f"{path}: {server_name}.cwd must be a string")
+            for index, value in enumerate([command, *args]):
+                validate_plugin_root_reference(
+                    plugin_root, value, f"{path}: {server_name}.argv[{index}]",
+                )
+            if isinstance(cwd, str):
+                validate_plugin_root_reference(plugin_root, cwd, f"{path}: {server_name}.cwd")
+            for key, value in environment.items():
+                validate_plugin_root_reference(plugin_root, value, f"{path}: {server_name}.env.{key}")
         else:
             require_https(server.get("url"), f"{path}: {server_name}.url")
         bearer = server.get("bearer_token_env_var")

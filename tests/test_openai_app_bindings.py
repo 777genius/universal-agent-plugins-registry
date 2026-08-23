@@ -613,6 +613,41 @@ class OpenAIAppBindingTests(unittest.TestCase):
         self.assertTrue({"chrome-devtools", "context7"}.issubset(expected))
         self.assertTrue({"firebase", "hubspot-developer"}.isdisjoint(expected))
 
+    def test_locked_runtime_extensions_are_complete_in_generated_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugins = root / "plugins"
+            builder.build(plugins, root / "marketplace.json")
+            for name in ("chrome-devtools", "context7"):
+                with self.subTest(plugin=name):
+                    runtime = (
+                        plugins / name / "io.github.777genius.agentplugins" / "runtime"
+                    )
+                    self.assertEqual(
+                        {path.name for path in runtime.iterdir() if path.is_file()},
+                        {"launcher.mjs", "package.json", "package-lock.json", "runtime.json"},
+                    )
+                    self.assertEqual(
+                        builder.tree_files(runtime),
+                        builder.tree_files(
+                            ROOT / "plugins" / name
+                            / "io.github.777genius.agentplugins" / "runtime"
+                        ),
+                    )
+
+    def test_generated_plugin_rejects_missing_plugin_root_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugins = root / "plugins"
+            builder.build(plugins, root / "marketplace.json")
+            plugin = plugins / "chrome-devtools"
+            (
+                plugin / "io.github.777genius.agentplugins" / "runtime" / "launcher.mjs"
+            ).unlink()
+
+            with self.assertRaisesRegex(ValidationError, "missing PLUGIN_ROOT resource"):
+                validate_plugin(plugin, {})
+
     @staticmethod
     def resolves(source: dict[str, object], product: str, target: str) -> bool:
         try:

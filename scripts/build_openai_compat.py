@@ -29,6 +29,7 @@ MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 BRAND_ASSETS = ROOT / "assets"
 LOCAL_REPOSITORY = "777genius/universal-agent-plugins"
 OPENAI_PACKAGE_TARGET = "codex"
+PORTABLE_EXTENSION_ROOTS = ("io.github.777genius.agentplugins",)
 
 CATEGORIES = {
     "atlassian": "Productivity",
@@ -426,6 +427,13 @@ def build(output_root: Path, marketplace_path: Path) -> None:
                     portable_root / "skills", output / "skills",
                     dirs_exist_ok=True, symlinks=True,
                 )
+            for extension_name in PORTABLE_EXTENSION_ROOTS:
+                extension = portable_root / extension_name
+                if extension.is_dir():
+                    shutil.copytree(
+                        extension, output / extension_name,
+                        dirs_exist_ok=True, symlinks=True,
+                    )
             assets = output / "assets"
             assets.mkdir(parents=True, exist_ok=True)
             shutil.copy2(BRAND_ASSETS / "icon.png", assets / "icon.png")
