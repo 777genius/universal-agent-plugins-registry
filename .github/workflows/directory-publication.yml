@@ -70,7 +70,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install no-secret validation dependencies
-        run: python3 -m pip install --disable-pip-version-check check-jsonschema==0.37.4 cryptography==46.0.3 jsonschema==4.25.1 PyYAML==6.0.3
+        run: python3 -m pip install --disable-pip-version-check check-jsonschema==0.37.4 cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
       - name: Require event source to remain protected main
         env:
           EVENT_SOURCE_COMMIT: ${{ github.sha }}
@@ -694,7 +694,7 @@ jobs:
           EXPECTED_SIGNED_LEDGER_COMMIT: ${{ needs.sign.outputs.ledger_commit }}
           EXPECTED_MATERIALIZED_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
         run: |
-          python3 -m pip install --disable-pip-version-check jsonschema==4.25.1
+          python3 -m pip install --disable-pip-version-check jsonschema==4.26.0
           test "$(git -C staged-publication rev-parse HEAD)" = "${EXPECTED_MATERIALIZED_LEDGER_COMMIT}"
           test "$(git -C staged-publication show -s --format=%P HEAD)" = "${EXPECTED_SIGNED_LEDGER_COMMIT}"
           git -C staged-publication diff --exit-code "${EXPECTED_SIGNED_LEDGER_COMMIT}" HEAD -- registry
@@ -773,7 +773,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install evidence validation dependencies
-        run: python3 -m pip install --disable-pip-version-check jsonschema==4.25.1
+        run: python3 -m pip install --disable-pip-version-check jsonschema==4.26.0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.required_stable_launch_evidence.outputs.evidence_artifact_name }}
@@ -961,7 +961,7 @@ jobs:
           PUBLICATION_SOURCE_COMMIT: ${{ needs.sign.outputs.marker_commit }}
           PUBLICATION_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
         run: |
-          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.25.1
+          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
           python3 scripts/observe_production_latest.py \
             --publication-id "$PUBLICATION_ID" --publication-sequence "$PUBLICATION_SEQUENCE" \
             --publication-snapshot-digest "$PUBLICATION_SNAPSHOT_DIGEST" \

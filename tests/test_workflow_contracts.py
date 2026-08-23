@@ -328,6 +328,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
         persist = publication["jobs"]["record_launch_approval"]
         body = commands(persist)
+        self.assertIn("jsonschema==4.26.0", body)
+        self.assertNotIn("jsonschema==4.25.1", str(publication))
         self.assertIn("materialize_launch_evidence.py verify-bundle", body)
         self.assertIn("--verify-attestation", body)
         self.assertIn("materialize_launch_evidence.py commit", body)
