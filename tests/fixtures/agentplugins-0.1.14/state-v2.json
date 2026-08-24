@@ -29,6 +29,18 @@
       },
       "origin_mode": "direct",
       "operation_group_id": "op-00000000000000000000000000000114",
+      "data_receipts": {
+        "data_000000000000000000000114": {
+          "data_receipt_id": "data_000000000000000000000114",
+          "physical_backend_id": "context7-05408cd487ce",
+          "scope": "user",
+          "locator": "/fixture/agentplugins-home/plugin-data/context7-05408cd487ce",
+          "ownership_digest": "sha256:39431bf68decd8ac14b807956dcffd33b3d377653e4c789d36813122559a0336",
+          "state": "owned",
+          "created_at": "2026-08-24T12:02:16.150252316Z",
+          "updated_at": "2026-08-24T12:02:16.150267654Z"
+        }
+      },
       "clients": {
         "client_000000000000000000000001": {
           "client_binding_id": "client_000000000000000000000001",
@@ -36,6 +48,7 @@
           "scope": "user",
           "target_locator": "/fixture/agentplugins-home/cursor/plugins/local/context7-05408cd487ce",
           "physical_artifact_id": "context7-05408cd487ce",
+          "data_receipt_id": "data_000000000000000000000114",
           "materialization": "materialized",
           "activation": "manual_activation_required",
           "authentication": "not_checked",
@@ -80,6 +93,7 @@
           "scope": "user",
           "target_locator": "/fixture/agentplugins-home/managed/clients/codex/context7-05408cd487ce",
           "physical_artifact_id": "context7-05408cd487ce",
+          "data_receipt_id": "data_000000000000000000000114",
           "materialization": "materialized",
           "activation": "manual_activation_required",
           "authentication": "not_checked",
@@ -124,6 +138,7 @@
           "scope": "user",
           "target_locator": "/fixture/agentplugins-home/managed/clients/kiro/context7-05408cd487ce",
           "physical_artifact_id": "context7-05408cd487ce",
+          "data_receipt_id": "data_000000000000000000000114",
           "materialization": "materialized",
           "activation": "manual_activation_required",
           "authentication": "not_checked",

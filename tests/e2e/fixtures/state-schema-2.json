@@ -2,43 +2,47 @@
   "schema_version": 2,
   "installations": [
     {
-      "id": "fixture-context7",
-      "declared_name": "context7",
-      "manifest_name": "context7",
-      "product_id": "context7",
+      "installation_id": "00000000-0000-4000-8000-000000000001",
+      "declared_name": "demo",
       "source": {
-        "kind": "catalog",
-        "locator": "upstash/context7@1111111111111111111111111111111111111111//plugins/context7",
-        "repository": "upstash/context7",
-        "path": "plugins/context7",
-        "revision": "1111111111111111111111111111111111111111"
+        "source_binding_id": "src_demo",
+        "requested_source": "demo",
+        "canonical_source": "https://github.com/777genius/universal-agent-plugins",
+        "repository": "777genius/universal-agent-plugins",
+        "package_subpath": "plugins/demo",
+        "resolved_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tree_digest": "sha256:desired-tree"
       },
       "package": {
-        "tree_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "closure_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        "loader_kind": "agent_plugins",
+        "format_id": "agent-plugins/1.0.0",
+        "schema_uri": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "declared_name": "demo",
+        "manifest_digest": "sha256:desired-manifest",
+        "inventory": {}
       },
       "clients": {
-        "cursor:user": {
-          "client": "cursor",
+        "client_a": {
+          "client_binding_id": "client_a",
+          "client_id": "codex",
           "scope": "user",
+          "target_locator": "user",
+          "physical_artifact_id": "physical_a",
           "materialization": "materialized",
-          "target_locator": "fixture://cursor/context7",
-          "receipts": [
-            {
-              "artifact_id": "fixture-cursor-context7",
-              "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-              "locator": "fixture://cursor/context7"
-            }
-          ]
+          "activation": "active",
+          "authentication": "not_required",
+          "policy": "allowed",
+          "verification": "installation_verified",
+          "package_revision": {
+            "resolved_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "tree_digest": "sha256:client-a-tree",
+            "manifest_digest": "sha256:client-a-manifest"
+          },
+          "updated_at": "2026-08-01T00:00:00Z"
         }
       },
-      "data_receipt": {
-        "backend": "cursor",
-        "scope": "user",
-        "locator": "fixture://data/context7",
-        "ownership_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      }
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-01T00:00:00Z"
     }
   ]
 }
