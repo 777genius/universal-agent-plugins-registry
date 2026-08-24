@@ -46,16 +46,27 @@ observer_cleanup_partial_paths() {
 # Recovery owns the journal directory and removes it only after every other
 # cleanup and durability operation has succeeded.
 observer_cleanup_recovery_partials() {
+  inventory=${1:-observer_partial_paths}
   cleaned_parents=
-  for partial in $(observer_partial_paths); do
+  for partial in $("$inventory"); do
     test "$partial" = /opt/uap-observer-source.new && continue
+    parent=$(dirname "$partial")
+    case " $cleaned_parents " in *" $parent "*) ;; *) cleaned_parents="$cleaned_parents $parent";; esac
     if [ -e "$partial" ] || [ -L "$partial" ]; then
       rm -rf -- "$partial" || return 1
-      parent=$(dirname "$partial")
-      case " $cleaned_parents " in *" $parent "*) ;; *) cleaned_parents="$cleaned_parents $parent";; esac
     fi
   done
   for parent in $cleaned_parents; do observer_sync_directory "$parent" || return 1; done
+}
+
+observer_validate_first_install_closures_root() {
+  closures_root=$1
+  expected_owner=${2:-0:0}
+  if [ ! -e "$closures_root" ] && [ ! -L "$closures_root" ]; then return 0; fi
+  test -d "$closures_root" || return 1
+  test ! -L "$closures_root" || return 1
+  test "$(stat -c '%u:%g:%a' "$closures_root")" = "$expected_owner:755" || return 1
+  test -z "$(find "$closures_root" -mindepth 1 -maxdepth 1 -print -quit)"
 }
 
 observer_closure_identity() {
@@ -337,11 +348,36 @@ observer_cleanup_committed_stage_payload() {
   for item in "$stage"/* "$stage"/.[!.]* "$stage"/..?*; do
     if [ ! -e "$item" ] && [ ! -L "$item" ]; then continue; fi
     case "${item##*/}" in
-      journal-committed|closure-digest|systemd-backup) continue ;;
+      journal-resolved) continue ;;
     esac
     rm -rf -- "$item" || return 1
   done
   observer_sync_directory "$stage" || return 1
+}
+
+observer_mark_recovery_resolved() {
+  stage=$1
+  python3 - "$stage" <<'PY'
+import os,secrets,sys
+stage=sys.argv[1]
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW
+directory=os.open(stage,flags)
+temporary=f".journal-resolved-{os.getpid()}-{secrets.token_hex(16)}"
+try:
+    descriptor=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|os.O_NOFOLLOW,0o600,dir_fd=directory)
+    try:
+        os.write(descriptor,b"resolved-v1\n")
+        os.fchown(descriptor,0,0)
+        os.fchmod(descriptor,0o600)
+        os.fsync(descriptor)
+    finally: os.close(descriptor)
+    os.rename(temporary,"journal-resolved",src_dir_fd=directory,dst_dir_fd=directory)
+    os.fsync(directory)
+finally:
+    try: os.unlink(temporary,dir_fd=directory)
+    except FileNotFoundError: pass
+    os.close(directory)
+PY
 }
 
 apply_observer_closure_modes() {
@@ -373,7 +409,8 @@ import os,stat,sys
 from pathlib import Path
 root=Path(sys.argv[1])
 info=root.lstat()
-if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022):
     raise SystemExit("systemd root is unsafe")
 units=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service")
 dropins=("uap-observer.service.d","uap-observer-runner.service.d")
@@ -384,6 +421,9 @@ for name in units+dropins:
     path=root/name
     try: item=path.lstat()
     except FileNotFoundError: continue
+    if (item.st_uid != 0 or item.st_gid != 0
+            or (not stat.S_ISLNK(item.st_mode) and item.st_mode & 0o022)):
+        raise SystemExit("systemd target is not root-controlled")
     if name in units:
         if stat.S_ISREG(item.st_mode):
             if item.st_nlink != 1: raise SystemExit("systemd regular target has unsafe link count")
@@ -395,6 +435,8 @@ for name in units+dropins:
     for current,dirs,files in os.walk(path,followlinks=False):
         for child_name in dirs+files:
             child_info=(Path(current)/child_name).lstat()
+            if child_info.st_uid != 0 or child_info.st_gid != 0 or child_info.st_mode & 0o022:
+                raise SystemExit("systemd drop-in is not root-controlled")
             if stat.S_ISLNK(child_info.st_mode) or not (stat.S_ISDIR(child_info.st_mode) or stat.S_ISREG(child_info.st_mode)):
                 raise SystemExit("systemd drop-in contains unsafe topology")
             if stat.S_ISREG(child_info.st_mode) and child_info.st_nlink != 1:
@@ -490,16 +532,156 @@ for state,index,_ in manifest:
 PY
 }
 
+# Install one reviewed systemd entry without ever opening the destination.
+# The only names created are exclusive entries in the destination directory;
+# renameat2 protects the displaced name and rename atomically replaces any
+# destination symlink raced in after validation.
+observer_replace_systemd_entries() {
+  systemd_root=$1
+  shift
+  python3 - "$systemd_root" "$@" <<'PY'
+import ctypes,os,secrets,stat,sys
+from pathlib import Path
+
+root_path=sys.argv[1]
+pairs=sys.argv[2:]
+if not pairs or len(pairs) % 2: raise SystemExit("invalid systemd replacement arguments")
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW
+rootfd=os.open(root_path,flags)
+libc=ctypes.CDLL(None,use_errno=True)
+renameat2=getattr(libc,"renameat2",None)
+if renameat2 is None:
+    raise SystemExit("renameat2 is required for safe systemd replacement")
+renameat2.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint)
+renameat2.restype=ctypes.c_int
+
+def trusted(info: os.stat_result, *, link: bool = False) -> None:
+    if info.st_uid != 0 or info.st_gid != 0 or (not link and info.st_mode & 0o022):
+        raise PermissionError("systemd source is not root-controlled")
+
+def exclusive_name(prefix: str) -> str:
+    return f".{prefix}-{os.getpid()}-{secrets.token_hex(16)}"
+
+def rename_noreplace(oldfd: int, old: str, newfd: int, new: str) -> None:
+    if renameat2(oldfd,os.fsencode(old),newfd,os.fsencode(new),1) != 0:
+        value=ctypes.get_errno()
+        raise OSError(value,os.strerror(value),old)
+
+def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
+    info=os.stat(srcname,dir_fd=srcfd,follow_symlinks=False)
+    mode=info.st_mode
+    if stat.S_ISREG(mode):
+        trusted(info)
+        if info.st_nlink != 1: raise PermissionError("systemd source has unsafe link count")
+        infd=os.open(srcname,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=srcfd)
+        outfd=os.open(dstname,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|os.O_NOFOLLOW,0o600,dir_fd=dstfd)
+        try:
+            if os.fstat(infd) != info: raise PermissionError("systemd source changed while copying")
+            while True:
+                block=os.read(infd,1 << 20)
+                if not block: break
+                view=memoryview(block)
+                while view: view=view[os.write(outfd,view):]
+            os.fchown(outfd,info.st_uid,info.st_gid)
+            os.fchmod(outfd,stat.S_IMODE(mode))
+            os.fsync(outfd)
+        finally:
+            os.close(outfd); os.close(infd)
+    elif stat.S_ISDIR(mode):
+        trusted(info)
+        os.mkdir(dstname,0o700,dir_fd=dstfd)
+        infd=os.open(srcname,flags,dir_fd=srcfd)
+        outfd=os.open(dstname,flags,dir_fd=dstfd)
+        try:
+            if os.fstat(infd) != info: raise PermissionError("systemd source changed while copying")
+            for child in os.listdir(infd): copy_entry(infd,child,outfd,child)
+            os.fchown(outfd,info.st_uid,info.st_gid)
+            os.fchmod(outfd,stat.S_IMODE(mode))
+            os.fsync(outfd)
+        finally:
+            os.close(outfd); os.close(infd)
+    elif stat.S_ISLNK(mode):
+        trusted(info,link=True)
+        os.symlink(os.readlink(srcname,dir_fd=srcfd),dstname,dir_fd=dstfd)
+        os.chown(dstname,info.st_uid,info.st_gid,dir_fd=dstfd,follow_symlinks=False)
+    else:
+        raise PermissionError("systemd source has unsafe type")
+
+def remove_entry(parentfd: int, child: str) -> None:
+    info=os.stat(child,dir_fd=parentfd,follow_symlinks=False)
+    if stat.S_ISDIR(info.st_mode):
+        childfd=os.open(child,flags,dir_fd=parentfd)
+        try:
+            for nested in os.listdir(childfd): remove_entry(childfd,nested)
+        finally: os.close(childfd)
+        os.rmdir(child,dir_fd=parentfd)
+    else:
+        os.unlink(child,dir_fd=parentfd)
+
+def replace(source_arg: str, name: str) -> None:
+    if not name or "/" in name or name in (".",".."):
+        raise ValueError("invalid systemd destination name")
+    temporary=exclusive_name("uap-observer-new")
+    displaced=exclusive_name("uap-observer-old")
+    created=False
+    moved=False
+    try:
+        if source_arg != "-":
+            source=Path(source_arg)
+            source_parent=os.open(source.parent,flags)
+            try: copy_entry(source_parent,source.name,rootfd,temporary)
+            finally: os.close(source_parent)
+            created=True
+        try:
+            rename_noreplace(rootfd,name,rootfd,displaced)
+            moved=True
+        except FileNotFoundError:
+            pass
+        if created:
+            os.rename(temporary,name,src_dir_fd=rootfd,dst_dir_fd=rootfd)
+            created=False
+        os.fsync(rootfd)
+        if moved:
+            remove_entry(rootfd,displaced)
+            moved=False
+            os.fsync(rootfd)
+    except BaseException:
+        if moved:
+            try: rename_noreplace(rootfd,displaced,rootfd,name)
+            except OSError: pass
+        if created:
+            try: remove_entry(rootfd,temporary)
+            except OSError: pass
+        raise
+
+try:
+    root_info=os.fstat(rootfd)
+    trusted(root_info)
+    if not stat.S_ISDIR(root_info.st_mode): raise PermissionError("systemd root is unsafe")
+    stale=[name for name in os.listdir(rootfd) if name.startswith((".uap-observer-new-",".uap-observer-old-"))]
+    for name in stale: remove_entry(rootfd,name)
+    if stale: os.fsync(rootfd)
+    fail_at=int(os.environ.get("UAP_OBSERVER_REPLACE_FAIL_AT") or 0)
+    for index in range(0,len(pairs),2):
+        replace(pairs[index],pairs[index+1])
+        if fail_at == index // 2 + 1: raise SystemExit(1)
+finally:
+    os.close(rootfd)
+PY
+}
+
 restore_observer_systemd() {
   backup=$1
   systemd_root=$2
+  set -- "$systemd_root"
   while read -r state index relative; do
-    target="$systemd_root/$relative"
-    rm -rf "$target" || return 1
     if [ "$state" = present ]; then
-      cp -a "$backup/items/$index" "$target" || return 1
+      set -- "$@" "$backup/items/$index" "$relative"
+    else
+      set -- "$@" - "$relative"
     fi
   done < "$backup/manifest"
+  observer_replace_systemd_entries "$@" || return 1
   observer_validate_systemd_topology "$systemd_root" || return 1
   while read -r state index relative; do
     target="$systemd_root/$relative"
@@ -519,7 +701,13 @@ recover_observer_install() {
   manager=$5
   cleanup_partials=${6:-observer_cleanup_recovery_partials}
   journal_committed=0
-  if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then return 0; fi
+  journal_resolved=0
+  if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then
+    # Retried even when a prior attempt removed the name but its parent fsync
+    # failed.  This makes the removal durability step independently retryable.
+    observer_sync_directory "$(dirname "$stage")"
+    return
+  fi
   if [ ! -d "$stage" ] || [ -L "$stage" ]; then
     echo "installer recovery journal is invalid" >&2
     return 1
@@ -528,7 +716,13 @@ recover_observer_install() {
     echo "installer recovery journal is invalid" >&2
     return 1
   }
-  if [ ! -e "$stage/journal-committed" ] && [ ! -L "$stage/journal-committed" ]; then
+  if [ -e "$stage/journal-resolved" ] || [ -L "$stage/journal-resolved" ]; then
+    journal_committed=1
+    journal_resolved=1
+    test -f "$stage/journal-resolved" && test ! -L "$stage/journal-resolved" || return 1
+    test "$(stat -c '%u:%g:%a:%h' "$stage/journal-resolved")" = 0:0:600:1 || return 1
+    test "$(cat "$stage/journal-resolved")" = resolved-v1 || return 1
+  elif [ ! -e "$stage/journal-committed" ] && [ ! -L "$stage/journal-committed" ]; then
     # The atomic marker is the sole durable proof that mutation could begin.
     # lstat traversal never follows a staged link outside this fixed tree.
     python3 - "$stage" <<'PY' || return 1
@@ -568,9 +762,11 @@ PY
       if [ -e "$candidate" ] || [ -L "$candidate" ]; then rm -rf -- "$candidate" || return 1; fi
       observer_sync_tree "$closures_root" || return 1
     fi
+    observer_mark_recovery_resolved "$stage" || return 1
+    journal_resolved=1
   fi
   "$cleanup_partials" || return 1
-  if [ "$journal_committed" -eq 1 ]; then
+  if [ "$journal_resolved" -eq 1 ]; then
     observer_cleanup_committed_stage_payload "$stage" || return 1
   fi
   rm -rf -- "$stage" || return 1
@@ -598,16 +794,14 @@ activate_observer_systemd() {
       fi
     done < "$backup/manifest"
   fi
-  for unit in $observer_units; do
-    rm -rf -- "$systemd_root/$unit" || return 1
-    cp -a "$staged/$unit" "$systemd_root/$unit" || return 1
-    observer_install_failpoint || return 1
-  done
+  set -- "$systemd_root"
+  for unit in $observer_units; do set -- "$@" "$staged/$unit" "$unit"; done
   for service in uap-observer uap-observer-runner; do
-    rm -rf -- "$systemd_root/$service.service.d" || return 1
-    cp -a "$staged/$service.service.d" "$systemd_root/$service.service.d" || return 1
-    observer_install_failpoint || return 1
+    set -- "$@" "$staged/$service.service.d" "$service.service.d"
   done
+  UAP_OBSERVER_REPLACE_FAIL_AT=${UAP_OBSERVER_INSTALL_FAIL_AT:-} \
+    observer_replace_systemd_entries "$@" || return 1
+  observer_install_step=7
   validate_observer_systemd_inventory "$staged" "$systemd_root"
 }
 

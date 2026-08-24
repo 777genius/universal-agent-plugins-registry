@@ -147,12 +147,13 @@ def _probe_adapter_identity_access(
                 pass
             else:
                 raise PermissionError("adapter probe retained privilege-regain capability")
+            directory_flags = _identity_directory_open_flags(getattr(os, "O_PATH", 0))
             for path, executable in paths:
-                descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+                descriptor = os.open("/", directory_flags)
                 try:
                     for component in path.parts[1:-1]:
                         child_fd = os.open(
-                            component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            component, directory_flags,
                             dir_fd=descriptor,
                         )
                         os.close(descriptor)
@@ -191,6 +192,12 @@ def _probe_adapter_identity_access(
             raise ValueError(f"adapter input is not accessible to exact identity: {error}")
     finally:
         os.close(read_fd)
+
+
+def _identity_directory_open_flags(o_path: int) -> int:
+    """Select search-only traversal when the platform exposes O_PATH."""
+    access_mode = o_path if o_path else os.O_RDONLY
+    return access_mode | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def validate_adapter_input_access(

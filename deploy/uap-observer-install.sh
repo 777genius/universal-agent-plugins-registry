@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 05886ddcca93c20f300757cbec2d6c2af449acb91af553f9f9b2a1a6bc10146b
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = d00b64f7cbd5da8eba765c9dae67dc623c46b26489fea9e303e6738ca4d8005f
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=359d2c7ea489d95076141945b8515e344c8fd03f97aff8e992882e4d35fa99d8
+runtime_manifest_digest=d0717c476b2cc5396b3b1880001f473d70bc9802abc44603d8f68294a6b4b62e
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -48,7 +48,7 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" \
-    ce21ba5ddf27c7f56a6cae5c5bf142c3256ab0e7bd1afbd584f0230079ff16bc \
+    84047e65bd98291eec5cb18777e51d209e5b1767808ab42529a4af7bed8754bb \
     977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state
@@ -56,6 +56,10 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   echo "observer files already installed; verified identical immutable closure"
   exit 0
 fi
+observer_validate_first_install_closures_root /opt/uap-observer-closures
+# Every authoritative temporary parent exists before the cleanup journal is
+# created, so recovery can fsync the complete parent inventory on any failure.
+install -d -o root -g root -m 0755 /opt/uap-observer-closures /usr/local/libexec /usr/local/bin /etc/caddy
 test ! -e "$stage_root"
 install -d -o root -g root -m 0700 "$stage_root"
 cleanup() {
@@ -104,7 +108,7 @@ caddy_binary=$stage_root/caddy
 caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
-runner_digest=ce21ba5ddf27c7f56a6cae5c5bf142c3256ab0e7bd1afbd584f0230079ff16bc
+runner_digest=84047e65bd98291eec5cb18777e51d209e5b1767808ab42529a4af7bed8754bb
 adapter_digest=977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
@@ -229,8 +233,6 @@ for source in "$source_root"/tests/e2e/schemas/*.schema.json; do
 done
 install -o root -g root -m 0555 "$source_root/deploy/uap-observer-signer.py" /opt/uap-observer-runtime.new/uap-observer-signer.py
 
-install -d -o root -g root -m 0755 /usr/local/libexec
-install -d -o root -g root -m 0755 /usr/local/bin
 install -o root -g root -m 0755 "$runner_source" /usr/local/libexec/uap-observer-runner.new
 test "$(sha256sum /usr/local/libexec/uap-observer-runner.new | cut -d' ' -f1)" = "$runner_digest"
 install -o root -g root -m 0555 "$adapter_source" /usr/local/libexec/uap-observer-fixed-adapter.new
@@ -265,7 +267,6 @@ PY
 chown root:root /etc/uap-observer-adapters.json.new
 chmod 0644 /etc/uap-observer-adapters.json.new
 
-install -d -o root -g root -m 0755 /etc/caddy
 install -o root -g caddy -m 0640 "$caddy_config" /etc/caddy/Caddyfile.new
 systemd_stage="$stage_root/systemd"
 install -d -o root -g root -m 0700 "$systemd_stage/uap-observer.service.d" "$systemd_stage/uap-observer-runner.service.d"
@@ -310,7 +311,6 @@ cmp "$caddy_config" /etc/caddy/Caddyfile.new
 
 # Build one immutable, complete version. No consumer references it until the
 # single current-pointer rename below.
-install -d -o root -g root -m 0755 /opt/uap-observer-closures
 closure_stage="/opt/uap-observer-closures/.new-$$"
 test ! -e "$closure_stage"
 test ! -e "$closure_final"
