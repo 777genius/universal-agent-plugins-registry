@@ -51,6 +51,12 @@ from launch_observer_signatures import (  # noqa: E402
     verify_observer_bundle,
 )
 from build_registry import RegistryError, directory_tree_digest, resolve_directory  # noqa: E402
+from observe_launch_scenario import (  # noqa: E402
+    installation_receipts,
+    selected_manager_installation,
+    strict_json_loads,
+    validate_cli_envelope,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,11 +129,13 @@ SECRET_NAME = re.compile(r"(?i)(token|secret|password|cookie|authorization|oauth
 
 def complete_acquisition_proof(
     value: Any, targets: tuple[str, ...], *, tree_digest: str, manifest_digest: str,
+    source_repository: str, source_revision: str, source_path: str,
 ) -> dict[str, Any] | None:
     """Validate the complete grouped acquisition at the evidence boundary."""
     if not isinstance(value, dict) or set(value) != {
         "acquisition_id", "acquisition_count", "tree_digest", "manifest_digest",
-        "closure_digest", "source_kind", "fetched", "validated", "target_outcomes",
+        "closure_digest", "source_kind", "fetched", "validated", "source_repository",
+        "source_revision", "source_path", "targets", "target_outcomes",
     }:
         return None
     acquisition_id = value.get("acquisition_id")
@@ -138,12 +146,20 @@ def complete_acquisition_proof(
         and value.get("manifest_digest") == manifest_digest and DIGEST.fullmatch(manifest_digest)
         and isinstance(value.get("closure_digest"), str) and DIGEST.fullmatch(value["closure_digest"])
         and value.get("source_kind") == "github"
+        and value.get("source_repository") == source_repository and GITHUB_REPOSITORY.fullmatch(source_repository)
+        and value.get("source_revision") == source_revision and FULL_SHA.fullmatch(source_revision)
+        and value.get("source_path") == source_path and GITHUB_SOURCE_PATH.fullmatch(source_path)
         and value.get("fetched") is True and value.get("validated") is True
         and len(targets) == len(set(targets))
     ):
         return None
     outcomes = value.get("target_outcomes")
-    if not isinstance(outcomes, dict) or set(outcomes) != set(targets):
+    target_bindings = value.get("targets")
+    if (
+        not isinstance(outcomes, dict) or set(outcomes) != set(targets)
+        or not isinstance(target_bindings, list) or len(target_bindings) != len(targets)
+        or [item.get("target") if isinstance(item, dict) else None for item in target_bindings] != list(targets)
+    ):
         return None
     binding = {
         "outcome": "passed", "acquisition_id": acquisition_id,
@@ -599,34 +615,14 @@ def materialization_digest(path: Path) -> str:
 def observed_state_identity(environment: dict[str, str], product_id: str, clients: tuple[str, ...]) -> dict[str, Any]:
     manager = Path(environment["AGENTPLUGINS_HOME"])
     home = Path(environment["HOME"])
-    installation: dict[str, Any] | None = None
-    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        candidates = value.get("installations", []) if isinstance(value, dict) else []
-        for candidate in candidates if isinstance(candidates, list) else ():
-            if isinstance(candidate, dict) and product_id in {candidate.get("declared_name"), find_value(candidate, {"product_id"})}:
-                installation = candidate
-                break
-        if installation is not None:
-            break
+    installation = selected_manager_installation(manager, product_id)
     roots = {client: home / CLIENT_ROOTS[client] for client in clients}
     native_digests = {client: materialization_digest(path) for client, path in roots.items()}
     # Materialized files are not proof that a client discovered a plugin, and
     # their digest is not a client version. Runtime claims come only from the
     # protected external observer contract validated by _load_attestations.
-    committed = 0
-    if installation:
-        stack = [installation]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, dict):
-                committed += int(item.get("phase") == "committed")
-                stack.extend(item.values())
-            elif isinstance(item, list):
-                stack.extend(item)
+    receipts = installation_receipts(manager, product_id) if installation else None
+    committed = len(receipts or [])
     return {
         "product_id": find_value(installation, {"product_id"}) if installation else None,
         "tree_digest": find_value(installation, {"tree_digest"}) if installation else None,
@@ -1454,9 +1450,11 @@ class LaunchHarness:
         if completed.returncode:
             return "failed", None, f"CLI returned exit status {completed.returncode}"
         try:
-            value = json.loads(completed.stdout)
-        except json.JSONDecodeError:
+            value = strict_json_loads(completed.stdout)
+        except (json.JSONDecodeError, ValueError):
             return "failed", None, "CLI did not return structured JSON"
+        if not validate_cli_envelope(value, argv[0]):
+            return "failed", None, "CLI returned a malformed command envelope"
         self._assert_result_paths(value, sandbox)
         after_state = observed_state_identity(env, product_id, clients)
         value["_observed_state"] = after_state
@@ -1473,12 +1471,20 @@ class LaunchHarness:
         }
         if type(value.get("schema_version")) is not int or value.get("schema_version") != 1 or value.get("command") != argv[0]:
             return "failed", value, "CLI returned an invalid command envelope"
-        result = value.get("data", {}).get("result", {})
-        if argv[0] in {"add", "repair", "remove"} and result.get("mutated") is not True:
+        data = value.get("data", {})
+        result = data.get("result", {})
+        if argv[0] == "add":
+            mutated = bool(data.get("targets")) and all(
+                isinstance(target, dict) and target.get("output", {}).get("result", {}).get("mutated") is True
+                for target in data["targets"]
+            )
+        else:
+            mutated = result.get("mutated")
+        if argv[0] in {"add", "repair", "remove"} and mutated is not True:
             return "failed", value, "CLI did not report a committed mutation"
-        if argv[0] == "update" and not isinstance(result.get("mutated"), bool):
+        if argv[0] == "update" and not isinstance(mutated, bool):
             return "failed", value, "CLI did not report whether update mutated state"
-        if argv[0] == "update" and result.get("mutated") is False and (
+        if argv[0] == "update" and mutated is False and (
             before_state["manager_digest"] != after_state["manager_digest"]
             or before_state["native_digests"] != after_state["native_digests"]
         ):
@@ -1537,8 +1543,8 @@ class LaunchHarness:
             "--challenge-context", str(challenge_path),
         ], cwd=sandbox / "workspace", env=env, text=True, capture_output=True, timeout=240, check=False)
         try:
-            value = json.loads(completed.stdout)
-        except json.JSONDecodeError:
+            value = strict_json_loads(completed.stdout)
+        except (json.JSONDecodeError, ValueError):
             return "failed", None, "repository-owned observer did not return JSON"
         outcome = value.get("outcome")
         if outcome not in OUTCOMES:
@@ -1803,6 +1809,8 @@ class LaunchHarness:
         acquisition = complete_acquisition_proof(
             value.get("acquisition") if value else None, targets,
             tree_digest=expected_digest, manifest_digest=release["manifest_digest"],
+            source_repository=release["source_repository"], source_revision=release["source_revision"],
+            source_path=release["source_path"],
         )
         valid = valid and acquisition is not None
         valid = valid and set(value.get("target_outcomes", {})) == set(targets)

@@ -18,6 +18,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -67,6 +68,81 @@ def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def strict_json_loads(raw: str | bytes) -> Any:
+    """Decode evidence JSON without allowing duplicate keys or non-JSON numbers."""
+    return json.loads(
+        raw, object_pairs_hook=unique_json_object,
+        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"invalid JSON number: {value}")),
+    )
+
+
+def _exact_int(value: Any, expected: int | None = None) -> bool:
+    return type(value) is int and (expected is None or value == expected)
+
+
+def validate_cli_envelope(value: Any, command: str) -> bool:
+    """Validate the released JSON envelope before it can become evidence."""
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != 1 or not _exact_int(value.get("schema_version"), 1)
+        or value.get("command") != command
+        or value.get("result") != "success"
+        or not isinstance(value.get("data"), dict)
+    ):
+        return False
+    data = value["data"]
+    if command == "add":
+        required = {
+            "operation_id", "batch", "status", "succeeded", "failed", "plugin", "version",
+            "source", "revision", "tree_digest", "manifest_digest", "dry_run", "targets",
+            "acquisition", "target_outcomes",
+        }
+        return bool(
+            required.issubset(data)
+            and isinstance(data["operation_id"], str) and data["operation_id"]
+            and type(data["batch"]) is bool and data["batch"] is True
+            and data["status"] == "completed"
+            and _exact_int(data["succeeded"]) and data["succeeded"] >= 1
+            and _exact_int(data["failed"], 0)
+            and isinstance(data["plugin"], str) and data["plugin"]
+            and isinstance(data["version"], str) and data["version"]
+            and isinstance(data["source"], str) and data["source"]
+            and isinstance(data["revision"], str) and FULL_SHA.fullmatch(data["revision"])
+            and isinstance(data["tree_digest"], str) and DIGEST.fullmatch(data["tree_digest"])
+            and isinstance(data["manifest_digest"], str) and DIGEST.fullmatch(data["manifest_digest"])
+            and type(data["dry_run"]) is bool and data["dry_run"] is False
+            and isinstance(data["targets"], list) and data["targets"]
+        )
+    if command == "info":
+        return data.get("status") in {"installed", "completed"} and isinstance(data.get("plugin"), str)
+    if command in {"repair", "remove"}:
+        result = data.get("result")
+        return bool(
+            isinstance(data.get("operation_id"), str) and data["operation_id"]
+            and data.get("status") == "completed"
+            and isinstance(data.get("plugin"), str) and data["plugin"]
+            and isinstance(result, dict) and type(result.get("mutated")) is bool
+        )
+    if command == "update":
+        result = data.get("result")
+        return bool(
+            isinstance(result, dict) and type(result.get("mutated")) is bool
+            and data.get("status") in {"completed", "unchanged"}
+            and isinstance(data.get("source"), str) and isinstance(data.get("revision"), str)
+            and FULL_SHA.fullmatch(data["revision"])
+            and isinstance(data.get("tree_digest"), str) and DIGEST.fullmatch(data["tree_digest"])
+            and isinstance(data.get("manifest_digest"), str) and DIGEST.fullmatch(data["manifest_digest"])
+        )
+    if command == "migrate-state":
+        status = data.get("status")
+        if type(data.get("mutated")) is not bool or status not in {"dry_run", "completed"}:
+            return False
+        if status == "dry_run":
+            return data["mutated"] is False and isinstance(data.get("state_digest"), str) and DIGEST.fullmatch(data["state_digest"])
+        return data["mutated"] is True and _exact_int(data.get("schema_version"), 4)
+    return False
+
+
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -97,6 +173,47 @@ def file_digests(root: Path) -> dict[str, str]:
         path.relative_to(root).as_posix(): "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(root.rglob("*")) if path.is_file() and not path.is_symlink()
     }
+
+
+def filesystem_snapshot(root: Path) -> dict[str, dict[str, Any]]:
+    """Capture a complete no-follow filesystem proof, including empty directories."""
+    snapshot: dict[str, dict[str, Any]] = {}
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return snapshot
+
+    def capture(path: Path, relative: str) -> bool:
+        metadata = path.lstat()
+        common: dict[str, Any] = {"mode": stat.S_IMODE(metadata.st_mode)}
+        if stat.S_ISLNK(metadata.st_mode):
+            snapshot[relative] = {**common, "kind": "symlink", "target": os.readlink(path)}
+            return False
+        if stat.S_ISDIR(metadata.st_mode):
+            snapshot[relative] = {**common, "kind": "directory"}
+            return True
+        if stat.S_ISREG(metadata.st_mode):
+            body = path.read_bytes()
+            snapshot[relative] = {
+                **common, "kind": "file", "size": len(body),
+                "digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+            }
+            return False
+        snapshot[relative] = {**common, "kind": "other", "size": metadata.st_size}
+        return False
+
+    if not capture(root, "."):
+        return snapshot
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                path = Path(entry.path)
+                relative = path.relative_to(root).as_posix()
+                if capture(path, relative):
+                    pending.append(path)
+    return snapshot
 
 
 def find_value(value: Any, names: set[str]) -> Any:
@@ -151,6 +268,8 @@ def command_acquisition_proof(
         or len(clients) != len(set(clients))
     ):
         return None
+    if not validate_cli_envelope(value, command):
+        return None
     data = value["data"]
     if (
         "acquisition" not in data
@@ -187,6 +306,35 @@ def command_acquisition_proof(
         return None
 
     target_values = data["target_outcomes"]
+    raw_targets = data.get("targets")
+    if command == "add":
+        if not isinstance(raw_targets, list) or len(raw_targets) != len(clients):
+            return None
+        target_names = [item.get("target") if isinstance(item, dict) else None for item in raw_targets]
+        if target_names != list(clients) or len(target_names) != len(set(target_names)):
+            return None
+        installation_ids: set[str] = set()
+        for item, client in zip(raw_targets, clients):
+            output = item.get("output") if isinstance(item, dict) else None
+            result = output.get("result") if isinstance(output, dict) else None
+            plan = result.get("plan") if isinstance(result, dict) else None
+            if not (
+                item.get("status") == "external_completed"
+                and output.get("operation_id") == data["operation_id"]
+                and output.get("plugin") == data["plugin"]
+                and output.get("version") == data["version"]
+                and output.get("source") == data["source"]
+                and output.get("revision") == data["revision"]
+                and output.get("tree_digest") == tree_digest
+                and output.get("manifest_digest") == manifest_digest
+                and output.get("dry_run") is False
+                and isinstance(plan, dict) and plan.get("client_id") == client
+                and isinstance(result.get("installation_id"), str) and result["installation_id"]
+            ):
+                return None
+            installation_ids.add(result["installation_id"])
+        if len(installation_ids) != 1 or data["succeeded"] != len(raw_targets):
+            return None
     if (
         not isinstance(target_values, dict)
         or set(target_values) != set(clients)
@@ -203,6 +351,18 @@ def command_acquisition_proof(
     }
     if any(outcome != expected_binding for outcome in outcomes.values()):
         return None
+    try:
+        repository, package_path = data["source"].split("//", 1)
+    except ValueError:
+        return None
+    if (
+        not GITHUB_REPOSITORY.fullmatch(repository)
+        or not GITHUB_SOURCE_PATH.fullmatch(package_path)
+        or package_path.startswith("/") or package_path.endswith("/")
+        or any(part in {"", ".", ".."} for part in package_path.split("/"))
+        or data["tree_digest"] != tree_digest or data["manifest_digest"] != manifest_digest
+    ):
+        return None
     return {
         "acquisition_id": identity,
         "acquisition_count": count,
@@ -212,6 +372,10 @@ def command_acquisition_proof(
         "source_kind": source_kind,
         "fetched": fetched,
         "validated": validated,
+        "source_repository": repository,
+        "source_revision": data["revision"],
+        "source_path": package_path,
+        "targets": copy.deepcopy(raw_targets),
         "target_outcomes": outcomes,
     }
 
@@ -220,14 +384,14 @@ def grouped_acquisition_proof(value: Any, clients: tuple[str, ...]) -> dict[str,
     return command_acquisition_proof(value, clients, command="add")
 
 
-def json_output(completed: subprocess.CompletedProcess[str]) -> dict[str, Any] | None:
+def json_output(completed: subprocess.CompletedProcess[str], command: str | None = None) -> dict[str, Any] | None:
     if completed.returncode:
         return None
     try:
-        value = json.loads(completed.stdout, object_pairs_hook=unique_json_object)
-    except (json.JSONDecodeError, DuplicateKeyError):
+        value = strict_json_loads(completed.stdout)
+    except (json.JSONDecodeError, DuplicateKeyError, ValueError):
         return None
-    return value if isinstance(value, dict) else None
+    return value if isinstance(value, dict) and (command is None or validate_cli_envelope(value, command)) else None
 
 
 def parse_canonical_github_source(value: Any) -> dict[str, str] | None:
@@ -278,54 +442,57 @@ def source_identities_match(expected: Any, observed: Any) -> bool:
 
 
 def manager_facts(manager: Path, product: str) -> dict[str, Any]:
-    committed = 0
-    product_mentions = 0
-    json_files = 0
-    installation_records = 0
-    digests: set[str] = set()
-    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        json_files += 1
-        stack = [value]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, dict):
-                if item.get("phase") == "committed":
-                    committed += 1
-                installations = item.get("installations")
-                if isinstance(installations, list):
-                    installation_records += sum(product in json.dumps(record, sort_keys=True) for record in installations)
-                product_mentions += sum(child == product for child in item.values())
-                digests.update(child for child in item.values() if isinstance(child, str) and child.startswith("sha256:") and len(child) == 71)
-                stack.extend(item.values())
-            elif isinstance(item, list):
-                stack.extend(item)
-    return {"json_files": json_files, "committed_receipts": committed, "product_mentions": product_mentions, "installation_records": installation_records, "digests": sorted(digests)}
+    state = manager_state(manager)
+    installations = state.get("installations", []) if state else []
+    matches = [item for item in installations if isinstance(item, dict) and item.get("declared_name") == product]
+    receipts = installation_receipts(manager, product) or []
+    digests = sorted({
+        child for child in find_values(matches, {"tree_digest", "manifest_digest", "after_digest", "managed_digest"})
+        if isinstance(child, str) and DIGEST.fullmatch(child)
+    })
+    return {
+        "json_files": 1 if state else 0,
+        "committed_receipts": len(receipts),
+        "product_mentions": len(matches),
+        "installation_records": len(matches),
+        "digests": digests,
+    }
+
+
+def manager_state(manager: Path) -> dict[str, Any] | None:
+    """Read only the State-v4 contract file, without following a link."""
+    path = manager / "state-v2.json"
+    try:
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            return None
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                return None
+            raw = stream.read()
+        value = strict_json_loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError, DuplicateKeyError, ValueError):
+        return None
+    if (
+        not isinstance(value, dict) or set(value) != {"schema_version", "installations"}
+        or not _exact_int(value.get("schema_version"), 4)
+        or not isinstance(value.get("installations"), list)
+    ):
+        return None
+    return value
 
 
 def selected_manager_installation(manager: Path, product: str) -> dict[str, Any] | None:
     """Select one installation without combining authority across files/records."""
-    matches: list[dict[str, Any]] = []
-    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        installations = value.get("installations") if isinstance(value, dict) else None
-        if not isinstance(installations, list):
-            continue
-        for installation in installations:
-            if not isinstance(installation, dict):
-                continue
-            identities = {
-                installation.get("declared_name"), installation.get("manifest_name"),
-                installation.get("product_id"),
-            }
-            if product in identities:
-                matches.append(copy.deepcopy(installation))
+    state = manager_state(manager)
+    if state is None:
+        return None
+    matches = [
+        copy.deepcopy(item) for item in state["installations"]
+        if isinstance(item, dict) and item.get("declared_name") == product
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -335,57 +502,70 @@ def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] |
     if installation is None:
         return None
     entries: list[dict[str, Any]] = []
-
-    def append_receipts(raw: Any, binding_client: Any = None) -> bool:
-        if raw is None:
-            return True
-        receipts = raw if isinstance(raw, list) else [raw]
-        if not all(isinstance(receipt, dict) for receipt in receipts):
-            return False
-        for receipt in receipts:
-            if receipt.get("phase") != "committed":
-                continue
-            entries.append({"receipt": copy.deepcopy(receipt), "binding_client": binding_client})
-        return True
-
-    if not append_receipts(installation.get("receipts")):
+    operation_group_id = installation.get("operation_group_id")
+    bindings = installation.get("clients")
+    if not isinstance(operation_group_id, str) or not operation_group_id or not isinstance(bindings, dict) or not bindings:
         return None
-    for bindings_name in ("bindings", "clients"):
-        bindings = installation.get(bindings_name)
-        if bindings is None:
-            continue
-        if not isinstance(bindings, dict):
+    client_ids: set[str] = set()
+    for binding_key, binding in bindings.items():
+        if not isinstance(binding_key, str) or not isinstance(binding, dict):
             return None
-        for binding in bindings.values():
-            if not isinstance(binding, dict) or not append_receipts(binding.get("receipts"), binding.get("client")):
+        binding_id = binding.get("client_binding_id")
+        client_id = binding.get("client_id")
+        raw = binding.get("receipts")
+        native_objects = binding.get("native_objects")
+        if (
+            binding_id != binding_key or not isinstance(client_id, str) or not client_id
+            or client_id in client_ids or not isinstance(raw, list) or not raw
+            or not isinstance(native_objects, list) or not native_objects
+        ):
+            return None
+        client_ids.add(client_id)
+        managed_digests = {
+            item.get("managed_digest") for item in native_objects
+            if isinstance(item, dict) and isinstance(item.get("managed_digest"), str)
+            and DIGEST.fullmatch(item["managed_digest"])
+        }
+        if not managed_digests:
+            return None
+        sequences: list[int] = []
+        for receipt in raw:
+            if not isinstance(receipt, dict) or not (
+                isinstance(receipt.get("operation_id"), str) and receipt["operation_id"]
+                and receipt.get("operation_group_id") == operation_group_id
+                and receipt.get("client_binding_id") == binding_id
+                and _exact_int(receipt.get("sequence")) and receipt["sequence"] >= 1
+                and receipt.get("phase") == "committed"
+                and isinstance(receipt.get("after_digest"), str) and DIGEST.fullmatch(receipt["after_digest"])
+                and receipt["after_digest"] in managed_digests
+            ):
                 return None
+            sequences.append(receipt["sequence"])
+            entries.append({
+                "receipt": copy.deepcopy(receipt), "binding_client": client_id,
+                "client_binding_id": binding_id, "operation_group_id": operation_group_id,
+            })
+        if sequences != sorted(sequences) or len(sequences) != len(set(sequences)):
+            return None
     return entries
 
 
 def receipts_bind_command(
     before: list[dict[str, Any]], after: list[dict[str, Any]], operation: str, clients: tuple[str, ...],
+    *, operation_group_id: str | None = None,
 ) -> bool:
-    """Require newly committed receipts to name this operation and exact targets."""
-    if len(after) <= len(before) or after[:len(before)] != before:
+    """Bind every exact client binding to one committed State-v4 operation group."""
+    del operation  # State-v4 binds the group and client, not a fabricated command name.
+    if len(clients) != len(set(clients)) or not after:
         return False
-    target_set = set(clients)
-    covered: set[str] = set()
-    for entry in after[len(before):]:
-        receipt = entry["receipt"]
-        if receipt.get("operation") != operation:
-            return False
-        raw_targets = receipt.get("targets")
-        if raw_targets is None:
-            raw_target = receipt.get("client", receipt.get("target", entry.get("binding_client")))
-            receipt_targets = {raw_target} if isinstance(raw_target, str) else set()
-        elif isinstance(raw_targets, list) and all(isinstance(item, str) for item in raw_targets):
-            receipt_targets = set(raw_targets)
-        else:
-            return False
-        if not receipt_targets or not receipt_targets.issubset(target_set):
-            return False
-        covered.update(receipt_targets)
-    return covered == target_set
+    groups = {entry.get("operation_group_id") for entry in after}
+    covered = [entry.get("binding_client") for entry in after]
+    return bool(
+        len(groups) == 1
+        and (operation_group_id is None or groups == {operation_group_id})
+        and set(covered) == set(clients) and len(covered) == len(clients)
+        and before != after
+    )
 
 
 def materialized_product_mentions(home: Path, product: str, clients: tuple[str, ...]) -> dict[str, int]:
@@ -439,9 +619,6 @@ def identity_matches_release(identity: dict[str, Any], context: dict[str, Any]) 
         return False
     expected = {
         "product_id": release["product_id"],
-        "distribution_id": release["distribution_id"],
-        "distribution_kind": release["distribution_kind"],
-        "desired_release_sequence": release["release_sequence"],
         "tree_digest": release["tree_digest"],
         "manifest_digest": release["manifest_digest"],
         "resolved_revision": release["source_revision"],
@@ -650,7 +827,7 @@ def lifecycle(
         argv = [operation, product, "--target", target, "--format", "json"]
         completed, trace = traced(binary, argv, root, challenge)
         traces.append(trace)
-        value = json_output(completed)
+        value = json_output(completed, operation)
         after_receipts = installation_receipts(manager, product) or []
         after = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": after_receipts, "materialized_mentions": materialized_product_mentions(home, product, clients)}
         identity = manager_identity(manager, product)
@@ -658,7 +835,11 @@ def lifecycle(
         observations.append({"operation": operation, "command": argv, "before": before, "after": after})
         passed = value is not None
         if operation in {"add", "repair", "remove"}:
-            passed = passed and receipts_bind_command(previous_receipts, after_receipts, operation, clients)
+            operation_group_id = value.get("data", {}).get("operation_id") if value else None
+            passed = passed and isinstance(operation_group_id, str) and receipts_bind_command(
+                previous_receipts, after_receipts, operation, clients,
+                operation_group_id=operation_group_id,
+            )
             previous_receipts = after_receipts
         elif operation == "update":
             # This fixture contains exactly one release. A truthful update is a
@@ -713,7 +894,7 @@ def shared_backend_lifecycle(
         before = {"state": observe(home, manager), "manager": manager_facts(manager, "context7")}
         completed, trace = traced(binary, [operation, "context7", "--target", "copilot,vscode", "--format", "json"], root, challenge)
         traces.append(trace)
-        value = json_output(completed)
+        value = json_output(completed, operation)
         after = {"state": observe(home, manager), "manager": manager_facts(manager, "context7")}
         observations.append({"operation": operation, "before": before, "after": after})
         if value is not None:
@@ -841,13 +1022,13 @@ def manager_identity(manager: Path, product: str) -> dict[str, Any]:
     source = installation.get("source") if isinstance(installation.get("source"), dict) else {}
     package = installation.get("package") if isinstance(installation.get("package"), dict) else {}
     candidates = {
-        "product_id": (installation.get("product_id"),),
+        "product_id": (installation.get("product_id"), installation.get("declared_name")),
         "resolved_revision": (installation.get("resolved_revision"), source.get("resolved_revision"), source.get("revision")),
         "canonical_source": (installation.get("canonical_source"), source.get("canonical_source"), source.get("locator")),
         "source_repository": (installation.get("source_repository"), source.get("source_repository"), source.get("repository")),
         "source_revision": (installation.get("source_revision"), source.get("source_revision"), source.get("resolved_revision"), source.get("revision")),
-        "source_path": (installation.get("source_path"), source.get("source_path"), source.get("path")),
-        "tree_digest": (installation.get("tree_digest"), package.get("tree_digest"), package.get("package_tree_digest")),
+        "source_path": (installation.get("source_path"), source.get("source_path"), source.get("path"), source.get("package_subpath")),
+        "tree_digest": (installation.get("tree_digest"), source.get("tree_digest"), package.get("tree_digest"), package.get("package_tree_digest")),
         "manifest_digest": (installation.get("manifest_digest"), package.get("manifest_digest")),
         "distribution_id": (installation.get("distribution_id"), directory.get("distribution_id")),
         "distribution_kind": (installation.get("distribution_kind"), directory.get("distribution_kind")),
@@ -868,22 +1049,16 @@ def manager_identity(manager: Path, product: str) -> dict[str, Any]:
 
 
 def manager_has_flag(manager: Path, product: str, key: str, expected: Any) -> bool:
-    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        if product not in json.dumps(value, sort_keys=True):
-            continue
-        stack = [value]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, dict):
-                if item.get(key) == expected:
-                    return True
-                stack.extend(item.values())
-            elif isinstance(item, list):
-                stack.extend(item)
+    installation = selected_manager_installation(manager, product)
+    stack = [installation] if installation else []
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if item.get(key) == expected:
+                return True
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
     return False
 
 
@@ -992,11 +1167,11 @@ def direct_full_sha_scenario(
     traces: list[dict[str, Any]] = []
     add, trace = traced(binary, ["add", selector, "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
-    add_value = json_output(add)
+    add_value = json_output(add, "add")
     installed_identity = manager_identity(manager, "e2e-external-package")
     update, trace = traced(binary, ["update", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
-    update_value = json_output(update)
+    update_value = json_output(update, "update")
     updated_identity = manager_identity(manager, "e2e-external-package")
     remove, trace = traced(binary, ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
@@ -1113,46 +1288,51 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     manager.mkdir(parents=True, exist_ok=True)
     fixture = Path(__file__).resolve().parents[1] / "tests/e2e/fixtures/state-schema-2.json"
     state_path = manager / "state.json"
-    state_path.write_bytes(fixture.read_bytes())
-    legacy_state = json.loads(state_path.read_text())
+    fixture_bytes = fixture.read_bytes()
+    state_path.write_bytes(fixture_bytes)
+    legacy_state = strict_json_loads(fixture_bytes)
     legacy_record = installation_record(legacy_state, "context7")
     expected_provenance = migration_provenance(legacy_record, legacy=True)
     input_digest = "sha256:" + hashlib.sha256(state_path.read_bytes()).hexdigest()
-    before = observe(home, manager)
+    isolated_root = Path(os.path.commonpath((home, manager, root)))
+    manager_relative = manager.relative_to(isolated_root).as_posix()
+    before = filesystem_snapshot(isolated_root)
     traces: list[dict[str, Any]] = []
     read, trace = traced(binary, ["info", "context7", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
-    after_read = observe(home, manager)
-    before_hidden = observe(home, manager)
+    read_value = json_output(read, "info")
+    after_read = filesystem_snapshot(isolated_root)
+    before_hidden = filesystem_snapshot(isolated_root)
     hidden, trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
-    after_hidden = observe(home, manager)
+    after_hidden = filesystem_snapshot(isolated_root)
     hidden_diagnostic = hidden.stdout + "\n" + hidden.stderr
-    unchanged_after_hidden = state_path.read_bytes() == fixture.read_bytes()
-    before_dry = observe(home, manager)
+    unchanged_after_hidden = state_path.read_bytes() == fixture_bytes
+    before_dry = filesystem_snapshot(isolated_root)
     dry, trace = traced(binary, ["migrate-state", "--dry-run", "--format", "json"], root, challenge)
     traces.append(trace)
-    after_dry = observe(home, manager)
-    dry_value = json_output(dry)
-    unchanged_after_dry = state_path.read_bytes() == fixture.read_bytes()
+    after_dry = filesystem_snapshot(isolated_root)
+    dry_value = json_output(dry, "migrate-state")
+    unchanged_after_dry = state_path.read_bytes() == fixture_bytes
     stale_digest = "sha256:" + ("0" if input_digest[7] != "0" else "1") + input_digest[8:]
-    before_stale = observe(home, manager)
+    before_stale = filesystem_snapshot(isolated_root)
     stale, trace = traced(binary, ["migrate-state", "--expected-digest", stale_digest, "--format", "json"], root, challenge)
     traces.append(trace)
-    after_stale = observe(home, manager)
-    unchanged_after_stale = state_path.read_bytes() == fixture.read_bytes()
+    after_stale = filesystem_snapshot(isolated_root)
+    unchanged_after_stale = state_path.read_bytes() == fixture_bytes
     stale_diagnostic = stale.stdout + "\n" + stale.stderr
-    before_apply_files = file_digests(manager)
+    before_apply_files = filesystem_snapshot(manager)
+    before_apply_all = filesystem_snapshot(isolated_root)
     apply, trace = traced(binary, ["migrate-state", "--expected-digest", input_digest, "--format", "json"], root, challenge)
     traces.append(trace)
-    apply_value = json_output(apply)
-    after = observe(home, manager)
-    after_apply_files = file_digests(manager)
-    backups = [path for path in manager.rglob("*") if path.is_file() and "backup" in path.name.lower()]
+    apply_value = json_output(apply, "migrate-state")
+    after = filesystem_snapshot(isolated_root)
+    after_apply_files = filesystem_snapshot(manager)
+    backups = [path for path in manager.iterdir() if not path.is_symlink() and path.is_file() and "backup" in path.name.lower()]
     migrated_schema = None
     migrated_state: dict[str, Any] | None = None
     try:
-        migrated_state = json.loads(state_path.read_text())
+        migrated_state = strict_json_loads(state_path.read_bytes())
         migrated_schema = migrated_state.get("schema_version")
     except (OSError, json.JSONDecodeError):
         pass
@@ -1163,30 +1343,37 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
         path for path in set(before_apply_files) | set(after_apply_files)
         if before_apply_files.get(path) != after_apply_files.get(path)
     }
-    changed_backups = [path for path in changed_manager_files if path != "state.json"]
+    changed_backups = [path for path in changed_manager_files if path not in {".", "state.json"}]
+    changed_all = {
+        path for path in set(before_apply_all) | set(after)
+        if before_apply_all.get(path) != after.get(path)
+    }
+    allowed_global_changes = {
+        f"{manager_relative}/state.json",
+        *(f"{manager_relative}/{path}" for path in changed_backups),
+    }
     allowed_apply_mutation = bool(
         changed_manager_files == {"state.json", *changed_backups}
         and len(changed_backups) == 1
         and "backup" in Path(changed_backups[0]).name.lower()
         and changed_backups[0] not in before_apply_files
-        and after_apply_files.get(changed_backups[0]) == input_digest
-        and before["native"] == after["native"]
+        and after_apply_files.get(changed_backups[0], {}).get("digest") == input_digest
+        and changed_all == allowed_global_changes
     )
     proof = {
-        "pre_migration_read_only": read.returncode == 0 and before == after_read,
+        "pre_migration_read_only": read_value is not None and before == after_read,
         "mutation_refused_with_guidance": hidden.returncode != 0 and copy_ready_migration_guidance(hidden_diagnostic, input_digest) and before_hidden == after_hidden and unchanged_after_hidden,
         "dry_run_bound_exact_digest": dry.returncode == 0 and dry_digest == input_digest and before_dry == after_dry and unchanged_after_dry,
         "stale_digest_refused_without_mutation": stale.returncode != 0 and before_stale == after_stale and unchanged_after_stale,
         "stale_refusal_copy_ready": copy_ready_migration_guidance(stale_diagnostic, input_digest),
         "migration_applied": bool(
             apply.returncode == 0
-            and type(migrated_schema) is int and migrated_schema == 3
-            and apply_value and type(apply_value.get("schema_version")) is int
-            and apply_value.get("schema_version") == 3
+            and type(migrated_schema) is int and migrated_schema == 4
+            and apply_value and _exact_int(apply_value.get("data", {}).get("schema_version"), 4)
             and allowed_apply_mutation
         ),
         "provenance_preserved": expected_provenance is not None and expected_provenance == observed_provenance,
-        "backup_verified": any(path.read_bytes() == fixture.read_bytes() for path in backups),
+        "backup_verified": any(path.read_bytes() == fixture_bytes for path in backups),
     }
     return all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof, **proof,
@@ -1342,6 +1529,57 @@ def canonical_allowed_locator(locator: Path | None, allowed_roots: tuple[Path, .
     return None
 
 
+def create_contained_marker(
+    locator: Path | None, allowed_roots: tuple[Path, ...], leaf: str, body: bytes,
+) -> Path | None:
+    """Create a new evidence leaf relative to the validated opened directory."""
+    canonical = canonical_allowed_locator(locator, allowed_roots)
+    if canonical is None or not leaf or leaf in {".", ".."} or "/" in leaf or "\\" in leaf:
+        return None
+    directory_fd: int | None = None
+    marker_fd: int | None = None
+    try:
+        expected = canonical.lstat()
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        directory_fd = os.open(canonical, flags)
+        opened = os.fstat(directory_fd)
+        current = canonical.lstat()
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+            or canonical_allowed_locator(locator, allowed_roots) != canonical
+        ):
+            return None
+        marker_fd = os.open(
+            leaf,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        current = canonical.lstat()
+        if (
+            (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+            or canonical_allowed_locator(locator, allowed_roots) != canonical
+        ):
+            os.close(marker_fd)
+            marker_fd = None
+            os.unlink(leaf, dir_fd=directory_fd)
+            return None
+        written = 0
+        while written < len(body):
+            written += os.write(marker_fd, body[written:])
+        os.fsync(marker_fd)
+        return canonical / leaf
+    except (FileExistsError, NotADirectoryError, OSError):
+        return None
+    finally:
+        if marker_fd is not None:
+            os.close(marker_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
 def package_identity(package: Path) -> dict[str, str]:
     """Calculate the canonical tree and manifest identities from package bytes."""
     manifest = package / "plugin.json"
@@ -1404,9 +1642,9 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     locator = data_locator(manager, "e2e-external-package")
     canonical_locator = canonical_allowed_locator(locator, (root, manager))
     safe_locator = canonical_locator is not None
-    marker = canonical_locator / "launch-marker.txt" if canonical_locator else root / "invalid-data-locator"
-    if safe_locator:
-        marker.write_text("stable-launch-marker")
+    marker = create_contained_marker(locator, (root, manager), "launch-marker.txt", b"stable-launch-marker")
+    safe_locator = marker is not None
+    marker = marker if marker is not None else root / "invalid-data-locator"
     update_manifest = json.loads((package / "plugin.json").read_text())
     update_manifest["version"] = "2.0.0"
     update_manifest["description"] = "Deterministic PLUGIN_DATA lifecycle fixture revision two."
@@ -1494,7 +1732,7 @@ def sticky_update_scenario(binary: Path, root: Path, challenge: str, context: di
     add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, initial_env)
     initial = manager_identity(manager, "context7")
     update, update_trace = traced_with_environment(binary, ["update", "context7", "--target", "cursor", "--format", "json"], root, challenge, update_env)
-    update_value = json_output(update)
+    update_value = json_output(update, "update")
     updated = manager_identity(manager, "context7")
     remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, update_env)
     after = observe(home, manager)
@@ -1690,8 +1928,9 @@ def external_activation_scenario(binary: Path, root: Path, challenge: str, conte
     add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
     combined = add.stdout + "\n" + add.stderr
     try:
-        result = json.loads(add.stdout)
-    except json.JSONDecodeError:
+        candidate = strict_json_loads(add.stdout)
+        result = candidate if validate_cli_envelope(candidate, "add") else {}
+    except (json.JSONDecodeError, ValueError):
         result = {}
     rendered = json.dumps(result, sort_keys=True).lower() + combined.lower()
     identity = manager_identity(manager, "context7")
@@ -1806,7 +2045,7 @@ def revoked_boundary_scenario(
     repair = execute(["repair", "context7", "--target", "cursor", "--format", "json"], revoked_env)
     identity_after_blocks = manager_identity(manager, "context7")
     update = execute(["update", "context7", "--target", "cursor", "--format", "json"], safe_env)
-    update_value = json_output(update)
+    update_value = json_output(update, "update")
     identity_after_update = manager_identity(manager, "context7")
     remove = execute(["remove", "context7", "--target", "cursor", "--format", "json"], safe_env)
 
@@ -1917,6 +2156,9 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, st
             passed and acquisition
             and acquisition["tree_digest"] == expected_tree_digest
             and acquisition["manifest_digest"] == expected_manifest_digest
+            and acquisition["source_repository"] == challenge_context["release"]["source_repository"]
+            and acquisition["source_revision"] == challenge_context["release"]["source_revision"]
+            and acquisition["source_path"] == challenge_context["release"]["source_path"]
         )
         proof = {
             **lifecycle_value,
