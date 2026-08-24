@@ -1072,6 +1072,8 @@ class DirectoryDomainTests(unittest.TestCase):
                     and runtime_root.is_dir()
                 ):
                     expected_minimum = registry.LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION
+                if distribution["id"] == "upstash/context7":
+                    expected_minimum = "0.1.13"
                 self.assertEqual(policy["minimum_installer_version"], expected_minimum)
             release = distribution["releases"][0]
             if release["package_source"]["revision"] is not None:
@@ -1101,8 +1103,15 @@ class DirectoryDomainTests(unittest.TestCase):
         )
         context7_resolution = registry.resolve_directory(source, "context7", ["codex"])
         self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("777genius/context7", 2))
-        with self.assertRaisesRegex(registry.RegistryError, r"upstash/context7: .* evidence .* for codex"):
-            registry.resolve_directory(source, "upstash/context7", ["codex"])
+        for target in ("codex", "cursor", "kiro"):
+            with self.subTest(target=target):
+                upstream = registry.resolve_directory(source, "upstash/context7", [target])
+                self.assertEqual(
+                    (upstream["distribution_id"], upstream["release_sequence"]),
+                    ("upstash/context7", 1),
+                )
+        with self.assertRaisesRegex(registry.RegistryError, r"upstash/context7: .* evidence .* for copilot"):
+            registry.resolve_directory(source, "upstash/context7", ["copilot"])
 
         context7 = next(
             product for product in registry.directory_preview(source)["products"]
@@ -1649,6 +1658,32 @@ class DirectoryDomainTests(unittest.TestCase):
             observation = next(item for item in fixture["evidence"] if item["id"] == evidence_id)
             observation[field] = value
             with self.subTest(field=field), self.assertRaisesRegex(registry.RegistryError, r"cursor$"):
+                registry.resolve_directory(fixture, "upstream/demo", ["cursor"])
+
+    def test_upstream_selection_requires_exact_current_materialization_tuple(self) -> None:
+        mutations = {
+            "missing pointer": None,
+            "other commit": ("source_revision", "0" * 40),
+            "other path": ("source_path", "plugins/other"),
+            "other tree digest": ("package_tree_digest", "sha256:" + "0" * 64),
+            "other manifest digest": ("manifest_digest", "sha256:" + "0" * 64),
+            "other CLI version": ("installer_version", "0.1.5"),
+            "other target": ("client", "codex"),
+        }
+        for label, mutation in mutations.items():
+            fixture = self.fixture()
+            upstream = self.promote_upstream(fixture, ("cursor",), set_default=False)
+            evidence_id = upstream["release_policies"][0]["current_evidence"][0]
+            observation = next(item for item in fixture["evidence"] if item["id"] == evidence_id)
+            if mutation is None:
+                upstream["release_policies"][0]["current_evidence"] = []
+            else:
+                field, value = mutation
+                observation[field] = value
+            with self.subTest(label=label), self.assertRaisesRegex(
+                registry.RegistryError,
+                r"upstream/demo: release 1 lacks current positive package compatibility evidence .* for cursor$",
+            ):
                 registry.resolve_directory(fixture, "upstream/demo", ["cursor"])
 
     def test_contribution_guide_keeps_alias_and_provenance_contract(self) -> None:

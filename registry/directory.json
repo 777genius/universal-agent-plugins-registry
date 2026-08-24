@@ -3308,7 +3308,7 @@
         {
           "release_sequence": 1,
           "status": "active",
-          "minimum_installer_version": "0.1.8",
+          "minimum_installer_version": "0.1.13",
           "targets": [
             {"client": "codex", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
             {"client": "cursor", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"},
@@ -3316,10 +3316,108 @@
             {"client": "vscode", "authentication": "not_required", "scopes": ["user"], "delivery": "prepared"},
             {"client": "kiro", "authentication": "not_required", "scopes": ["user"], "delivery": "managed"}
           ],
-          "current_evidence": []
+          "current_evidence": [
+            "context7/upstash-materialization-codex-cli-0.1.13",
+            "context7/upstash-materialization-cursor-cli-0.1.13",
+            "context7/upstash-materialization-kiro-cli-0.1.13"
+          ]
         }
       ]
     }
   ],
-  "evidence": []
+  "evidence": [
+    {
+      "schema_version": 1,
+      "id": "context7/upstash-materialization-codex-cli-0.1.13",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "codex",
+      "client_version": "not-invoked (filesystem materialization only)",
+      "installer_version": "0.1.13",
+      "adapter_version": "0.1.13",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "streamable-http:https://mcp.context7.com/mcp/oauth",
+      "observed_at": "2026-08-24T07:34:18Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins",
+        "revision": "eae64f4961c9179749bf37c119c75f6367cb771f",
+        "path": "registry/evidence/context7-upstream/cli-0.1.13/codex.json",
+        "digest": "sha256:22b92ff81d91b86be72f15ec055797c56645b3163c7f8b88cda28d89b65c7d20"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "context7/upstash-materialization-cursor-cli-0.1.13",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "cursor",
+      "client_version": "not-invoked (filesystem materialization only)",
+      "installer_version": "0.1.13",
+      "adapter_version": "0.1.13",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "streamable-http:https://mcp.context7.com/mcp/oauth",
+      "observed_at": "2026-08-24T07:34:18Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins",
+        "revision": "eae64f4961c9179749bf37c119c75f6367cb771f",
+        "path": "registry/evidence/context7-upstream/cli-0.1.13/cursor.json",
+        "digest": "sha256:a72fcd22e9dd00737699ddfb61967b054f8e99116f9c5eef40a7e30a2da0f91a"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "context7/upstash-materialization-kiro-cli-0.1.13",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "kiro",
+      "client_version": "not-invoked (filesystem materialization only)",
+      "installer_version": "0.1.13",
+      "adapter_version": "0.1.13",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "streamable-http:https://mcp.context7.com/mcp/oauth",
+      "observed_at": "2026-08-24T07:34:18Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins",
+        "revision": "eae64f4961c9179749bf37c119c75f6367cb771f",
+        "path": "registry/evidence/context7-upstream/cli-0.1.13/kiro.json",
+        "digest": "sha256:980a6b184fa1e70e409529b29d323f68dd6e296d703fcca45888c49c7bbe08f6"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    }
+  ]
 }

@@ -821,7 +821,11 @@ def build_candidate(
     validate_signing_boundary_packages(
         candidate_source, previous, repository_root, config["repository"], overrides,
     )
-    evidence = selected_evidence(candidate_source, set(distributions_by_id), config, overrides)
+    evidence_overrides = dict(overrides)
+    evidence_overrides.setdefault(config["repository"], repository_root)
+    evidence = selected_evidence(
+        candidate_source, set(distributions_by_id), config, evidence_overrides,
+    )
     validate_upstream_default_evidence(products, output_distributions, evidence)
     revocations = [
         {"distribution_id": distribution["id"], "release_sequence": policy["release_sequence"]}

@@ -1505,6 +1505,11 @@ def _positive_materialization_clients(
         if observation.get("distribution_id") == distribution["id"]
         and observation.get("release_sequence") == release["sequence"]
         and observation.get("package_tree_digest") == release["tree_digest"]
+        and observation.get("manifest_digest") == release["manifest_digest"]
+        and observation.get("source_repository") == release["package_source"]["repository"]
+        and observation.get("source_revision") == release["package_source"]["revision"]
+        and observation.get("source_path") == release["package_source"]["path"]
+        and observation.get("installer_version") == policy["minimum_installer_version"]
         and observation.get("level") == "materialization"
         and observation.get("outcome") == "passed"
     }

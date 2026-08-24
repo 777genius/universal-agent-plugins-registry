@@ -5909,8 +5909,25 @@
             "mcp",
             "skills"
           ],
-          "eligible_targets": [],
-          "current_evidence": [],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "current_evidence": [
+            "context7/upstash-materialization-codex-cli-0.1.13",
+            "context7/upstash-materialization-cursor-cli-0.1.13",
+            "context7/upstash-materialization-kiro-cli-0.1.13"
+          ],
           "source": {
             "repository": "upstash/context7",
             "revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
