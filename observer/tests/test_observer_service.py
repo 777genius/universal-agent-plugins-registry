@@ -1430,6 +1430,70 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                     {"egress.conf"},
                 )
 
+    def test_systemd_activation_rejects_atime_only_drift_after_journaling(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        units = (
+            "uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
+            "uap-observer-runner.socket", "uap-observer-caddy.service",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); systemd = root / "systemd"; staged = root / "staged"; backup = root / "backup"
+            systemd.mkdir(); staged.mkdir()
+            live = systemd / units[0]; live.write_text("original\n")
+            for unit in units:
+                (staged / unit).write_text(f"reviewed {unit}\n")
+            for service in ("uap-observer", "uap-observer-runner"):
+                directory = staged / f"{service}.service.d"; directory.mkdir(); (directory / "egress.conf").write_text("reviewed\n")
+            original = 1_700_000_000_000_000_000
+            os.utime(live, ns=(original, original + 1))
+            subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                 "sh", str(helper), str(backup), str(systemd)], check=True,
+            )
+            drifted = original + 123_456_789
+            os.utime(live, ns=(drifted, original + 1))
+            result = subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; activate_observer_systemd "$2" "$3" "$4"',
+                 "sh", str(helper), str(staged), str(systemd), str(backup)],
+                text=True, capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0, "atime-only drift was silently accepted")
+            self.assertEqual(live.stat().st_atime_ns, drifted)
+            self.assertEqual(live.read_text(), "original\n")
+
+    def test_interrupted_restore_retry_uses_durable_original_symlink_atime(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); systemd = root / "systemd"; backup = root / "backup"
+            systemd.mkdir()
+            unit = systemd / "uap-observer.service"; unit.write_text("original unit\n")
+            legacy = systemd / "legacy.service"; legacy.write_text("legacy\n")
+            link = systemd / "uap-observer-signer.service"; link.symlink_to(legacy.name)
+            original = 1_700_000_000_111_222_333
+            os.utime(unit, ns=(original, original + 1))
+            os.utime(link, ns=(original + 2, original + 3), follow_symlinks=False)
+            subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                 "sh", str(helper), str(backup), str(systemd)], check=True,
+            )
+            unit.write_text("mutated unit\n"); link.unlink(); link.write_text("mutated signer\n")
+            failed = subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; restore_observer_systemd "$2" "$3"',
+                 "sh", str(helper), str(backup), str(systemd)],
+                env=dict(os.environ, UAP_OBSERVER_REPLACE_FAIL_AT="2"), text=True, capture_output=True,
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            restored = subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; restore_observer_systemd "$2" "$3"',
+                 "sh", str(helper), str(backup), str(systemd)], text=True, capture_output=True,
+            )
+            self.assertEqual(restored.returncode, 0, restored.stderr)
+            self.assertEqual(unit.stat().st_atime_ns, original)
+            self.assertEqual(link.lstat().st_atime_ns, original + 2)
+            self.assertEqual(unit.read_text(), "original unit\n")
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(os.readlink(link), legacy.name)
+
     def test_systemd_atomic_replace_does_not_follow_raced_destination_symlink(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
         with tempfile.TemporaryDirectory() as temporary:
