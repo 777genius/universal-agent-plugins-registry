@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = c1d84c707e5eec11c8fbbc4ef74b3593fd245bbf3b679110c48740037fe8761e
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 9491e7e40eb962a4f852c00953a78758186921d134dc691502fc0a9c382ae2b8
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=286d110189a19dcafd4b8e56ad1ed1db53ccb64815a6a2a8c887cc7bb1e6639c
+runtime_manifest_digest=8bd166927694f0cac6a9153626c1a9dd71fe771288d3d620e79f5ef5c4a5062f
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -44,7 +44,7 @@ install_identity=$(observer_install_input_identity \
 if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   observer_validate_no_partial_paths
   observer_validate_completed_closure /opt/uap-observer-closures /opt/uap-observer-current "$install_identity"
-  installed_target=$(readlink /opt/uap-observer-current)
+  installed_target=$(observer_read_symlink_neutral /opt/uap-observer-current)
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" \

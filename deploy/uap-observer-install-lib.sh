@@ -5,6 +5,51 @@
 
 observer_units='uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service'
 
+# Control data is never consumed through a pathname-opening utility.  The
+# parent and object are pinned without following links and O_NOATIME keeps
+# validation and recovery from becoming metadata mutations themselves.
+observer_read_control_file() {
+  python3 - "$1" <<'PY'
+import os,stat,sys
+path=os.path.abspath(sys.argv[1]); parent_path=os.path.dirname(path); name=os.path.basename(path)
+dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+parent_info=os.stat(parent_path,follow_symlinks=False); parent=os.open(parent_path,dirflags)
+try:
+    if os.fstat(parent)!=parent_info: raise PermissionError("control parent changed while opening")
+    before=os.stat(name,dir_fd=parent,follow_symlinks=False); descriptor=os.open(name,fileflags,dir_fd=parent)
+    try:
+        if os.fstat(descriptor)!=before or not stat.S_ISREG(before.st_mode): raise PermissionError("control file changed while opening")
+        while True:
+            block=os.read(descriptor,1<<20)
+            if not block: break
+            os.write(1,block)
+        if os.fstat(descriptor)!=before: raise PermissionError("control file changed while reading")
+    finally: os.close(descriptor)
+finally: os.close(parent)
+PY
+}
+
+observer_read_symlink_neutral() {
+  python3 - "$1" <<'PY'
+import os,stat,sys
+path=os.path.abspath(sys.argv[1]); parent_path=os.path.dirname(path); name=os.path.basename(path)
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+parent_info=os.stat(parent_path,follow_symlinks=False); parent=os.open(parent_path,flags)
+try:
+    if os.fstat(parent)!=parent_info: raise PermissionError("symlink parent changed while opening")
+    before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    if not stat.S_ISLNK(before.st_mode): raise PermissionError("control symlink is unsafe")
+    value=os.readlink(name,dir_fd=parent)
+    os.utime(name,ns=(before.st_atime_ns,before.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
+    after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    fields=lambda value:(value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),value.st_uid,value.st_gid,value.st_atime_ns,value.st_mtime_ns,value.st_nlink)
+    if fields(after)!=fields(before): raise PermissionError("control symlink changed while reading")
+    os.write(1,os.fsencode(value))
+finally: os.close(parent)
+PY
+}
+
 # This is the authoritative inventory of every temporary name created by the
 # installer.  Both retry cleanup and the identical-install trust check consume
 # it so a newly added staging path cannot silently escape one of them.
@@ -172,7 +217,7 @@ observer_validate_completed_closure() {
   test "$(stat -c '%u:%g:%a' "$closures_root")" = "$expected_owner:755"
   test -L "$current_pointer"
   test "$(stat -c '%u:%g:%a' "$current_pointer")" = "$expected_owner:777"
-  target=$(readlink "$current_pointer")
+  target=$(observer_read_symlink_neutral "$current_pointer")
   digest=${target#uap-observer-closures/}
   printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || {
     echo "observer current pointer is invalid" >&2
@@ -189,8 +234,8 @@ observer_validate_completed_closure() {
     test ! -L "$closure/$marker"
     test "$(stat -c '%u:%g:%a' "$closure/$marker")" = "$expected_owner:644"
   done
-  test "$(cat "$closure/.complete")" = complete-v1
-  test "$(cat "$closure/.install-identity")" = "$expected_install_identity"
+  test "$(observer_read_control_file "$closure/.complete")" = complete-v1
+  test "$(observer_read_control_file "$closure/.install-identity")" = "$expected_install_identity"
   actual_identity=$(observer_closure_identity "$closure")
   test "$actual_identity" = "$digest"
   test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$config_gid:640:1"
@@ -417,8 +462,10 @@ observer_validate_systemd_topology() {
   python3 - "$1" <<'PY'
 import os,stat,sys
 flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+root_before=os.stat(sys.argv[1],follow_symlinks=False)
 rootfd=os.open(sys.argv[1],flags)
 info=os.fstat(rootfd)
+if info!=root_before: raise PermissionError("systemd root changed while opening")
 if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
         or info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022):
     raise SystemExit("systemd root is unsafe")
@@ -428,19 +475,22 @@ allowed=set(units+dropins)
 actual={name for name in os.listdir(rootfd) if name.startswith("uap-observer")}
 if actual - allowed: raise SystemExit("systemd observer inventory contains an unexpected target")
 
-def validate_dropin(parentfd: int, name: str) -> None:
+def validate_dropin(parentfd: int, name: str, before: os.stat_result) -> None:
     directory=os.open(name,flags,dir_fd=parentfd)
     try:
+        info=os.fstat(directory)
+        if info!=before: raise PermissionError("systemd drop-in changed while opening")
         for child_name in os.listdir(directory):
             child_info=os.stat(child_name,dir_fd=directory,follow_symlinks=False)
             if child_info.st_uid != 0 or child_info.st_gid != 0 or child_info.st_mode & 0o022:
                 raise SystemExit("systemd drop-in is not root-controlled")
             if stat.S_ISDIR(child_info.st_mode):
-                validate_dropin(directory,child_name)
+                validate_dropin(directory,child_name,child_info)
             elif stat.S_ISREG(child_info.st_mode):
                 if child_info.st_nlink != 1: raise SystemExit("systemd drop-in regular file has unsafe link count")
             else:
                 raise SystemExit("systemd drop-in contains unsafe topology")
+        if os.fstat(directory)!=info: raise PermissionError("systemd drop-in changed during traversal")
     finally: os.close(directory)
 
 for name in units+dropins:
@@ -457,7 +507,8 @@ for name in units+dropins:
         continue
     if not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode):
         raise SystemExit("systemd drop-in directory is unsafe")
-    validate_dropin(rootfd,name)
+    validate_dropin(rootfd,name,item)
+if os.fstat(rootfd)!=info: raise PermissionError("systemd root changed during traversal")
 os.close(rootfd)
 PY
 }
@@ -474,6 +525,13 @@ names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner
 dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 
+def open_directory(name,*,dir_fd=None):
+    before=os.stat(name,dir_fd=dir_fd,follow_symlinks=False)
+    descriptor=os.open(name,dirflags,dir_fd=dir_fd)
+    if os.fstat(descriptor)!=before:
+        os.close(descriptor); raise PermissionError("systemd directory changed while opening")
+    return descriptor,before
+
 def metadata(info):
     return {"type":stat.S_IFMT(info.st_mode),"mode":stat.S_IMODE(info.st_mode),"uid":info.st_uid,"gid":info.st_gid,"atime":info.st_atime_ns,"mtime":info.st_mtime_ns,"nlink":info.st_nlink}
 def proc_link(parent,name): return f"/proc/self/fd/{parent}/{name}"
@@ -485,25 +543,23 @@ def set_xattrs(parent,name,info,values,descriptor=None):
     for encoded,value in values:
         key=os.fsdecode(base64.b64decode(encoded)); data=base64.b64decode(value)
         os.setxattr(target,key,data,follow_symlinks=not stat.S_ISLNK(info.st_mode))
-def stable_link(parent,name,info,canonical_atime=None):
+def stable_link(parent,name,info):
     target=os.readlink(name,dir_fd=parent)
-    atime=info.st_atime_ns if canonical_atime is None else canonical_atime
-    os.utime(name,ns=(atime,info.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
+    os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
     after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-    if (after.st_dev,after.st_ino,stat.S_IFMT(after.st_mode),after.st_mtime_ns)!=(info.st_dev,info.st_ino,stat.S_IFMT(info.st_mode),info.st_mtime_ns):
+    if metadata(after)!=metadata(info) or (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino):
         raise PermissionError("systemd symlink changed while reading")
     return target
 def trusted(info,link=False):
     if info.st_uid!=0 or info.st_gid!=0 or (not link and info.st_mode&0o022): raise PermissionError("systemd target is not root-controlled")
 
-def scan(parent,name,prefix,*,durable=None,allow_link=True):
+def scan(parent,name,prefix,*,allow_link=True):
     info=os.stat(name,dir_fd=parent,follow_symlinks=False); mode=info.st_mode
-    record=metadata(info); record["path"]=prefix
-    expected=(durable or {}).get(prefix)
     if stat.S_ISREG(mode):
         trusted(info); descriptor=os.open(name,fileflags,dir_fd=parent)
         try:
             if os.fstat(descriptor)!=info: raise PermissionError("systemd file changed while reading")
+            info=os.fstat(descriptor); record=metadata(info); record["path"]=prefix
             digest=hashlib.sha256()
             while True:
                 block=os.read(descriptor,1<<20)
@@ -512,23 +568,26 @@ def scan(parent,name,prefix,*,durable=None,allow_link=True):
             record["payload"]=digest.hexdigest(); record["xattrs"]=xattrs(parent,name,info,descriptor)
         finally: os.close(descriptor)
     elif stat.S_ISDIR(mode):
-        trusted(info); descriptor=os.open(name,dirflags,dir_fd=parent)
+        trusted(info); descriptor,opened=open_directory(name,dir_fd=parent)
         try:
-            if os.fstat(descriptor)!=info: raise PermissionError("systemd directory changed while reading")
+            if opened!=info: raise PermissionError("systemd directory changed while reading")
+            info=os.fstat(descriptor); record=metadata(info); record["path"]=prefix
             record["xattrs"]=xattrs(parent,name,info,descriptor)
             children=[]
             for child in sorted(os.listdir(descriptor)):
-                children.extend(scan(descriptor,child,prefix+"/"+child,durable=durable,allow_link=False))
+                children.extend(scan(descriptor,child,prefix+"/"+child,allow_link=False))
             record["children"]=[child for child in sorted(os.listdir(descriptor))]
+            if os.fstat(descriptor)!=info: raise PermissionError("systemd directory changed while reading")
         finally: os.close(descriptor)
         return [record]+children
     elif stat.S_ISLNK(mode):
         if not allow_link: raise PermissionError("systemd drop-in contains a symlink")
         trusted(info,True)
-        canonical=expected["atime"] if expected is not None else None
-        record["payload"]=stable_link(parent,name,info,canonical)
-        if canonical is not None: record["atime"]=canonical
+        record=metadata(info); record["path"]=prefix
+        record["payload"]=stable_link(parent,name,info)
         record["xattrs"]=xattrs(parent,name,info)
+        after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        if metadata(after)!=metadata(info) or (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino): raise PermissionError("systemd symlink changed while reading")
     else: raise PermissionError("systemd target has unsafe type")
     if stat.S_ISREG(mode) and info.st_nlink!=1: raise PermissionError("systemd regular target has unsafe link count")
     return [record]
@@ -550,17 +609,22 @@ def copy(parent,name,destination,dstname,prefix,allow_link=True):
             os.utime(target,ns=(info.st_atime_ns,info.st_mtime_ns)); os.fsync(target)
         finally: os.close(target); os.close(source)
     elif stat.S_ISDIR(mode):
-        trusted(info); source=os.open(name,dirflags,dir_fd=parent); os.mkdir(dstname,0o700,dir_fd=destination); target=os.open(dstname,dirflags,dir_fd=destination)
+        trusted(info); source,opened=open_directory(name,dir_fd=parent); os.mkdir(dstname,0o700,dir_fd=destination); target,_=open_directory(dstname,dir_fd=destination)
         try:
-            if os.fstat(source)!=info: raise PermissionError("systemd directory changed while snapshotting")
+            if opened!=info: raise PermissionError("systemd directory changed while snapshotting")
+            info=os.fstat(source)
             for child in sorted(os.listdir(source)): copy(source,child,target,child,prefix+"/"+child,False)
             os.fchown(target,info.st_uid,info.st_gid); os.fchmod(target,stat.S_IMODE(mode)); set_xattrs(destination,dstname,info,xattrs(parent,name,info,source),target)
             os.utime(target,ns=(info.st_atime_ns,info.st_mtime_ns)); os.fsync(target)
+            if os.fstat(source)!=info: raise PermissionError("systemd directory changed while snapshotting")
         finally: os.close(target); os.close(source)
     elif stat.S_ISLNK(mode):
         if not allow_link: raise PermissionError("systemd drop-in contains a symlink")
-        trusted(info,True); target_text=stable_link(parent,name,info); os.symlink(target_text,dstname,dir_fd=destination)
-        os.chown(dstname,info.st_uid,info.st_gid,dir_fd=destination,follow_symlinks=False); set_xattrs(destination,dstname,info,xattrs(parent,name,info))
+        trusted(info,True); target_text=stable_link(parent,name,info); attributes=xattrs(parent,name,info)
+        after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        if metadata(after)!=metadata(info) or (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino): raise PermissionError("systemd symlink changed while snapshotting")
+        os.symlink(target_text,dstname,dir_fd=destination)
+        os.chown(dstname,info.st_uid,info.st_gid,dir_fd=destination,follow_symlinks=False); set_xattrs(destination,dstname,info,attributes)
         os.utime(dstname,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=destination,follow_symlinks=False)
     else: raise PermissionError("systemd target has unsafe type")
 
@@ -581,28 +645,26 @@ def write_file(directory,name,data):
     try: os.write(descriptor,data); os.fchown(descriptor,0,0); os.fchmod(descriptor,0o600); os.fsync(descriptor)
     finally: os.close(descriptor)
 def load_archive():
-    backup=os.open(backup_path,dirflags)
-    info=os.fstat(backup)
+    backup,info=open_directory(backup_path)
     if info.st_uid or info.st_gid or stat.S_IMODE(info.st_mode)!=0o700: raise PermissionError("journal root is unsafe")
-    items=os.open("items",dirflags,dir_fd=backup)
-    item_info=os.fstat(items)
+    items,item_info=open_directory("items",dir_fd=backup)
     if item_info.st_uid or item_info.st_gid or stat.S_IMODE(item_info.st_mode)!=0o700: raise PermissionError("journal items are unsafe")
     manifest=read_file(backup,"manifest")
     identity=json.loads(read_file(backup,"identity.json"))
     expected_manifest=b"".join((b"present " if name in identity["present"] else b"missing ")+str(index).encode()+b" "+name.encode()+b"\n" for index,name in enumerate(names))
     if manifest!=expected_manifest or identity.get("version")!=1: raise PermissionError("installer recovery journal is invalid")
-    return backup,items,identity
+    return backup,items,identity,info,item_info
 
 if operation=="create":
     parent_path=os.path.dirname(backup_path) or "."; leaf=os.path.basename(backup_path)
-    parent=os.open(parent_path,dirflags); live=os.open(live_path,dirflags)
+    parent,_=open_directory(parent_path); live,rootinfo=open_directory(live_path)
     created=False
     try:
-        rootinfo=os.fstat(live); trusted(rootinfo)
+        trusted(rootinfo)
         if not stat.S_ISDIR(rootinfo.st_mode): raise PermissionError("systemd root is unsafe")
         allowed=set(names); actual={name for name in os.listdir(live) if name.startswith("uap-observer")}
         if actual-allowed: raise PermissionError("systemd observer inventory contains an unexpected target")
-        os.mkdir(leaf,0o700,dir_fd=parent); created=True; backup=os.open(leaf,dirflags,dir_fd=parent); os.mkdir("items",0o700,dir_fd=backup); items=os.open("items",dirflags,dir_fd=backup)
+        os.mkdir(leaf,0o700,dir_fd=parent); created=True; backup,_=open_directory(leaf,dir_fd=parent); os.mkdir("items",0o700,dir_fd=backup); items,_=open_directory("items",dir_fd=backup)
         try:
             present=[]; records=[]
             for index,name in enumerate(names):
@@ -611,8 +673,8 @@ if operation=="create":
                 if index<5 and not (stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode)): raise PermissionError("systemd unit target has unsafe type")
                 if index>=5 and not stat.S_ISDIR(entry.st_mode): raise PermissionError("systemd drop-in target has unsafe type")
                 copy(live,name,items,str(index),name,index<5); present.append(name); records.extend(scan(live,name,name,allow_link=index<5))
+            if os.fstat(live)!=rootinfo: raise PermissionError("systemd root changed while snapshotting")
             identity={"version":1,"present":present,"records":records}
-            durable={record["path"]:record for record in records}
             copied=[]
             for index,name in enumerate(names):
                 if name in present: copied.extend(scan(items,str(index),name,allow_link=index<5))
@@ -632,19 +694,21 @@ if operation=="create":
         try: os.close(parent)
         except OSError: pass
 elif operation=="manifest":
-    backup,items,identity=load_archive()
-    try: os.write(1,read_file(backup,"manifest"))
+    backup,items,identity,backup_info,item_info=load_archive()
+    try:
+        os.write(1,read_file(backup,"manifest"))
+        if os.fstat(backup)!=backup_info or os.fstat(items)!=item_info: raise PermissionError("journal directory changed while reading")
     finally: os.close(items); os.close(backup)
 elif operation in ("validate","compare"):
-    backup,items,identity=load_archive()
+    backup,items,identity,backup_info,item_info=load_archive()
     try:
-        durable={record["path"]:record for record in identity["records"]}; actual=[]
+        actual=[]
         if set(os.listdir(items))!={str(names.index(name)) for name in identity["present"]}: raise PermissionError("journal inventory differs")
         for index,name in enumerate(names):
-            if name in identity["present"]: actual.extend(scan(items,str(index),name,durable=durable,allow_link=index<5))
+            if name in identity["present"]: actual.extend(scan(items,str(index),name,allow_link=index<5))
         if actual!=identity["records"]: raise PermissionError("journal payload differs")
         if operation=="compare":
-            live=os.open(live_path,dirflags)
+            live,live_info=open_directory(live_path)
             try:
                 current=[]
                 for name in names:
@@ -655,7 +719,9 @@ elif operation in ("validate","compare"):
                         if name not in identity["present"]: raise PermissionError("systemd target appeared after journaling")
                         current.extend(scan(live,name,name,allow_link=names.index(name)<5))
                 if current!=identity["records"]: raise PermissionError("systemd target drifted after journaling")
+                if os.fstat(live)!=live_info: raise PermissionError("systemd root changed while comparing")
             finally: os.close(live)
+        if os.fstat(backup)!=backup_info or os.fstat(items)!=item_info: raise PermissionError("journal directory changed while validating")
     finally: os.close(items); os.close(backup)
 else: raise SystemExit("invalid journal operation")
 PY
@@ -683,7 +749,9 @@ root_path=sys.argv[1]
 pairs=sys.argv[2:]
 if not pairs or len(pairs) % 2: raise SystemExit("invalid systemd replacement arguments")
 flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+root_lstat=os.stat(root_path,follow_symlinks=False)
 rootfd=os.open(root_path,flags)
+if os.fstat(rootfd)!=root_lstat: raise PermissionError("systemd root changed while opening")
 source_parents={}
 libc=ctypes.CDLL(None,use_errno=True)
 renameat2=getattr(libc,"renameat2",None)
@@ -764,7 +832,22 @@ def same_entry(first: os.stat_result, second: os.stat_result) -> bool:
     return first.st_dev == second.st_dev and first.st_ino == second.st_ino and stat.S_IFMT(first.st_mode) == stat.S_IFMT(second.st_mode)
 
 def exact_metadata(info: os.stat_result, copied: os.stat_result) -> bool:
-    return (stat.S_IMODE(info.st_mode),info.st_uid,info.st_gid,info.st_atime_ns,info.st_mtime_ns) == (stat.S_IMODE(copied.st_mode),copied.st_uid,copied.st_gid,copied.st_atime_ns,copied.st_mtime_ns)
+    return (stat.S_IFMT(info.st_mode),stat.S_IMODE(info.st_mode),info.st_uid,info.st_gid,info.st_atime_ns,info.st_mtime_ns,info.st_nlink) == (stat.S_IFMT(copied.st_mode),stat.S_IMODE(copied.st_mode),copied.st_uid,copied.st_gid,copied.st_atime_ns,copied.st_mtime_ns,copied.st_nlink)
+
+def neutral_readlink(parentfd: int, name: str, info: os.stat_result) -> str:
+    value=os.readlink(name,dir_fd=parentfd)
+    os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parentfd,follow_symlinks=False)
+    after=os.stat(name,dir_fd=parentfd,follow_symlinks=False)
+    if not same_entry(info,after) or not exact_metadata(info,after):
+        raise PermissionError("systemd symlink changed while reading")
+    return value
+
+def open_directory(name, *, dir_fd=None):
+    before=os.stat(name,dir_fd=dir_fd,follow_symlinks=False)
+    descriptor=os.open(name,flags,dir_fd=dir_fd)
+    if os.fstat(descriptor)!=before:
+        os.close(descriptor); raise PermissionError("systemd directory changed while opening")
+    return descriptor,before
 
 def sync_xattrs_link(srcfd: int, srcname: str, dstfd: int, dstname: str, info: os.stat_result) -> None:
     source=link_path(srcfd,srcname); destination=link_path(dstfd,dstname)
@@ -813,10 +896,11 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
     elif stat.S_ISDIR(mode):
         trusted(info)
         os.mkdir(dstname,0o700,dir_fd=dstfd)
-        infd=os.open(srcname,flags,dir_fd=srcfd)
-        outfd=os.open(dstname,flags,dir_fd=dstfd)
+        infd,opened=open_directory(srcname,dir_fd=srcfd)
+        outfd,_=open_directory(dstname,dir_fd=dstfd)
         try:
-            if os.fstat(infd) != info: raise PermissionError("systemd source changed while copying")
+            if opened != info: raise PermissionError("systemd source changed while copying")
+            info=os.fstat(infd)
             for child in os.listdir(infd): copy_entry(infd,child,outfd,child)
             os.fchown(outfd,info.st_uid,info.st_gid)
             os.fchmod(outfd,stat.S_IMODE(mode))
@@ -824,11 +908,12 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
             os.utime(outfd,ns=(info.st_atime_ns,info.st_mtime_ns))
             os.fsync(outfd)
             if not exact_metadata(info,os.fstat(outfd)): raise OSError("systemd directory metadata differs after copy")
+            if os.fstat(infd) != info: raise PermissionError("systemd source changed while copying")
         finally:
             os.close(outfd); os.close(infd)
     elif stat.S_ISLNK(mode):
         trusted(info,link=True)
-        os.symlink(os.readlink(srcname,dir_fd=srcfd),dstname,dir_fd=dstfd)
+        os.symlink(neutral_readlink(srcfd,srcname,info),dstname,dir_fd=dstfd)
         os.chown(dstname,info.st_uid,info.st_gid,dir_fd=dstfd,follow_symlinks=False)
         sync_xattrs_link(srcfd,srcname,dstfd,dstname,info)
         os.utime(dstname,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=dstfd,follow_symlinks=False)
@@ -840,18 +925,60 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
 def remove_entry(parentfd: int, child: str) -> None:
     info=os.stat(child,dir_fd=parentfd,follow_symlinks=False)
     if stat.S_ISDIR(info.st_mode):
-        childfd=os.open(child,flags,dir_fd=parentfd)
+        childfd,opened=open_directory(child,dir_fd=parentfd)
         try:
+            if opened!=info: raise PermissionError("systemd directory changed while removing")
+            info=os.fstat(childfd)
             for nested in os.listdir(childfd): remove_entry(childfd,nested)
+            if not same_entry(info,os.fstat(childfd)): raise PermissionError("systemd directory changed while removing")
         finally: os.close(childfd)
         os.rmdir(child,dir_fd=parentfd)
     else:
         os.unlink(child,dir_fd=parentfd)
 
+def fingerprint(parentfd: int, name: str, *, allow_link=True):
+    info=os.stat(name,dir_fd=parentfd,follow_symlinks=False)
+    common=(stat.S_IFMT(info.st_mode),stat.S_IMODE(info.st_mode),info.st_uid,info.st_gid,info.st_atime_ns,info.st_mtime_ns,info.st_nlink)
+    if stat.S_ISREG(info.st_mode):
+        descriptor=os.open(name,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=parentfd)
+        try:
+            if os.fstat(descriptor)!=info: raise PermissionError("systemd file changed while binding")
+            digest=hashlib.sha256()
+            while True:
+                block=os.read(descriptor,1<<20)
+                if not block: break
+                digest.update(block)
+            attrs=tuple((key,xattr_value(fgetxattr,descriptor,key)) for key in sorted(xattr_names(flistxattr,descriptor)))
+            if os.fstat(descriptor)!=info: raise PermissionError("systemd file changed while binding")
+            return common,digest.digest(),attrs
+        finally: os.close(descriptor)
+    if stat.S_ISDIR(info.st_mode):
+        descriptor,opened=open_directory(name,dir_fd=parentfd)
+        try:
+            if opened!=info: raise PermissionError("systemd directory changed while binding")
+            attrs=tuple((key,xattr_value(fgetxattr,descriptor,key)) for key in sorted(xattr_names(flistxattr,descriptor)))
+            children=tuple((child,fingerprint(descriptor,child,allow_link=False)) for child in sorted(os.listdir(descriptor)))
+            if os.fstat(descriptor)!=info: raise PermissionError("systemd directory changed while binding")
+            return common,attrs,children
+        finally: os.close(descriptor)
+    if stat.S_ISLNK(info.st_mode) and allow_link:
+        target=link_path(parentfd,name)
+        attrs=tuple((key,xattr_value(lgetxattr,target,key)) for key in sorted(xattr_names(llistxattr,target)))
+        return common,neutral_readlink(parentfd,name,info),attrs
+    raise PermissionError("systemd topology changed while binding")
+
+expected_records={}
+expected_present=None
+expected_inventory=None
+
+def observer_inventory() -> set[str]:
+    return {name for name in os.listdir(rootfd) if name.startswith("uap-observer")}
+
 def journal_precondition() -> None:
+    global expected_records,expected_present,expected_inventory
     backup_path=os.environ.get("UAP_OBSERVER_COMPARE_BACKUP")
     if not backup_path: return
-    backup=os.open(backup_path,flags)
+    backup,_=open_directory(backup_path)
     try:
         control=os.open("identity.json",os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=backup)
         try:
@@ -872,13 +999,15 @@ def journal_precondition() -> None:
             target=link_path(parent,name); names_=xattr_names(llistxattr,target); getter=lgetxattr
         else: target=descriptor; names_=xattr_names(flistxattr,target); getter=fgetxattr
         return [[base64.b64encode(key).decode(),base64.b64encode(xattr_value(getter,target,key)).decode()] for key in sorted(names_)]
-    def visit(parent,name,path,allow_link=True):
+    def visit(parent,name,path,allow_link=True,output=None):
+        if output is None: output=records
         info=os.stat(name,dir_fd=parent,follow_symlinks=False); mode=info.st_mode
-        record={"path":path,"type":stat.S_IFMT(mode),"mode":stat.S_IMODE(mode),"uid":info.st_uid,"gid":info.st_gid,"atime":info.st_atime_ns,"mtime":info.st_mtime_ns,"nlink":info.st_nlink}
         if stat.S_ISREG(mode):
             descriptor=os.open(name,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=parent)
             try:
                 if os.fstat(descriptor)!=info: raise PermissionError("systemd target changed before replacement")
+                info=os.fstat(descriptor)
+                record={"path":path,"type":stat.S_IFMT(info.st_mode),"mode":stat.S_IMODE(info.st_mode),"uid":info.st_uid,"gid":info.st_gid,"atime":info.st_atime_ns,"mtime":info.st_mtime_ns,"nlink":info.st_nlink}
                 digest=hashlib.sha256()
                 while True:
                     block=os.read(descriptor,1<<20)
@@ -887,20 +1016,25 @@ def journal_precondition() -> None:
                 record["payload"]=digest.hexdigest(); record["xattrs"]=attrs(parent,name,info,descriptor)
             finally: os.close(descriptor)
         elif stat.S_ISDIR(mode):
-            descriptor=os.open(name,flags,dir_fd=parent)
+            descriptor,opened=open_directory(name,dir_fd=parent)
             try:
+                if opened!=info: raise PermissionError("systemd directory changed before replacement")
+                info=os.fstat(descriptor)
+                record={"path":path,"type":stat.S_IFMT(info.st_mode),"mode":stat.S_IMODE(info.st_mode),"uid":info.st_uid,"gid":info.st_gid,"atime":info.st_atime_ns,"mtime":info.st_mtime_ns,"nlink":info.st_nlink}
                 children=sorted(os.listdir(descriptor)); record["children"]=children; record["xattrs"]=attrs(parent,name,info,descriptor)
-                records.append(record)
-                for child in children: visit(descriptor,child,path+"/"+child,False)
+                output.append(record)
+                for child in children: visit(descriptor,child,path+"/"+child,False,output)
+                if os.fstat(descriptor)!=info: raise PermissionError("systemd directory changed before replacement")
             finally: os.close(descriptor)
             return
         elif stat.S_ISLNK(mode) and allow_link:
-            record["payload"]=os.readlink(name,dir_fd=parent)
-            os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
-            if not same_entry(info,os.stat(name,dir_fd=parent,follow_symlinks=False)): raise PermissionError("systemd symlink changed before replacement")
+            record={"path":path,"type":stat.S_IFMT(mode),"mode":stat.S_IMODE(mode),"uid":info.st_uid,"gid":info.st_gid,"atime":info.st_atime_ns,"mtime":info.st_mtime_ns,"nlink":info.st_nlink}
+            record["payload"]=neutral_readlink(parent,name,info)
             record["xattrs"]=attrs(parent,name,info)
+            after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            if not same_entry(info,after) or not exact_metadata(info,after): raise PermissionError("systemd symlink changed before replacement")
         else: raise PermissionError("systemd topology changed before replacement")
-        records.append(record)
+        output.append(record)
     for index,name in enumerate(names):
         try: os.stat(name,dir_fd=rootfd,follow_symlinks=False)
         except FileNotFoundError:
@@ -909,6 +1043,18 @@ def journal_precondition() -> None:
             if name not in present: raise PermissionError("systemd target appeared before replacement")
             visit(rootfd,name,name,index<5)
     if records!=expected: raise PermissionError("systemd target drifted immediately before replacement")
+    expected_present=present
+    expected_inventory=set(present)
+    if observer_inventory()!=expected_inventory: raise PermissionError("systemd observer inventory changed before replacement")
+    expected_records={name:[record for record in expected if record["path"]==name or record["path"].startswith(name+"/")] for name in present}
+
+    globals()["capture_visit"]=visit
+
+def validate_capture(name: str, displaced: str) -> None:
+    captured=[]
+    capture_visit(rootfd,displaced,name,names.index(name)<5,captured)
+    if captured!=expected_records[name]:
+        raise PermissionError("systemd destination raced after validation")
 
 def replace(source_arg: str, name: str) -> None:
     if not name or "/" in name or name in (".",".."):
@@ -917,13 +1063,19 @@ def replace(source_arg: str, name: str) -> None:
     displaced=exclusive_name("uap-observer-old")
     created=False
     moved=False
+    installed=False
+    baseline_missing=False
+    baseline=None
     try:
+        if expected_present is None:
+            try: baseline=fingerprint(rootfd,name)
+            except FileNotFoundError: baseline_missing=True
         if source_arg != "-":
             source=Path(source_arg)
             parent=os.fspath(source.parent)
             source_parent=source_parents.get(parent)
             if source_parent is None:
-                source_parent=os.open(parent,flags)
+                source_parent,_=open_directory(parent)
                 source_parents[parent]=source_parent
             copy_entry(source_parent,source.name,rootfd,temporary)
             created=True
@@ -931,22 +1083,44 @@ def replace(source_arg: str, name: str) -> None:
         if not precondition_done:
             journal_precondition()
             precondition_done=True
-        try:
+        if expected_inventory is not None and observer_inventory()!=expected_inventory:
+            raise PermissionError("systemd observer inventory changed before replacement")
+        if expected_present is not None and name in expected_present:
             rename_noreplace(rootfd,name,rootfd,displaced)
             moved=True
-        except FileNotFoundError:
-            pass
+            if observer_inventory()!=expected_inventory-{name}:
+                raise PermissionError("systemd observer inventory changed before replacement")
+            validate_capture(name,displaced)
+        elif expected_present is not None and name not in expected_present:
+            if os.path.lexists(link_path(rootfd,name)):
+                raise PermissionError("systemd missing destination raced after validation")
+        else:
+            if baseline_missing:
+                pass
+            else:
+                rename_noreplace(rootfd,name,rootfd,displaced)
+                moved=True
+                if observer_inventory()!=expected_inventory-{name}:
+                    raise PermissionError("systemd observer inventory changed before replacement")
+                if fingerprint(rootfd,displaced)!=baseline:
+                    raise PermissionError("systemd destination raced after validation")
         if created:
-            os.rename(temporary,name,src_dir_fd=rootfd,dst_dir_fd=rootfd)
+            rename_noreplace(rootfd,temporary,rootfd,name)
             created=False
+            installed=True
+            if expected_inventory is not None: expected_inventory.add(name)
         os.fsync(rootfd)
         if moved:
             remove_entry(rootfd,displaced)
             moved=False
+            if expected_inventory is not None and source_arg == "-": expected_inventory.discard(name)
             os.fsync(rootfd)
     except BaseException:
+        if installed:
+            try: remove_entry(rootfd,name); installed=False
+            except OSError: pass
         if moved:
-            try: rename_noreplace(rootfd,displaced,rootfd,name)
+            try: rename_noreplace(rootfd,displaced,rootfd,name); moved=False
             except OSError: pass
         if created:
             try: remove_entry(rootfd,temporary)
@@ -962,6 +1136,8 @@ try:
     if stale: os.fsync(rootfd)
     fail_at=int(os.environ.get("UAP_OBSERVER_REPLACE_FAIL_AT") or 0)
     precondition_done=False
+    if not os.environ.get("UAP_OBSERVER_COMPARE_BACKUP"):
+        expected_inventory=observer_inventory()
     for index in range(0,len(pairs),2):
         replace(pairs[index],pairs[index+1])
         if fail_at == index // 2 + 1: raise SystemExit(1)
@@ -1018,7 +1194,7 @@ recover_observer_install() {
     journal_resolved=1
     test -f "$stage/journal-resolved" && test ! -L "$stage/journal-resolved" || return 1
     test "$(stat -c '%u:%g:%a:%h' "$stage/journal-resolved")" = 0:0:600:1 || return 1
-    test "$(cat "$stage/journal-resolved")" = resolved-v1 || return 1
+    test "$(observer_read_control_file "$stage/journal-resolved")" = resolved-v1 || return 1
   elif [ ! -e "$stage/journal-committed" ] && [ ! -L "$stage/journal-committed" ]; then
     # The atomic marker is the sole durable proof that mutation could begin.
     python3 - "$stage" <<'PY' || return 1
@@ -1043,10 +1219,10 @@ PY
     journal_committed=1
     test -f "$stage/journal-committed" && test ! -L "$stage/journal-committed" || return 1
     test "$(stat -c '%u:%g:%a:%h' "$stage/journal-committed")" = 0:0:600:1 || return 1
-    test "$(cat "$stage/journal-committed")" = committed-v1 || return 1
+    test "$(observer_read_control_file "$stage/journal-committed")" = committed-v1 || return 1
     test -f "$stage/closure-digest" && test ! -L "$stage/closure-digest" || return 1
     test "$(stat -c '%u:%g:%a:%h' "$stage/closure-digest")" = 0:0:600:1 || return 1
-    recovered_digest=$(cat "$stage/closure-digest")
+    recovered_digest=$(observer_read_control_file "$stage/closure-digest")
     printf '%s\n' "$recovered_digest" | grep -Eq '^[0-9a-f]{64}$' || return 1
     validate_observer_systemd_journal "$stage/systemd-backup" || return 1
     test -d "$closures_root" && test ! -L "$closures_root" || return 1
@@ -1055,7 +1231,7 @@ PY
     # only permitted to accept the exact journaled closure in that case.
     if [ -e "$current_pointer" ] || [ -L "$current_pointer" ]; then
       test -L "$current_pointer" || return 1
-      test "$(readlink "$current_pointer")" = "uap-observer-closures/$recovered_digest" || return 1
+      test "$(observer_read_symlink_neutral "$current_pointer")" = "uap-observer-closures/$recovered_digest" || return 1
       test -d "$closures_root/$recovered_digest" || return 1
       test ! -L "$closures_root/$recovered_digest" || return 1
       observer_sync_directory "$(dirname "$current_pointer")" || return 1
@@ -1132,7 +1308,7 @@ def link(parent,name,info):
     value=os.readlink(name,dir_fd=parent)
     os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
     after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-    if (after.st_dev,after.st_ino,after.st_mtime_ns)!=(info.st_dev,info.st_ino,info.st_mtime_ns): raise PermissionError("systemd symlink changed during comparison")
+    if (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino) or metadata(after)!=metadata(info): raise PermissionError("systemd symlink changed during comparison")
     return value
 def compare(first,name,second):
     left=os.stat(name,dir_fd=first,follow_symlinks=False); right=os.stat(name,dir_fd=second,follow_symlinks=False)
@@ -1150,17 +1326,23 @@ def compare(first,name,second):
     elif stat.S_ISDIR(left.st_mode):
         a=os.open(name,dirflags,dir_fd=first); b=os.open(name,dirflags,dir_fd=second)
         try:
+            if os.fstat(a)!=left or os.fstat(b)!=right: raise PermissionError("systemd directory changed during comparison")
+            left=os.fstat(a); right=os.fstat(b)
             if attributes(first,name,left,a)!=attributes(second,name,right,b): raise SystemExit("systemd xattrs differ")
             children=sorted(os.listdir(a))
             if children!=sorted(os.listdir(b)): raise SystemExit("systemd topology differs")
             for child in children: compare(a,child,b)
+            if os.fstat(a)!=left or os.fstat(b)!=right: raise PermissionError("systemd directory changed during comparison")
         finally: os.close(b); os.close(a)
     elif stat.S_ISLNK(left.st_mode):
         if link(first,name,left)!=link(second,name,right) or attributes(first,name,left)!=attributes(second,name,right): raise SystemExit("systemd symlink differs")
     else: raise SystemExit("systemd type differs")
+first_before=os.stat(sys.argv[1],follow_symlinks=False); second_before=os.stat(sys.argv[2],follow_symlinks=False)
 first=os.open(sys.argv[1],dirflags); second=os.open(sys.argv[2],dirflags)
 try:
+    if os.fstat(first)!=first_before or os.fstat(second)!=second_before: raise PermissionError("systemd root changed during comparison")
     for name in names: compare(first,name,second)
+    if os.fstat(first)!=first_before or os.fstat(second)!=second_before: raise PermissionError("systemd root changed during comparison")
 finally: os.close(second); os.close(first)
 PY
 }

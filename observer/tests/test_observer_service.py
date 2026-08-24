@@ -1521,11 +1521,92 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                 process.kill()
                 self.fail("exclusive systemd staging entry was not observed")
             stdout, stderr = process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 0, stdout + stderr)
+            self.assertNotEqual(process.returncode, 0, "raced destination was silently overwritten")
+            self.assertIn("destination raced", stderr)
             self.assertEqual(victim.read_text(), "root-owned victim\n")
             self.assertFalse((systemd / ".uap-observer-old-crash").exists())
-            self.assertFalse(destination.is_symlink())
-            self.assertEqual(destination.read_bytes(), staged.read_bytes())
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual(os.readlink(destination), str(victim))
+
+    def test_restore_keeps_complete_journal_metadata_unchanged_at_every_boundary(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        def snapshot(path: Path) -> tuple:
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | getattr(os, "O_NOATIME", 0)
+            def visit(parent: int, name: str, relative: str) -> tuple:
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                proc_path = f"/proc/self/fd/{parent}/{name}"
+                attrs = tuple(sorted((key, os.getxattr(proc_path, key, follow_symlinks=False)) for key in os.listxattr(proc_path, follow_symlinks=False)))
+                common = (relative, stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, info.st_atime_ns, info.st_mtime_ns, info.st_nlink, attrs)
+                if stat.S_ISDIR(info.st_mode):
+                    descriptor = os.open(name, flags | os.O_DIRECTORY, dir_fd=parent)
+                    try:
+                        return common + (tuple(visit(descriptor, child, f"{relative}/{child}") for child in sorted(os.listdir(descriptor))),)
+                    finally: os.close(descriptor)
+                if stat.S_ISREG(info.st_mode):
+                    descriptor = os.open(name, flags, dir_fd=parent)
+                    try:
+                        payload = b""
+                        while block := os.read(descriptor, 1 << 20): payload += block
+                    finally: os.close(descriptor)
+                    return common + (payload,)
+                value = os.readlink(name, dir_fd=parent)
+                os.utime(name, ns=(info.st_atime_ns, info.st_mtime_ns), dir_fd=parent, follow_symlinks=False)
+                return common + (value,)
+            parent = os.open(path.parent, flags | os.O_DIRECTORY)
+            try: return visit(parent, path.name, path.name)
+            finally: os.close(parent)
+        for boundary in range(1, 8):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); systemd = root / "systemd"; backup = root / "backup"
+                systemd.mkdir(); (systemd / "uap-observer.service").write_text("original\n")
+                (systemd / "uap-observer-signer.service").symlink_to("legacy.service")
+                subprocess.run(["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"', "sh", str(helper), str(backup), str(systemd)], check=True)
+                before = snapshot(backup)
+                (systemd / "uap-observer.service").write_text("mutated\n")
+                (systemd / "uap-observer-signer.service").unlink()
+                failed = subprocess.run(["/bin/sh", "-c", '. "$1"; restore_observer_systemd "$2" "$3"', "sh", str(helper), str(backup), str(systemd)], env=dict(os.environ, UAP_OBSERVER_REPLACE_FAIL_AT=str(boundary)))
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(snapshot(backup), before)
+                subprocess.run(["/bin/sh", "-c", '. "$1"; restore_observer_systemd "$2" "$3"', "sh", str(helper), str(backup), str(systemd)], check=True)
+                self.assertEqual(snapshot(backup), before)
+
+    def test_systemd_replace_rejects_raced_hardlink_content_and_metadata(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        for race in ("hardlink", "content", "metadata"):
+            with self.subTest(race=race), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); systemd = root / "systemd"; systemd.mkdir()
+                staged = root / "reviewed"; staged.write_bytes(b"reviewed\n" + b"x" * (16 << 20))
+                destination = systemd / "uap-observer.service"; destination.write_text("old\n")
+                victim = root / "victim"; victim.write_text("victim\n")
+                process = subprocess.Popen(["/bin/sh", "-c", '. "$1"; observer_replace_systemd_entries "$2" "$3" "$4"', "sh", str(helper), str(systemd), str(staged), destination.name], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not any(item.name.startswith(".uap-observer-new-") for item in systemd.iterdir()): time.sleep(0.001)
+                self.assertLess(time.monotonic(), deadline, "exclusive replacement was not observed")
+                if race == "hardlink": destination.unlink(); os.link(victim, destination)
+                elif race == "content": destination.write_text("raced\n")
+                else: destination.chmod(0o600)
+                stdout, stderr = process.communicate(timeout=10)
+                self.assertNotEqual(process.returncode, 0, stdout + stderr)
+                self.assertIn("destination raced", stderr)
+                self.assertEqual(victim.read_text(), "victim\n")
+
+    def test_systemd_replace_rechecks_pinned_directory_and_top_inventory_before_mutation(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        for race in ("directory", "inventory"):
+            with self.subTest(race=race), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); systemd = root / "systemd"; systemd.mkdir()
+                destination = systemd / "uap-observer.service.d"; destination.mkdir(); (destination / "old.conf").write_text("old\n")
+                staged = root / "reviewed"; staged.mkdir(); (staged / "egress.conf").write_bytes(b"x" * (32 << 20))
+                process = subprocess.Popen(["/bin/sh", "-c", '. "$1"; observer_replace_systemd_entries "$2" "$3" "$4"', "sh", str(helper), str(systemd), str(staged), destination.name], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not any(item.name.startswith(".uap-observer-new-") for item in systemd.iterdir()): time.sleep(0.001)
+                self.assertLess(time.monotonic(), deadline, "exclusive replacement was not observed")
+                if race == "directory": staged.chmod(0o700)
+                else: (systemd / "uap-observer-unexpected.service").write_text("raced\n")
+                stdout, stderr = process.communicate(timeout=15)
+                self.assertNotEqual(process.returncode, 0, stdout + stderr)
+                self.assertEqual((destination / "old.conf").read_text(), "old\n")
+                if race == "inventory": self.assertIn("inventory changed", stderr)
 
     def test_systemd_journal_rejects_escape_and_non_single_link_topology_before_mutation(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
