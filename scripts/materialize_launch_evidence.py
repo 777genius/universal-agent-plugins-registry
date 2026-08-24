@@ -25,10 +25,15 @@ from directory_publication import (  # noqa: E402
     validate_with_schema,
 )
 from build_registry import RegistryError, validate_directory  # noqa: E402
+from launch_observer_signatures import (  # noqa: E402
+    validate_evidence_redaction,
+    verify_observer_bundle,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCH_SCHEMA = ROOT / "tests" / "e2e" / "schemas" / "launch-evidence.schema.json"
+OBSERVER_SCHEMA_ROOT = ROOT / "tests" / "e2e" / "schemas"
 EVIDENCE_SCHEMA = ROOT / "schemas" / "directory-evidence-artifact.schema.json"
 DIRECTORY_EVIDENCE_SCHEMA = ROOT / "schemas" / "directory-evidence.schema.json"
 GIT = "/usr/bin/git"
@@ -46,6 +51,22 @@ MAX_BUNDLE_BYTES = 16 << 20
 LEDGER_ROOT = PurePosixPath("registry/evidence/sha256")
 BOT_NAME = "uap-directory-publisher[bot]"
 BOT_EMAIL = "uap-directory-publisher[bot]@users.noreply.github.com"
+AUTHORITATIVE_DETAIL_FIELDS = (
+    "challenge", "started_at", "observed_at", "consent_artifact_digest",
+    "consent_attested", "isolated_identity", "identity_id", "client_id",
+    "application_id", "endpoint", "command_traces", "github_attestation",
+    "runtime_invocation", "discovery_verified", "manager_observation",
+    "native_observation", "receipt_reconciled", "native_discovery_reconciled",
+    "projection_receipt_digest", "native_app_digest", "native_mcp_digest",
+    "oauth_artifact_approved", "registered_app_binding", "ui_activation",
+    "read_only", "scenario_id", "run_id", "run_attempt",
+    "pseudonymous_identity_id", "pseudonymous_workspace_id",
+    "dedicated_identity", "disposable_project_status", "operation_mode",
+    "auth_origin", "cleanup_outcome", "no_real_project_proof",
+    "native_discovery_evidence",
+    "public_mcp_evidence", "release_manifest_digest", "release_checksums_digest",
+    "directory_digest", "scenario_contract_digest",
+)
 
 
 class EvidenceError(PublicationError):
@@ -140,6 +161,127 @@ def selected_rows(launch: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: canonical_json(applicability(row)))
 
 
+def verify_authoritative_observer_rows(
+    launch: dict[str, Any], observer: dict[str, Any], *, repository: str,
+    public_key: str, key_id: str, enforce_freshness: bool = True,
+) -> None:
+    artifacts = verify_observer_bundle(
+        observer, challenge=launch["run"]["challenge"],
+        public_key_base64=public_key, expected_key_id=key_id,
+        enforce_freshness=enforce_freshness,
+    )
+    validate_observer_artifact_schemas(artifacts)
+    source: dict[tuple[str, str, str], dict[str, Any]] = {}
+    expected_file_pairs = {
+        "runtime-attestations.json": {
+            (plugin, client) for plugin in HEROES - {"notion"} for client in HERO_CLIENTS
+        },
+        "notion-oauth-attestations.json": {("notion", client) for client in HERO_CLIENTS},
+        "chatgpt-cloudflare-attestation.json": {("cloudflare-docs", "chatgpt")},
+    }
+    for name in (
+        "runtime-attestations.json", "notion-oauth-attestations.json",
+        "chatgpt-cloudflare-attestation.json",
+    ):
+        artifact = artifacts.get(name)
+        if not isinstance(artifact, dict) or artifact.get("schema_version") != 1:
+            fail(f"signed observer artifact is invalid: {name}")
+        records = artifact.get("attestations")
+        if not isinstance(records, list):
+            fail(f"signed observer artifact omitted attestations: {name}")
+        if {(record.get("plugin"), record.get("client")) for record in records if isinstance(record, dict)} != expected_file_pairs[name] or len(records) != len(expected_file_pairs[name]):
+            fail(f"signed observer artifact does not contain the exact expected pair set: {name}")
+        for record in records:
+            if not isinstance(record, dict):
+                fail(f"signed observer artifact contains a non-object record: {name}")
+            key = (record.get("plugin"), record.get("client"), record.get("level"))
+            if not all(isinstance(part, str) for part in key) or key in source:
+                fail("signed observer artifact contains an invalid or duplicate row")
+            github = record.get("github_attestation")
+            if (
+                record.get("challenge") != launch["run"]["challenge"]
+                or str(record.get("run_id")) != launch["run"]["github_run_id"]
+                or str(record.get("run_attempt")) != launch["run"]["github_run_attempt"]
+                or not isinstance(github, dict)
+                or github.get("repository") != repository
+                or github.get("sha") != launch["run"]["github_sha"]
+                or str(github.get("run_id")) != launch["run"]["github_run_id"]
+                or str(github.get("run_attempt")) != launch["run"]["github_run_attempt"]
+                or github.get("workflow") != "launch-evidence-e2e.yml"
+                or github.get("job") != "protected-observer-inputs"
+                or github.get("challenge") != launch["run"]["challenge"]
+                or record.get("release_manifest_digest") != launch["release"]["manifest_digest"]
+                or record.get("release_checksums_digest") != launch["release"]["checksums_digest"]
+                or record.get("directory_digest") != launch["directory"]["snapshot_digest"]
+                or record.get("scenario_contract_digest") != launch["scenario_contract"]["digest"]
+            ):
+                fail(f"signed observer row is not bound to the protected OIDC job: {key}")
+            source[key] = record
+    rows = selected_rows(launch)
+    expected = {(row["plugin"], row["client"], row["level"]): row for row in rows}
+    if set(source) != set(expected):
+        fail("signed observer and canonical launch rows differ")
+    for key, row in expected.items():
+        record = source[key]
+        default_reason = "explicit OAuth/runtime attestation" if key[1] == "chatgpt" else "explicit runtime attestation"
+        projected_details = {
+            **{field: record[field] for field in AUTHORITATIVE_DETAIL_FIELDS if field in record},
+            "evidence_basis": "protected_external_observer",
+            "runtime_proof": True,
+            "native_discovery_proof": True,
+        }
+        row_details = row.get("details")
+        mismatches = []
+        if record.get("outcome") != "passed": mismatches.append("outcome")
+        if record.get("tuple") != row.get("tuple"): mismatches.append("tuple")
+        if row.get("reason") != record.get("reason", default_reason): mismatches.append("reason")
+        if not isinstance(row_details, dict):
+            mismatches.append("details")
+        else:
+            if set(row_details) != set(projected_details) | {"resolution"}:
+                mismatches.append(f"detail fields observed={sorted(row_details)} expected={sorted(set(projected_details) | {'resolution'})}")
+            differing = sorted(field for field, value in projected_details.items() if row_details.get(field) != value)
+            if differing: mismatches.append(f"detail values={differing}")
+        if mismatches:
+            fail(f"canonical launch row differs from signed observer row ({', '.join(mismatches)}): {key}")
+
+
+def validate_observer_artifact_schemas(artifacts: dict[str, Any]) -> None:
+    """Apply the reviewed observer schemas inside the minimal attester."""
+    try:
+        import jsonschema
+    except ImportError as error:  # pragma: no cover - workflows install it
+        fail("jsonschema is required for protected observer validation")
+    base = "https://uap.invalid/observer-schemas/"
+    schemas: dict[str, dict[str, Any]] = {}
+    for path in OBSERVER_SCHEMA_ROOT.glob("*.schema.json"):
+        value = read_json(path, f"observer schema {path.name}")
+        schemas[path.name] = {**value, "$id": base + path.name}
+    # The protected observer's reviewed consent schema is deployed with the
+    # observer commit. Reconstruct its one hardened field here so this worker
+    # does not take ownership of that separately-owned schema path.
+    consent_schema = copy.deepcopy(schemas["consent.schema.json"])
+    proof = consent_schema["properties"]["no_real_project_proof"]
+    proof["properties"]["enforcement"] = {"const": "systemd-positive-mount-allowlist-v1"}
+    consent_schema["allOf"][0]["then"]["properties"]["no_real_project_proof"] = {"required": ["enforcement"]}
+    schemas["consent.schema.json"] = consent_schema
+    store = {base + name: value for name, value in schemas.items()}
+    for name, schema_name in (
+        ("runtime-attestations.json", "runtime-attestations.schema.json"),
+        ("notion-oauth-attestations.json", "runtime-attestations.schema.json"),
+        ("chatgpt-cloudflare-attestation.json", "runtime-attestations.schema.json"),
+        ("consent.json", "consent.schema.json"),
+    ):
+        schema = schemas[schema_name]
+        resolver = jsonschema.RefResolver(base + schema_name, schema, store=store)
+        validator = jsonschema.Draft202012Validator(
+            schema, resolver=resolver, format_checker=jsonschema.FormatChecker(),
+        )
+        errors = sorted(validator.iter_errors(artifacts[name]), key=lambda item: list(item.absolute_path))
+        if errors:
+            fail(f"signed observer artifact does not match the reviewed schema: {name}")
+
+
 def evidence_record(row: dict[str, Any]) -> dict[str, Any]:
     tuple_value = row["tuple"]
     evidence_identity = {
@@ -184,7 +326,10 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
                  expected_caller_event_name: str, expected_caller_ref: str,
                  expected_caller_workflow_ref: str,
                  expected_publication_id: str, expected_sequence: int,
-                 expected_snapshot_digest: str, expected_source_commit: str) -> tuple[str, dict[str, bytes]]:
+                 expected_snapshot_digest: str, expected_source_commit: str,
+                 verify_observer: bool = False, observer_public_key: str = "",
+                 observer_key_id: str = "", enforce_observer_freshness: bool = True,
+                 ) -> tuple[str, dict[str, bytes]]:
     if REPOSITORY_RE.fullmatch(repository) is None or WORKFLOW_RE.fullmatch(workflow) is None:
         fail("repository or workflow identity is invalid")
     if not workflow.startswith(repository + "/.github/workflows/"):
@@ -206,6 +351,7 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
     observer_bytes = read_bytes_bounded(bundle_path, MAX_FILE_BYTES)
     observer = parse_json_bytes(observer_bytes, "signed observer bundle", max_bytes=MAX_FILE_BYTES)
     validate_with_schema(launch, LAUNCH_SCHEMA)
+    validate_evidence_redaction(launch, context="canonical launch evidence")
     if launch["run"].get("mode") != "enforced" or launch["run"].get("runtime_claims") is not True:
         fail("only enforced runtime launch evidence is publishable")
     if launch["summary"].get("required_gates_complete") is not True or launch["summary"].get("hero_runtime_results") != 15:
@@ -236,6 +382,14 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
     # selected row independently carries the immutable release source revision.
     if not isinstance(observer, dict) or sha256(observer_bytes) != launch["run"]["observer_bundle_digest"]:
         fail("signed observer bundle digest mismatch")
+    if verify_observer:
+        if not observer_public_key or not observer_key_id:
+            fail("observer signature verification requires an explicit public key and key ID")
+        verify_authoritative_observer_rows(
+            launch, observer, repository=repository,
+            public_key=observer_public_key, key_id=observer_key_id,
+            enforce_freshness=enforce_observer_freshness,
+        )
 
     launch_bytes = canonical_json(launch)
     digest = sha256(launch_bytes)
@@ -548,6 +702,144 @@ def materialize_commits(source_repo: Path, ledger_repo: Path, artifact_dir: Path
     }
 
 
+def verify_completed_state(
+    source_repo: Path, ledger_repo: Path, *, repository: str, main_commit: str,
+    main_parent: str, expected_run_id: str, source_digest: str,
+    caller_event_name: str, caller_ref: str, caller_workflow_ref: str,
+    approval_tag: str, observer_public_key: str, observer_key_id: str,
+) -> None:
+    """Authenticate the exact post-evidence CAS state for a whole-run retry."""
+    require_sha(main_commit, "completed main commit")
+    require_sha(main_parent, "completed main parent")
+    require_sha(source_digest, "completed workflow source")
+    if not expected_run_id.isdigit():
+        fail("completed workflow run ID must be decimal")
+    ledger_commit = _git(ledger_repo, ["rev-parse", "HEAD"]).stdout.decode().strip()
+    require_sha(ledger_commit, "completed ledger commit")
+    main_parents = _git(source_repo, ["show", "-s", "--format=%P", main_commit]).stdout.decode().strip().split()
+    if main_parents != [main_parent]:
+        fail("completed main commit is not the exact evidence child")
+    ledger_parents = _git(ledger_repo, ["show", "-s", "--format=%P", ledger_commit]).stdout.decode().strip().split()
+    if len(ledger_parents) != 1:
+        fail("completed evidence ledger commit must have one parent")
+    approval = _git(ledger_repo, ["rev-parse", f"{approval_tag}^{{commit}}"], check=False)
+    if approval.returncode != 0 or approval.stdout.decode().strip() != ledger_parents[0]:
+        fail("completed evidence ledger parent is not the exact approved publication")
+    ledger_message = _git(ledger_repo, ["show", "-s", "--format=%B", ledger_commit]).stdout.decode()
+    match = re.fullmatch(
+        r"chore\(evidence\): persist stable launch evidence\n\n"
+        r"Launch-Evidence-Persistence: 1\n"
+        r"Launch-Evidence-Digest: (sha256:[0-9a-f]{64})\n"
+        r"Workflow-Source-Commit: ([0-9a-f]{40})\n\n?",
+        ledger_message,
+    )
+    if match is None or match.group(2) != source_digest:
+        fail("completed evidence ledger message is invalid")
+    digest = match.group(1)
+    expected_main_message = (
+        "chore(evidence): select stable launch evidence\n\n"
+        "Launch-Evidence-Selection: 1\n"
+        f"Launch-Evidence-Digest: {digest}\n"
+        f"Evidence-Ledger-Commit: {ledger_commit}\n\n"
+    )
+    if _git(source_repo, ["show", "-s", "--format=%B", main_commit]).stdout.decode() != expected_main_message:
+        fail("completed main evidence selection message is invalid")
+    changed_main = _git(source_repo, ["diff-tree", "--no-commit-id", "--name-only", "-r", main_parent, main_commit]).stdout.decode().splitlines()
+    if changed_main != ["registry/directory.json"]:
+        fail("completed main evidence selection changed unexpected paths")
+    root = (LEDGER_ROOT / digest.removeprefix("sha256:")).as_posix()
+    paths = _git(ledger_repo, ["ls-tree", "-r", "--name-only", ledger_commit, "--", root]).stdout.decode().splitlines()
+    if not paths or any(not path.startswith(root + "/") for path in paths):
+        fail("completed ledger evidence root is missing or invalid")
+    files = {
+        path.removeprefix(root + "/"): _git(ledger_repo, ["show", f"{ledger_commit}:{path}"]).stdout
+        for path in paths
+    }
+    index = load_index(files)
+    if (
+        index.get("repository") != repository
+        or index.get("workflow") != f"{repository}/.github/workflows/launch-evidence-e2e.yml"
+        or index.get("source_ref") != "refs/heads/main"
+        or index.get("source_digest") != source_digest
+        or index.get("workflow_run_id") != expected_run_id
+        or index.get("caller_event_name") != caller_event_name
+        or index.get("caller_ref") != caller_ref
+        or index.get("caller_workflow_ref") != caller_workflow_ref
+        or index.get("publication_id") != expected_run_id
+        or index.get("publication_source_commit") != main_parent
+    ):
+        fail("completed evidence index is not bound to this exact workflow run")
+    with tempfile.TemporaryDirectory(prefix="uap-completed-evidence-") as temporary:
+        bundle = Path(temporary)
+        for name in ("launch-evidence.json", "signed-observer-bundle.json", "bundle-identity.json"):
+            (bundle / name).write_bytes(files[name])
+        # Authenticate the immutable permanent subject before allowing an old
+        # observer timestamp to enter deterministic completed-state replay.
+        verify_attestation(
+            bundle, repository=repository, workflow=index["workflow"],
+            source_ref=index["source_ref"], source_digest=source_digest,
+        )
+        _, derived = build_bundle(
+            bundle, repository=repository, workflow=index["workflow"],
+            source_ref=index["source_ref"], source_digest=source_digest,
+            expected_run_id=expected_run_id, expected_run_attempt=index["workflow_run_attempt"],
+            expected_caller_event_name=caller_event_name, expected_caller_ref=caller_ref,
+            expected_caller_workflow_ref=caller_workflow_ref,
+            expected_publication_id=expected_run_id, expected_sequence=index["publication_sequence"],
+            expected_snapshot_digest=index["publication_snapshot_digest"],
+            expected_source_commit=main_parent,
+            verify_observer=True, observer_public_key=observer_public_key,
+            observer_key_id=observer_key_id, enforce_observer_freshness=False,
+        )
+        write_bundle(bundle, derived)
+    if files != derived:
+        fail("completed permanent evidence root is not the exact canonical bundle")
+    ledger_files = {f"{root}/{path}": body for path, body in files.items()}
+    expected_ledger_message = (
+        "chore(evidence): persist stable launch evidence\n\n"
+        "Launch-Evidence-Persistence: 1\n"
+        f"Launch-Evidence-Digest: {digest}\n"
+        f"Workflow-Source-Commit: {source_digest}\n"
+    )
+    expected_ledger = commit_with_files(
+        ledger_repo, ledger_parents[0], ledger_files, expected_ledger_message, digest,
+    )
+    if expected_ledger != ledger_commit:
+        fail("completed evidence ledger commit is not the exact deterministic append")
+    base_directory = parse_json_bytes(
+        _git(source_repo, ["show", f"{main_parent}:registry/directory.json"]).stdout,
+        "completed base Directory", max_bytes=MAX_FILE_BYTES,
+    )
+    if not isinstance(base_directory, dict):
+        fail("completed base Directory must be an object")
+    records = [
+        parse_json_bytes(files[item["path"]], f"completed record {item['id']}", max_bytes=MAX_FILE_BYTES)
+        for item in index["records"]
+    ]
+    if not all(isinstance(record, dict) for record in records):
+        fail("completed evidence records must be objects")
+    pointers = [
+        pointer_for(
+            record, repository=repository, ledger_commit=ledger_commit, root=root,
+            index=index, index_digest=sha256(files["directory-evidence/index.json"]),
+            bundle_identity_digest=sha256(files["bundle-identity.json"]),
+        )
+        for record in records
+    ]
+    expected_directory = update_directory(base_directory, pointers)
+    validate_directory(
+        expected_directory, verify_packages=False,
+        repository_root=source_repo, repository=repository,
+    )
+    expected_main = commit_with_files(
+        source_repo, main_parent,
+        {"registry/directory.json": canonical_json(expected_directory)},
+        expected_main_message.removesuffix("\n"), digest,
+    )
+    if expected_main != main_commit:
+        fail("completed main evidence selection is not the exact deterministic commit")
+
+
 def write_outputs(path: Path | None, values: Mapping[str, str]) -> None:
     body = canonical_json(dict(values))
     if path is None:
@@ -571,6 +863,9 @@ def common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--expected-publication-sequence", type=int, required=True)
     parser.add_argument("--expected-publication-snapshot-digest", required=True)
     parser.add_argument("--expected-publication-source-commit", required=True)
+    parser.add_argument("--verify-observer", action="store_true")
+    parser.add_argument("--observer-public-key", default="")
+    parser.add_argument("--observer-key-id", default="")
 
 
 def main() -> int:
@@ -590,8 +885,34 @@ def main() -> int:
     commit.add_argument("--main-parent", required=True)
     commit.add_argument("--ledger-parent", required=True)
     commit.add_argument("--output", type=Path, required=True)
+    completed = commands.add_parser("verify-completed")
+    completed.add_argument("--source-repo", type=Path, required=True)
+    completed.add_argument("--ledger-repo", type=Path, required=True)
+    completed.add_argument("--repository", required=True)
+    completed.add_argument("--main-commit", required=True)
+    completed.add_argument("--main-parent", required=True)
+    completed.add_argument("--expected-run-id", required=True)
+    completed.add_argument("--source-digest", required=True)
+    completed.add_argument("--caller-event-name", required=True)
+    completed.add_argument("--caller-ref", required=True)
+    completed.add_argument("--caller-workflow-ref", required=True)
+    completed.add_argument("--approval-tag", required=True)
+    completed.add_argument("--observer-public-key", required=True)
+    completed.add_argument("--observer-key-id", required=True)
     args = parser.parse_args()
     try:
+        if args.command == "verify-completed":
+            verify_completed_state(
+                args.source_repo, args.ledger_repo, repository=args.repository,
+                main_commit=args.main_commit, main_parent=args.main_parent,
+                expected_run_id=args.expected_run_id, source_digest=args.source_digest,
+                caller_event_name=args.caller_event_name, caller_ref=args.caller_ref,
+                caller_workflow_ref=args.caller_workflow_ref,
+                approval_tag=args.approval_tag,
+                observer_public_key=args.observer_public_key,
+                observer_key_id=args.observer_key_id,
+            )
+            return 0
         digest, files = build_bundle(
             args.artifact_dir, repository=args.repository, workflow=args.workflow,
             source_ref=args.source_ref, source_digest=args.source_digest,
@@ -604,6 +925,9 @@ def main() -> int:
             expected_sequence=args.expected_publication_sequence,
             expected_snapshot_digest=args.expected_publication_snapshot_digest,
             expected_source_commit=args.expected_publication_source_commit,
+            verify_observer=args.verify_observer,
+            observer_public_key=args.observer_public_key,
+            observer_key_id=args.observer_key_id,
         )
         if args.command == "prepare-bundle":
             write_bundle(args.artifact_dir, files)

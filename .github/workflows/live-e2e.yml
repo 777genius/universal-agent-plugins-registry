@@ -40,6 +40,9 @@ on:
       workflow_source_digest:
         description: Exact protected launch workflow source commit
         value: ${{ jobs.required-live-e2e.outputs.workflow_source_digest }}
+      evidence_run_attempt:
+        description: Exact attempt that produced the immutable evidence artifact
+        value: ${{ jobs.required-live-e2e.outputs.evidence_run_attempt }}
   workflow_dispatch:
     inputs:
       consent:
@@ -78,7 +81,7 @@ concurrency:
 
 jobs:
   required-stable-launch-evidence:
-    if: github.event_name == 'workflow_call' && inputs.consent
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     uses: ./.github/workflows/launch-evidence-e2e.yml
     with:
       consent: ${{ inputs.consent }}
@@ -124,7 +127,7 @@ jobs:
 
   required-live-e2e:
     name: Require complete live E2E results
-    if: always() && github.event_name == 'workflow_call' && inputs.consent
+    if: always() && inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     needs:
       - required-stable-launch-evidence
       - public-read-flows
@@ -136,6 +139,7 @@ jobs:
       evidence_artifact_name: ${{ needs.required-stable-launch-evidence.outputs.evidence_artifact_name }}
       launch_evidence_digest: ${{ needs.required-stable-launch-evidence.outputs.launch_evidence_digest }}
       workflow_source_digest: ${{ needs.required-stable-launch-evidence.outputs.workflow_source_digest }}
+      evidence_run_attempt: ${{ needs.required-stable-launch-evidence.outputs.evidence_run_attempt }}
     steps:
       - name: Reject skipped or failed nested evidence
         env:

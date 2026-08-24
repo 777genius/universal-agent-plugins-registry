@@ -16,11 +16,13 @@ from urllib.parse import parse_qsl, urlsplit
 SIGNATURE_DOMAIN = b"UAP-STABLE-LAUNCH-OBSERVER-BUNDLE-V1\0"
 MAX_BUNDLE_AGE = timedelta(minutes=30)
 FORBIDDEN_KEY = re.compile(
-    r"(?i)(?:api[_-]?key|token|secret|passw(?:or)?d|cookie|authorization|oauth[_-]?(?:code|state))"
+    r"(?i)(?:api[_-]?key|access[_-]?token|token|secret|signature|sig|passw(?:or)?d|"
+    r"cookie|authorization|credential|oauth[_-]?(?:code|state|token)|x[_-]?amz[_-]?[a-z0-9_-]+)"
 )
 SENSITIVE_ARGUMENT = re.compile(
     r"(?i)^(?:api[_-]?key|access[_-]?token|token|secret|passw(?:or)?d|cookie|"
-    r"auth(?:entication|orization)?|credential|oauth[_-]?(?:code|state|token))$"
+    r"auth(?:entication|orization)?|credential|signature|sig|aws-secret-access-key|"
+    r"aws-session-token|x-amz-(?:signature|security-token|credential)|oauth[_-]?(?:code|state|token))$"
 )
 ENVIRONMENT_ARGUMENT = re.compile(r"(?i)^(?:env|environment|env[_-]?var)$")
 ENVIRONMENT_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(=)(.*)$", re.DOTALL)
@@ -30,8 +32,11 @@ WINDOWS_ABSOLUTE_PATH = re.compile(r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\)[^\
 REDACTION = re.compile(r"^<redacted:(?:credential|absolute-path):sha256:[a-f0-9]{64}>$")
 URL = re.compile(r"(?i)https?://[^\s,;]+")
 FILE_URL = re.compile(r"(?i)file:///(?:[^\s,;]+)")
-LABELED_ABSOLUTE_PATH = re.compile(r"(?i)\b(path|file|dir|directory|root|cwd|home):(/[^\s,;]+)")
-SENSITIVE_QUERY = re.compile(r"(?i)^(?:code|state|token|credential|oauth[_-]?(?:code|state|token))$")
+LABELED_ABSOLUTE_PATH = re.compile(r"(?i)\b(path|file|dir|directory|root|cwd|home|workspace):(/[^\s,;]+)")
+SENSITIVE_QUERY = re.compile(
+    r"(?i)^(?:code|state|api[_-]?key|access[_-]?token|token|secret|credential|signature|sig|"
+    r"oauth[_-]?(?:code|state|token)|x[_-]?amz[_-]?[a-z0-9_-]+)$"
+)
 
 
 def canonical_json(value: Any) -> bytes:
@@ -89,7 +94,12 @@ def _sanitize_credential_text(value: str) -> str:
     def sanitize_url(match: re.Match[str]) -> str:
         candidate = match.group(0)
         parsed = urlsplit(candidate)
-        sensitive_query = any(SENSITIVE_QUERY.fullmatch(name) for name, _ in parse_qsl(parsed.query, keep_blank_values=True))
+        fragment_query = parsed.fragment.split("?", 1)[1] if "?" in parsed.fragment else parsed.fragment
+        sensitive_query = any(
+            SENSITIVE_QUERY.fullmatch(name)
+            for component in (parsed.query, fragment_query)
+            for name, _ in parse_qsl(component, keep_blank_values=True)
+        )
         if parsed.username or parsed.password or sensitive_query:
             return _redaction("credential", candidate)
         return candidate
@@ -185,7 +195,7 @@ def validate_evidence_redaction(value: Any, *, context: str = "evidence") -> Non
 
 def verify_observer_bundle(
     bundle: dict[str, Any], *, challenge: str, public_key_base64: str,
-    expected_key_id: str, now: datetime | None = None,
+    expected_key_id: str, now: datetime | None = None, enforce_freshness: bool = True,
 ) -> dict[str, Any]:
     """Return signed artifacts after strict Ed25519 and freshness validation."""
     required = {"schema_version", "challenge", "signed_at", "key_id", "artifacts", "signature"}
@@ -200,7 +210,10 @@ def verify_observer_bundle(
     except (TypeError, ValueError) as error:
         raise ValueError("protected observer bundle timestamp is invalid") from error
     current = now or datetime.now(timezone.utc)
-    if signed_at.tzinfo is None or signed_at > current + timedelta(minutes=2) or current - signed_at > MAX_BUNDLE_AGE:
+    if signed_at.tzinfo is None or (
+        enforce_freshness
+        and (signed_at > current + timedelta(minutes=2) or current - signed_at > MAX_BUNDLE_AGE)
+    ):
         raise ValueError("protected observer bundle is stale or from the future")
     artifacts = bundle.get("artifacts")
     expected_artifacts = {

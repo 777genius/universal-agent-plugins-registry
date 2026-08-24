@@ -25,6 +25,10 @@ class EvidenceRedactionTests(unittest.TestCase):
             ["agentplugins", "TOKEN=secret"],
             ["agentplugins", "--env", "PASSWORD=secret"],
             ["agentplugins", "--env=API_KEY=secret"],
+            ["client", "--signature=secret"],
+            ["client", "--sig", "secret"],
+            ["client", "--aws-secret-access-key=secret"],
+            ["client", "--x-amz-signature", "secret"],
         )
         for argv in unsafe_argv:
             with self.subTest(argv=argv), self.assertRaisesRegex(
@@ -41,6 +45,21 @@ class EvidenceRedactionTests(unittest.TestCase):
             "callback=https://example.test/cb?token=secret",
             "callback=https://example.test/cb?credential=secret",
             "prefix=https://user:pass@example.test/private",
+        )
+        for value in unsafe:
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "absolute local path or credential material",
+            ):
+                signatures.validate_evidence_redaction({"detail": value})
+
+    def test_cloud_credentials_fragments_and_workspace_paths_are_rejected(self) -> None:
+        unsafe = (
+            "https://example.test/cb?api_key=secret",
+            "https://example.test/cb?access_token=secret",
+            "https://example.test/cb#access_token=secret",
+            "https://example.test/#route?code=secret",
+            "https://example.test/cb?X-Amz-Signature=secret",
+            "workspace:/Users/alice/private-project",
         )
         for value in unsafe:
             with self.subTest(value=value), self.assertRaisesRegex(
@@ -72,7 +91,10 @@ class EvidenceRedactionTests(unittest.TestCase):
     def test_safe_hashes_and_credential_free_urls_are_not_false_positives(self) -> None:
         digest = "sha256:" + "a" * 64
         safe = {
-            "trace": {"argv": ["agentplugins", "--digest=" + digest, "--endpoint=https://api.example.test/v1"]},
+            "trace": {"argv": [
+                "agentplugins", "--digest=" + digest, "--endpoint=https://api.example.test/v1",
+                "npm", "audit", "signatures", "--verify-signature",
+            ]},
             "token_digest": digest,
             "authorization_url": "https://login.example.test/oauth/authorize?client_id=public",
         }

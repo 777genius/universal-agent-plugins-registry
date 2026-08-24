@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -13,6 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import materialize_launch_evidence as evidence
+import launch_observer_signatures as signatures
 import prepare_directory_publication as prepare
 
 
@@ -88,7 +91,12 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
                 "caller_workflow_ref": "owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
                 "observer_bundle_digest": evidence.sha256(observer),
             },
+            "release": {
+                "manifest_digest": "sha256:" + "e" * 64,
+                "checksums_digest": "sha256:" + "f" * 64,
+            },
             "directory": {"sequence": 7, "snapshot_digest": "sha256:" + "b" * 64},
+            "scenario_contract": {"digest": "sha256:" + "9" * 64},
             "matrix": authoritative_rows(),
             "summary": {"required_gates_complete": True, "hero_runtime_results": 15},
         }
@@ -116,6 +124,103 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         self.assertEqual(len(selected), 16)
         self.assertEqual(sum(row["level"] == "runtime" for row in selected), 15)
         self.assertEqual(sum(row["level"] == "oauth" for row in selected), 1)
+
+    def test_attester_verifies_signature_and_exact_signed_authoritative_rows(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        launch = self.launch(b"placeholder")
+        launch["run"]["challenge"] = "d" * 64
+        for row in launch["matrix"]:
+            row["details"]["runtime_proof"] = True
+            row["details"]["run_id"] = "123"
+            row["details"]["run_attempt"] = "2"
+            row["details"]["resolution"] = {"derived": True}
+        artifacts = {
+            "runtime-attestations.json": {"schema_version": 1, "attestations": []},
+            "notion-oauth-attestations.json": {"schema_version": 1, "attestations": []},
+            "chatgpt-cloudflare-attestation.json": {"schema_version": 1, "attestations": []},
+            "consent.json": {"schema_version": 1},
+        }
+        for row in launch["matrix"]:
+            record = {
+                "plugin": row["plugin"], "client": row["client"], "level": row["level"],
+                "outcome": "passed", "reason": row["reason"], "tuple": row["tuple"], "challenge": "d" * 64,
+                "run_id": "123", "run_attempt": "2",
+                "release_manifest_digest": launch["release"]["manifest_digest"],
+                "release_checksums_digest": launch["release"]["checksums_digest"],
+                "directory_digest": launch["directory"]["snapshot_digest"],
+                "scenario_contract_digest": launch["scenario_contract"]["digest"],
+                "github_attestation": {
+                    "repository": "owner/repository", "sha": "a" * 40,
+                    "run_id": "123", "run_attempt": "2", "workflow": "launch-evidence-e2e.yml",
+                    "job": "protected-observer-inputs", "challenge": "d" * 64,
+                },
+            }
+            row["details"].update({
+                field: record[field]
+                for field in evidence.AUTHORITATIVE_DETAIL_FIELDS
+                if field in record
+            })
+            name = (
+                "chatgpt-cloudflare-attestation.json" if row["client"] == "chatgpt"
+                else "notion-oauth-attestations.json" if row["plugin"] == "notion"
+                else "runtime-attestations.json"
+            )
+            artifacts[name]["attestations"].append(record)
+        private_key = Ed25519PrivateKey.generate()
+        public_key = base64.b64encode(private_key.public_key().public_bytes_raw()).decode()
+        bundle = {
+            "schema_version": 1, "challenge": "d" * 64,
+            "signed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "key_id": "observer-v1", "artifacts": artifacts,
+        }
+        bundle["signature"] = base64.b64encode(private_key.sign(signatures.signed_payload(bundle))).decode()
+        schema_patch = mock.patch.object(evidence, "validate_observer_artifact_schemas")
+        schema_patch.start()
+        self.addCleanup(schema_patch.stop)
+        evidence.verify_authoritative_observer_rows(
+            launch, bundle, repository="owner/repository",
+            public_key=public_key, key_id="observer-v1",
+        )
+        delayed = {**bundle, "signed_at": (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat()}
+        delayed["signature"] = base64.b64encode(private_key.sign(signatures.signed_payload(delayed))).decode()
+        with self.assertRaisesRegex(ValueError, "stale"):
+            evidence.verify_authoritative_observer_rows(
+                launch, delayed, repository="owner/repository",
+                public_key=public_key, key_id="observer-v1",
+            )
+        evidence.verify_authoritative_observer_rows(
+            launch, delayed, repository="owner/repository",
+            public_key=public_key, key_id="observer-v1", enforce_freshness=False,
+        )
+        forged = json.loads(json.dumps(launch))
+        forged["matrix"][0]["tuple"]["client_version"] = "forged"
+        with self.assertRaisesRegex(evidence.EvidenceError, "differs from signed observer"):
+            evidence.verify_authoritative_observer_rows(
+                forged, bundle, repository="owner/repository",
+                public_key=public_key, key_id="observer-v1",
+            )
+        forged_details = json.loads(json.dumps(launch))
+        forged_details["matrix"][0]["details"]["github_attestation"]["job"] = "enforced-stable-gate"
+        with self.assertRaisesRegex(evidence.EvidenceError, "differs from signed observer"):
+            evidence.verify_authoritative_observer_rows(
+                forged_details, bundle, repository="owner/repository",
+                public_key=public_key, key_id="observer-v1",
+            )
+        tampered = {**bundle, "signature": base64.b64encode(b"x" * 64).decode()}
+        with self.assertRaisesRegex(ValueError, "signature is invalid"):
+            evidence.verify_authoritative_observer_rows(
+                launch, tampered, repository="owner/repository",
+                public_key=public_key, key_id="observer-v1",
+            )
+        rebound = json.loads(json.dumps(bundle))
+        rebound["artifacts"]["runtime-attestations.json"]["attestations"][0]["scenario_contract_digest"] = "sha256:" + "8" * 64
+        rebound["signature"] = base64.b64encode(private_key.sign(signatures.signed_payload(rebound))).decode()
+        with self.assertRaisesRegex(evidence.EvidenceError, "protected OIDC job"):
+            evidence.verify_authoritative_observer_rows(
+                launch, rebound, repository="owner/repository",
+                public_key=public_key, key_id="observer-v1",
+            )
 
     def test_duplicate_applicability_is_rejected(self) -> None:
         rows = authoritative_rows()
@@ -245,6 +350,12 @@ class PermanentCommitTests(unittest.TestCase):
             "repository": "owner/repository",
             "workflow": "owner/repository/.github/workflows/launch-evidence-e2e.yml",
             "source_ref": "refs/heads/main", "source_digest": "4" * 40,
+            "workflow_run_id": "123", "workflow_run_attempt": "2",
+            "caller_event_name": "push", "caller_ref": "refs/heads/main",
+            "caller_workflow_ref": "owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
+            "publication_id": "123", "publication_sequence": 7,
+            "publication_snapshot_digest": "sha256:" + "5" * 64,
+            "publication_source_commit": self.parent,
             "records": [{"id": record["id"], "path": path, "digest": evidence.sha256(record_body)}],
         }
         files = {
@@ -300,6 +411,39 @@ class PermanentCommitTests(unittest.TestCase):
                 self.repo, self.repo, self.repo, files, repository="owner/repository",
                 main_parent=self.parent, ledger_parent=self.parent, digest=digest,
             )
+
+    def test_whole_run_retry_accepts_only_exact_persisted_state(self) -> None:
+        digest, files = self.files()
+        result = evidence.materialize_commits(
+            self.repo, self.repo, self.repo, files, repository="owner/repository",
+            main_parent=self.parent, ledger_parent=self.parent, digest=digest,
+        )
+        git(self.repo, "tag", "directory-publication-schema-1-launch-approved", self.parent)
+        git(self.repo, "checkout", "-q", "--detach", result["ledger_commit"])
+        with mock.patch.object(evidence, "build_bundle", return_value=(digest, files)) as build_bundle, mock.patch.object(
+            evidence, "verify_attestation",
+        ) as verify_attestation:
+            evidence.verify_completed_state(
+                self.repo, self.repo, repository="owner/repository",
+                main_commit=result["main_commit"], main_parent=self.parent,
+                expected_run_id="123", source_digest="4" * 40,
+                caller_event_name="push", caller_ref="refs/heads/main",
+                caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
+                approval_tag="refs/tags/directory-publication-schema-1-launch-approved",
+                observer_public_key="trusted-key", observer_key_id="observer-v1",
+            )
+            with self.assertRaisesRegex(evidence.EvidenceError, "exact workflow run"):
+                evidence.verify_completed_state(
+                    self.repo, self.repo, repository="owner/repository",
+                    main_commit=result["main_commit"], main_parent=self.parent,
+                    expected_run_id="999", source_digest="4" * 40,
+                    caller_event_name="push", caller_ref="refs/heads/main",
+                    caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
+                    approval_tag="refs/tags/directory-publication-schema-1-launch-approved",
+                    observer_public_key="trusted-key", observer_key_id="observer-v1",
+                )
+            verify_attestation.assert_called_once()
+            self.assertFalse(build_bundle.call_args.kwargs["enforce_observer_freshness"])
 
     def test_existing_immutable_digest_root_is_rejected(self) -> None:
         digest, files = self.files()

@@ -836,56 +836,66 @@ def collect_digests(value: Any) -> set[str]:
     return found
 
 
+def logical_root_id(github_sha: str, run_id: str, run_attempt: str) -> str:
+    framed = "\0".join((github_sha, run_id, run_attempt)).encode("ascii")
+    return hashlib.sha256(b"UAP-STABLE-LAUNCH-LOGICAL-ROOT-V1\0" + framed).hexdigest()
+
+
+def exported_root_id(challenge: dict[str, str] | None) -> str:
+    """Return the portable public identifier, never a temporary-path hash."""
+    return challenge["root_id"][:16] if challenge else "0" * 16
+
+
 def make_challenge(
     github_sha: str, run_id: str, run_attempt: str,
     caller_event_name: str, caller_ref: str, caller_workflow_ref: str,
     release_digest: str, directory_digest: str, run_root: Path,
+    scenario_contract_digest: str | None = None,
 ) -> dict[str, str]:
     if not FULL_SHA.fullmatch(github_sha) or not run_id.isdigit() or not run_attempt.isdigit():
         raise ValueError("enforced evidence requires exact GitHub SHA/run identity")
     if not DIGEST.fullmatch(release_digest) or not DIGEST.fullmatch(directory_digest):
         raise ValueError("challenge inputs require release and Directory digests")
+    scenario_contract_digest = scenario_contract_digest or sha256_file(SCENARIOS)
+    if not DIGEST.fullmatch(scenario_contract_digest):
+        raise ValueError("challenge requires the immutable scenario contract digest")
     expected_workflow_ref = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@refs/heads/main"
     if caller_event_name not in {"push", "schedule", "workflow_dispatch"} or caller_ref != "refs/heads/main" or caller_workflow_ref != expected_workflow_ref:
         raise ValueError("enforced evidence requires an approved protected Directory publication caller")
     nonce = secrets.token_hex(32)
-    root_id = hashlib.sha256(str(run_root.resolve()).encode()).hexdigest()
+    # This identity crosses isolated GitHub jobs. The concrete temporary path
+    # is independently safety-checked by each consumer and is not portable.
+    root_id = logical_root_id(github_sha, run_id, run_attempt)
     framed = json.dumps({
         "github_sha": github_sha, "run_id": run_id, "run_attempt": run_attempt,
-        "caller_event_name": caller_event_name, "caller_ref": caller_ref,
-        "caller_workflow_ref": caller_workflow_ref,
         "release_manifest_digest": release_digest, "directory_digest": directory_digest,
+        "scenario_contract_digest": scenario_contract_digest,
         "root_id": root_id, "nonce": nonce,
     }, sort_keys=True, separators=(",", ":")).encode()
     return {
         "value": hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest(),
         "nonce": nonce, "github_sha": github_sha, "run_id": run_id,
         "run_attempt": run_attempt, "release_manifest_digest": release_digest,
-        "caller_event_name": caller_event_name, "caller_ref": caller_ref,
-        "caller_workflow_ref": caller_workflow_ref,
         "directory_digest": directory_digest, "root_id": root_id,
+        "scenario_contract_digest": scenario_contract_digest,
     }
 
 
 def challenge_context_valid(value: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != {"value", "nonce", "github_sha", "run_id", "run_attempt", "caller_event_name", "caller_ref", "caller_workflow_ref", "release_manifest_digest", "directory_digest", "root_id"}:
+    if not isinstance(value, dict) or set(value) != {"value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest", "scenario_contract_digest", "root_id"}:
         return False
     if not all(isinstance(value.get(field), str) for field in value):
         return False
     if not FULL_SHA.fullmatch(value["github_sha"]) or not value["run_id"].isdigit() or not value["run_attempt"].isdigit():
         return False
-    if not DIGEST.fullmatch(value["release_manifest_digest"]) or not DIGEST.fullmatch(value["directory_digest"]):
-        return False
-    expected_workflow_ref = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@refs/heads/main"
-    if value["caller_event_name"] not in {"push", "schedule", "workflow_dispatch"} or value["caller_ref"] != "refs/heads/main" or value["caller_workflow_ref"] != expected_workflow_ref:
+    if not all(DIGEST.fullmatch(value[field]) for field in ("release_manifest_digest", "directory_digest", "scenario_contract_digest")):
         return False
     if not re.fullmatch(r"[a-f0-9]{64}", value["nonce"]) or not re.fullmatch(r"[a-f0-9]{64}", value["root_id"]):
         return False
     framed = json.dumps({
         "github_sha": value["github_sha"], "run_id": value["run_id"], "run_attempt": value["run_attempt"],
-        "caller_event_name": value["caller_event_name"], "caller_ref": value["caller_ref"],
-        "caller_workflow_ref": value["caller_workflow_ref"],
         "release_manifest_digest": value["release_manifest_digest"], "directory_digest": value["directory_digest"],
+        "scenario_contract_digest": value["scenario_contract_digest"],
         "root_id": value["root_id"], "nonce": value["nonce"],
     }, sort_keys=True, separators=(",", ":")).encode()
     return value["value"] == hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest()
@@ -1018,6 +1028,10 @@ class LaunchHarness:
         github_sha: str | None = None,
         github_run_id: str | None = None,
         github_run_attempt: str | None = None,
+        producer_run_attempt: str | None = None,
+        caller_event_name: str | None = None,
+        caller_ref: str | None = None,
+        caller_workflow_ref: str | None = None,
         challenge: dict[str, str] | None = None,
         native_observations: Path | None = None,
         observer_bundle_digest: str | None = None,
@@ -1039,6 +1053,10 @@ class LaunchHarness:
         self.github_sha = github_sha
         self.github_run_id = github_run_id
         self.github_run_attempt = github_run_attempt
+        self.producer_run_attempt = producer_run_attempt or github_run_attempt
+        self.caller_event_name = caller_event_name
+        self.caller_ref = caller_ref
+        self.caller_workflow_ref = caller_workflow_ref
         self.native_observations = native_observations
         self.observer_bundle_digest = observer_bundle_digest
         self.copilot_executable = Path(os.path.abspath(copilot_executable)) if copilot_executable else None
@@ -1072,6 +1090,13 @@ class LaunchHarness:
         self.consent, self.consent_digest = self._load_consent(consent)
         self.external_pr_evidence: dict[str, Any] | None = None
         self.attestations = self._load_attestations(attestations, allow_external_pr=True)
+        expected_runtime = {
+            (plugin, client, "runtime")
+            for plugin in ("agent-code-navigator", "context7", "cloudflare-docs", "chrome-devtools")
+            for client in ("codex", "cursor", "kiro")
+        }
+        if self.mode == "enforced" and set(self.attestations) != expected_runtime:
+            raise ValueError("primary runtime artifact must contain the exact 12 non-Notion pairs")
         notion_records = self._load_attestations(notion_oauth)
         expected_notion = {("notion", client, "runtime") for client in ("codex", "cursor", "kiro")}
         if any(key[0] == "notion" for key in self.attestations):
@@ -1115,12 +1140,15 @@ class LaunchHarness:
             and value.get("scenario_contract_digest") == sha256_file(SCENARIOS)
         )
         proof = value.get("no_real_project_proof")
-        proof_valid = isinstance(proof, dict) and proof == {
+        expected_proof = {
             "real_project_accessed": False,
             "absolute_paths_exported": False,
             "credential_material_exported": False,
             "auth_copied": False,
         }
+        if self.mode == "enforced":
+            expected_proof["enforcement"] = "systemd-positive-mount-allowlist-v1"
+        proof_valid = isinstance(proof, dict) and proof == expected_proof
         if self.mode == "enforced":
             bound = self.challenge is None or (
                 value.get("mode") == "enforced"
@@ -1149,7 +1177,9 @@ class LaunchHarness:
     def _preflight(self) -> None:
         if self.run_root is not None:
             if self.run_root.exists():
-                expected_root_id = hashlib.sha256(str(self.run_root.resolve()).encode()).hexdigest()
+                expected_root_id = logical_root_id(
+                    self.github_sha or "", str(self.github_run_id), str(self.github_run_attempt),
+                )
                 prepared = self.mode == "enforced" and self.challenge and self.challenge.get("root_id") == expected_root_id
                 if not prepared or (self.run_root / "runs").exists() or (self.run_root / "evidence").exists():
                     raise ValueError("disposable run root must not already exist unless it is the authenticated prepared root")
@@ -1306,6 +1336,14 @@ class LaunchHarness:
                 or record.get("scenario_id") != expected_scenario
             ):
                 raise ValueError(f"attestation is not challenge/run/scenario-bound: {key}")
+            expected_bindings = {
+                "release_manifest_digest": self.release_manifest_digest,
+                "release_checksums_digest": self.release_checksums_digest,
+                "directory_digest": self.snapshot_digest,
+                "scenario_contract_digest": sha256_file(SCENARIOS),
+            }
+            if any(record.get(field) != expected for field, expected in expected_bindings.items()):
+                raise ValueError(f"attestation is not release/Directory/scenario-bound: {key}")
             if record.get("consent_artifact_digest") != self.consent_digest or any(record.get(field) != self.consent.get(field) for field in privacy_fields):
                 raise ValueError(f"attestation privacy fields differ from signed consent: {key}")
             if record.get("identity_id") != record.get("pseudonymous_identity_id"):
@@ -1344,7 +1382,7 @@ class LaunchHarness:
                     and str(github.get("run_attempt")) == str(self.github_run_attempt)
                     and github.get("challenge") == self.challenge["value"]
                     and github.get("workflow") == "launch-evidence-e2e.yml"
-                    and github.get("job") == "enforced-stable-gate"
+                    and github.get("job") == "protected-observer-inputs"
                 )
                 if not github_valid:
                     raise ValueError(f"passed external observation is not GitHub-attested for this run: {key}")
@@ -1806,15 +1844,19 @@ class LaunchHarness:
     @staticmethod
     def runtime_attestation_details(record: dict[str, Any]) -> dict[str, Any]:
         fields = (
+            "challenge", "started_at", "observed_at", "consent_artifact_digest",
             "consent_attested", "isolated_identity", "identity_id", "client_id",
-            "application_id", "endpoint", "command_traces", "manager_observation",
+            "application_id", "endpoint", "command_traces", "github_attestation",
+            "runtime_invocation", "discovery_verified", "manager_observation",
             "native_observation", "receipt_reconciled", "native_discovery_reconciled",
             "projection_receipt_digest", "native_app_digest", "native_mcp_digest",
-            "registered_app_binding", "ui_activation", "read_only",
-            "scenario_id", "run_id", "run_attempt", "pseudonymous_identity_id",
+            "oauth_artifact_approved", "registered_app_binding", "ui_activation",
+            "read_only", "scenario_id", "run_id", "run_attempt", "pseudonymous_identity_id",
             "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status",
             "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof",
             "native_discovery_evidence",
+            "public_mcp_evidence", "release_manifest_digest", "release_checksums_digest",
+            "directory_digest", "scenario_contract_digest",
         )
         return {
             **{field: record[field] for field in fields if field in record},
@@ -2007,14 +2049,18 @@ class LaunchHarness:
                 and challenge_context_valid(challenge_context)
                 and challenge_context.get("github_sha") == self.github_sha
                 and str(challenge_context.get("run_id")) == str(self.github_run_id)
-                and str(challenge_context.get("run_attempt")) == str(self.github_run_attempt)
+                and str(challenge_context.get("run_attempt", "")).isdigit()
+                and str(self.github_run_attempt or "").isdigit()
+                and 1 <= int(challenge_context["run_attempt"]) <= int(self.github_run_attempt)
+                and challenge_context.get("root_id") == logical_root_id(
+                    str(self.github_sha), str(self.github_run_id), str(challenge_context["run_attempt"]),
+                )
                 and challenge_context.get("release_manifest_digest") == self.release_manifest_digest
                 and challenge_context.get("directory_digest") == self.snapshot_digest
                 and value.get("challenge") == challenge_context.get("value")
                 and trace.get("challenge") == value.get("challenge") and trace.get("exit_code") == 0
                 and trace.get("argv") == ["agentplugins", "version"]
                 and started <= observed <= datetime.now(timezone.utc) + timedelta(minutes=2)
-                and datetime.now(timezone.utc) - observed <= MAX_ATTESTATION_AGE
                 and distribution_valid
                 and attestation_valid
                 and release_identity_valid
@@ -2022,7 +2068,7 @@ class LaunchHarness:
             self.add(
                 f"native_{kind}_{os_name}_{architecture}", None, f"{os_name}/{architecture}", "harness",
                 "passed" if valid else "failed", "manifest-bound native execution observed" if valid else "native execution observation is incomplete or bound to another manifest",
-                details={"kind": kind, "os": os_name, "architecture": architecture, "release_manifest_digest": value.get("release_manifest_digest"), "release_checksums_digest": value.get("release_checksums_digest"), "asset_name": value.get("asset_name"), "asset_digest": value.get("asset_digest"), "github_asset_attestation": attested_asset, "challenge": value.get("challenge"), "command_trace": trace, "started_at": value.get("started_at"), "observed_at": value.get("observed_at")},
+                details={"kind": kind, "os": os_name, "architecture": architecture, "release_manifest_digest": value.get("release_manifest_digest"), "release_checksums_digest": value.get("release_checksums_digest"), "asset_name": value.get("asset_name"), "asset_digest": value.get("asset_digest"), "github_asset_attestation": attested_asset, "challenge": value.get("challenge"), "producer_run_attempt": str(challenge_context.get("run_attempt")) if isinstance(challenge_context, dict) else None, "command_trace": trace, "started_at": value.get("started_at"), "observed_at": value.get("observed_at")},
             )
 
     @staticmethod
@@ -2176,7 +2222,7 @@ class LaunchHarness:
         required_ids = self.config["fault_scenarios"] + self.config["adapter_repair_faults"] + self.config["advanced_scenarios"] + self.config["acceptance_postconditions"] + self.config["journeys"] + ["shared_copilot_vscode_backend"]
         return {
             "schema_version": 3,
-            "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": hashlib.sha256(str(self.run_root).encode()).hexdigest()[:16] if self.run_root else None, "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "caller_event_name": self.challenge.get("caller_event_name") if self.challenge else None, "caller_ref": self.challenge.get("caller_ref") if self.challenge else None, "caller_workflow_ref": self.challenge.get("caller_workflow_ref") if self.challenge else None, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
+            "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": exported_root_id(self.challenge), "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "caller_event_name": self.caller_event_name, "caller_ref": self.caller_ref, "caller_workflow_ref": self.caller_workflow_ref, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
             "release": {"repository": read_production_config()["cli_release_repository"] if self.mode == "enforced" else None, "tag": self.release_tag, "tag_commit": self.release_manifest.get("commit"), "release_id": self.release_identity.get("release_id"), "immutable": self.release_identity.get("immutable") if self.mode == "enforced" else None, "manifest_digest": self.release_manifest_digest, "checksums_digest": self.release_checksums_digest},
             "directory": {"origin": self.directory_environment.get("AGENTPLUGINS_DIRECTORY_ORIGIN"), "snapshot_digest": self.snapshot_digest, "sequence": self.snapshot.get("sequence"), "trust_root_digest": sha256_file(PRODUCTION_DIRECTORY_TRUST) if self.mode == "enforced" else None},
             "scenario_contract": {"id": self.config["contract_id"], "digest": sha256_file(SCENARIOS), "expected_ids": list(EXPECTED_ACCEPTANCE_SCENARIOS), "required_singleton_ids": required_ids, "expected_counts": EXPECTED_COUNTS},
@@ -2380,11 +2426,12 @@ def main() -> int:
         release_tag = prepared["cli_release_tag"]
         github = prepared["github"]
         challenge = prepared["challenge"]
-        if challenge.get("release_manifest_digest") != release_manifest_digest or challenge.get("directory_digest") != prepared["directory"]["digest"]:
+        if challenge.get("release_manifest_digest") != release_manifest_digest or challenge.get("directory_digest") != prepared["directory"]["digest"] or challenge.get("scenario_contract_digest") != sha256_file(SCENARIOS):
             raise ValueError("prepared challenge is not bound to release and Directory digests")
-        if any(challenge.get(field) != github.get(field) for field in (
-            "caller_event_name", "caller_ref", "caller_workflow_ref",
-        )):
+        if any(github.get(field) != expected for field, expected in (
+            ("caller_ref", "refs/heads/main"),
+            ("caller_workflow_ref", f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@refs/heads/main"),
+        )) or github.get("caller_event_name") not in {"push", "schedule", "workflow_dispatch"}:
             raise ValueError("prepared challenge is not bound to the protected caller identity")
         observer_public_key = os.environ.get("OBSERVER_ED25519_PUBLIC_KEY", "")
         observer_key_id = os.environ.get("OBSERVER_KEY_ID", "")
@@ -2437,6 +2484,9 @@ def main() -> int:
         release_checksums_digest=release_checksums_digest,
         release_tag=release_tag, github_sha=github.get("sha"), github_run_id=github.get("run_id"),
         github_run_attempt=github.get("run_attempt"), challenge=challenge,
+        producer_run_attempt=prepared.get("producer_run_attempt"),
+        caller_event_name=github.get("caller_event_name"), caller_ref=github.get("caller_ref"),
+        caller_workflow_ref=github.get("caller_workflow_ref"),
         native_observations=args.native_observations,
         observer_bundle_digest=observer_bundle_digest,
         copilot_executable=args.copilot_executable, copilot_metadata=args.copilot_metadata,

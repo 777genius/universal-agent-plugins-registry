@@ -82,7 +82,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         e2e.assert_redacted(evidence)
 
     def test_enforced_mode_refuses_missing_live_inputs_before_evidence(self) -> None:
-        with self.assertRaisesRegex(ValueError, "missing required input"):
+        with self.assertRaisesRegex(ValueError, "does not authorize|missing required input"):
             e2e.LaunchHarness(None, None, mode="enforced", consent=CONSENT)
 
     def test_stable_version_floor(self) -> None:
@@ -99,12 +99,29 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e.secrets, "token_hex", return_value="ab" * 32):
             caller = ("push", "refs/heads/main", "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main")
             first = e2e.make_challenge("a" * 40, "12", "3", *caller, "sha256:" + "b" * 64, "sha256:" + "c" * 64, Path(tmp))
-            changed = e2e.make_challenge("a" * 40, "12", "3", *caller, "sha256:" + "d" * 64, "sha256:" + "c" * 64, Path(tmp))
+            changed = e2e.make_challenge("a" * 40, "12", "3", *caller, "sha256:" + "d" * 64, "sha256:" + "c" * 64, Path(tmp) / "producer")
             self.assertNotEqual(first["value"], changed["value"])
         self.assertEqual(first["github_sha"], "a" * 40)
-        self.assertEqual(first["root_id"], e2e.hashlib.sha256(str(Path(tmp).resolve()).encode()).hexdigest())
+        self.assertEqual(first["scenario_contract_digest"], e2e.sha256_file(e2e.SCENARIOS))
+        self.assertNotIn("caller_event_name", first)
+        self.assertEqual(first["root_id"], e2e.logical_root_id("a" * 40, "12", "3"))
+        self.assertEqual(
+            first["root_id"],
+            e2e.make_challenge("a" * 40, "12", "3", *caller, "sha256:" + "b" * 64, "sha256:" + "c" * 64, Path(tmp) / "other-job")["root_id"],
+        )
         self.assertTrue(e2e.challenge_context_valid(first))
         self.assertFalse(e2e.challenge_context_valid({**first, "directory_digest": "sha256:" + "d" * 64}))
+
+    def test_exported_root_identity_is_logical_not_temporary_path_derived(self) -> None:
+        challenge = {
+            "root_id": e2e.logical_root_id("a" * 40, "12", "3"),
+            "caller_event_name": "push",
+            "caller_ref": "refs/heads/main",
+            "caller_workflow_ref": "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main",
+            "value": "b" * 64,
+        }
+        self.assertEqual(e2e.exported_root_id(challenge), challenge["root_id"][:16])
+        self.assertEqual(e2e.exported_root_id(None), "0" * 16)
 
     def test_live_artifacts_require_fresh_challenge_bound_ed25519_bundle(self) -> None:
         private_key = Ed25519PrivateKey.generate()
@@ -1231,6 +1248,10 @@ print(json.dumps(value))
             "outcome": "failed", "reason": "fixture negative record", "tuple": {},
             "challenge": harness.challenge["value"], "run_id": "17", "run_attempt": "2",
             "scenario_id": "hero_5x3_runtime",
+            "release_manifest_digest": harness.release_manifest_digest,
+            "release_checksums_digest": harness.release_checksums_digest,
+            "directory_digest": harness.snapshot_digest,
+            "scenario_contract_digest": e2e.sha256_file(e2e.SCENARIOS),
             "identity_id": consent["pseudonymous_identity_id"],
             "consent_artifact_digest": harness.consent_digest,
             **{field: consent[field] for field in (
@@ -1257,6 +1278,7 @@ print(json.dumps(value))
             "operation": {**record, "operation_mode": "write"},
             "auth": {**record, "auth_origin": "copied-user-auth"},
             "real_project": {**record, "no_real_project_proof": {**record["no_real_project_proof"], "real_project_accessed": True}},
+            "release_binding": {**record, "release_manifest_digest": "sha256:" + "b" * 64},
         }
         for name, value in negatives.items():
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "bound|privacy|identity"):
