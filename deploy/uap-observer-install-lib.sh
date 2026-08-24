@@ -1,0 +1,480 @@
+#!/bin/sh
+
+# Shared, testable installer primitives. The caller supplies only disposable
+# roots in tests; production calls use the fixed system paths.
+
+observer_units='uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service'
+
+# This is the authoritative inventory of every temporary name created by the
+# installer.  Both retry cleanup and the identical-install trust check consume
+# it so a newly added staging path cannot silently escape one of them.
+observer_partial_paths() {
+  printf '%s\n' \
+    /opt/uap-observer-source.new \
+    /opt/uap-observer-venv.new \
+    /opt/uap-observer-runtime.new \
+    /opt/uap-observer-current.new \
+    /usr/local/libexec/uap-observer-runner.new \
+    /usr/local/libexec/uap-observer-fixed-adapter.new \
+    /usr/local/libexec/uap-observer-attest-chatgpt.new \
+    /usr/local/libexec/uap-observer-attest-consent.new \
+    /usr/local/libexec/uap-observer-provision-profile.new \
+    /usr/local/bin/caddy.new \
+    /etc/uap-observer.json.new \
+    /etc/uap-observer-adapter-config.json.new \
+    /etc/uap-observer-adapters.json.new \
+    /etc/caddy/Caddyfile.new \
+    /opt/uap-observer-closures/.new-* \
+    /usr/local/libexec/uap-observer-adapter-*.new
+}
+
+observer_validate_no_partial_paths() {
+  inventory=${1:-observer_partial_paths}
+  for partial in $("$inventory"); do
+    test ! -e "$partial"
+    test ! -L "$partial"
+  done
+}
+
+observer_cleanup_partial_paths() {
+  inventory=${1:-observer_partial_paths}
+  for partial in $("$inventory"); do
+    if [ -e "$partial" ] || [ -L "$partial" ]; then rm -rf -- "$partial"; fi
+  done
+}
+
+observer_closure_identity() {
+  python3 - "$1" <<'PY'
+import hashlib,os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+identity=hashlib.sha256()
+paths=sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
+regular={}
+for path in paths:
+    info=path.lstat()
+    if stat.S_ISREG(info.st_mode):
+        regular.setdefault((info.st_dev,info.st_ino),[]).append(path.relative_to(root).as_posix())
+adapter_paths={f"libexec/uap-observer-adapter-{name}" for name in ("runtime","notion","chatgpt","consent")}
+adapter_paths.add("libexec/uap-observer-fixed-adapter")
+for inode,members in regular.items():
+    members.sort()
+    info=(root/members[0]).lstat()
+    actual=set(members)
+    if actual == adapter_paths:
+        if info.st_nlink != 5: raise SystemExit("adapter hardlink set has an external link")
+    elif len(members) != 1 or info.st_nlink != 1:
+        raise SystemExit("closure regular file has unexpected hardlink topology")
+groups=[set(members) for members in regular.values() if adapter_paths & set(members)]
+if groups != [adapter_paths]: raise SystemExit("adapter paths are not one exact hardlink set")
+for path in paths:
+    info=path.lstat(); relative=path.relative_to(root).as_posix().encode()
+    kind=b"d" if stat.S_ISDIR(info.st_mode) else b"f" if stat.S_ISREG(info.st_mode) else b"l" if stat.S_ISLNK(info.st_mode) else b"?"
+    identity.update(b"\0".join((relative,kind,str(stat.S_IMODE(info.st_mode)).encode(),str(info.st_uid).encode(),str(info.st_gid).encode()))+b"\0")
+    if kind == b"f":
+        # Canonical path equivalence classes bind topology without hashing raw,
+        # filesystem-specific inode numbers.
+        topology="=".join(regular[(info.st_dev,info.st_ino)]).encode()
+        identity.update(b"links\0"+topology+b"\0"+hashlib.sha256(path.read_bytes()).digest())
+    elif kind == b"l": identity.update(os.readlink(path).encode())
+    elif kind == b"?": raise SystemExit("closure contains a special file")
+print(identity.hexdigest())
+PY
+}
+
+observer_install_input_identity() {
+  source_root=$1
+  runtime_manifest_digest=$2
+  adapter_config=$3
+  adapter_config_digest=$4
+  observer_config=$5
+  observer_config_digest=$6
+  caddy_archive=$7
+  caddy_archive_digest=$8
+  caddy_config=$9
+  shift 9
+  caddy_config_digest=$1
+  manifest="$source_root/deploy/uap-observer-runtime.sha256"
+  test -d "$source_root"
+  test ! -L "$source_root"
+  test -f "$manifest"
+  test ! -L "$manifest"
+  test "$(sha256sum "$manifest" | cut -d' ' -f1)" = "$runtime_manifest_digest"
+  while read -r expected relative extra; do
+    test -z "${extra:-}"
+    case "$expected:$relative" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*:[A-Za-z0-9._-]*) ;;
+      *) echo "invalid runtime closure entry" >&2; return 1 ;;
+    esac
+    case "/$relative/" in */../*|*/./*|//* ) echo "unsafe runtime closure path" >&2; return 1 ;; esac
+    test -f "$source_root/$relative"
+    test ! -L "$source_root/$relative"
+  done < "$manifest"
+  (cd "$source_root" && sha256sum -c deploy/uap-observer-runtime.sha256 >/dev/null)
+  for input in "$adapter_config" "$observer_config" "$caddy_archive" "$caddy_config"; do
+    test -f "$input"
+    test ! -L "$input"
+  done
+  actual_adapter="sha256:$(sha256sum "$adapter_config" | cut -d' ' -f1)"
+  actual_observer="sha256:$(sha256sum "$observer_config" | cut -d' ' -f1)"
+  actual_archive="sha256:$(sha256sum "$caddy_archive" | cut -d' ' -f1)"
+  actual_caddy="sha256:$(sha256sum "$caddy_config" | cut -d' ' -f1)"
+  test "$actual_adapter" = "$adapter_config_digest"
+  test "$actual_observer" = "$observer_config_digest"
+  test "$actual_archive" = "sha256:$caddy_archive_digest"
+  test "$actual_caddy" = "$caddy_config_digest"
+  printf '%s\n' \
+    "runtime-manifest sha256:$runtime_manifest_digest" \
+    "adapter-config $actual_adapter" \
+    "observer-config $actual_observer" \
+    "caddy-archive $actual_archive" \
+    "caddy-config $actual_caddy" | sha256sum | cut -d' ' -f1
+}
+
+observer_validate_completed_closure() {
+  closures_root=$1
+  current_pointer=$2
+  expected_install_identity=$3
+  expected_owner=${4:-0:0}
+  systemd_root=${5:-/etc/systemd/system}
+  config_gid=${6:-$(getent group uap-observer-adapter-config | cut -d: -f3)}
+  caddy_gid=${7:-$(getent group caddy | cut -d: -f3)}
+  test -n "$config_gid"
+  test -n "$caddy_gid"
+  test -d "$closures_root"
+  test ! -L "$closures_root"
+  test "$(stat -c '%u:%g:%a' "$closures_root")" = "$expected_owner:755"
+  test -L "$current_pointer"
+  test "$(stat -c '%u:%g:%a' "$current_pointer")" = "$expected_owner:777"
+  target=$(readlink "$current_pointer")
+  digest=${target#uap-observer-closures/}
+  printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || {
+    echo "observer current pointer is invalid" >&2
+    return 1
+  }
+  test "$target" = "uap-observer-closures/$digest"
+  closure="$closures_root/$digest"
+  test "$(find "$closures_root" -mindepth 1 -maxdepth 1 -printf '%f\n')" = "$digest"
+  test -d "$closure"
+  test ! -L "$closure"
+  test "$(stat -c '%u:%g:%a' "$closure")" = "$expected_owner:755"
+  for marker in .complete .install-identity; do
+    test -f "$closure/$marker"
+    test ! -L "$closure/$marker"
+    test "$(stat -c '%u:%g:%a' "$closure/$marker")" = "$expected_owner:644"
+  done
+  test "$(cat "$closure/.complete")" = complete-v1
+  test "$(cat "$closure/.install-identity")" = "$expected_install_identity"
+  actual_identity=$(observer_closure_identity "$closure")
+  test "$actual_identity" = "$digest"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$config_gid:640:1"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/Caddyfile")" = "0:$caddy_gid:640:1"
+  test -d "$systemd_root"
+  test ! -L "$systemd_root"
+  test "$(stat -c '%u:%g:%a' "$systemd_root")" = "$expected_owner:755"
+  for unit in $observer_units; do
+    installed="$systemd_root/$unit"
+    reviewed="$closure/systemd/$unit"
+    test -f "$installed"
+    test ! -L "$installed"
+    test "$(stat -c '%h' "$installed")" = 1
+    test "$(stat -c '%u:%g:%a' "$installed")" = "$expected_owner:644"
+    cmp "$reviewed" "$installed"
+  done
+  for service in uap-observer uap-observer-runner; do
+    installed="$systemd_root/$service.service.d"
+    reviewed="$closure/systemd/$service.service.d/egress.conf"
+    test -d "$installed"
+    test ! -L "$installed"
+    test "$(stat -c '%u:%g:%a' "$installed")" = "$expected_owner:755"
+    test "$(find "$installed" -mindepth 1 -maxdepth 1 -printf '%f\n')" = egress.conf
+    test -f "$installed/egress.conf"
+    test ! -L "$installed/egress.conf"
+    test "$(stat -c '%h' "$installed/egress.conf")" = 1
+    test "$(stat -c '%u:%g:%a' "$installed/egress.conf")" = "$expected_owner:644"
+    cmp "$reviewed" "$installed/egress.conf"
+  done
+  expected_observer_paths=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | sort)
+  actual_observer_paths=$(find "$systemd_root" -mindepth 1 -maxdepth 1 -name 'uap-observer*' -printf '%f\n' | sort)
+  test "$actual_observer_paths" = "$expected_observer_paths"
+}
+
+observer_validate_installed_accounts_and_state() {
+  observer_runtime=${1:-/opt/uap-observer-current/runtime}
+  PYTHONPATH="$observer_runtime" python3 - <<'PY'
+import grp,os,pwd,stat
+from pathlib import Path
+from observer.fixed_runner import reviewed_service_identities
+
+services=reviewed_service_identities()
+identities=[services[name][:2] for name in ("codex","cursor","kiro","control")]
+observer_uid,observer_gid,_=services["observer"]
+caddy_uid,caddy_gid,_=services["caddy"]
+
+def directory(path,uid,gid,mode):
+    info=os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_gid != gid or stat.S_IMODE(info.st_mode) != mode:
+        raise SystemExit(f"installed state directory {path} differs")
+
+directory("/var/empty",0,0,0o755)
+for suffix,(uid,gid) in zip(("codex","cursor","kiro","control"),identities):
+    directory(f"/var/empty/uap-observer-{suffix}",uid,gid,0o700)
+directory("/var/lib/uap-observer",0,0,0o711)
+directory("/var/lib/uap-observer/state",observer_uid,observer_gid,0o700)
+for name in ("jobs","workspaces","profiles"): directory(f"/var/lib/uap-observer/{name}",0,0,0o711)
+for suffix,(uid,gid) in zip(("codex","cursor","kiro"),identities):
+    directory(f"/var/lib/uap-observer/profiles/{suffix}",uid,gid,0o700)
+    directory(f"/var/lib/uap-observer/workspaces/{suffix}",uid,gid,0o700)
+directory("/var/lib/uap-observer-human",0,0,0o755)
+directory("/var/lib/uap-observer-human/pending",0,identities[3][1],0o750)
+for name in ("consumed","reserved"): directory(f"/var/lib/uap-observer-human/{name}",0,0,0o700)
+config_gid=grp.getgrnam("uap-observer-adapter-config").gr_gid
+directory("/var/lib/uap-observer-consent",0,0,0o755)
+directory("/var/lib/uap-observer-consent/pending",0,config_gid,0o750)
+for name in ("consumed","reserved"): directory(f"/var/lib/uap-observer-consent/{name}",0,0,0o700)
+directory("/var/lib/caddy",caddy_uid,caddy_gid,0o700)
+directory("/var/log/caddy",caddy_uid,caddy_gid,0o700)
+PY
+}
+
+observer_validate_protected_inputs() {
+  closure=$1
+  observer_runtime=${2:-$closure/runtime}
+  protected_root=${3:-/opt/uap-observer-inputs}
+  PYTHONPATH="$observer_runtime" python3 - "$closure/etc/uap-observer-adapter-config.json" "$protected_root" <<'PY'
+import sys
+from pathlib import Path
+from observer.fixed_runner import validate_adapter_input_access
+validate_adapter_input_access(Path(sys.argv[1]),protected_root=Path(sys.argv[2]))
+PY
+}
+
+observer_validate_installed_closure_sources() {
+  closure=$1
+  source_root=$2
+  adapter_config=$3
+  observer_config=$4
+  caddy_config=$5
+  runner_digest=$6
+  adapter_digest=$7
+  caddy_digest=$8
+  cmp "$observer_config" "$closure/etc/uap-observer.json"
+  cmp "$adapter_config" "$closure/etc/uap-observer-adapter-config.json"
+  cmp "$caddy_config" "$closure/etc/Caddyfile"
+  test "$(sha256sum "$closure/libexec/uap-observer-runner" | cut -d' ' -f1)" = "$runner_digest"
+  test "$(sha256sum "$closure/libexec/uap-observer-fixed-adapter" | cut -d' ' -f1)" = "$adapter_digest"
+  test "$(sha256sum "$closure/bin/caddy" | cut -d' ' -f1)" = "$caddy_digest"
+  for source in "$source_root"/observer/*.py; do
+    cmp "$source" "$closure/runtime/observer/$(basename "$source")"
+  done
+  for source in "$source_root"/tests/e2e/schemas/*.schema.json; do
+    cmp "$source" "$closure/runtime/tests/e2e/schemas/$(basename "$source")"
+  done
+  cmp "$source_root/deploy/uap-observer-signer.py" "$closure/runtime/uap-observer-signer.py"
+  cmp "$source_root/deploy/uap-observer-attest-chatgpt.py" "$closure/libexec/uap-observer-attest-chatgpt"
+  cmp "$source_root/deploy/uap-observer-attest-consent.py" "$closure/libexec/uap-observer-attest-consent"
+  cmp "$source_root/deploy/uap-observer-provision-profile.py" "$closure/libexec/uap-observer-provision-profile"
+  for unit in $observer_units; do cmp "$source_root/deploy/$unit" "$closure/systemd/$unit"; done
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$closure/runtime" "$closure/venv/bin/python" -B -c 'import cryptography,jsonschema; import observer.http_server'
+  python3 - "$closure/etc/uap-observer-adapter-config.json" "$closure/etc/uap-observer-adapters.json" "$adapter_digest" <<'PY'
+import hashlib,json,sys
+config_path,adapters_path,adapter_digest=sys.argv[1:]
+config_digest="sha256:"+hashlib.sha256(open(config_path,"rb").read()).hexdigest()
+artifacts={"runtime-attestations.json":"runtime","notion-oauth-attestations.json":"notion","chatgpt-cloudflare-attestation.json":"chatgpt","consent.json":"consent"}
+expected={"schema_version":1,"config":{"path":"/opt/uap-observer-current/etc/uap-observer-adapter-config.json","sha256":config_digest},"artifacts":{artifact:{"path":f"/opt/uap-observer-current/libexec/uap-observer-adapter-{name}","sha256":"sha256:"+adapter_digest} for artifact,name in artifacts.items()}}
+if json.load(open(adapters_path,encoding="utf-8")) != expected: raise SystemExit("installed adapter registry differs")
+PY
+}
+
+observer_sync_tree() {
+  python3 - "$1" <<'PY'
+import os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+directories=[]
+for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+    info=path.lstat()
+    if stat.S_ISREG(info.st_mode):
+        descriptor=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)
+        try: os.fsync(descriptor)
+        finally: os.close(descriptor)
+    elif stat.S_ISDIR(info.st_mode): directories.append(path)
+    elif not stat.S_ISLNK(info.st_mode): raise SystemExit("durability tree contains a special file")
+directories.append(root)
+for path in directories:
+    descriptor=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+PY
+}
+
+apply_observer_closure_modes() {
+  closure=$1
+  config_group=${2:-uap-observer-adapter-config}
+  caddy_group=${3:-caddy}
+  chown -R root "$closure"
+  find "$closure" -type d -exec chmod 0755 {} +
+  find "$closure" -type f -perm /0111 -exec chmod 0755 {} +
+  find "$closure" -type f ! -perm /0111 -exec chmod 0644 {} +
+  chmod 0640 "$closure/etc/uap-observer-adapter-config.json" "$closure/etc/Caddyfile"
+  chown "root:$config_group" "$closure/etc/uap-observer-adapter-config.json"
+  chown "root:$caddy_group" "$closure/etc/Caddyfile"
+  chmod 0755 "$closure/libexec/uap-observer-runner" "$closure/libexec/uap-observer-fixed-adapter"
+  for name in runtime notion chatgpt consent; do
+    chmod 0755 "$closure/libexec/uap-observer-adapter-$name"
+  done
+  test "$(stat -c '%u:%g:%a' "$closure/etc/uap-observer.json")" = '0:0:644'
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$(getent group "$config_group" | cut -d: -f3):640:1"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/Caddyfile")" = "0:$(getent group "$caddy_group" | cut -d: -f3):640:1"
+  test "$(stat -c '%u:%g:%a' "$closure/etc/uap-observer-adapters.json")" = '0:0:644'
+  test "$(stat -c '%u:%g:%a' "$closure/libexec/uap-observer-runner")" = '0:0:755'
+  test -z "$(find "$closure" \( -type d -o -type f \) -perm /0022 -print -quit)"
+}
+
+journal_observer_systemd() {
+  backup=$1
+  systemd_root=$2
+  test ! -e "$backup"
+  install -d -o root -g root -m 0700 "$backup" "$backup/items"
+  : > "$backup/manifest"
+  chown root:root "$backup/manifest"
+  chmod 0600 "$backup/manifest"
+  index=0
+  for relative in $observer_units uap-observer.service.d uap-observer-runner.service.d; do
+    target="$systemd_root/$relative"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      cp -a "$target" "$backup/items/$index"
+      printf 'present %s %s\n' "$index" "$relative" >> "$backup/manifest"
+    else
+      printf 'missing %s %s\n' "$index" "$relative" >> "$backup/manifest"
+    fi
+    index=$((index + 1))
+  done
+}
+
+validate_observer_systemd_journal() {
+  backup=$1
+  test -d "$backup"
+  test ! -L "$backup"
+  test -d "$backup/items"
+  test ! -L "$backup/items"
+  test -f "$backup/manifest"
+  test ! -L "$backup/manifest"
+  test "$(stat -c '%u:%g:%a' "$backup")" = 0:0:700
+  test "$(stat -c '%u:%g:%a' "$backup/items")" = 0:0:700
+  test "$(stat -c '%u:%g:%a:%h' "$backup/manifest")" = 0:0:600:1
+  expected_index=0
+  expected_names="$observer_units uap-observer.service.d uap-observer-runner.service.d"
+  seen_items=
+  while read -r state index relative extra; do
+    test -z "${extra:-}"
+    test "$index" = "$expected_index"
+    expected_relative=$(printf '%s\n' $expected_names | sed -n "$((expected_index + 1))p")
+    test "$relative" = "$expected_relative"
+    case "$state" in
+      present)
+        test -e "$backup/items/$index" || test -L "$backup/items/$index"
+        seen_items="$seen_items $index"
+        ;;
+      missing)
+        test ! -e "$backup/items/$index"
+        test ! -L "$backup/items/$index"
+        ;;
+      *) echo "installer recovery journal is invalid" >&2; return 1 ;;
+    esac
+    expected_index=$((expected_index + 1))
+  done < "$backup/manifest"
+  test "$expected_index" -eq 7
+  for item in "$backup"/items/*; do
+    if [ -e "$item" ] || [ -L "$item" ]; then
+      index=${item##*/}
+      case " $seen_items " in *" $index "*) ;; *) echo "installer recovery journal is invalid" >&2; return 1;; esac
+    fi
+  done
+}
+
+restore_observer_systemd() {
+  backup=$1
+  systemd_root=$2
+  while read -r state index relative; do
+    target="$systemd_root/$relative"
+    rm -rf "$target" || return 1
+    if [ "$state" = present ]; then
+      cp -a "$backup/items/$index" "$target" || return 1
+    fi
+  done < "$backup/manifest"
+}
+
+recover_observer_install() {
+  stage=$1
+  closures_root=$2
+  current_pointer=$3
+  systemd_root=$4
+  manager=$5
+  cleanup_partials=${6:-observer_cleanup_partial_paths}
+  if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then return 0; fi
+  if [ ! -d "$stage" ] || [ -L "$stage" ]; then
+    echo "installer recovery journal is invalid" >&2
+    return 1
+  fi
+  test "$(stat -c '%u:%g:%a' "$stage")" = 0:0:700 || {
+    echo "installer recovery journal is invalid" >&2
+    return 1
+  }
+  journal_present=0
+  for journal_path in rollback-required closure-digest systemd-backup; do
+    if [ -e "$stage/$journal_path" ] || [ -L "$stage/$journal_path" ]; then journal_present=1; fi
+  done
+  if [ "$journal_present" -eq 1 ]; then
+    test -f "$stage/rollback-required" && test ! -L "$stage/rollback-required"
+    test "$(stat -c '%u:%g:%a:%h' "$stage/rollback-required")" = 0:0:600:1
+    test "$(cat "$stage/rollback-required")" = rollback-required
+    test -f "$stage/closure-digest" && test ! -L "$stage/closure-digest"
+    test "$(stat -c '%u:%g:%a:%h' "$stage/closure-digest")" = 0:0:600:1
+    recovered_digest=$(cat "$stage/closure-digest")
+    printf '%s\n' "$recovered_digest" | grep -Eq '^[0-9a-f]{64}$'
+    validate_observer_systemd_journal "$stage/systemd-backup"
+    test -d "$closures_root" && test ! -L "$closures_root"
+    test "$(stat -c '%u:%g:%a' "$closures_root")" = 0:0:755
+    # A current pointer means activation crossed its commit point.  Recovery is
+    # only permitted to accept the exact journaled closure in that case.
+    if [ -e "$current_pointer" ] || [ -L "$current_pointer" ]; then
+      test -L "$current_pointer"
+      test "$(readlink "$current_pointer")" = "uap-observer-closures/$recovered_digest"
+    else
+      restore_observer_systemd "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_sync_tree "$systemd_root" || return 1
+      "$manager" daemon-reload || return 1
+      candidate="$closures_root/$recovered_digest"
+      if [ -e "$candidate" ] || [ -L "$candidate" ]; then rm -rf -- "$candidate" || return 1; fi
+      observer_sync_tree "$closures_root" || return 1
+    fi
+  fi
+  "$cleanup_partials" || return 1
+}
+
+observer_install_failpoint() {
+  observer_install_step=$((observer_install_step + 1))
+  test "${UAP_OBSERVER_INSTALL_FAIL_AT:-}" != "$observer_install_step"
+}
+
+activate_observer_systemd() {
+  staged=$1
+  systemd_root=$2
+  observer_install_step=0
+  install -d -m 0755 "$systemd_root/uap-observer.service.d" "$systemd_root/uap-observer-runner.service.d"
+  for unit in $observer_units; do
+    mv "$staged/$unit" "$systemd_root/$unit"
+    observer_install_failpoint || return 1
+  done
+  for service in uap-observer uap-observer-runner; do
+    mv "$staged/$service.service.d/egress.conf" "$systemd_root/$service.service.d/egress.conf"
+    observer_install_failpoint || return 1
+  done
+}
+
+reload_observer_systemd() {
+  manager=$1
+  "$manager" daemon-reload
+  observer_install_failpoint || return 1
+}

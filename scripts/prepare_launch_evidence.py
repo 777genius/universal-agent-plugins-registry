@@ -71,7 +71,8 @@ def main() -> int:
     challenge = make_challenge(
         os.environ["GITHUB_SHA"], os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"],
         args.caller_event_name, args.caller_ref, args.caller_workflow_ref,
-        release_digest, directory_digest, args.run_root,
+        release_digest, directory_digest,
+        sha256_file(Path(__file__).parents[1] / "tests/e2e/launch-scenarios.json"), args.run_root,
     )
     value = {
         "schema_version": 1, "catalog_repository": catalog_repository,
@@ -83,6 +84,7 @@ def main() -> int:
         "github_asset_attestation": json.loads((args.run_root / "release" / f"{args.asset_name}.attestation.json").read_text()),
         "directory": {"origin": directory_env["AGENTPLUGINS_DIRECTORY_ORIGIN"], "snapshot": "directory/snapshot.json", "envelope": "directory/envelope.json", "digest": directory_digest, "sequence": snapshot["sequence"], "publication_id": snapshot["publication_id"], "source_commit": snapshot["source_commit"], "ledger_commit": args.publication_ledger_commit},
         "github": {"sha": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"], "caller_event_name": args.caller_event_name, "caller_ref": args.caller_ref, "caller_workflow_ref": args.caller_workflow_ref},
+        "scenario_contract_digest": challenge["scenario_contract_digest"],
         "challenge": challenge,
     }
     if npm_package is not None:

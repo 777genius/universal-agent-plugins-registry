@@ -32,7 +32,7 @@
     "notion/codex/oauth",
     "notion/cursor/oauth",
     "notion/kiro/oauth",
-    "cloudflare-docs/chatgpt/oauth_runtime"
+    "cloudflare-docs/chatgpt/registered_binding_ui_public_mcp_runtime"
   ],
   "fault_scenarios": [
     "state_schema_2_migration",
