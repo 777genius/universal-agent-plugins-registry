@@ -66,6 +66,7 @@ SCENARIOS = ROOT / "tests" / "e2e" / "launch-scenarios.json"
 EXTERNAL_PACKAGE = ROOT / "tests" / "e2e" / "fixtures" / "external-package"
 FORK_PACKAGE = ROOT / "tests" / "fixtures" / "plugins" / "fixture-bridge"
 STATE_FIXTURE = ROOT / "tests" / "e2e" / "fixtures" / "state-schema-2.json"
+CAPTURE_PROVENANCE = ROOT / "tests" / "fixtures" / "agentplugins-0.1.14" / "provenance.json"
 RECOVERY_FIXTURE = ROOT / "tests" / "e2e" / "fixtures" / "recovery-cases.json"
 SCENARIO_OBSERVER = ROOT / "scripts" / "observe_launch_scenario.py"
 PRODUCTION_CONFIG = ROOT / "tests" / "e2e" / "production-launch.json"
@@ -77,6 +78,61 @@ TRUSTED_CATALOG_REPOSITORY = "777genius/universal-agent-plugins"
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
 TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.12"
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
+
+
+def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, Any]:
+    """Verify retained capture bytes and reject path/secret-bearing provenance."""
+    value = strict_json_loads(path.read_bytes())
+    if set(value) != {"schema_version", "release", "sanitization_rules", "captures"} or value["schema_version"] != 1:
+        raise ValueError("invalid capture provenance envelope")
+    release = value["release"]
+    if not (
+        release.get("repository") == "777genius/plugin-kit-ai"
+        and release.get("tag") == "agentplugins-v0.1.14"
+        and re.fullmatch(r"[0-9a-f]{40}", str(release.get("tag_commit", "")))
+        and release.get("asset") == "agentplugins_0.1.14_linux_amd64"
+        and release.get("version_stdout") == "agentplugins 0.1.14"
+        and release.get("binary_sha256") is None
+        and release.get("binary_digest_status") == "not_retained_in_capture"
+    ):
+        raise ValueError("invalid capture release identity")
+    if not isinstance(value["sanitization_rules"], list) or len(value["sanitization_rules"]) < 5:
+        raise ValueError("incomplete capture sanitization rules")
+    roots = {"tests/e2e/fixtures": ROOT / "tests/e2e/fixtures"}
+    default_root = path.parent
+    seen: set[tuple[str, str]] = set()
+    for capture in value["captures"]:
+        fixture_root = capture.get("fixture_root", ".")
+        root = default_root if fixture_root == "." else roots.get(fixture_root)
+        fixture = capture.get("fixture")
+        if root is None or not isinstance(fixture, str) or Path(fixture).name != fixture:
+            raise ValueError("non-canonical capture fixture locator")
+        key = (fixture_root, fixture)
+        if key in seen or not isinstance(capture.get("argv"), list) or not capture["argv"]:
+            raise ValueError("duplicate or unbound capture provenance")
+        seen.add(key)
+        try:
+            body = (root / fixture).read_bytes()
+        except OSError as error:
+            raise ValueError("capture fixture is missing") from error
+        if capture.get("sanitized_sha256") != "sha256:" + hashlib.sha256(body).hexdigest():
+            raise ValueError("capture fixture digest mismatch")
+        if not DIGEST.fullmatch(str(capture.get("capture_sha256", ""))):
+            raise ValueError("invalid original capture digest")
+        stderr_fixture = capture.get("stderr_fixture")
+        if stderr_fixture is not None:
+            if Path(stderr_fixture).name != stderr_fixture:
+                raise ValueError("non-canonical stderr fixture locator")
+            try:
+                stderr_body = (root / stderr_fixture).read_bytes()
+            except OSError as error:
+                raise ValueError("stderr capture fixture is missing") from error
+            if capture.get("stderr_sha256") != "sha256:" + hashlib.sha256(stderr_body).hexdigest():
+                raise ValueError("stderr capture digest mismatch")
+    serialized = json.dumps(value, sort_keys=True)
+    if re.search(r"/(?:home|tmp|srv|root)/", serialized, re.IGNORECASE):
+        raise ValueError("capture provenance contains a host path")
+    return value
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
     "AGENTPLUGINS_DIRECTORY_SNAPSHOT",

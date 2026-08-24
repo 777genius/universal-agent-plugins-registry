@@ -93,14 +93,87 @@ def _digest(value: Any) -> bool:
 
 
 def _validate_package_revision(value: Any, *, revision: str | None, tree: str, manifest: str) -> bool:
-    required = {"version", "tree_digest", "manifest_digest"}
-    optional = {"resolved_revision", "distribution_id", "release_sequence", "catalog_evidence"}
+    required = {"tree_digest", "manifest_digest"}
+    optional = {"version", "resolved_revision", "distribution_id", "release_sequence", "catalog_evidence"}
     return bool(
         _keys(value, required, optional)
-        and _nonempty(value["version"])
+        and ("version" not in value or _nonempty(value["version"]))
         and value["tree_digest"] == tree and value["manifest_digest"] == manifest
         and (revision is None or value.get("resolved_revision") == revision)
         and ("resolved_revision" not in value or FULL_SHA.fullmatch(value["resolved_revision"]) is not None)
+    )
+
+
+MATERIALIZATIONS = {"materialized"}
+ACTIVATIONS = {"active", "manual_activation_required", "not_required"}
+AUTHENTICATIONS = {"not_checked", "not_required"}
+POLICIES = {"allowed"}
+VERIFICATIONS = {"package_validated", "installation_verified"}
+PACKAGE_MODES = {"native", "compatibility_projection"}
+
+
+def _string_list(value: Any, *, nonempty: bool = False) -> bool:
+    return isinstance(value, list) and (not nonempty or bool(value)) and all(_nonempty(item) for item in value)
+
+
+def _validate_plan(value: Any, target: str) -> bool:
+    required = {
+        "client_id", "scope", "status", "package_mode", "activation", "authentication",
+        "policy", "verification", "physical_artifact_id", "components", "user_actions", "warnings",
+    }
+    if not _keys(value, required):
+        return False
+    components = value["components"]
+    if not isinstance(components, list) or not components:
+        return False
+    for component in components:
+        if not (
+            _keys(component, {"kind", "name", "support"})
+            and component["kind"] in {"skill", "mcp_server"}
+            and _nonempty(component["name"])
+            and component["support"] in {"native", "projected"}
+        ):
+            return False
+    return bool(
+        value["client_id"] == target and value["scope"] == "user"
+        and value["status"] == "manual_activation_required"
+        and value["package_mode"] in PACKAGE_MODES
+        and value["activation"] == "manual_activation_required"
+        and value["authentication"] in AUTHENTICATIONS and value["policy"] in POLICIES
+        and value["verification"] == "package_validated"
+        and _nonempty(value["physical_artifact_id"])
+        and _string_list(value["user_actions"], nonempty=True) and _string_list(value["warnings"])
+    )
+
+
+def _validate_activation(value: Any) -> bool:
+    if not _keys(value, {"activation", "authentication", "policy", "verification"}, {"user_actions"}):
+        return False
+    return bool(
+        value["activation"] in ACTIVATIONS and value["authentication"] in AUTHENTICATIONS
+        and value["policy"] in POLICIES and value["verification"] in VERIFICATIONS
+        and ("user_actions" not in value or _string_list(value["user_actions"], nonempty=True))
+        and ((value["activation"] == "active") == (value["verification"] == "installation_verified"))
+    )
+
+
+def _requested_source_matches(requested: str, data: dict[str, Any], command: str) -> bool:
+    if command != "add":
+        return requested == data["plugin"]
+    if requested in {data["plugin"], data["source"]}:
+        return True
+    if data["source"] == "direct local source":
+        path = PurePosixPath(requested.removeprefix("./"))
+        return bool(requested.startswith("./") and path.parts and ".." not in path.parts)
+    try:
+        repository_revision, package_path = requested.split("//", 1)
+        repository, revision = repository_revision.split("@", 1)
+    except ValueError:
+        return False
+    return bool(
+        data.get("source") == repository + "//" + package_path
+        and data.get("revision") == revision and GITHUB_REPOSITORY.fullmatch(repository)
+        and FULL_SHA.fullmatch(revision) and GITHUB_SOURCE_PATH.fullmatch(package_path)
     )
 
 
@@ -137,11 +210,9 @@ def _validate_group_target(
         if not _keys(result, common | {"plan"}, {"activation", "no_change"}):
             return None
         plan = result["plan"]
-        plan_required = {
-            "client_id", "scope", "status", "package_mode", "activation", "authentication",
-            "policy", "verification", "physical_artifact_id", "components", "user_actions", "warnings",
-        }
-        if not _keys(plan, plan_required) or plan["client_id"] != target or plan["scope"] != "user":
+        if not _validate_plan(plan, target):
+            return None
+        if "activation" in result and not _validate_activation(result["activation"]):
             return None
     elif command == "remove":
         if not _keys(result, common | {"plugin", "client_id", "deactivation", "affected_surfaces"}):
@@ -149,7 +220,13 @@ def _validate_group_target(
         deactivation = result["deactivation"]
         if not _keys(deactivation, {"activation", "artifact_removal_allowed", "external_removal_complete"}):
             return None
-        if result["plugin"] != data["plugin"] or result["client_id"] != target:
+        if (
+            result["plugin"] != data["plugin"] or result["client_id"] != target
+            or deactivation["activation"] != "not_required"
+            or type(deactivation["artifact_removal_allowed"]) is not bool
+            or type(deactivation["external_removal_complete"]) is not bool
+            or result["affected_surfaces"] != [target]
+        ):
             return None
     else:
         return None
@@ -221,7 +298,9 @@ def _validate_grouped(value: dict[str, Any], command: str, *, verify_acquisition
     return command != "add" or not verify_acquisition or command_acquisition_proof(value, tuple(targets), command="add") is not None
 
 
-def validate_cli_envelope(value: Any, command: str) -> bool:
+def validate_cli_envelope(
+    value: Any, command: str, *, requested_argv: list[str] | tuple[str, ...] | None = None,
+) -> bool:
     """Validate public agentplugins 0.1.14 JSON, without accepting invented shapes."""
     if not (
         _keys(value, {"schema_version", "command", "result", "data"})
@@ -232,12 +311,26 @@ def validate_cli_envelope(value: Any, command: str) -> bool:
         return False
     data = value["data"]
     if command in {"add", "update", "repair", "remove"}:
-        return _validate_grouped(value, command)
+        valid = _validate_grouped(value, command)
+        if valid and requested_argv is not None:
+            argv = list(requested_argv)
+            try:
+                command_index = argv.index(command)
+                requested_source = argv[command_index + 1]
+                requested_targets = argv[argv.index("--target") + 1].split(",")
+            except (ValueError, IndexError):
+                return False
+            valid = bool(
+                requested_targets == [item["target"] for item in data["targets"]]
+                and _requested_source_matches(requested_source, data, command)
+            )
+        return valid
     if command == "info":
-        if not _keys(data, {"installation_id", "name", "source", "clients", "mixed_version"}, {"version", "convergence_action"}):
+        if not _keys(data, {"installation_id", "name", "version", "source", "clients", "mixed_version"}):
             return False
         clients = data["clients"]
         seen: set[str] = set()
+        revisions: set[tuple[str, str, str, str]] = set()
         for client in clients if isinstance(clients, list) else ():
             required = {
                 "client_id", "scope", "materialization", "activation", "authentication", "policy",
@@ -248,19 +341,35 @@ def validate_cli_envelope(value: Any, command: str) -> bool:
             revision = client.get("package_revision") if isinstance(client, dict) else None
             if (
                 not _nonempty(client_id) or client_id in seen or client["scope"] != "user"
+                or client["materialization"] not in MATERIALIZATIONS
+                or client["activation"] not in ACTIVATIONS
+                or client["authentication"] not in AUTHENTICATIONS
+                or client["policy"] not in POLICIES or client["verification"] not in VERIFICATIONS
+                or ((client["activation"] == "active") != (client["verification"] == "installation_verified"))
                 or not isinstance(revision, dict) or not _digest(revision.get("tree_digest"))
                 or not _digest(revision.get("manifest_digest"))
-                or ("version" in revision and not _nonempty(revision.get("version")))
-                or ("resolved_revision" in revision and FULL_SHA.fullmatch(revision["resolved_revision"]) is None)
+                or revision.get("version") != data["version"]
+                or FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is None
                 or ("affected_surfaces" in client and client["affected_surfaces"] != [client_id])
             ):
                 return False
             seen.add(client_id)
-        return bool(
+            revisions.add((revision["version"], revision["resolved_revision"], revision["tree_digest"], revision["manifest_digest"]))
+        valid = bool(
             _nonempty(data["installation_id"]) and _nonempty(data["name"])
-            and ("version" not in data or _nonempty(data["version"])) and _nonempty(data["source"])
-            and seen and type(data["mixed_version"]) is bool
+            and _nonempty(data["version"]) and _nonempty(data["source"])
+            and seen and len(revisions) == 1 and type(data["mixed_version"]) is bool and data["mixed_version"] is False
         )
+        if valid and requested_argv is not None:
+            argv = list(requested_argv)
+            try:
+                valid = (
+                    argv[argv.index("info") + 1] == data["name"]
+                    and argv[argv.index("--target") + 1].split(",") == [item["client_id"] for item in clients]
+                )
+            except (ValueError, IndexError):
+                return False
+        return valid
     if command == "migrate-state":
         if not _keys(data, {"dry_run", "source_schema", "installations", "needs_rebind", "migrated", "backup_created"}):
             return False
@@ -276,12 +385,66 @@ def validate_cli_envelope(value: Any, command: str) -> bool:
     return False
 
 
+FULL_SHA_UPDATE_STDERR = (
+    "Resolving and validating one updated Agent Plugin package for every selected target...\n"
+    "agentplugins: group update preflight failed; no target was changed: "
+    "direct full-SHA installations require explicit switch\n"
+)
+
+
+def validate_full_sha_update_failure(
+    value: Any, stderr: str, *, plugin: str, source: str, revision: str,
+    tree_digest: str, expected_targets: tuple[str, ...], requested_argv: list[str] | tuple[str, ...] | None = None,
+) -> bool:
+    """Validate the complete public 0.1.14 preflight-refusal contract."""
+    if not (
+        _keys(value, {"schema_version", "command", "result", "data"})
+        and _exact_int(value.get("schema_version"), 1) and value.get("command") == "update"
+        and value.get("result") == "failure" and stderr == FULL_SHA_UPDATE_STDERR
+    ):
+        return False
+    data = value["data"]
+    required = {
+        "operation_id", "batch", "status", "succeeded", "failed", "plugin", "version",
+        "source", "revision", "tree_digest", "dry_run", "targets",
+    }
+    if not (
+        _keys(data, required) and _nonempty(data["operation_id"]) and data["batch"] is True
+        and data["status"] == "preflight_failed" and _exact_int(data["succeeded"], 0)
+        and _exact_int(data["failed"], len(expected_targets)) and data["targets"] == []
+        and data["plugin"] == plugin and _nonempty(data["version"]) and data["source"] == source
+        and data["revision"] == revision and FULL_SHA.fullmatch(revision)
+        and data["tree_digest"] == tree_digest and _digest(tree_digest) and data["dry_run"] is False
+        and len(expected_targets) == len(set(expected_targets)) and bool(expected_targets)
+    ):
+        return False
+    if requested_argv is None:
+        return True
+    argv = list(requested_argv)
+    try:
+        return bool(
+            argv[argv.index("update") + 1] == plugin
+            and tuple(argv[argv.index("--target") + 1].split(",")) == expected_targets
+            and argv[argv.index("--format") + 1] == "json"
+        )
+    except (ValueError, IndexError):
+        return False
+
+
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[str, bytes]]:
-    """Read one tree through retained dirfds without following names or links."""
+    """Read one tree through a descriptor-bound parent/child graph.
+
+    Each child binding is checked again after its descendants have been read.
+    This detects name swaps even when the replacement has identical bytes and
+    metadata.  Hosted Linux must provide ``O_NOFOLLOW`` and dir-fd operations;
+    callers fail closed when those guarantees are unavailable.
+    """
+    if not hasattr(os, "O_NOFOLLOW") or not all(function in os.supports_dir_fd for function in (os.open, os.stat, os.unlink)):
+        raise ValueError("descriptor-bound no-follow snapshots are unavailable")
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         root_fd = os.open(root, flags)
@@ -289,15 +452,13 @@ def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[s
         return {}, {}
     snapshot: dict[str, dict[str, Any]] = {}
     bodies: dict[str, bytes] = {}
-    pending: list[tuple[int, str]] = [(root_fd, ".")]
     try:
         opened_root = os.fstat(root_fd)
         current_root = root.lstat()
         if not stat.S_ISDIR(opened_root.st_mode) or (opened_root.st_dev, opened_root.st_ino) != (current_root.st_dev, current_root.st_ino):
             raise ValueError("snapshot root changed during observation")
         snapshot["."] = {"kind": "directory", "mode": stat.S_IMODE(opened_root.st_mode)}
-        while pending:
-            directory_fd, relative_directory = pending.pop()
+        def walk(directory_fd: int, relative_directory: str) -> None:
             before = os.fstat(directory_fd)
             names = sorted(os.listdir(directory_fd))
             for name in names:
@@ -310,13 +471,20 @@ def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[s
                     raise ValueError(f"unsupported filesystem object during observation: {relative}")
                 if stat.S_ISDIR(metadata.st_mode):
                     child_fd = os.open(name, flags, dir_fd=directory_fd)
-                    opened = os.fstat(child_fd)
-                    current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                    if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino) or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+                    try:
+                        opened = os.fstat(child_fd)
+                        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                        identity = (opened.st_dev, opened.st_ino)
+                        if identity != (metadata.st_dev, metadata.st_ino) or identity != (current.st_dev, current.st_ino):
+                            raise ValueError(f"directory changed during observation: {relative}")
+                        snapshot[relative] = {**common, "kind": "directory"}
+                        walk(child_fd, relative)
+                        rebound = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                        after_child = os.fstat(child_fd)
+                        if identity != (rebound.st_dev, rebound.st_ino) or identity != (after_child.st_dev, after_child.st_ino):
+                            raise ValueError(f"directory binding changed during descendant observation: {relative}")
+                    finally:
                         os.close(child_fd)
-                        raise ValueError(f"directory changed during observation: {relative}")
-                    snapshot[relative] = {**common, "kind": "directory"}
-                    pending.append((child_fd, relative))
                     continue
                 file_fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
                 try:
@@ -345,18 +513,12 @@ def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[s
             after = os.fstat(directory_fd)
             if (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns):
                 raise ValueError(f"directory changed during observation: {relative_directory}")
-            if directory_fd != root_fd:
-                os.close(directory_fd)
+        walk(root_fd, ".")
         current_root = root.lstat()
         if (opened_root.st_dev, opened_root.st_ino) != (current_root.st_dev, current_root.st_ino):
             raise ValueError("snapshot root was replaced during observation")
         return snapshot, bodies
     finally:
-        for directory_fd, _ in pending:
-            try:
-                os.close(directory_fd)
-            except OSError:
-                pass
         try:
             os.close(root_fd)
         except OSError:
@@ -596,7 +758,10 @@ def json_output(completed: subprocess.CompletedProcess[str], command: str | None
         value = strict_json_loads(completed.stdout)
     except (json.JSONDecodeError, DuplicateKeyError, ValueError):
         return None
-    return value if isinstance(value, dict) and (command is None or validate_cli_envelope(value, command)) else None
+    requested = completed.args if isinstance(completed.args, (list, tuple)) else None
+    return value if isinstance(value, dict) and (
+        command is None or validate_cli_envelope(value, command, requested_argv=requested)
+    ) else None
 
 
 def parse_canonical_github_source(value: Any) -> dict[str, str] | None:
@@ -679,6 +844,23 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
         return None
     installation_ids: set[str] = set()
     names: set[str] = set()
+    global_binding_ids: set[str] = set()
+    global_receipt_ids: set[str] = set()
+    global_operation_ids: set[str] = set()
+    global_paths: dict[str, str] = {}
+    installation_groups: set[str] = set()
+
+    def owned_path(value: Any, owner: str) -> bool:
+        if not isinstance(value, str) or not value.startswith("/") or "\\" in value:
+            return False
+        path = PurePosixPath(value)
+        if any(part in {"", ".", ".."} for part in path.parts[1:]) or str(path) != value:
+            return False
+        previous = global_paths.get(value)
+        if previous is not None and previous != owner:
+            return False
+        global_paths[value] = owner
+        return True
     for installation in value["installations"]:
         required = {"installation_id", "declared_name", "source", "package", "clients", "created_at", "updated_at"}
         optional = {"origin_mode", "directory", "operation_group_id", "data_receipts", "data_retained", "needs_rebind"}
@@ -690,6 +872,10 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
             return None
         installation_ids.add(installation_id)
         names.add(name)
+        if "operation_group_id" in installation:
+            if not _nonempty(installation["operation_group_id"]) or installation["operation_group_id"] in installation_groups:
+                return None
+            installation_groups.add(installation["operation_group_id"])
         source = installation["source"]
         package = installation["package"]
         if not (
@@ -703,7 +889,10 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
                 and GITHUB_SOURCE_PATH.fullmatch(source.get("package_subpath", "")) is not None
             ))
             and _keys(package, {"loader_kind", "format_id", "schema_uri", "declared_name", "manifest_digest", "inventory"}, {"version"})
+            and package["loader_kind"] == "agent_plugins" and package["format_id"] == "agent-plugins/1.0.0"
+            and package["schema_uri"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
             and package["declared_name"] == name and isinstance(package["inventory"], dict) and _digest(package["manifest_digest"])
+            and ("version" not in package or _nonempty(package["version"]))
         ):
             return None
         clients = installation["clients"]
@@ -716,22 +905,66 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
                 "materialization", "activation", "authentication", "policy", "verification", "updated_at",
             }
             optional_binding = {"package_revision", "data_receipt_id", "affected_surfaces", "native_objects", "receipts"}
-            if not _keys(binding, required_binding, optional_binding) or binding.get("client_binding_id") != binding_id:
+            if (
+                not _keys(binding, required_binding, optional_binding)
+                or binding.get("client_binding_id") != binding_id or binding_id in global_binding_ids
+            ):
                 return None
+            global_binding_ids.add(binding_id)
             client_id = binding.get("client_id")
             if not _nonempty(client_id) or client_id in client_ids or binding.get("scope") != "user":
                 return None
             client_ids.add(client_id)
+            if not (
+                binding["materialization"] in MATERIALIZATIONS and binding["activation"] in ACTIVATIONS
+                and binding["authentication"] in AUTHENTICATIONS and binding["policy"] in POLICIES
+                and binding["verification"] in VERIFICATIONS
+                and _nonempty(binding["physical_artifact_id"])
+                and owned_path(binding["target_locator"], binding_id)
+                and ("affected_surfaces" not in binding or binding["affected_surfaces"] == [client_id])
+            ):
+                return None
             if "native_objects" in binding and not isinstance(binding["native_objects"], list):
                 return None
             if "receipts" in binding and not isinstance(binding["receipts"], list):
                 return None
             revision = binding.get("package_revision")
             if revision is not None and not (
-                isinstance(revision, dict) and _digest(revision.get("tree_digest"))
-                and _digest(revision.get("manifest_digest"))
+                _validate_package_revision(
+                    revision, revision=source["resolved_revision"], tree=source["tree_digest"],
+                    manifest=package["manifest_digest"],
+                )
+                and revision.get("version") == package.get("version")
             ):
                 return None
+            native_objects = binding.get("native_objects", [])
+            for native_object in native_objects:
+                if not (
+                    _keys(native_object, {"object_id", "kind", "logical_name", "path", "managed_digest", "protection_class"})
+                    and _nonempty(native_object["object_id"]) and native_object["logical_name"] == name
+                    and native_object["kind"] == "managed_package_directory"
+                    and native_object["protection_class"] == "managed" and _digest(native_object["managed_digest"])
+                    and native_object["path"] == binding["target_locator"]
+                ):
+                    return None
+            for receipt in binding.get("receipts", []):
+                if not (
+                    _keys(receipt, {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "staging_path", "backup_path", "after_digest", "phase"}, {"before_digest"})
+                    and _nonempty(receipt["operation_id"]) and receipt["operation_id"] not in global_operation_ids
+                    and receipt["operation_group_id"] == installation.get("operation_group_id")
+                    and receipt["client_binding_id"] == binding_id and _exact_int(receipt["sequence"])
+                    and receipt["sequence"] >= 1 and receipt["mutation_type"] == "directory_swap"
+                    and receipt["phase"] == "committed" and receipt["active_path"] == binding["target_locator"]
+                    and PurePosixPath(receipt["staging_path"]).parent == PurePosixPath(binding["target_locator"]).parent
+                    and PurePosixPath(receipt["backup_path"]).parent == PurePosixPath(binding["target_locator"]).parent
+                    and owned_path(receipt["staging_path"], receipt["operation_id"])
+                    and owned_path(receipt["backup_path"], receipt["operation_id"])
+                    and _digest(receipt["after_digest"])
+                    and receipt["after_digest"] in {item["managed_digest"] for item in native_objects}
+                    and ("before_digest" not in receipt or _digest(receipt["before_digest"]))
+                ):
+                    return None
+                global_operation_ids.add(receipt["operation_id"])
         data_receipts = installation.get("data_receipts", {})
         if not isinstance(data_receipts, dict):
             return None
@@ -740,19 +973,53 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
                 _keys(receipt, {"data_receipt_id", "physical_backend_id", "scope", "locator", "ownership_digest", "state"}, {"created_at", "updated_at"})
                 and receipt.get("data_receipt_id") == receipt_id and receipt.get("scope") == "user"
                 and receipt.get("state") in {"owned", "unknown", "stale"} and _digest(receipt.get("ownership_digest"))
+                and receipt_id not in global_receipt_ids and _nonempty(receipt.get("physical_backend_id"))
+                and owned_path(receipt.get("locator"), receipt_id)
             ):
                 return None
+            global_receipt_ids.add(receipt_id)
         if data_receipts and any(binding.get("data_receipt_id") not in data_receipts for binding in clients.values()):
             return None
     transaction_receipts = value.get("transaction_receipts", [])
     if not isinstance(transaction_receipts, list):
         return None
+    transaction_bindings: set[str] = set()
     for receipt in transaction_receipts:
         if not (
             _keys(receipt, {"operation_id", "sequence", "mutation_type", "client_binding_id", "phase"}, {"operation_group_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest"})
             and _nonempty(receipt["operation_id"]) and _exact_int(receipt["sequence"])
-            and receipt["sequence"] >= 1 and receipt["phase"] == "committed"
+            and receipt["sequence"] >= 1 and _nonempty(receipt["client_binding_id"])
+            and receipt["client_binding_id"] not in transaction_bindings
+            and receipt["phase"] == "committed"
+            and receipt.get("operation_group_id") in installation_groups
+            and receipt["operation_id"] not in global_operation_ids
         ):
+            return None
+        if receipt["mutation_type"] == "directory_remove":
+            if not (
+                set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "backup_path", "before_digest", "phase"}
+                and owned_path(receipt["active_path"], receipt["client_binding_id"])
+                and owned_path(receipt["backup_path"], receipt["operation_id"])
+                and PurePosixPath(receipt["active_path"]).parent == PurePosixPath(receipt["backup_path"]).parent
+                and _digest(receipt["before_digest"])
+            ):
+                return None
+        elif receipt["mutation_type"] not in {"directory_swap"}:
+            return None
+        transaction_bindings.add(receipt["client_binding_id"])
+        global_operation_ids.add(receipt["operation_id"])
+    if global_paths:
+        try:
+            authority_root = Path(os.path.commonpath(tuple(global_paths)))
+            manager_parent = manager.resolve(strict=True).parent
+        except (OSError, ValueError):
+            return None
+        fixture_authority = PurePosixPath("/fixture/agentplugins-home")
+        fixture_paths = all(
+            PurePosixPath(path) == fixture_authority or fixture_authority in PurePosixPath(path).parents
+            for path in global_paths
+        )
+        if authority_root == Path("/") or (not fixture_paths and authority_root != manager_parent):
             return None
     return value
 
@@ -1124,6 +1391,7 @@ def lifecycle(
             transactions = state.get("transaction_receipts", []) if state else []
             passed = passed and bool(
                 installation and installation.get("clients") == {} and installation.get("data_retained") is True
+                and len(installation.get("data_receipts", {})) == 1
                 and isinstance(operation_group_id, str)
                 and len(transactions) == len(clients)
                 and all(item.get("operation_group_id") == operation_group_id for item in transactions)
@@ -1415,6 +1683,50 @@ def migration_provenance(record: dict[str, Any] | None, *, legacy: bool) -> dict
     return normalized if all(child not in (None, "") for child in required_values) else None
 
 
+def validate_schema_2_state(value: Any) -> bool:
+    """Validate the sanitized genuine schema-2 capture before executing a CLI."""
+    if not _keys(value, {"schema_version", "installations"}) or not _exact_int(value["schema_version"], 2):
+        return False
+    if not isinstance(value["installations"], list) or len(value["installations"]) != 1:
+        return False
+    record = value["installations"][0]
+    if not _keys(record, {"installation_id", "declared_name", "source", "package", "clients", "created_at", "updated_at"}):
+        return False
+    source, package, clients = record["source"], record["package"], record["clients"]
+    if not (
+        _nonempty(record["installation_id"]) and _nonempty(record["declared_name"])
+        and _keys(source, {"source_binding_id", "requested_source", "canonical_source", "repository", "package_subpath", "resolved_revision", "tree_digest"})
+        and GITHUB_REPOSITORY.fullmatch(source["repository"]) and GITHUB_SOURCE_PATH.fullmatch(source["package_subpath"])
+        and FULL_SHA.fullmatch(source["resolved_revision"]) and _digest(source["tree_digest"])
+        and source["canonical_source"] == "https://github.com/" + source["repository"]
+        and _keys(package, {"loader_kind", "format_id", "schema_uri", "declared_name", "manifest_digest", "inventory"})
+        and package["loader_kind"] == "agent_plugins" and package["format_id"] == "agent-plugins/1.0.0"
+        and package["schema_uri"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+        and package["declared_name"] == record["declared_name"] and _digest(package["manifest_digest"])
+        and isinstance(package["inventory"], dict) and isinstance(clients, dict) and bool(clients)
+    ):
+        return False
+    seen_clients: set[str] = set()
+    for binding_id, binding in clients.items():
+        if not (
+            _keys(binding, {"client_binding_id", "client_id", "scope", "target_locator", "physical_artifact_id", "materialization", "activation", "authentication", "policy", "verification", "package_revision", "updated_at"})
+            and binding["client_binding_id"] == binding_id and _nonempty(binding["client_id"])
+            and binding["client_id"] not in seen_clients and binding["scope"] == "user"
+            and PurePosixPath(binding["target_locator"]).is_absolute() and ".." not in PurePosixPath(binding["target_locator"]).parts
+            and binding["materialization"] in MATERIALIZATIONS and binding["activation"] in ACTIVATIONS
+            and binding["authentication"] in AUTHENTICATIONS and binding["policy"] in POLICIES
+            and binding["verification"] in VERIFICATIONS
+            and _keys(binding["package_revision"], {"resolved_revision", "tree_digest", "manifest_digest"})
+            and binding["package_revision"] == {
+                "resolved_revision": source["resolved_revision"], "tree_digest": source["tree_digest"],
+                "manifest_digest": package["manifest_digest"],
+            }
+        ):
+            return False
+        seen_clients.add(binding["client_id"])
+    return migration_provenance(record, legacy=True) is not None
+
+
 def copy_ready_migration_guidance(text: str) -> bool:
     return all(
         command in text
@@ -1461,8 +1773,15 @@ def direct_full_sha_scenario(
     traces.append(trace)
     add_value = json_output(add, "add")
     installed_identity = manager_identity(manager, "e2e-external-package")
+    stable_root = Path(os.path.commonpath((home, manager, root)))
+    before_update = filesystem_snapshot(stable_root)
     update, trace = traced(binary, ["update", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
+    after_update = filesystem_snapshot(stable_root)
+    try:
+        update_failure = strict_json_loads(update.stdout)
+    except (json.JSONDecodeError, DuplicateKeyError, ValueError):
+        update_failure = None
     updated_identity = manager_identity(manager, "e2e-external-package")
     remove, trace = traced(binary, ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
@@ -1489,13 +1808,21 @@ def direct_full_sha_scenario(
         and add_acquisition["source_kind"] == "github"
         and add_acquisition["fetched"] is True and add_acquisition["validated"] is True
     )
-    update_diagnostic = (update.stdout + "\n" + update.stderr).lower()
+    failure_valid = validate_full_sha_update_failure(
+        update_failure, update.stderr, plugin="e2e-external-package",
+        source=installed_identity.get("canonical_source", "").removeprefix("https://github.com/").split("@", 1)[0] + "//" + package_path,
+        revision=revision, tree_digest=installed_identity.get("tree_digest", ""), expected_targets=("cursor",),
+        requested_argv=["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
+    )
     proof = {
         "full_sha": installed_exact and updated_exact,
-        "direct_update_refused_requires_switch": add.returncode == 0 and update.returncode != 0 and "switch" in update_diagnostic and identity_stable and acquisition_bound,
+        "direct_update_refused_requires_switch": bool(
+            add.returncode == 0 and update.returncode != 0 and failure_valid
+            and before_update == after_update and identity_stable and acquisition_bound
+        ),
         "mutable_ref_followed": False if identity_stable else True,
     }
-    return all((proof["full_sha"], proof["direct_update_refused_requires_switch"], not proof["mutable_ref_followed"], remove.returncode == 0)), {"command_traces": traces, "before": before, "after": after, "proof": proof, "installed_identity": installed_identity, "updated_identity": updated_identity, "add_acquisition": add_acquisition}
+    return all((proof["full_sha"], proof["direct_update_refused_requires_switch"], not proof["mutable_ref_followed"], remove.returncode == 0)), {"command_traces": traces, "before": before, "after": after, "before_update": before_update, "after_update": after_update, "proof": proof, "installed_identity": installed_identity, "updated_identity": updated_identity, "update_failure": update_failure, "add_acquisition": add_acquisition}
 
 
 def missing_runtime_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
@@ -1577,8 +1904,10 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     fixture = Path(__file__).resolve().parents[1] / "tests/e2e/fixtures/state-schema-2.json"
     state_path = manager / "state-v2.json"
     fixture_bytes = fixture.read_bytes()
-    state_path.write_bytes(fixture_bytes)
     legacy_state = strict_json_loads(fixture_bytes)
+    if not validate_schema_2_state(legacy_state):
+        raise ValueError("migration fixture is not a valid sanitized schema-2 capture")
+    state_path.write_bytes(fixture_bytes)
     product = legacy_state["installations"][0]["declared_name"]
     legacy_record = installation_record(legacy_state, product)
     expected_provenance = migration_provenance(legacy_record, legacy=True)
@@ -1683,6 +2012,8 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
         "migration_applied": bool(
             apply.returncode == 0
             and type(migrated_schema) is int and migrated_schema == 4
+            and manager_state(manager) is not None
+            and len(manager_state(manager)["installations"]) == 1
             and apply_value and validate_cli_envelope(apply_value, "migrate-state")
             and apply_value["data"] == {
                 "dry_run": False, "source_schema": legacy_state["schema_version"],
@@ -1850,22 +2181,28 @@ def canonical_allowed_locator(locator: Path | None, allowed_roots: tuple[Path, .
 
 
 class RetainedMarker:
-    """An inode-bound PLUGIN_DATA marker retained across the whole lifecycle."""
+    """An inode-bound marker plus its descriptor-bound allowed-root ancestry."""
 
-    def __init__(self, path: Path, directory_fd: int, marker_fd: int, directory_identity: tuple[int, int], marker_identity: tuple[int, int], body: bytes, mode: int):
+    def __init__(self, path: Path, ancestry: list[tuple[int, Path, int | None, str | None, tuple[int, int]]], marker_fd: int, marker_identity: tuple[int, int], body: bytes, mode: int):
         self.path = path
-        self.directory_fd = directory_fd
+        self.ancestry = ancestry
+        self.directory_fd = ancestry[-1][0]
         self.marker_fd = marker_fd
-        self.directory_identity = directory_identity
         self.marker_identity = marker_identity
         self.body = body
         self.mode = mode
 
     def verify(self) -> bool:
         try:
+            for descriptor, absolute, parent_fd, name, identity in self.ancestry:
+                opened = os.fstat(descriptor)
+                if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != identity:
+                    return False
+                current = absolute.lstat() if parent_fd is None else os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != identity:
+                    return False
             opened_directory = os.fstat(self.directory_fd)
             opened_marker = os.fstat(self.marker_fd)
-            current_directory = self.path.parent.lstat()
             current_marker = os.stat(self.path.name, dir_fd=self.directory_fd, follow_symlinks=False)
             os.lseek(self.marker_fd, 0, os.SEEK_SET)
             observed = b""
@@ -1876,8 +2213,6 @@ class RetainedMarker:
                 observed += chunk
             return bool(
                 stat.S_ISDIR(opened_directory.st_mode) and stat.S_ISREG(opened_marker.st_mode)
-                and (opened_directory.st_dev, opened_directory.st_ino) == self.directory_identity
-                and (current_directory.st_dev, current_directory.st_ino) == self.directory_identity
                 and (opened_marker.st_dev, opened_marker.st_ino) == self.marker_identity
                 and (current_marker.st_dev, current_marker.st_ino) == self.marker_identity
                 and stat.S_IMODE(opened_marker.st_mode) == self.mode
@@ -1888,7 +2223,7 @@ class RetainedMarker:
             return False
 
     def close(self) -> None:
-        for descriptor in (self.marker_fd, self.directory_fd):
+        for descriptor in [self.marker_fd, *(item[0] for item in reversed(self.ancestry))]:
             try:
                 os.close(descriptor)
             except OSError:
@@ -1902,20 +2237,36 @@ def create_contained_marker(
     canonical = canonical_allowed_locator(locator, allowed_roots)
     if canonical is None or not leaf or leaf in {".", ".."} or "/" in leaf or "\\" in leaf:
         return None
-    directory_fd: int | None = None
+    ancestry: list[tuple[int, Path, int | None, str | None, tuple[int, int]]] = []
     marker_fd: int | None = None
     try:
-        expected = canonical.lstat()
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        directory_fd = os.open(canonical, flags)
+        expected_locator = canonical.lstat()
+        probe_fd = os.open(canonical, flags)
+        try:
+            probed = os.fstat(probe_fd)
+            if (probed.st_dev, probed.st_ino) != (expected_locator.st_dev, expected_locator.st_ino):
+                return None
+        finally:
+            os.close(probe_fd)
+        anchors = [root.resolve(strict=True) for root in allowed_roots]
+        matches = [anchor for anchor in anchors if anchor == canonical or anchor in canonical.parents]
+        if len(matches) != 1:
+            return None
+        anchor = matches[0]
+        anchor_fd = os.open(anchor, flags)
+        anchor_stat = os.fstat(anchor_fd)
+        ancestry.append((anchor_fd, anchor, None, None, (anchor_stat.st_dev, anchor_stat.st_ino)))
+        current_path = anchor
+        for part in canonical.relative_to(anchor).parts:
+            parent_fd = ancestry[-1][0]
+            child_fd = os.open(part, flags, dir_fd=parent_fd)
+            child_stat = os.fstat(child_fd)
+            current_path /= part
+            ancestry.append((child_fd, current_path, parent_fd, part, (child_stat.st_dev, child_stat.st_ino)))
+        directory_fd = ancestry[-1][0]
         opened = os.fstat(directory_fd)
-        current = canonical.lstat()
-        if (
-            not stat.S_ISDIR(opened.st_mode)
-            or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
-            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
-            or canonical_allowed_locator(locator, allowed_roots) != canonical
-        ):
+        if canonical_allowed_locator(locator, allowed_roots) != canonical:
             return None
         marker_fd = os.open(
             leaf,
@@ -1938,21 +2289,21 @@ def create_contained_marker(
         os.fsync(marker_fd)
         marker_metadata = os.fstat(marker_fd)
         retained = RetainedMarker(
-            canonical / leaf, directory_fd, marker_fd,
-            (opened.st_dev, opened.st_ino), (marker_metadata.st_dev, marker_metadata.st_ino),
+            canonical / leaf, ancestry, marker_fd, (marker_metadata.st_dev, marker_metadata.st_ino),
             body, stat.S_IMODE(marker_metadata.st_mode),
         )
         if not retained.verify():
             return None
-        directory_fd = marker_fd = None
+        ancestry = []
+        marker_fd = None
         return retained
     except (FileExistsError, NotADirectoryError, OSError):
         return None
     finally:
         if marker_fd is not None:
             os.close(marker_fd)
-        if directory_fd is not None:
-            os.close(directory_fd)
+        for descriptor, *_ in reversed(ancestry):
+            os.close(descriptor)
 
 
 def package_identity(package: Path) -> dict[str, str]:
