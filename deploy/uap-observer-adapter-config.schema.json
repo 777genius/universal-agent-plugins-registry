@@ -11,8 +11,8 @@
         "catalog_repository": {"const": "777genius/universal-agent-plugins"},
         "cli_release_repository": {"const": "777genius/plugin-kit-ai"},
         "cli_release_tag": {"const": "agentplugins-v0.1.14"},
-        "release_manifest_digest": {"const": "sha256:f13de10e96296bf6d68de4298fd2349bf75597a64544fa7e99b5bfbf34c3641c"},
-        "release_checksums_digest": {"const": "sha256:d682e61936a9d8ba891a2a036f0714ee96beb87cd96ccb2f24d334ca52158590"},
+        "release_manifest_digest": {"const": "sha256:21b72bb9fc82df2b45ce2e83ea79eeb5b8436cfd9b09f8ccfcbb25c8d0fda8f9"},
+        "release_checksums_digest": {"const": "sha256:bd9f8de83b9b04589d2b29ce36ae079bf5f67b10b8f44c5ab811fc5d6706ff6b"},
         "directory_digest": {"$ref": "#/$defs/digest"},
         "scenario_contract_digest": {"$ref": "#/$defs/digest"}
       },

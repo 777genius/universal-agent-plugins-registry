@@ -869,6 +869,13 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         install_identity = "a" * 64
         (staged / ".install-identity").write_text(install_identity + "\n")
         (staged / "payload").write_text("reviewed closure\n")
+        libexec = staged / "libexec"
+        libexec.mkdir()
+        fixed_adapter = libexec / "uap-observer-fixed-adapter"
+        fixed_adapter.write_text("#!/bin/sh\nexit 1\n")
+        fixed_adapter.chmod(0o755)
+        for name in ("runtime", "notion", "chatgpt", "consent"):
+            os.link(fixed_adapter, libexec / f"uap-observer-adapter-{name}")
         reviewed_systemd = staged / "systemd"
         reviewed_systemd.mkdir()
         for unit in ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
@@ -912,19 +919,18 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             _, _, install_identity, owner = self._completed_closure_fixture(root)
-            before = subprocess.check_output(
-                ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"', "sh",
-                 str(Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"), str(root)],
-                text=True,
-            ).strip()
+            def snapshot() -> list[tuple[str, int, int, int, int, bytes | str]]:
+                result = []
+                for path in sorted(root.rglob("*")):
+                    info = path.lstat()
+                    payload: bytes | str = os.readlink(path) if path.is_symlink() else (path.read_bytes() if path.is_file() else b"")
+                    result.append((str(path.relative_to(root)), stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, payload))
+                return result
+            before = snapshot()
             for _ in range(2):
                 result = self._validate_completed_closure(root, install_identity, owner)
                 self.assertEqual(result.returncode, 0, result.stderr)
-            after = subprocess.check_output(
-                ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"', "sh",
-                 str(Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"), str(root)],
-                text=True,
-            ).strip()
+            after = snapshot()
             self.assertEqual(after, before)
 
     def test_second_install_validation_fails_closed_on_every_identity_boundary(self) -> None:
@@ -939,6 +945,8 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             "systemd content drift": lambda closure, current: (current.parent / "systemd/uap-observer.service").write_text("drift\n"),
             "systemd unexpected path": lambda closure, current: (current.parent / "systemd/uap-observer.service.d/unexpected.conf").write_text("drift\n"),
             "systemd symlink": lambda closure, current: ((current.parent / "systemd/uap-observer-runner.socket").unlink(), (current.parent / "systemd/uap-observer-runner.socket").symlink_to("uap-observer.service")),
+            "adapter copy replacement": lambda closure, current: self._replace_adapter_with_copy(closure),
+            "adapter external hardlink": lambda closure, current: os.link(closure / "libexec/uap-observer-fixed-adapter", current.parent / "external-adapter-link"),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
@@ -956,12 +964,109 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             result = self._validate_completed_closure(root, install_identity, wrong_owner)
             self.assertNotEqual(result.returncode, 0)
 
+    @staticmethod
+    def _replace_adapter_with_copy(closure: Path) -> None:
+        adapter = closure / "libexec/uap-observer-adapter-runtime"
+        payload = adapter.read_bytes()
+        mode = stat.S_IMODE(adapter.stat().st_mode)
+        adapter.unlink()
+        adapter.write_bytes(payload)
+        adapter.chmod(mode)
+
     def test_production_installer_checks_idempotence_before_staging(self) -> None:
         installer = (Path(__file__).parents[2] / "deploy/uap-observer-install.sh").read_text()
         validation = installer.index("observer_validate_completed_closure")
         staging = installer.index('install -d -o root -g root -m 0700 "$stage_root"')
         self.assertLess(validation, staging)
         self.assertIn('printf \'%s\\n\' "$install_identity" > "$closure_stage/.install-identity"', installer)
+        self.assertIn('observer_validate_installed_accounts_and_state', installer[:staging])
+        self.assertIn('observer_validate_protected_inputs', installer[:staging])
+
+    def test_power_loss_recovery_precedes_untrusted_inputs_and_restores_exactly(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        installer = (Path(__file__).parents[2] / "deploy/uap-observer-install.sh").read_text()
+        recovery = installer.index('recover_observer_install')
+        self.assertLess(recovery, installer.index('untrusted_adapter_config=${2:?$usage}'))
+        self.assertLess(recovery, installer.index('observer_install_input_identity'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage = root / "source.new"
+            systemd = root / "systemd"
+            closures = root / "closures"
+            staged_partial = root / "runtime.new"
+            stage.mkdir(mode=0o700); systemd.mkdir(); closures.mkdir(); staged_partial.mkdir()
+            old = systemd / "uap-observer.service"
+            old.write_text("old\n")
+            backup = stage / "systemd-backup"
+            subprocess.run(["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"', "sh", str(helper), str(backup), str(systemd)], check=True)
+            old.write_text("partially activated\n")
+            digest = "a" * 64
+            (stage / "closure-digest").write_text(digest + "\n")
+            (stage / "rollback-required").write_text("rollback-required\n")
+            (stage / "closure-digest").chmod(0o600)
+            (stage / "rollback-required").chmod(0o600)
+            published = closures / digest
+            published.mkdir()
+            manager = root / "systemctl"
+            manager.write_text("#!/bin/sh\ntest \"$1\" = daemon-reload\n")
+            manager.chmod(0o755)
+            script = '''set -eu
+. "$1"
+fixture_stage=$2
+fixture_partial=$3
+cleanup_fixture() { rm -rf "$fixture_stage" "$fixture_partial"; }
+recover_observer_install "$2" "$4" "$5" "$6" "$7" cleanup_fixture
+'''
+            # No source/config/archive arguments exist: recovery uses only its
+            # fixed fixture roots and the retained journal.
+            result = subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(stage), str(staged_partial), str(closures), str(root / "current"), str(systemd), str(manager)], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(old.read_text(), "old\n")
+            self.assertFalse(stage.exists())
+            self.assertFalse(staged_partial.exists())
+            self.assertFalse(published.exists())
+
+    def test_every_installer_new_path_is_in_shared_partial_inventory(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        inventory = subprocess.check_output(["/bin/sh", "-c", '. "$1"; observer_partial_paths', "sh", str(helper)], text=True).splitlines()
+        for path in (
+            "/usr/local/libexec/uap-observer-attest-chatgpt.new",
+            "/usr/local/libexec/uap-observer-attest-consent.new",
+            "/usr/local/libexec/uap-observer-provision-profile.new",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, inventory)
+                with tempfile.TemporaryDirectory() as temporary:
+                    partial = Path(temporary) / Path(path).name
+                    partial.write_text("partial\n")
+                    script = '''set -eu
+. "$1"
+fixture_partial=$2
+fixture_inventory() { printf '%s\\n' "$fixture_partial"; }
+observer_validate_no_partial_paths fixture_inventory
+'''
+                    result = subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(partial)], text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+
+    def test_invalid_recovery_journal_fails_closed_without_cleanup_or_restore(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage, closures, systemd = root / "source.new", root / "closures", root / "systemd"
+            stage.mkdir(mode=0o700); closures.mkdir(); systemd.mkdir()
+            unit = systemd / "uap-observer.service"
+            unit.write_text("partially activated\n")
+            (stage / "rollback-required").write_text("rollback-required\n")
+            (stage / "rollback-required").chmod(0o600)
+            script = '''set -eu
+. "$1"
+cleanup_fixture() { rm -rf "$2"; }
+recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
+'''
+            result = subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(stage), str(closures), str(root / "current"), str(systemd), "/bin/false"], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(stage.exists())
+            self.assertEqual(unit.read_text(), "partially activated\n")
 
     def test_second_install_revalidates_every_supplied_input_and_checksum(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"

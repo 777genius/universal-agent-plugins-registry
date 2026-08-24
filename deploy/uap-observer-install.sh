@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 57e9e9a6e54579ef6484c581c30a8fac23905d06f3f2b125fb927f9bbe234d93
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 5f48bda0a127dd37790192d5597055cc25105298f5d1c8bedf3246c7e805bf23
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -11,17 +11,9 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-untrusted_source_root=${1:-/opt/uap-observer}
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256'
-untrusted_adapter_config=${2:?$usage}
-adapter_config_digest=${3:?$usage}
-untrusted_observer_config=${4:?$usage}
-observer_config_digest=${5:?$usage}
-untrusted_caddy_archive=${6:?$usage}
-untrusted_caddy_config=${7:?$usage}
-caddy_config_digest=${8:?$usage}
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=34eb7fd8c71ef6d0bc78734610f0da013c3882d88b9e2136166c80b43ccecc5c
+runtime_manifest_digest=e9ed2c4b131c8a8f8c120b7c2c6ed37b058a6ce78858c1f59c2f3add0f7feec5
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -33,6 +25,22 @@ closure_published=0
 install -d -o root -g root -m 0755 /run/lock
 exec 9>/run/lock/uap-observer-install.lock
 flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
+
+# Recovery is deliberately before even requiring, opening, hashing, or
+# otherwise validating caller-controlled arguments.  A retry after power loss
+# must be able to restore the fixed system state with every input unavailable.
+if [ ! -e /opt/uap-observer-current ] && [ ! -L /opt/uap-observer-current ]; then
+  recover_observer_install "$stage_root" /opt/uap-observer-closures /opt/uap-observer-current /etc/systemd/system systemctl
+fi
+
+untrusted_source_root=${1:-/opt/uap-observer}
+untrusted_adapter_config=${2:?$usage}
+adapter_config_digest=${3:?$usage}
+untrusted_observer_config=${4:?$usage}
+observer_config_digest=${5:?$usage}
+untrusted_caddy_archive=${6:?$usage}
+untrusted_caddy_config=${7:?$usage}
+caddy_config_digest=${8:?$usage}
 install_identity=$(observer_install_input_identity \
   "$untrusted_source_root" "$runtime_manifest_digest" \
   "$untrusted_adapter_config" "$adapter_config_digest" \
@@ -40,43 +48,19 @@ install_identity=$(observer_install_input_identity \
   "$untrusted_caddy_archive" "$caddy_archive_digest" \
   "$untrusted_caddy_config" "$caddy_config_digest")
 if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
-  for partial in /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new \
-    /opt/uap-observer-current.new /usr/local/libexec/uap-observer-runner.new \
-    /usr/local/libexec/uap-observer-fixed-adapter.new /usr/local/bin/caddy.new \
-    /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
-    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new; do
-    test ! -e "$partial"
-    test ! -L "$partial"
-  done
-  for partial in /opt/uap-observer-closures/.new-* /usr/local/libexec/uap-observer-adapter-*.new; do
-    test ! -e "$partial"
-    test ! -L "$partial"
-  done
+  observer_validate_no_partial_paths
   observer_validate_completed_closure /opt/uap-observer-closures /opt/uap-observer-current "$install_identity"
+  installed_target=$(readlink /opt/uap-observer-current)
+  installed_closure="/opt/$installed_target"
+  observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
+    "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" \
+    46c161d23bdf457a9cd08be7a088e9ed8431dae2a84a2d5e84765b0aa6d6360b \
+    977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf \
+    b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
+  observer_validate_installed_accounts_and_state
+  observer_validate_protected_inputs "$installed_closure"
   echo "observer files already installed; verified identical immutable closure"
   exit 0
-fi
-if [ -d "$stage_root" ]; then
-  if [ -f "$stage_root/rollback-required" ] && [ -f "$stage_root/systemd-backup/manifest" ]; then
-    recovered_digest=$(cat "$stage_root/closure-digest")
-    printf '%s\n' "$recovered_digest" | grep -Eq '^[0-9a-f]{64}$' || { echo "installer recovery journal is invalid" >&2; exit 1; }
-    if [ "$(readlink /opt/uap-observer-current 2>/dev/null || true)" != "uap-observer-closures/$recovered_digest" ]; then
-      restore_observer_systemd "$stage_root/systemd-backup" /etc/systemd/system
-      observer_sync_tree /etc/systemd/system
-      systemctl daemon-reload
-      rm -rf "/opt/uap-observer-closures/$recovered_digest"
-    fi
-  fi
-  for orphan in /opt/uap-observer-closures/.new-*; do
-    if [ -d "$orphan" ] && [ ! -L "$orphan" ]; then rm -rf "$orphan"; fi
-  done
-  rm -rf "$stage_root" /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
-  rm -f /opt/uap-observer-current.new
-  rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
-    /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
-    /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
-    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
-  for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
 fi
 test ! -e "$stage_root"
 install -d -o root -g root -m 0700 "$stage_root"
@@ -97,18 +81,11 @@ cleanup() {
   if [ "$rollback_ok" -eq 0 ]; then
     echo "observer rollback incomplete; durable recovery journal retained" >&2
   else
-    rm -rf /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
+    observer_cleanup_partial_paths
     test -z "$closure_stage" || rm -rf "$closure_stage"
     if [ "$closure_published" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
       rm -rf "$closure_final"
     fi
-    rm -f /opt/uap-observer-current.new
-    rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
-      /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
-      /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
-      /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
-    for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
-    rm -rf "$stage_root"
   fi
   exit "$status"
 }
@@ -434,8 +411,12 @@ systemd_backup="$stage_root/systemd-backup"
 journal_observer_systemd "$systemd_backup" /etc/systemd/system
 observer_sync_tree "$systemd_backup"
 printf '%s\n' "$closure_digest" > "$stage_root/closure-digest"
+chown root:root "$stage_root/closure-digest"
+chmod 0600 "$stage_root/closure-digest"
 sync -f "$stage_root/closure-digest"
 printf '%s\n' rollback-required > "$stage_root/rollback-required"
+chown root:root "$stage_root/rollback-required"
+chmod 0600 "$stage_root/rollback-required"
 sync -f "$stage_root/rollback-required"
 sync -f "$stage_root"
 mv "$closure_stage" "$closure_final"

@@ -46,6 +46,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(production["cli_release_tag"], tag)
         self.assertEqual(observer["cli_release_tag"], tag)
         self.assertEqual(adapter_schema["properties"]["request_policy"]["properties"]["cli_release_tag"]["const"], tag)
+        # Bind the version and both independently authenticated public release
+        # assets in one regression contract.  Updating only the version cannot
+        # leave a stale observer trust pin behind.
+        request_policy = adapter_schema["properties"]["request_policy"]["properties"]
+        self.assertEqual((version, request_policy["release_manifest_digest"]["const"], request_policy["release_checksums_digest"]["const"]), (
+            "0.1.14",
+            "sha256:21b72bb9fc82df2b45ce2e83ea79eeb5b8436cfd9b09f8ccfcbb25c8d0fda8f9",
+            "sha256:bd9f8de83b9b04589d2b29ce36ae079bf5f67b10b8f44c5ab811fc5d6706ff6b",
+        ))
         self.assertEqual(schema["properties"]["cli_release_tag"]["const"], tag)
         self.assertEqual(schema["properties"]["github_release_identity"]["properties"]["tag"]["const"], tag)
         self.assertEqual(schema["properties"]["github_asset_attestation"]["properties"]["tag"]["const"], tag)
