@@ -177,6 +177,116 @@ def _requested_source_matches(requested: str, data: dict[str, Any], command: str
     )
 
 
+def _optional_string(value: dict[str, Any], name: str) -> bool:
+    return name not in value or _nonempty(value[name])
+
+
+def _validate_directory_evidence(value: Any) -> bool:
+    required = {
+        "id", "distribution_id", "release_sequence", "level", "outcome",
+        "package_tree_digest", "artifact", "trusted_for_eligibility",
+    }
+    optional = {
+        "client", "client_version", "installer_version", "os", "architecture",
+        "dependency_identity", "observed_at", "trust",
+    }
+    if not _keys(value, required, optional):
+        return False
+    artifact = value["artifact"]
+    if not (
+        _keys(artifact, {"repository", "revision", "path", "digest"})
+        and GITHUB_REPOSITORY.fullmatch(str(artifact["repository"])) is not None
+        and FULL_SHA.fullmatch(str(artifact["revision"])) is not None
+        and GITHUB_SOURCE_PATH.fullmatch(str(artifact["path"])) is not None
+        and _digest(artifact["digest"])
+        and _exact_int(value["release_sequence"]) and value["release_sequence"] > 0
+        and _digest(value["package_tree_digest"])
+        and type(value["trusted_for_eligibility"]) is bool
+        and all(_nonempty(value[name]) for name in ("id", "distribution_id", "level", "outcome"))
+        and all(_optional_string(value, name) for name in optional - {"trust"})
+    ):
+        return False
+    if "trust" in value:
+        trust = value["trust"]
+        if not isinstance(trust, dict) or not _nonempty(trust.get("kind")):
+            return False
+        if trust["kind"] == "github_actions":
+            if not _keys(trust, {"kind", "workflow", "source_ref", "source_digest"}):
+                return False
+            if not all(_nonempty(trust[name]) for name in ("workflow", "source_ref")) or FULL_SHA.fullmatch(str(trust["source_digest"])) is None:
+                return False
+        elif trust["kind"] == "reviewed_external":
+            if set(trust) != {"kind"}:
+                return False
+        else:
+            return False
+    return True
+
+
+def _validate_installed_directory(value: Any) -> bool:
+    required = {"product_id", "recorded_distribution", "recorded_revision", "recorded_release_sequence"}
+    optional = {
+        "current_distribution", "reviewed_default_distribution", "current_revision",
+        "current_repository", "current_package_path", "current_release_sequence",
+        "recorded_snapshot_sequence", "current_snapshot_sequence", "current_immutable_evidence",
+    }
+    if not _keys(value, required, optional):
+        return False
+    if not (
+        all(_nonempty(value[name]) for name in ("product_id", "recorded_distribution", "recorded_revision"))
+        and _exact_int(value["recorded_release_sequence"]) and value["recorded_release_sequence"] > 0
+        and all(_optional_string(value, name) for name in (
+            "current_distribution", "reviewed_default_distribution", "current_revision",
+            "current_repository", "current_package_path",
+        ))
+        and all(name not in value or (_exact_int(value[name]) and value[name] > 0) for name in (
+            "current_release_sequence", "recorded_snapshot_sequence", "current_snapshot_sequence",
+        ))
+    ):
+        return False
+    evidence = value.get("current_immutable_evidence", [])
+    return isinstance(evidence, list) and all(_validate_directory_evidence(item) for item in evidence)
+
+
+def _validate_safety_warning(value: Any) -> bool:
+    if not _keys(value, {"code", "message"}, {"action", "distribution_id", "release_sequence", "clients"}):
+        return False
+    return bool(
+        _nonempty(value["code"]) and _nonempty(value["message"])
+        and all(_optional_string(value, name) for name in ("action", "distribution_id"))
+        and ("release_sequence" not in value or (_exact_int(value["release_sequence"]) and value["release_sequence"] > 0))
+        and ("clients" not in value or _string_list(value["clients"], nonempty=True))
+    )
+
+
+def _validate_native_discovery(value: Any, client_id: str, client_version: Any) -> bool:
+    if not _keys(value, {"basis", "version_operation", "discovery_operation"}) or value["basis"] != "native_client_command":
+        return False
+    version = value["version_operation"]
+    discovery = value["discovery_operation"]
+    return bool(
+        _keys(version, {"argv"}, {"observed_client_version"})
+        and _string_list(version["argv"], nonempty=True)
+        and _optional_string(version, "observed_client_version")
+        and ("observed_client_version" not in version or version["observed_client_version"] == client_version)
+        and _keys(discovery, {"argv", "discovered", "product_id"})
+        and _string_list(discovery["argv"], nonempty=True)
+        and type(discovery["discovered"]) is bool and _nonempty(discovery["product_id"])
+    )
+
+
+def _validate_inventory(value: Any) -> bool:
+    required = {"mcp_present", "mcp_enabled"}
+    list_fields = {"mcp_servers", "invalid_mcp_servers", "app_bindings", "skills", "invalid_skills", "extensions"}
+    bool_fields = {"app_present", "invalid_skills_root"}
+    return bool(
+        _keys(value, required, list_fields | bool_fields)
+        and all(type(value[name]) is bool for name in required)
+        and all(name not in value or _string_list(value[name]) for name in list_fields)
+        and all(name not in value or type(value[name]) is bool for name in bool_fields)
+    )
+
+
 def _validate_group_target(
     item: Any, *, command: str, data: dict[str, Any], installation_ids: set[str],
 ) -> str | None:
@@ -206,6 +316,9 @@ def _validate_group_target(
         and ("revision" not in output or FULL_SHA.fullmatch(output["revision"]) is not None)
         and ("revision" not in data or "revision" in output)
         and ("revision" not in data or output.get("revision") == data["revision"])
+        and ("next_action" not in item or _nonempty(item["next_action"]))
+        and ("next_action" not in output or _nonempty(output["next_action"]))
+        and (item.get("next_action") == output.get("next_action"))
     ):
         return None
     result = output["result"]
@@ -342,45 +455,71 @@ def validate_cli_envelope(
             )
         return valid
     if command == "info":
-        if not _keys(data, {"installation_id", "name", "version", "source", "clients", "mixed_version"}):
+        required_info = {"installation_id", "name", "source", "clients", "mixed_version"}
+        optional_info = {"version", "needs_rebind", "directory", "warnings", "convergence_action"}
+        if not _keys(data, required_info, optional_info):
             return False
         clients = data["clients"]
-        seen: set[str] = set()
-        revisions: set[tuple[str, str, str, str]] = set()
+        seen: set[tuple[str, str]] = set()
         for client in clients if isinstance(clients, list) else ():
             required = {
                 "client_id", "scope", "materialization", "activation", "authentication", "policy",
-                "verification", "package_revision",
+                "verification",
             }
-            optional = {"affected_surfaces", "receipt_reconciled", "native_discovery_reconciled", "native_identity_state", "client_version"}
+            optional = {
+                "package_revision", "affected_surfaces", "receipt_reconciled",
+                "native_discovery_reconciled", "native_identity_state", "client_version",
+                "native_discovery_evidence",
+            }
             client_id = client.get("client_id") if _keys(client, required, optional) else None
             revision = client.get("package_revision") if isinstance(client, dict) else None
             if (
-                not _nonempty(client_id) or client_id in seen or client["scope"] != "user"
-                or client["materialization"] not in MATERIALIZATIONS
-                or client["activation"] not in ACTIVATIONS
-                or client["authentication"] not in AUTHENTICATIONS
-                or client["policy"] not in POLICIES or client["verification"] not in VERIFICATIONS
-                or ((client["activation"] == "active") != (client["verification"] == "installation_verified"))
-                or not isinstance(revision, dict)
-                or set(revision) != {"version", "resolved_revision", "tree_digest", "manifest_digest"}
-                or not _digest(revision.get("tree_digest"))
-                or not _digest(revision.get("manifest_digest"))
-                or revision.get("version") != data["version"]
-                or FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is None
-                or ("affected_surfaces" in client and client["affected_surfaces"] != [client_id])
+                not _nonempty(client_id) or (client_id, client.get("scope")) in seen or not _nonempty(client["scope"])
+                or client["materialization"] not in {"absent", "staged", "materialized", "degraded"}
+                or client["activation"] not in {"not_required", "prepared", "manual_activation_required", "active", "failed"}
+                or client["authentication"] not in {"not_required", "not_checked", "auth_pending", "authenticated", "failed"}
+                or client["policy"] not in {"allowed", "blocked", "approval_required"}
+                or client["verification"] not in {"not_run", "package_validated", "installation_verified", "runtime_verified", "failed"}
+                or ("affected_surfaces" in client and not _string_list(client["affected_surfaces"], nonempty=True))
                 or ("receipt_reconciled" in client and type(client["receipt_reconciled"]) is not bool)
                 or ("native_discovery_reconciled" in client and type(client["native_discovery_reconciled"]) is not bool)
-                or ("native_identity_state" in client and not _nonempty(client["native_identity_state"]))
+                or ("native_identity_state" in client and client["native_identity_state"] not in {"absent", "managed", "unmanaged", "indeterminate"})
                 or ("client_version" in client and not _nonempty(client["client_version"]))
             ):
                 return False
-            seen.add(client_id)
-            revisions.add((revision["version"], revision["resolved_revision"], revision["tree_digest"], revision["manifest_digest"]))
+            if revision is not None:
+                revision_required = {"tree_digest", "manifest_digest"}
+                revision_optional = {"version", "resolved_revision", "distribution_id", "release_sequence", "evidence"}
+                if not (
+                    _keys(revision, revision_required, revision_optional)
+                    and _digest(revision["tree_digest"]) and _digest(revision["manifest_digest"])
+                    and all(_optional_string(revision, name) for name in ("version", "resolved_revision", "distribution_id"))
+                    and ("release_sequence" not in revision or (_exact_int(revision["release_sequence"]) and revision["release_sequence"] > 0))
+                    and ("evidence" not in revision or (
+                        isinstance(revision["evidence"], list)
+                        and all(_validate_directory_evidence(item) for item in revision["evidence"])
+                    ))
+                    and ("version" not in revision or revision["version"] == data.get("version"))
+                    and (("distribution_id" in revision) == ("release_sequence" in revision))
+                ):
+                    return False
+            native_evidence = client.get("native_discovery_evidence")
+            if native_evidence is not None and not _validate_native_discovery(native_evidence, client_id, client.get("client_version")):
+                return False
+            seen.add((client_id, client["scope"]))
         valid = bool(
             _nonempty(data["installation_id"]) and _nonempty(data["name"])
-            and _nonempty(data["version"]) and _nonempty(data["source"])
-            and seen and len(revisions) == 1 and type(data["mixed_version"]) is bool and data["mixed_version"] is False
+            and _nonempty(data["source"]) and isinstance(clients, list) and seen
+            and _optional_string(data, "version")
+            and type(data["mixed_version"]) is bool
+            and ("needs_rebind" not in data or type(data["needs_rebind"]) is bool)
+            and ("directory" not in data or _validate_installed_directory(data["directory"]))
+            and ("warnings" not in data or (
+                isinstance(data["warnings"], list) and data["warnings"]
+                and all(_validate_safety_warning(item) for item in data["warnings"])
+            ))
+            and ("convergence_action" not in data or _nonempty(data["convergence_action"]))
+            and (data["mixed_version"] == ("convergence_action" in data))
         )
         if valid and requested_argv is not None:
             argv = list(requested_argv)
@@ -592,9 +731,15 @@ def tree_digest(root: Path) -> str:
 
 
 def observe(home: Path, manager: Path) -> dict[str, Any]:
+    manager_snapshot = filesystem_snapshot(manager)
+    native_snapshots = {name: filesystem_snapshot(home / name) for name in NATIVE_ROOTS}
     return {
-        "manager": tree_digest(manager),
-        "native": {name: tree_digest(home / name) for name in NATIVE_ROOTS},
+        "manager": manager_snapshot,
+        "native": native_snapshots,
+        "portable_digests": {
+            "manager": manager_snapshot.get(".", {}).get("digest"),
+            "native": {name: snapshot.get(".", {}).get("digest") for name, snapshot in native_snapshots.items()},
+        },
     }
 
 
@@ -914,9 +1059,12 @@ def manager_state(
         path = PurePosixPath(value)
         if any(part in {"", ".", ".."} for part in path.parts[1:]) or str(path) != value:
             return False
-        previous = global_paths.get(value)
-        if previous is not None and previous != owner:
-            return False
+        for existing, previous in global_paths.items():
+            if previous == owner:
+                continue
+            existing_path = PurePosixPath(existing)
+            if path == existing_path or path in existing_path.parents or existing_path in path.parents:
+                return False
         global_paths[value] = owner
         return True
     for installation in value["installations"]:
@@ -930,6 +1078,24 @@ def manager_state(
             return None
         installation_ids.add(installation_id)
         names.add(name)
+        origin_mode = installation.get("origin_mode")
+        directory = installation.get("directory")
+        if origin_mode is not None and origin_mode not in {"direct", "directory"}:
+            return None
+        if origin_mode != "directory" and directory is not None:
+            return None
+        if origin_mode == "directory" and not (
+            _keys(directory, {"product_id", "distribution_id", "distribution_kind", "desired_release_sequence"},
+                  {"snapshot_schema", "snapshot_sequence", "snapshot_digest"})
+            and directory["product_id"] == name
+            and _nonempty(directory["distribution_id"])
+            and directory["distribution_kind"] in {"upstream", "community_bridge", "community"}
+            and _exact_int(directory["desired_release_sequence"]) and directory["desired_release_sequence"] > 0
+            and ("snapshot_schema" not in directory or (_exact_int(directory["snapshot_schema"]) and directory["snapshot_schema"] > 0))
+            and ("snapshot_sequence" not in directory or (_exact_int(directory["snapshot_sequence"]) and directory["snapshot_sequence"] > 0))
+            and ("snapshot_digest" not in directory or _digest(directory["snapshot_digest"]))
+        ):
+            return None
         if "operation_group_id" in installation:
             if not _nonempty(installation["operation_group_id"]) or installation["operation_group_id"] in installation_groups:
                 return None
@@ -949,14 +1115,14 @@ def manager_state(
             and _keys(package, {"loader_kind", "format_id", "schema_uri", "declared_name", "manifest_digest", "inventory"}, {"version"})
             and package["loader_kind"] == "agent_plugins" and package["format_id"] == "agent-plugins/1.0.0"
             and package["schema_uri"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
-            and package["declared_name"] == name and isinstance(package["inventory"], dict) and _digest(package["manifest_digest"])
+            and package["declared_name"] == name and _validate_inventory(package["inventory"]) and _digest(package["manifest_digest"])
             and ("version" not in package or _nonempty(package["version"]))
         ):
             return None
         clients = installation["clients"]
         if not isinstance(clients, dict):
             return None
-        client_ids: set[str] = set()
+        client_ids: set[tuple[str, str]] = set()
         for binding_id, binding in clients.items():
             required_binding = {
                 "client_binding_id", "client_id", "scope", "target_locator", "physical_artifact_id",
@@ -971,16 +1137,19 @@ def manager_state(
                 return None
             global_binding_ids.add(binding_id)
             client_id = binding.get("client_id")
-            if not _nonempty(client_id) or client_id in client_ids or binding.get("scope") != "user":
+            client_identity = (client_id, binding.get("scope"))
+            if not _nonempty(client_id) or client_identity in client_ids or binding.get("scope") not in {"user", "project"}:
                 return None
-            client_ids.add(client_id)
+            client_ids.add(client_identity)
             if not (
-                binding["materialization"] in MATERIALIZATIONS and binding["activation"] in ACTIVATIONS
-                and binding["authentication"] in AUTHENTICATIONS and binding["policy"] in POLICIES
-                and binding["verification"] in VERIFICATIONS
+                binding["materialization"] in {"absent", "staged", "materialized", "degraded"}
+                and binding["activation"] in {"not_required", "prepared", "manual_activation_required", "active", "failed"}
+                and binding["authentication"] in {"not_required", "not_checked", "auth_pending", "authenticated", "failed"}
+                and binding["policy"] in {"allowed", "blocked", "approval_required"}
+                and binding["verification"] in {"not_run", "package_validated", "installation_verified", "runtime_verified", "failed"}
                 and _nonempty(binding["physical_artifact_id"])
                 and owned_path(binding["target_locator"], binding_id)
-                and ("affected_surfaces" not in binding or binding["affected_surfaces"] == [client_id])
+                and ("affected_surfaces" not in binding or _string_list(binding["affected_surfaces"], nonempty=True))
             ):
                 return None
             if "native_objects" in binding and not isinstance(binding["native_objects"], list):
@@ -988,29 +1157,24 @@ def manager_state(
             if "receipts" in binding and not isinstance(binding["receipts"], list):
                 return None
             revision = binding["package_revision"]
-            if not (
-                _validate_package_revision(
-                    revision, revision=source["resolved_revision"], tree=source["tree_digest"],
-                    manifest=package["manifest_digest"],
-                )
-                and revision.get("version") == package.get("version")
-            ):
+            if not _validate_package_revision(revision, revision=None, tree=revision.get("tree_digest", ""), manifest=revision.get("manifest_digest", "")):
                 return None
             native_objects = binding.get("native_objects", [])
             for native_object in native_objects:
                 if not (
-                    _keys(native_object, {"object_id", "kind", "logical_name", "path", "managed_digest", "protection_class"})
-                    and _nonempty(native_object["object_id"]) and native_object["logical_name"] == name
-                    and native_object["kind"] == "managed_package_directory"
-                    and native_object["protection_class"] == "managed" and _digest(native_object["managed_digest"])
-                    and native_object["path"] == binding["target_locator"]
+                    _keys(native_object, {"object_id", "kind", "protection_class"},
+                          {"logical_name", "path", "before_digest", "managed_digest", "user_modified"})
+                    and all(_nonempty(native_object[key]) for key in ("object_id", "kind", "protection_class"))
+                    and all(_optional_string(native_object, key) for key in ("logical_name", "path"))
+                    and all(key not in native_object or _digest(native_object[key]) for key in ("before_digest", "managed_digest"))
+                    and ("user_modified" not in native_object or type(native_object["user_modified"]) is bool)
                 ):
                     return None
             for receipt in binding.get("receipts", []):
                 if not (
                     _keys(receipt, {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "staging_path", "backup_path", "after_digest", "phase"}, {"before_digest"})
                     and _nonempty(receipt["operation_id"]) and receipt["operation_id"] not in global_operation_ids
-                    and receipt["operation_group_id"] == installation.get("operation_group_id")
+                    and _nonempty(receipt["operation_group_id"])
                     and receipt["client_binding_id"] == binding_id and _exact_int(receipt["sequence"])
                     and receipt["sequence"] >= 1 and receipt["mutation_type"] == "directory_swap"
                     and receipt["phase"] == "committed" and receipt["active_path"] == binding["target_locator"]
@@ -1038,7 +1202,7 @@ def manager_state(
         for receipt_id, receipt in data_receipts.items():
             if not (
                 _keys(receipt, {"data_receipt_id", "physical_backend_id", "scope", "locator", "ownership_digest", "state"}, {"created_at", "updated_at"})
-                and receipt.get("data_receipt_id") == receipt_id and receipt.get("scope") == "user"
+                and receipt.get("data_receipt_id") == receipt_id and receipt.get("scope") in {"user", "project"}
                 and receipt.get("state") in {"owned", "unknown", "stale"} and _digest(receipt.get("ownership_digest"))
                 and receipt_id not in global_receipt_ids and _nonempty(receipt.get("physical_backend_id"))
                 and owned_path(receipt.get("locator"), receipt_id)
@@ -1046,32 +1210,28 @@ def manager_state(
                 return None
             global_receipt_ids.add(receipt_id)
         if any(
-            ("data_receipt_id" in binding) != bool(data_receipts)
-            or ("data_receipt_id" in binding and binding["data_receipt_id"] not in data_receipts)
-            for binding in clients.values()
+            "data_receipt_id" in binding and (
+                binding["data_receipt_id"] not in data_receipts
+                or data_receipts[binding["data_receipt_id"]]["physical_backend_id"] != binding["physical_artifact_id"]
+            ) for binding in clients.values()
         ):
             return None
     transaction_receipts = value.get("transaction_receipts", [])
     if not isinstance(transaction_receipts, list):
         return None
-    transaction_bindings: set[str] = set()
     for receipt in transaction_receipts:
         if not (
-            _keys(receipt, {"operation_id", "sequence", "mutation_type", "client_binding_id", "phase"}, {"operation_group_id", "client_id", "physical_artifact_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest"})
+            _keys(receipt, {"operation_id", "sequence", "mutation_type", "client_binding_id", "phase"}, {"operation_group_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest"})
             and _nonempty(receipt["operation_id"]) and _exact_int(receipt["sequence"])
             and receipt["sequence"] >= 1 and _nonempty(receipt["client_binding_id"])
-            and receipt["client_binding_id"] not in transaction_bindings
             and receipt["phase"] == "committed"
             and receipt["operation_id"] not in global_operation_ids
         ):
             return None
         if receipt["mutation_type"] == "directory_remove":
-            authority = (removal_authority or {}).get(receipt["client_binding_id"])
             if not (
-                set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "client_id", "physical_artifact_id", "active_path", "backup_path", "before_digest", "phase"}
-                and isinstance(authority, dict)
-                and set(authority) == {"client_binding_id", "client_id", "physical_artifact_id", "active_path", "before_digest"}
-                and all(receipt[field] == authority[field] for field in ("client_binding_id", "client_id", "physical_artifact_id", "active_path", "before_digest"))
+                set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "backup_path", "before_digest", "phase"}
+                and _nonempty(receipt["operation_group_id"])
                 and owned_path(receipt["active_path"], receipt["client_binding_id"])
                 and owned_path(receipt["backup_path"], receipt["operation_id"])
                 and PurePosixPath(receipt["active_path"]).parent == PurePosixPath(receipt["backup_path"]).parent
@@ -1094,7 +1254,6 @@ def manager_state(
                 return None
         else:
             return None
-        transaction_bindings.add(receipt["client_binding_id"])
         global_operation_ids.add(receipt["operation_id"])
     if global_paths:
         try:
@@ -1119,7 +1278,7 @@ def selected_manager_installation(manager: Path, product: str) -> dict[str, Any]
 
 
 def removal_authority_from_installation(installation: Any) -> dict[str, dict[str, Any]] | None:
-    if not isinstance(installation, dict) or not _nonempty(installation.get("operation_group_id")):
+    if not isinstance(installation, dict) or not _nonempty(installation.get("installation_id")):
         return None
     authority: dict[str, dict[str, Any]] = {}
     for binding_id, binding in installation.get("clients", {}).items():
@@ -1134,10 +1293,52 @@ def removal_authority_from_installation(installation: Any) -> dict[str, dict[str
             "client_binding_id": binding_id, "client_id": binding.get("client_id"),
             "physical_artifact_id": binding.get("physical_artifact_id"),
             "active_path": binding.get("target_locator"), "before_digest": next(iter(digests)),
+            "installation_id": installation["installation_id"],
+            "data_receipt_id": binding.get("data_receipt_id"),
         }
         if not all(_nonempty(value) for value in authority[binding_id].values()):
             return None
     return authority or None
+
+
+def removal_receipts_bind_command(
+    before_state: Any, after_state: Any, authority: Any, operation_group_id: Any,
+    clients: tuple[str, ...], retained_installation: Any,
+) -> bool:
+    """Bind released removal receipts to pre-operation binding/native authority."""
+    if not isinstance(before_state, dict) or not isinstance(after_state, dict) or not isinstance(authority, dict):
+        return False
+    before = before_state.get("transaction_receipts", [])
+    after = after_state.get("transaction_receipts", [])
+    if not isinstance(before, list) or not isinstance(after, list) or after[:len(before)] != before:
+        return False
+    delta = after[len(before):]
+    if len(delta) != len(clients) or not _nonempty(operation_group_id):
+        return False
+    by_client = {item["client_id"]: item for item in authority.values()}
+    if set(by_client) != set(clients):
+        return False
+    seen: set[str] = set()
+    for receipt in delta:
+        binding = authority.get(receipt.get("client_binding_id")) if isinstance(receipt, dict) else None
+        if not isinstance(binding, dict) or binding["client_id"] in seen:
+            return False
+        if not (
+            set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "backup_path", "before_digest", "phase"}
+            and receipt["operation_group_id"] == operation_group_id
+            and receipt["mutation_type"] == "directory_remove" and receipt["phase"] == "committed"
+            and receipt["active_path"] == binding["active_path"]
+            and receipt["before_digest"] == binding["before_digest"]
+            and PurePosixPath(receipt["backup_path"]).parent == PurePosixPath(binding["active_path"]).parent
+        ):
+            return False
+        seen.add(binding["client_id"])
+    if not isinstance(retained_installation, dict) or retained_installation.get("installation_id") != next(iter(authority.values()))["installation_id"]:
+        return False
+    return retained_installation.get("clients") == {} and all(
+        receipt_id in retained_installation.get("data_receipts", {})
+        for receipt_id in {binding["data_receipt_id"] for binding in authority.values()}
+    )
 
 
 def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] | None:
@@ -1146,9 +1347,8 @@ def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] |
     if installation is None:
         return None
     entries: list[dict[str, Any]] = []
-    operation_group_id = installation.get("operation_group_id")
     bindings = installation.get("clients")
-    if not isinstance(operation_group_id, str) or not operation_group_id or not isinstance(bindings, dict) or not bindings:
+    if not isinstance(bindings, dict) or not bindings:
         return None
     client_ids: set[str] = set()
     for binding_key, binding in bindings.items():
@@ -1176,7 +1376,7 @@ def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] |
         for receipt in raw:
             if not isinstance(receipt, dict) or not (
                 isinstance(receipt.get("operation_id"), str) and receipt["operation_id"]
-                and receipt.get("operation_group_id") == operation_group_id
+                and _nonempty(receipt.get("operation_group_id"))
                 and receipt.get("client_binding_id") == binding_id
                 and _exact_int(receipt.get("sequence")) and receipt["sequence"] >= 1
                 and receipt.get("phase") == "committed"
@@ -1187,7 +1387,13 @@ def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] |
             sequences.append(receipt["sequence"])
             entries.append({
                 "receipt": copy.deepcopy(receipt), "binding_client": client_id,
-                "client_binding_id": binding_id, "operation_group_id": operation_group_id,
+                "client_binding_id": binding_id, "operation_group_id": receipt["operation_group_id"],
+                "installation_id": installation["installation_id"],
+                "physical_artifact_id": binding.get("physical_artifact_id"),
+                "active_path": binding.get("target_locator"),
+                "native_object_ids": sorted(
+                    item["object_id"] for item in native_objects if isinstance(item, dict) and _nonempty(item.get("object_id"))
+                ),
             })
         if sequences != sorted(sequences) or len(sequences) != len(set(sequences)):
             return None
@@ -1198,36 +1404,81 @@ def receipts_bind_command(
     before: list[dict[str, Any]], after: list[dict[str, Any]], operation: str, clients: tuple[str, ...],
     *, operation_group_id: str | None = None,
 ) -> bool:
-    """Bind every exact client binding to one committed State-v4 operation group."""
-    del operation  # State-v4 binds the group and client, not a fabricated command name.
-    if len(clients) != len(set(clients)) or not after:
+    """Bind the exact receipt delta while leaving historical operation groups intact."""
+    if operation not in {"add", "repair"} or len(clients) != len(set(clients)) or not after:
         return False
-    groups = {entry.get("operation_group_id") for entry in after}
-    covered = [entry.get("binding_client") for entry in after]
+    before_by_id = {entry["receipt"].get("operation_id"): entry for entry in before}
+    after_by_id = {entry["receipt"].get("operation_id"): entry for entry in after}
+    if len(before_by_id) != len(before) or len(after_by_id) != len(after):
+        return False
+    if any(after_by_id.get(key) != entry for key, entry in before_by_id.items()):
+        return False
+    delta = [entry for key, entry in after_by_id.items() if key not in before_by_id]
+    previous_by_binding: dict[str, dict[str, Any]] = {}
+    for entry in before:
+        current = previous_by_binding.get(entry["client_binding_id"])
+        if current is None or entry["receipt"]["sequence"] > current["receipt"]["sequence"]:
+            previous_by_binding[entry["client_binding_id"]] = entry
+    groups = {entry.get("operation_group_id") for entry in delta}
+    covered = [entry.get("binding_client") for entry in delta]
     return bool(
-        len(groups) == 1
+        len(delta) == len(clients) and len(groups) == 1
         and (operation_group_id is None or groups == {operation_group_id})
         and set(covered) == set(clients) and len(covered) == len(clients)
-        and before != after
+        and all(
+            entry["receipt"].get("mutation_type") == "directory_swap"
+            and entry["receipt"].get("active_path") == entry["active_path"]
+            and entry["receipt"].get("after_digest")
+            and _nonempty(entry["physical_artifact_id"])
+            and entry["native_object_ids"]
+            and (
+                operation != "repair" or (
+                    entry["client_binding_id"] in previous_by_binding
+                    and entry["receipt"].get("before_digest")
+                    == previous_by_binding[entry["client_binding_id"]]["receipt"].get("after_digest")
+                )
+            )
+            for entry in delta
+        )
     )
 
 
-def materialized_product_mentions(home: Path, product: str, clients: tuple[str, ...]) -> dict[str, int]:
-    roots = {
-        "codex": home / ".codex", "cursor": home / ".cursor", "kiro": home / ".kiro",
-        "copilot": home / ".copilot", "vscode": home / ".config/Code/User",
-    }
-    result: dict[str, int] = {}
-    needle = product.encode()
-    for client in clients:
-        root = roots[client]
-        snapshot, bodies = _stable_tree_snapshot(root)
-        result[client] = sum(
-            1 for relative, item in snapshot.items()
-            if item["kind"] == "file" and (
-                needle in relative.encode() or (item["size"] <= (1 << 20) and needle in bodies[relative])
-            )
-        )
+def materialized_product_mentions(home: Path, manager: Path, product: str, clients: tuple[str, ...]) -> dict[str, int]:
+    """Descriptor-read only receipt-owned targets; name mentions are not evidence."""
+    result = {client: 0 for client in clients}
+    installation = selected_manager_installation(manager, product)
+    if installation is None:
+        return result
+    allowed_roots = tuple(path.resolve(strict=True) for path in (home, manager) if path.exists())
+    for binding in installation.get("clients", {}).values():
+        if not isinstance(binding, dict) or binding.get("client_id") not in result:
+            continue
+        target = Path(str(binding.get("target_locator", "")))
+        native = [
+            item for item in binding.get("native_objects", [])
+            if isinstance(item, dict) and item.get("kind") == "managed_package_directory"
+            and item.get("path") == str(target)
+        ]
+        receipts = [
+            item for item in binding.get("receipts", [])
+            if isinstance(item, dict) and item.get("active_path") == str(target)
+            and item.get("after_digest") in {entry.get("managed_digest") for entry in native}
+            and item.get("phase") == "committed"
+        ]
+        try:
+            resolved = target.resolve(strict=True)
+            contained = any(resolved == root or root in resolved.parents for root in allowed_roots)
+            snapshot, bodies = _stable_tree_snapshot(target)
+            identity = package_identity(target, observed=(snapshot, bodies))
+            manifest = strict_json_loads(bodies["plugin.json"])
+        except (OSError, ValueError, json.JSONDecodeError, DuplicateKeyError):
+            continue
+        if (
+            contained and len(native) == 1 and receipts
+            and identity["tree_digest"] == native[0]["managed_digest"]
+            and isinstance(manifest, dict) and manifest.get("name") == product
+        ):
+            result[binding["client_id"]] += 1
     return result
 
 
@@ -1260,6 +1511,13 @@ def identity_matches_release(identity: dict[str, Any], context: dict[str, Any]) 
         "tree_digest": release["tree_digest"],
         "manifest_digest": release["manifest_digest"],
         "resolved_revision": release["source_revision"],
+        "origin_mode": "directory",
+        "distribution_id": release["distribution_id"],
+        "distribution_kind": release["distribution_kind"],
+        "desired_release_sequence": release["release_sequence"],
+        "snapshot_schema": 1,
+        "snapshot_sequence": context["snapshot_sequence"],
+        "snapshot_digest": context["directory_digest"],
     }
     expected_source = {
         "source_repository": release["source_repository"],
@@ -1461,14 +1719,15 @@ def lifecycle(
     previous_receipts = installation_receipts(manager, product) or []
     for operation in operations:
         before_installation = selected_manager_installation(manager, product)
+        before_manager_state = manager_state(manager)
         before_receipts = installation_receipts(manager, product) or []
-        before = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": before_receipts, "materialized_mentions": materialized_product_mentions(home, product, clients)}
+        before = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": before_receipts, "materialized_mentions": materialized_product_mentions(home, manager, product, clients)}
         argv = [operation, product, "--target", target, "--format", "json"]
         completed, trace = traced(binary, argv, root, challenge)
         traces.append(trace)
         value = json_output(completed, operation)
         after_receipts = installation_receipts(manager, product) or []
-        after = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": after_receipts, "materialized_mentions": materialized_product_mentions(home, product, clients)}
+        after = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": after_receipts, "materialized_mentions": materialized_product_mentions(home, manager, product, clients)}
         identity = manager_identity(manager, product)
         identities[operation] = identity
         observations.append({"operation": operation, "command": argv, "before": before, "after": after})
@@ -1507,9 +1766,20 @@ def lifecycle(
             passed = passed and bool(
                 installation and installation.get("clients") == {} and installation.get("data_retained") is True
                 and len(installation.get("data_receipts", {})) == 1
+                and {
+                    item["data_receipt_id"]: item for item in value["data"].get("retained_data", [])
+                } == {
+                    receipt_id: {
+                        "data_receipt_id": receipt_id,
+                        "physical_backend_id": receipt["physical_backend_id"],
+                        "scope": receipt["scope"], "state": receipt["state"],
+                    }
+                    for receipt_id, receipt in installation.get("data_receipts", {}).items()
+                }
                 and isinstance(operation_group_id, str)
-                and len(transactions) == len(clients)
-                and all(item.get("operation_group_id") == operation_group_id for item in transactions)
+                and removal_receipts_bind_command(
+                    before_manager_state, state, removal_authority, operation_group_id, clients, installation,
+                )
             )
         elif operation == "update":
             # This fixture contains exactly one release. A truthful update is a
@@ -1698,6 +1968,7 @@ def installation_identity(installation: Any) -> dict[str, Any]:
     source = installation.get("source") if isinstance(installation.get("source"), dict) else {}
     package = installation.get("package") if isinstance(installation.get("package"), dict) else {}
     candidates = {
+        "origin_mode": (installation.get("origin_mode"),),
         "product_id": (installation.get("product_id"), installation.get("declared_name")),
         "resolved_revision": (installation.get("resolved_revision"), source.get("resolved_revision"), source.get("revision")),
         "canonical_source": (installation.get("canonical_source"), source.get("canonical_source"), source.get("locator")),
@@ -1709,6 +1980,9 @@ def installation_identity(installation: Any) -> dict[str, Any]:
         "distribution_id": (installation.get("distribution_id"), directory.get("distribution_id")),
         "distribution_kind": (installation.get("distribution_kind"), directory.get("distribution_kind")),
         "desired_release_sequence": (installation.get("desired_release_sequence"), directory.get("desired_release_sequence")),
+        "snapshot_schema": (directory.get("snapshot_schema"),),
+        "snapshot_sequence": (directory.get("snapshot_sequence"),),
+        "snapshot_digest": (directory.get("snapshot_digest"),),
         "data_locator": (installation.get("data_locator"),),
         "data_root": (installation.get("data_root"),),
         "affected_surfaces": (installation.get("affected_surfaces"),),
@@ -1808,7 +2082,8 @@ SANITIZED_PATH_FIELDS = frozenset({
 
 
 def transform_sanitized_placeholders(
-    value: Any, *, fixture_digest: str, mappings: tuple[tuple[str, Path], ...],
+    value: Any, *, original_raw: bytes | None = None, trusted_input_digest: str | None = None,
+    mappings: tuple[tuple[str, Path], ...],
 ) -> tuple[Any, dict[str, Any]]:
     """Rehome explicitly sanitized path placeholders into one sandbox.
 
@@ -1817,7 +2092,19 @@ def transform_sanitized_placeholders(
     placeholder must match exactly one mapping, so this cannot become a live
     path-authority exception.
     """
-    if not _digest(fixture_digest) or not mappings:
+    if (original_raw is None) == (trusted_input_digest is None):
+        raise ValueError("supply exactly one independent migration input authority")
+    input_digest = (
+        "sha256:" + hashlib.sha256(original_raw).hexdigest()
+        if original_raw is not None else trusted_input_digest
+    )
+    if original_raw is not None:
+        try:
+            if strict_json_loads(original_raw) != value:
+                raise ValueError("migration value does not match independently supplied raw bytes")
+        except (json.JSONDecodeError, DuplicateKeyError) as error:
+            raise ValueError("migration raw bytes are not strict JSON") from error
+    if not _digest(input_digest) or not mappings:
         raise ValueError("invalid sanitized fixture transformation authority")
     ordered = sorted((placeholder, str(destination.resolve(strict=True))) for placeholder, destination in mappings)
     placeholders = [item[0] for item in ordered]
@@ -1852,7 +2139,7 @@ def transform_sanitized_placeholders(
     record: dict[str, Any] = {
         "schema_version": 1,
         "algorithm": "agentplugins-sanitized-placeholder-to-sandbox-v1",
-        "input_digest": fixture_digest,
+        "input_digest": input_digest,
         "mappings": [{"placeholder": source, "sandbox": target} for source, target in ordered],
         "output_digest": output_digest,
     }
@@ -1861,7 +2148,8 @@ def transform_sanitized_placeholders(
 
 
 def validate_placeholder_transformation(
-    original: Any, transformed: Any, record: Any,
+    original: Any, transformed: Any, record: Any, *, original_raw: bytes | None = None,
+    trusted_input_digest: str | None = None,
 ) -> bool:
     if not _keys(record, {"schema_version", "algorithm", "input_digest", "mappings", "output_digest", "record_digest"}):
         return False
@@ -1875,10 +2163,18 @@ def validate_placeholder_transformation(
         and isinstance(record["mappings"], list) and record["mappings"]
     ):
         return False
+    if (original_raw is None) == (trusted_input_digest is None):
+        return False
+    independently_expected = (
+        "sha256:" + hashlib.sha256(original_raw).hexdigest()
+        if original_raw is not None else trusted_input_digest
+    )
+    if record["input_digest"] != independently_expected:
+        return False
     try:
         mappings = tuple((item["placeholder"], Path(item["sandbox"])) for item in record["mappings"] if set(item) == {"placeholder", "sandbox"})
         replayed, replay_record = transform_sanitized_placeholders(
-            original, fixture_digest=record["input_digest"], mappings=mappings,
+            original, trusted_input_digest=independently_expected, mappings=mappings,
         )
     except (KeyError, OSError, TypeError, ValueError):
         return False
@@ -2086,7 +2382,7 @@ def repair_fault_scenario(binary: Path, client: str, root: Path, challenge: str)
             fault_injected = True
     repair, trace = traced(binary, ["repair", "context7", "--target", client, "--format", "json"], root, challenge)
     traces.append(trace)
-    repaired = materialized_product_mentions(home, "context7", (client,))[client] > 0
+    repaired = materialized_product_mentions(home, manager, "context7", (client,))[client] > 0
     remove, trace = traced(binary, ["remove", "context7", "--target", client, "--format", "json"], root, challenge)
     traces.append(trace)
     after = observe(home, manager)
@@ -2136,9 +2432,11 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     migrated_fixture_root = manager / "sanitized-schema2-root"
     migrated_fixture_root.mkdir()
     transformed_state, transformation = transform_sanitized_placeholders(
-        legacy_state, fixture_digest=fixture_digest, mappings=(("/fixture/home", migrated_fixture_root),),
+        legacy_state, original_raw=fixture_bytes, mappings=(("/fixture/home", migrated_fixture_root),),
     )
-    if not validate_placeholder_transformation(legacy_state, transformed_state, transformation):
+    if not validate_placeholder_transformation(
+        legacy_state, transformed_state, transformation, original_raw=fixture_bytes,
+    ):
         raise ValueError("migration fixture sandbox transformation is invalid")
     transformed_bytes = canonical_json(transformed_state)
     state_path.write_bytes(transformed_bytes)
@@ -2298,7 +2596,7 @@ def crash_recovery_scenario(binary: Path, root: Path, challenge: str) -> tuple[b
     }
     retry, retry_trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
     identity = manager_identity(manager, "context7")
-    reconciled = retry.returncode == 0 and bool(identity) and materialized_product_mentions(home, "context7", ("cursor",))["cursor"] > 0
+    reconciled = retry.returncode == 0 and bool(identity) and materialized_product_mentions(home, manager, "context7", ("cursor",))["cursor"] > 0
     remove, remove_trace = traced(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge)
     after = observe(home, manager)
     proof = {"crash_injected": killed and process.returncode != 0, "journal_recovered": reconciled, "ownership_reconciled": reconciled and remove.returncode == 0}
@@ -2316,7 +2614,7 @@ def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple
     kiro = home / ".kiro"
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and process.poll() is None:
-        if materialized_product_mentions(home, "context7", ("codex",))["codex"] > 0:
+        if materialized_product_mentions(home, manager, "context7", ("codex",))["codex"] > 0:
             try:
                 if kiro.is_dir() and not any(kiro.iterdir()):
                     kiro.rmdir()
@@ -2334,7 +2632,7 @@ def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple
     if kiro.is_file():
         kiro.unlink()
         kiro.mkdir()
-    rolled_back = all(materialized_product_mentions(home, "context7", (client,))[client] == 0 for client in ("codex", "cursor", "kiro"))
+    rolled_back = all(materialized_product_mentions(home, manager, "context7", (client,))[client] == 0 for client in ("codex", "cursor", "kiro"))
     state_restored = manager_facts(manager, "context7")["installation_records"] == 0
     if process.returncode == 0:
         cleanup, cleanup_trace = traced(binary, ["remove", "context7", "--target", "codex,cursor,kiro", "--format", "json"], root, challenge)
@@ -2427,6 +2725,7 @@ class RetainedMarker:
         self.directory_fd = ancestry[-1][0]
         self.marker_fd = marker_fd
         self.marker_identity = marker_identity
+        self.locator_identity = ancestry[-1][4]
         self.body = body
         self.mode = mode
 
@@ -2463,11 +2762,21 @@ class RetainedMarker:
     def purged(
         self, allowed_roots: tuple[Path, ...], *, max_entries: int = 10000, max_depth: int = 32,
     ) -> bool:
-        """Prove unlink of this inode, not disappearance of its former name."""
+        """Prove unlink of both the exact marker and its owned locator."""
         try:
             opened = os.fstat(self.marker_fd)
             if (opened.st_dev, opened.st_ino) != self.marker_identity or opened.st_nlink != 0:
                 return False
+            opened_locator = os.fstat(self.directory_fd)
+            if (opened_locator.st_dev, opened_locator.st_ino) != self.locator_identity or opened_locator.st_nlink != 0:
+                return False
+            if len(self.ancestry) < 2 or self.ancestry[-1][2] != self.ancestry[-2][0]:
+                return False
+            try:
+                os.stat(self.ancestry[-1][3], dir_fd=self.ancestry[-2][0], follow_symlinks=False)
+                return False
+            except FileNotFoundError:
+                pass
             visited = 0
             for root in allowed_roots:
                 anchor = root.resolve(strict=True)
@@ -2571,9 +2880,11 @@ def create_contained_marker(
             os.close(descriptor)
 
 
-def package_identity(package: Path) -> dict[str, str]:
+def package_identity(
+    package: Path, *, observed: tuple[dict[str, dict[str, Any]], dict[str, bytes]] | None = None,
+) -> dict[str, str]:
     """Calculate the canonical tree and manifest identities from package bytes."""
-    snapshot, bodies = _stable_tree_snapshot(package)
+    snapshot, bodies = observed if observed is not None else _stable_tree_snapshot(package)
     if "." not in snapshot or "plugin.json" not in bodies:
         raise ValueError("package snapshot has no regular plugin.json")
     entries: list[tuple[bytes, bytes, bytes, bytes, bytes]] = []
@@ -2650,6 +2961,7 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
 
     add = execute(["add", "./" + package.name, "--target", "cursor", "--format", "json"])
     initial_identity = manager_identity(manager, "e2e-external-package")
+    initial_installation = selected_manager_installation(manager, "e2e-external-package")
     initial_receipt = data_receipt(manager, "e2e-external-package")
     locator = data_locator(manager, "e2e-external-package")
     canonical_locator = canonical_allowed_locator(locator, (root, manager))
@@ -2683,7 +2995,13 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     remove = execute(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"])
     remove_preserved = marker is not None and marker.verify()
     purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
-    purge_deleted = marker is not None and marker.purged((root, manager))
+    purge_state = manager_state(manager)
+    remaining = [
+        item for item in purge_state.get("installations", [])
+        if isinstance(item, dict) and item.get("installation_id") == (initial_installation or {}).get("installation_id")
+    ] if purge_state else []
+    authority_consumed = data_receipt(manager, "e2e-external-package") is None and not remaining
+    purge_deleted = marker is not None and marker.purged((root, manager)) and authority_consumed
     after = observe(home, manager)
     proof = {
         "info_preserved": info_preserved,
@@ -2701,6 +3019,7 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,
         "updated_identity": updated_identity, "initial_data_receipt": initial_receipt,
         "updated_data_receipt": updated_receipt,
+        "purge_authority_consumed": authority_consumed,
         "expected_initial_identity": expected_initial_identity,
         "expected_updated_identity": expected_updated_identity,
     }
@@ -2950,7 +3269,7 @@ def external_activation_scenario(binary: Path, root: Path, challenge: str, conte
         result = {}
     rendered = json.dumps(result, sort_keys=True).lower() + combined.lower()
     identity = manager_identity(manager, "context7")
-    materialized = bool(identity) and materialized_product_mentions(home, "context7", ("cursor",))["cursor"] > 0
+    materialized = bool(identity) and materialized_product_mentions(home, manager, "context7", ("cursor",))["cursor"] > 0
     activation_visible = "activation" in rendered and any(word in rendered for word in ("pending", "manual", "failed", "repair"))
     repair_action = "repair" in rendered or "activation" in rendered
     remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
@@ -3075,7 +3394,7 @@ def revoked_boundary_scenario(
     after = observe(home, manager)
     identity_unchanged = all(identity_before.get(field) == identity_after_blocks.get(field) for field in ("distribution_id", "resolved_revision", "desired_release_sequence"))
     proof = {
-        "install_blocked": blocked_install.returncode != 0 and manager_facts(fresh_manager, "context7")["installation_records"] == 0 and materialized_product_mentions(fresh_home, "context7", ("cursor",))["cursor"] == 0,
+        "install_blocked": blocked_install.returncode != 0 and manager_facts(fresh_manager, "context7")["installation_records"] == 0 and materialized_product_mentions(fresh_home, fresh_manager, "context7", ("cursor",))["cursor"] == 0,
         "new_target_blocked": new_target.returncode != 0 and identity_unchanged,
         "repair_blocked": repair.returncode != 0 and identity_unchanged,
         "remove_available": remove.returncode == 0,

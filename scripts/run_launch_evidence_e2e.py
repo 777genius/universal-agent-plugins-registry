@@ -181,6 +181,8 @@ def validate_capture_release_binding(
     *, release_manifest: dict[str, Any], release_identity: dict[str, Any],
     release_manifest_digest: str, release_checksums_digest: str,
     asset_name: str, asset_digest: str, asset_attestation: dict[str, Any],
+    capture_transcript_manifest: dict[str, Any] | None = None,
+    capture_transcript_attestation: dict[str, Any] | None = None,
     provenance_path: Path = CAPTURE_PROVENANCE,
 ) -> dict[str, Any]:
     """Bind sanitized conformance captures to separately authenticated release evidence.
@@ -226,6 +228,65 @@ def validate_capture_release_binding(
         release_manifest, repository=TRUSTED_CLI_RELEASE_REPOSITORY,
         tag=TRUSTED_CLI_RELEASE_TAG, tag_commit=captured["tag_commit"],
     )
+    if capture_transcript_manifest is None or capture_transcript_attestation is None:
+        raise ValueError("enforced captures require an externally authenticated raw transcript manifest")
+    manifest = capture_transcript_manifest
+    manifest_digest = "sha256:" + hashlib.sha256(canonical_json(manifest)).hexdigest()
+    if not (
+        set(manifest) == {"schema_version", "release", "binary", "attestation", "sanitization", "captures"}
+        and manifest.get("schema_version") == 1
+        and manifest.get("release") == {
+            "repository": captured["repository"], "tag": captured["tag"], "commit": captured["tag_commit"],
+        }
+        and manifest.get("binary") == {"asset": asset_name, "digest": asset_digest}
+        and manifest.get("attestation") == {
+            "predicate_type": "https://slsa.dev/provenance/v1",
+            "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
+            "verified": True,
+        }
+        and manifest.get("sanitization") == {
+            "transform": "agentplugins-deterministic-sanitization",
+            "version": 1,
+        }
+        and capture_transcript_attestation == {
+            "predicate_type": "https://slsa.dev/provenance/v1",
+            "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
+            "subject_digest": manifest_digest,
+            "verified": True,
+        }
+        and isinstance(manifest.get("captures"), list)
+    ):
+        raise ValueError("capture transcript manifest lacks release/binary/attestation binding")
+    retained = {
+        (item.get("fixture_root", "."), item["fixture"]): item for item in provenance["captures"]
+    }
+    observed: set[tuple[str, str]] = set()
+    for item in manifest["captures"]:
+        required = {
+            "fixture", "fixture_root", "argv", "exit_code", "raw_stdout_digest",
+            "raw_stderr_digest", "sanitized_stdout_digest",
+        }
+        optional = {"sanitized_stderr_digest"}
+        if not isinstance(item, dict) or not required <= set(item) <= required | optional:
+            raise ValueError("capture transcript manifest has an invalid record")
+        key = (item["fixture_root"], item["fixture"])
+        capture = retained.get(key)
+        if key in observed or capture is None or item["argv"] != capture["argv"]:
+            raise ValueError("capture transcript manifest is not bound to retained fixture argv")
+        if not (
+            type(item["exit_code"]) is int
+            and DIGEST.fullmatch(str(item["raw_stdout_digest"]))
+            and DIGEST.fullmatch(str(item["raw_stderr_digest"]))
+            and item["sanitized_stdout_digest"] == capture["sanitized_sha256"]
+            and (
+                ("stderr_sha256" not in capture and "sanitized_stderr_digest" not in item)
+                or item.get("sanitized_stderr_digest") == capture.get("stderr_sha256")
+            )
+        ):
+            raise ValueError("capture transcript manifest lacks raw/sanitized digest binding")
+        observed.add(key)
+    if observed != set(retained):
+        raise ValueError("capture transcript manifest does not cover every retained capture")
     return {
         "capture_evidence_level": captured["capture_evidence_level"],
         "release_binary_authenticated": True,
@@ -234,6 +295,8 @@ def validate_capture_release_binding(
         "release_manifest_digest": release_manifest_digest,
         "release_checksums_digest": release_checksums_digest,
         "attestation": copy.deepcopy(asset_attestation),
+        "capture_transcript_manifest_digest": manifest_digest,
+        "capture_transcript_attestation": copy.deepcopy(capture_transcript_attestation),
     }
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
@@ -2676,6 +2739,8 @@ def main() -> int:
     parser.add_argument("--directory-trust", type=Path)
     parser.add_argument("--prepared-context", type=Path, help="workflow-prepared official release/Directory/challenge context")
     parser.add_argument("--asset-name", help="manifest-listed native binary asset for this runner")
+    parser.add_argument("--capture-transcript-manifest", type=Path, help="raw-to-sanitized capture transcript manifest")
+    parser.add_argument("--capture-transcript-attestation", type=Path, help="verified attestation for the capture transcript manifest")
     parser.add_argument("--native-observations", type=Path, help="directory containing six native and one Node 22 observations")
     parser.add_argument("--copilot-executable", type=Path, help="exact local GitHub Copilot CLI executable")
     parser.add_argument("--copilot-metadata", type=Path, help="validated npm signature/version/integrity metadata")
@@ -2692,8 +2757,8 @@ def main() -> int:
     challenge = None
     github: dict[str, str] = {}
     if args.mode == "enforced":
-        if not args.prepared_context or not args.asset_name or not args.observer_bundle:
-            raise ValueError("enforced mode requires prepared official context and manifest asset name")
+        if not all((args.prepared_context, args.asset_name, args.observer_bundle, args.capture_transcript_manifest, args.capture_transcript_attestation)):
+            raise ValueError("enforced mode requires prepared official context, asset, observer, and authenticated capture transcript")
         if any(value is not None for value in (args.binary, args.binary_digest, args.expected_version, args.directory_origin, args.directory_snapshot, args.directory_envelope, args.directory_trust)):
             raise ValueError("enforced mode forbids caller-paired binary/version/digest/Directory/driver inputs")
         prepared = json.loads(args.prepared_context.read_text())
@@ -2758,6 +2823,8 @@ def main() -> int:
             release_checksums_digest=release_checksums_digest,
             asset_name=args.asset_name, asset_digest=prepared_asset_digest,
             asset_attestation=prepared_attestation,
+            capture_transcript_manifest=strict_json_loads(args.capture_transcript_manifest.read_bytes()),
+            capture_transcript_attestation=strict_json_loads(args.capture_transcript_attestation.read_bytes()),
         )
         args.binary = binary_path
         args.binary_digest = "sha256:" + declared["sha256"]
