@@ -19,9 +19,10 @@ import tempfile
 import time
 import stat
 import secrets
+import select
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 MAX_MESSAGE = 8 << 20
 MAX_ADAPTER_OUTPUT = 4 << 20
@@ -112,23 +113,90 @@ def reviewed_service_identities() -> dict[str, tuple[int, int, frozenset[int]]]:
     if len({uid for uid, _, _ in result.values()}) != len(result):
         raise ValueError("reviewed service UIDs are not distinct")
 
-    supplemental_members = {
+    supplemental_members = {name: set() for name in required_groups}
+    supplemental_members.update({
         "uap-observer-adapter-config": {
             "uap-observer-codex", "uap-observer-cursor",
             "uap-observer-kiro", "uap-observer-control",
         },
         "uap-observer-signer-ipc": {"uap-observer"},
         "uap-observer-runner-ipc": {"uap-observer"},
-    }
+    })
     for name, expected in supplemental_members.items():
         if set(groups[name].gr_mem) != expected:
             raise ValueError("reviewed supplemental group membership differs")
     return result
 
 
+def _probe_adapter_identity_access(
+    uid: int, gid: int, gids: frozenset[int], paths: tuple[tuple[Path, bool], ...],
+    *, timeout: float = 2.0,
+) -> None:
+    """Use the kernel's DAC/ACL checks under the exact service credentials."""
+    read_fd, write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+    child = os.fork()
+    if child == 0:
+        os.close(read_fd)
+        try:
+            os.setgroups(sorted(gids))
+            os.setresgid(gid, gid, gid)
+            os.setresuid(uid, uid, uid)
+            try:
+                os.setuid(0)
+            except PermissionError:
+                pass
+            else:
+                raise PermissionError("adapter probe retained privilege-regain capability")
+            for path, executable in paths:
+                descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+                try:
+                    for component in path.parts[1:-1]:
+                        child_fd = os.open(
+                            component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            dir_fd=descriptor,
+                        )
+                        os.close(descriptor)
+                        descriptor = child_fd
+                    file_fd = os.open(
+                        path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        dir_fd=descriptor,
+                    )
+                    os.close(file_fd)
+                    if executable and not os.access(path, os.R_OK | os.X_OK):
+                        raise PermissionError(f"cannot execute {path}")
+                finally:
+                    os.close(descriptor)
+        except BaseException as error:
+            try:
+                os.write(write_fd, str(error).encode("utf-8", "replace")[:4096])
+            finally:
+                os._exit(1)
+        os._exit(0)
+    os.close(write_fd)
+    deadline = time.monotonic() + timeout
+    status: int | None = None
+    try:
+        while time.monotonic() < deadline:
+            completed, value = os.waitpid(child, os.WNOHANG)
+            if completed:
+                status = value
+                break
+            select.select([read_fd], [], [], min(0.02, max(0.0, deadline - time.monotonic())))
+        if status is None:
+            os.kill(child, signal.SIGKILL)
+            _, status = os.waitpid(child, 0)
+            raise ValueError("adapter input accessibility probe timed out")
+        error = os.read(read_fd, 4096).decode("utf-8", "replace")
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            raise ValueError(f"adapter input is not accessible to exact identity: {error}")
+    finally:
+        os.close(read_fd)
+
+
 def validate_adapter_input_access(
     config_path: Path, *, protected_root: Path = Path("/opt/uap-observer-inputs"),
     identities: dict[str, tuple[int, int, frozenset[int]]] | None = None,
+    access_probe: Callable[[int, int, frozenset[int], tuple[tuple[Path, bool], ...]], None] = _probe_adapter_identity_access,
 ) -> tuple[Path, ...]:
     """Validate immutable inputs and prove each adapter identity can access them."""
     identities = identities or reviewed_service_identities()
@@ -154,18 +222,12 @@ def validate_adapter_input_access(
     if actual != expected_dirs | literal:
         raise ValueError("protected input tree contains an unexpected path")
 
-    def permits(info: os.stat_result, uid: int, gids: frozenset[int], permission: int) -> bool:
-        shift = 6 if uid == info.st_uid else 3 if info.st_gid in gids else 0
-        return bool((stat.S_IMODE(info.st_mode) >> shift) & permission)
-
     for directory in expected_dirs:
         if directory.resolve(strict=True) != directory:
             raise ValueError("protected input path traverses a symlink")
         info = os.lstat(directory)
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
             raise ValueError("protected input directory is not root-controlled")
-        if any(not permits(info, uid, gids, 0o1) for uid, _, gids in adapters.values()):
-            raise ValueError("protected input directory is not accessible to every adapter identity")
     for path, digest in expected_files.items():
         if path.resolve(strict=True) != path:
             raise ValueError("protected input path traverses a symlink")
@@ -178,13 +240,13 @@ def validate_adapter_input_access(
             or (not executable and info.st_gid != config_gid)
         ):
             raise ValueError("protected input metadata differs")
-        permission = 0o5 if executable else 0o4
-        if any(not permits(info, uid, gids, permission) for uid, _, gids in adapters.values()):
-            raise ValueError("protected input is not accessible to every adapter identity")
         actual_digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         if actual_digest != digest:
             raise ValueError("protected input digest differs")
-    return tuple(sorted(expected_files))
+    probes = tuple((path, path.parent == protected_root / "bin") for path in sorted(expected_files))
+    for uid, gid, gids in adapters.values():
+        access_probe(uid, gid, gids, probes)
+    return tuple(path for path, _ in probes)
 
 
 def canonical_json(value: Any) -> bytes:

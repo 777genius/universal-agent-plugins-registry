@@ -43,6 +43,21 @@ observer_cleanup_partial_paths() {
   done
 }
 
+# Recovery owns the journal directory and removes it only after every other
+# cleanup and durability operation has succeeded.
+observer_cleanup_recovery_partials() {
+  cleaned_parents=
+  for partial in $(observer_partial_paths); do
+    test "$partial" = /opt/uap-observer-source.new && continue
+    if [ -e "$partial" ] || [ -L "$partial" ]; then
+      rm -rf -- "$partial" || return 1
+      parent=$(dirname "$partial")
+      case " $cleaned_parents " in *" $parent "*) ;; *) cleaned_parents="$cleaned_parents $parent";; esac
+    fi
+  done
+  for parent in $cleaned_parents; do observer_sync_directory "$parent" || return 1; done
+}
+
 observer_closure_identity() {
   python3 - "$1" <<'PY'
 import hashlib,os,stat,sys
@@ -308,6 +323,27 @@ for path in directories:
 PY
 }
 
+observer_sync_directory() {
+  python3 - "$1" <<'PY'
+import os,sys
+descriptor=os.open(sys.argv[1],os.O_RDONLY|os.O_CLOEXEC|os.O_DIRECTORY|os.O_NOFOLLOW)
+try: os.fsync(descriptor)
+finally: os.close(descriptor)
+PY
+}
+
+observer_cleanup_committed_stage_payload() {
+  stage=$1
+  for item in "$stage"/* "$stage"/.[!.]* "$stage"/..?*; do
+    if [ ! -e "$item" ] && [ ! -L "$item" ]; then continue; fi
+    case "${item##*/}" in
+      journal-committed|closure-digest|systemd-backup) continue ;;
+    esac
+    rm -rf -- "$item" || return 1
+  done
+  observer_sync_directory "$stage" || return 1
+}
+
 apply_observer_closure_modes() {
   closure=$1
   config_group=${2:-uap-observer-adapter-config}
@@ -331,10 +367,46 @@ apply_observer_closure_modes() {
   test -z "$(find "$closure" \( -type d -o -type f \) -perm /0022 -print -quit)"
 }
 
+observer_validate_systemd_topology() {
+  python3 - "$1" <<'PY'
+import os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+info=root.lstat()
+if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+    raise SystemExit("systemd root is unsafe")
+units=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service")
+dropins=("uap-observer.service.d","uap-observer-runner.service.d")
+allowed=set(units+dropins)
+actual={item.name for item in root.iterdir() if item.name.startswith("uap-observer")}
+if actual - allowed: raise SystemExit("systemd observer inventory contains an unexpected target")
+for name in units+dropins:
+    path=root/name
+    try: item=path.lstat()
+    except FileNotFoundError: continue
+    if name in units:
+        if stat.S_ISREG(item.st_mode):
+            if item.st_nlink != 1: raise SystemExit("systemd regular target has unsafe link count")
+        elif not stat.S_ISLNK(item.st_mode):
+            raise SystemExit("systemd unit target has unsafe type")
+        continue
+    if not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode):
+        raise SystemExit("systemd drop-in directory is unsafe")
+    for current,dirs,files in os.walk(path,followlinks=False):
+        for child_name in dirs+files:
+            child_info=(Path(current)/child_name).lstat()
+            if stat.S_ISLNK(child_info.st_mode) or not (stat.S_ISDIR(child_info.st_mode) or stat.S_ISREG(child_info.st_mode)):
+                raise SystemExit("systemd drop-in contains unsafe topology")
+            if stat.S_ISREG(child_info.st_mode) and child_info.st_nlink != 1:
+                raise SystemExit("systemd drop-in regular file has unsafe link count")
+PY
+}
+
 journal_observer_systemd() {
   backup=$1
   systemd_root=$2
   test ! -e "$backup"
+  observer_validate_systemd_topology "$systemd_root" || return 1
   install -d -o root -g root -m 0700 "$backup" "$backup/items"
   : > "$backup/manifest"
   chown root:root "$backup/manifest"
@@ -354,43 +426,68 @@ journal_observer_systemd() {
 
 validate_observer_systemd_journal() {
   backup=$1
-  test -d "$backup"
-  test ! -L "$backup"
-  test -d "$backup/items"
-  test ! -L "$backup/items"
-  test -f "$backup/manifest"
-  test ! -L "$backup/manifest"
-  test "$(stat -c '%u:%g:%a' "$backup")" = 0:0:700
-  test "$(stat -c '%u:%g:%a' "$backup/items")" = 0:0:700
-  test "$(stat -c '%u:%g:%a:%h' "$backup/manifest")" = 0:0:600:1
+  test -d "$backup" || return 1
+  test ! -L "$backup" || return 1
+  test -d "$backup/items" || return 1
+  test ! -L "$backup/items" || return 1
+  test -f "$backup/manifest" || return 1
+  test ! -L "$backup/manifest" || return 1
+  test "$(stat -c '%u:%g:%a' "$backup")" = 0:0:700 || return 1
+  test "$(stat -c '%u:%g:%a' "$backup/items")" = 0:0:700 || return 1
+  test "$(stat -c '%u:%g:%a:%h' "$backup/manifest")" = 0:0:600:1 || return 1
   expected_index=0
   expected_names="$observer_units uap-observer.service.d uap-observer-runner.service.d"
   seen_items=
   while read -r state index relative extra; do
-    test -z "${extra:-}"
-    test "$index" = "$expected_index"
+    test -z "${extra:-}" || return 1
+    test "$index" = "$expected_index" || return 1
     expected_relative=$(printf '%s\n' $expected_names | sed -n "$((expected_index + 1))p")
-    test "$relative" = "$expected_relative"
+    test "$relative" = "$expected_relative" || return 1
     case "$state" in
       present)
-        test -e "$backup/items/$index" || test -L "$backup/items/$index"
+        test -e "$backup/items/$index" || test -L "$backup/items/$index" || return 1
         seen_items="$seen_items $index"
         ;;
       missing)
-        test ! -e "$backup/items/$index"
-        test ! -L "$backup/items/$index"
+        test ! -e "$backup/items/$index" || return 1
+        test ! -L "$backup/items/$index" || return 1
         ;;
       *) echo "installer recovery journal is invalid" >&2; return 1 ;;
     esac
     expected_index=$((expected_index + 1))
   done < "$backup/manifest"
-  test "$expected_index" -eq 7
+  test "$expected_index" -eq 7 || return 1
   for item in "$backup"/items/*; do
     if [ -e "$item" ] || [ -L "$item" ]; then
       index=${item##*/}
       case " $seen_items " in *" $index "*) ;; *) echo "installer recovery journal is invalid" >&2; return 1;; esac
     fi
   done
+  python3 - "$backup" <<'PY' || return 1
+import os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1]); items=root/"items"
+manifest=[line.split() for line in (root/"manifest").read_text().splitlines()]
+present={index for state,index,_ in manifest if state == "present"}
+actual={item.name for item in items.iterdir()}
+if actual != present: raise SystemExit("installer recovery journal inventory differs")
+for state,index,_ in manifest:
+    if state != "present": continue
+    path=items/index; info=path.lstat()
+    if int(index) < 5:
+        if stat.S_ISREG(info.st_mode):
+            if info.st_nlink != 1: raise SystemExit("journal target link count differs")
+        elif not stat.S_ISLNK(info.st_mode): raise SystemExit("journal unit type differs")
+    else:
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode): raise SystemExit("journal drop-in type differs")
+        for current,dirs,files in os.walk(path,followlinks=False):
+            for child_name in dirs+files:
+                child=(Path(current)/child_name).lstat()
+                if stat.S_ISLNK(child.st_mode) or not (stat.S_ISDIR(child.st_mode) or stat.S_ISREG(child.st_mode)):
+                    raise SystemExit("journal drop-in topology differs")
+                if stat.S_ISREG(child.st_mode) and child.st_nlink != 1:
+                    raise SystemExit("journal drop-in link count differs")
+PY
 }
 
 restore_observer_systemd() {
@@ -403,6 +500,15 @@ restore_observer_systemd() {
       cp -a "$backup/items/$index" "$target" || return 1
     fi
   done < "$backup/manifest"
+  observer_validate_systemd_topology "$systemd_root" || return 1
+  while read -r state index relative; do
+    target="$systemd_root/$relative"
+    if [ "$state" = present ]; then
+      diff -r --no-dereference "$backup/items/$index" "$target" >/dev/null || return 1
+    else
+      test ! -e "$target" && test ! -L "$target" || return 1
+    fi
+  done < "$backup/manifest"
 }
 
 recover_observer_install() {
@@ -411,7 +517,8 @@ recover_observer_install() {
   current_pointer=$3
   systemd_root=$4
   manager=$5
-  cleanup_partials=${6:-observer_cleanup_partial_paths}
+  cleanup_partials=${6:-observer_cleanup_recovery_partials}
+  journal_committed=0
   if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then return 0; fi
   if [ ! -d "$stage" ] || [ -L "$stage" ]; then
     echo "installer recovery journal is invalid" >&2
@@ -421,26 +528,38 @@ recover_observer_install() {
     echo "installer recovery journal is invalid" >&2
     return 1
   }
-  journal_present=0
-  for journal_path in rollback-required closure-digest systemd-backup; do
-    if [ -e "$stage/$journal_path" ] || [ -L "$stage/$journal_path" ]; then journal_present=1; fi
-  done
-  if [ "$journal_present" -eq 1 ]; then
-    test -f "$stage/rollback-required" && test ! -L "$stage/rollback-required"
-    test "$(stat -c '%u:%g:%a:%h' "$stage/rollback-required")" = 0:0:600:1
-    test "$(cat "$stage/rollback-required")" = rollback-required
-    test -f "$stage/closure-digest" && test ! -L "$stage/closure-digest"
-    test "$(stat -c '%u:%g:%a:%h' "$stage/closure-digest")" = 0:0:600:1
+  if [ ! -e "$stage/journal-committed" ] && [ ! -L "$stage/journal-committed" ]; then
+    # The atomic marker is the sole durable proof that mutation could begin.
+    # lstat traversal never follows a staged link outside this fixed tree.
+    python3 - "$stage" <<'PY' || return 1
+import os,stat,sys
+from pathlib import Path
+for current,dirs,files in os.walk(Path(sys.argv[1]),followlinks=False):
+    for name in dirs+files:
+        mode=(Path(current)/name).lstat().st_mode
+        if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+            raise SystemExit("pre-commit staging tree contains an unsafe object")
+PY
+  else
+    journal_committed=1
+    test -f "$stage/journal-committed" && test ! -L "$stage/journal-committed" || return 1
+    test "$(stat -c '%u:%g:%a:%h' "$stage/journal-committed")" = 0:0:600:1 || return 1
+    test "$(cat "$stage/journal-committed")" = committed-v1 || return 1
+    test -f "$stage/closure-digest" && test ! -L "$stage/closure-digest" || return 1
+    test "$(stat -c '%u:%g:%a:%h' "$stage/closure-digest")" = 0:0:600:1 || return 1
     recovered_digest=$(cat "$stage/closure-digest")
-    printf '%s\n' "$recovered_digest" | grep -Eq '^[0-9a-f]{64}$'
-    validate_observer_systemd_journal "$stage/systemd-backup"
-    test -d "$closures_root" && test ! -L "$closures_root"
-    test "$(stat -c '%u:%g:%a' "$closures_root")" = 0:0:755
+    printf '%s\n' "$recovered_digest" | grep -Eq '^[0-9a-f]{64}$' || return 1
+    validate_observer_systemd_journal "$stage/systemd-backup" || return 1
+    test -d "$closures_root" && test ! -L "$closures_root" || return 1
+    test "$(stat -c '%u:%g:%a' "$closures_root")" = 0:0:755 || return 1
     # A current pointer means activation crossed its commit point.  Recovery is
     # only permitted to accept the exact journaled closure in that case.
     if [ -e "$current_pointer" ] || [ -L "$current_pointer" ]; then
-      test -L "$current_pointer"
-      test "$(readlink "$current_pointer")" = "uap-observer-closures/$recovered_digest"
+      test -L "$current_pointer" || return 1
+      test "$(readlink "$current_pointer")" = "uap-observer-closures/$recovered_digest" || return 1
+      test -d "$closures_root/$recovered_digest" || return 1
+      test ! -L "$closures_root/$recovered_digest" || return 1
+      observer_sync_directory "$(dirname "$current_pointer")" || return 1
     else
       restore_observer_systemd "$stage/systemd-backup" "$systemd_root" || return 1
       observer_sync_tree "$systemd_root" || return 1
@@ -451,6 +570,11 @@ recover_observer_install() {
     fi
   fi
   "$cleanup_partials" || return 1
+  if [ "$journal_committed" -eq 1 ]; then
+    observer_cleanup_committed_stage_payload "$stage" || return 1
+  fi
+  rm -rf -- "$stage" || return 1
+  observer_sync_directory "$(dirname "$stage")" || return 1
 }
 
 observer_install_failpoint() {
@@ -461,15 +585,41 @@ observer_install_failpoint() {
 activate_observer_systemd() {
   staged=$1
   systemd_root=$2
+  backup=${3:-}
   observer_install_step=0
-  install -d -m 0755 "$systemd_root/uap-observer.service.d" "$systemd_root/uap-observer-runner.service.d"
+  if [ -n "$backup" ]; then
+    validate_observer_systemd_journal "$backup" || return 1
+    while read -r state index relative; do
+      target="$systemd_root/$relative"
+      if [ "$state" = present ]; then
+        diff -r --no-dereference "$backup/items/$index" "$target" >/dev/null || return 1
+      else
+        test ! -e "$target" && test ! -L "$target" || return 1
+      fi
+    done < "$backup/manifest"
+  fi
   for unit in $observer_units; do
-    mv "$staged/$unit" "$systemd_root/$unit"
+    rm -rf -- "$systemd_root/$unit" || return 1
+    cp -a "$staged/$unit" "$systemd_root/$unit" || return 1
     observer_install_failpoint || return 1
   done
   for service in uap-observer uap-observer-runner; do
-    mv "$staged/$service.service.d/egress.conf" "$systemd_root/$service.service.d/egress.conf"
+    rm -rf -- "$systemd_root/$service.service.d" || return 1
+    cp -a "$staged/$service.service.d" "$systemd_root/$service.service.d" || return 1
     observer_install_failpoint || return 1
+  done
+  validate_observer_systemd_inventory "$staged" "$systemd_root"
+}
+
+validate_observer_systemd_inventory() {
+  reviewed=$1
+  systemd_root=$2
+  observer_validate_systemd_topology "$systemd_root" || return 1
+  expected=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | sort)
+  actual=$(find "$systemd_root" -mindepth 1 -maxdepth 1 -name 'uap-observer*' -printf '%f\n' | sort)
+  test "$actual" = "$expected" || return 1
+  for relative in $observer_units uap-observer.service.d uap-observer-runner.service.d; do
+    diff -r --no-dereference "$reviewed/$relative" "$systemd_root/$relative" >/dev/null || return 1
   done
 }
 

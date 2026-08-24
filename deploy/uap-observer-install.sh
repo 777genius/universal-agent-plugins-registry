@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 4ad999df2e3eb6446bd45cfd4615a0aef57bc89ad97b1370ba8f1ed3d89c898d
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 05886ddcca93c20f300757cbec2d6c2af449acb91af553f9f9b2a1a6bc10146b
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,15 +13,11 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=b2fc820cb0e77ca4d1d90b27da81e98951d0ec255df2016c0bcc4684f6c333a6
+runtime_manifest_digest=359d2c7ea489d95076141945b8515e344c8fd03f97aff8e992882e4d35fa99d8
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
 closure_final=
-activation_started=0
-activation_complete=0
-systemd_mutation_started=0
-closure_published=0
 install -d -o root -g root -m 0755 /run/lock
 exec 9>/run/lock/uap-observer-install.lock
 flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
@@ -52,7 +48,7 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" \
-    cb2d9c4ba3baabc61d3e98d36d432f6b07316b51f05a3b643b28e5c676596213 \
+    ce21ba5ddf27c7f56a6cae5c5bf142c3256ab0e7bd1afbd584f0230079ff16bc \
     977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state
@@ -65,25 +61,13 @@ install -d -o root -g root -m 0700 "$stage_root"
 cleanup() {
   status=${1:-1}
   trap - EXIT HUP INT TERM
-  rollback_ok=1
-  if [ "$systemd_mutation_started" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
-    set +e
-    restore_observer_systemd "$systemd_backup" /etc/systemd/system
-    restore_status=$?
-    if [ "$restore_status" -eq 0 ]; then observer_sync_tree /etc/systemd/system; restore_status=$?; fi
-    systemctl daemon-reload
-    reload_status=$?
-    if [ "$restore_status" -ne 0 ] || [ "$reload_status" -ne 0 ]; then rollback_ok=0; fi
-    set -e
-  fi
-  if [ "$rollback_ok" -eq 0 ]; then
+  set +e
+  recover_observer_install "$stage_root" /opt/uap-observer-closures /opt/uap-observer-current /etc/systemd/system systemctl
+  recovery_status=$?
+  set -e
+  if [ "$recovery_status" -ne 0 ]; then
     echo "observer rollback incomplete; durable recovery journal retained" >&2
-  else
-    observer_cleanup_partial_paths
-    test -z "$closure_stage" || rm -rf "$closure_stage"
-    if [ "$closure_published" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
-      rm -rf "$closure_final"
-    fi
+    if [ "$status" -eq 0 ]; then status=$recovery_status; fi
   fi
   exit "$status"
 }
@@ -120,7 +104,7 @@ caddy_binary=$stage_root/caddy
 caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
-runner_digest=cb2d9c4ba3baabc61d3e98d36d432f6b07316b51f05a3b643b28e5c676596213
+runner_digest=ce21ba5ddf27c7f56a6cae5c5bf142c3256ab0e7bd1afbd584f0230079ff16bc
 adapter_digest=977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
@@ -390,22 +374,19 @@ printf '%s\n' "$closure_digest" > "$stage_root/closure-digest"
 chown root:root "$stage_root/closure-digest"
 chmod 0600 "$stage_root/closure-digest"
 sync -f "$stage_root/closure-digest"
-printf '%s\n' rollback-required > "$stage_root/rollback-required"
-chown root:root "$stage_root/rollback-required"
-chmod 0600 "$stage_root/rollback-required"
-sync -f "$stage_root/rollback-required"
-sync -f "$stage_root"
+printf '%s\n' committed-v1 > "$stage_root/.journal-committed.new"
+chown root:root "$stage_root/.journal-committed.new"
+chmod 0600 "$stage_root/.journal-committed.new"
+sync -f "$stage_root/.journal-committed.new"
+mv "$stage_root/.journal-committed.new" "$stage_root/journal-committed"
+observer_sync_directory "$stage_root"
 mv "$closure_stage" "$closure_final"
 closure_stage=
-closure_published=1
 sync -f /opt/uap-observer-closures
-systemd_mutation_started=1
-activate_observer_systemd "$systemd_stage" /etc/systemd/system
+activate_observer_systemd "$systemd_stage" /etc/systemd/system "$systemd_backup"
 observer_sync_tree /etc/systemd/system
 reload_observer_systemd systemctl
-activation_started=1
 ln -s "uap-observer-closures/$closure_digest" /opt/uap-observer-current.new
 mv -T /opt/uap-observer-current.new /opt/uap-observer-current
 sync -f /opt
-activation_complete=1
 echo "observer files installed; provision the root key and reviewed adapters before enabling services"

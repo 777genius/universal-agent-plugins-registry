@@ -1033,9 +1033,9 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             old.write_text("partially activated\n")
             digest = "a" * 64
             (stage / "closure-digest").write_text(digest + "\n")
-            (stage / "rollback-required").write_text("rollback-required\n")
+            (stage / "journal-committed").write_text("committed-v1\n")
             (stage / "closure-digest").chmod(0o600)
-            (stage / "rollback-required").chmod(0o600)
+            (stage / "journal-committed").chmod(0o600)
             published = closures / digest
             published.mkdir()
             manager = root / "systemctl"
@@ -1045,7 +1045,7 @@ class FixedRunnerFixtureTests(unittest.TestCase):
 . "$1"
 fixture_stage=$2
 fixture_partial=$3
-cleanup_fixture() { rm -rf "$fixture_stage" "$fixture_partial"; }
+cleanup_fixture() { rm -rf "$fixture_partial"; }
 recover_observer_install "$2" "$4" "$5" "$6" "$7" cleanup_fixture
 '''
             # No source/config/archive arguments exist: recovery uses only its
@@ -1100,15 +1100,16 @@ recover_observer_install "$2" "$4" "$5" "$6" "$7" cleanup_fixture
                          "sh", str(helper), str(backup), str(systemd)], check=True,
                     )
                     digest = "a" * 64
-                    (stage / "rollback-required").write_text("rollback-required\n")
+                    (stage / "journal-committed").write_text("committed-v1\n")
                     (stage / "closure-digest").write_text(digest + "\n")
-                    (stage / "rollback-required").chmod(0o600)
+                    (stage / "journal-committed").chmod(0o600)
                     (stage / "closure-digest").chmod(0o600)
                     current = root / "opt/uap-observer-current"
+                    (closures / digest).mkdir()
                     current.symlink_to(f"uap-observer-closures/{digest}")
                 else:
-                    (stage / "rollback-required").write_text("invalid\n")
-                    (stage / "rollback-required").chmod(0o600)
+                    (stage / "journal-committed").write_text("invalid\n")
+                    (stage / "journal-committed").chmod(0o600)
                     current = root / "opt/uap-observer-current"
                     current.symlink_to("uap-observer-closures/" + "b" * 64)
                 result = subprocess.run(
@@ -1153,11 +1154,11 @@ observer_validate_no_partial_paths fixture_inventory
             stage.mkdir(mode=0o700); closures.mkdir(); systemd.mkdir()
             unit = systemd / "uap-observer.service"
             unit.write_text("partially activated\n")
-            (stage / "rollback-required").write_text("rollback-required\n")
-            (stage / "rollback-required").chmod(0o600)
+            (stage / "journal-committed").write_text("invalid\n")
+            (stage / "journal-committed").chmod(0o600)
             script = '''set -eu
 . "$1"
-cleanup_fixture() { rm -rf "$2"; }
+cleanup_fixture() { :; }
 recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
 '''
             result = subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(stage), str(closures), str(root / "current"), str(systemd), "/bin/false"], text=True, capture_output=True)
@@ -1278,6 +1279,137 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                 subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(backup), str(systemd_root), str(staged), str(manager)], env=environment, check=True)
                 self.assertEqual(snapshot(systemd_root), before)
 
+    def test_systemd_activation_replaces_dropins_with_exact_reviewed_inventory(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            systemd, staged = root / "systemd", root / "staged"
+            systemd.mkdir(); staged.mkdir()
+            units = (
+                "uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
+                "uap-observer-runner.socket", "uap-observer-caddy.service",
+            )
+            for unit in units:
+                (staged / unit).write_text(f"reviewed {unit}\n")
+            for service in ("uap-observer", "uap-observer-runner"):
+                reviewed = staged / f"{service}.service.d"
+                reviewed.mkdir(); (reviewed / "egress.conf").write_text("sandboxed\n")
+                installed = systemd / f"{service}.service.d"
+                installed.mkdir(); (installed / "zz-override.conf").write_text("IPAddressDeny=\n")
+            result = subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; activate_observer_systemd "$2" "$3"',
+                 "sh", str(helper), str(staged), str(systemd)], text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for service in ("uap-observer", "uap-observer-runner"):
+                self.assertEqual(
+                    {path.name for path in (systemd / f"{service}.service.d").iterdir()},
+                    {"egress.conf"},
+                )
+
+    def test_systemd_journal_rejects_escape_and_non_single_link_topology_before_mutation(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        for kind in ("dropin-symlink", "unit-hardlink", "dropin-hardlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); systemd = root / "systemd"; systemd.mkdir()
+                unit = systemd / "uap-observer.service"; unit.write_text("old\n")
+                dropin = systemd / "uap-observer.service.d"
+                outside = root / "outside"; outside.mkdir()
+                if kind == "dropin-symlink":
+                    dropin.symlink_to(outside, target_is_directory=True)
+                else:
+                    dropin.mkdir(); conf = dropin / "old.conf"; conf.write_text("old\n")
+                    source = unit if kind == "unit-hardlink" else conf
+                    os.link(source, outside / "external-link")
+                before = unit.read_bytes()
+                result = subprocess.run(
+                    ["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                     "sh", str(helper), str(root / "backup"), str(systemd)],
+                    text=True, capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(unit.read_bytes(), before)
+                self.assertFalse((root / "backup").exists())
+
+    def test_uncommitted_partial_journal_is_discarded_without_restore(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); stage = root / "stage"; systemd = root / "systemd"
+            stage.mkdir(mode=0o700); systemd.mkdir()
+            unit = systemd / "uap-observer.service"; unit.write_text("live\n")
+            (stage / "closure-digest").write_text("a" * 64 + "\n")
+            (stage / "closure-digest").chmod(0o600)
+            (stage / "systemd-backup").mkdir()
+            result = subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; cleanup_fixture() { :; }; recover_observer_install "$2" "$3" "$4" "$5" /bin/false cleanup_fixture',
+                 "sh", str(helper), str(stage), str(root / "closures"), str(root / "current"), str(systemd)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(unit.read_text(), "live\n")
+            self.assertFalse(stage.exists())
+
+    def test_current_recovery_syncs_pointer_parent_before_journal_removal(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); stage = root / "stage"; closures = root / "closures"; systemd = root / "systemd"
+            stage.mkdir(mode=0o700); closures.mkdir(); systemd.mkdir()
+            subprocess.run(["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"', "sh", str(helper), str(stage / "systemd-backup"), str(systemd)], check=True)
+            digest = "d" * 64
+            for name, value in (("closure-digest", digest + "\n"), ("journal-committed", "committed-v1\n")):
+                (stage / name).write_text(value); (stage / name).chmod(0o600)
+            current = root / "current"; current.symlink_to(f"uap-observer-closures/{digest}")
+            (closures / digest).mkdir()
+            log = root / "log"
+            script = r'''. "$1"
+fixture_log=$6
+observer_sync_directory() { printf 'sync %s\n' "$1" >> "$fixture_log"; }
+cleanup_fixture() { printf 'cleanup\n' >> "$fixture_log"; }
+rm() { printf 'rm %s\n' "$3" >> "$fixture_log"; command rm "$@"; }
+recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
+'''
+            result = subprocess.run(
+                ["/bin/sh", "-c", script, "sh", str(helper), str(stage), str(closures), str(current), str(systemd), str(log)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            events = log.read_text().splitlines()
+            self.assertEqual(events[0], f"sync {root}")
+            self.assertEqual(events[1], "cleanup")
+            self.assertEqual(events[2], f"sync {stage}")
+            self.assertEqual(events[3], f"rm {stage}")
+            self.assertEqual(events[4], f"sync {root}")
+
+    def test_recovery_retains_committed_journal_when_pointer_sync_or_partial_cleanup_fails(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        for failure in ("missing-closure", "pointer-sync", "partial-cleanup", "stage-payload"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); stage = root / "stage"; closures = root / "closures"; systemd = root / "systemd"
+                stage.mkdir(mode=0o700); closures.mkdir(); systemd.mkdir()
+                subprocess.run(["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"', "sh", str(helper), str(stage / "systemd-backup"), str(systemd)], check=True)
+                digest = "e" * 64
+                for name, value in (("closure-digest", digest + "\n"), ("journal-committed", "committed-v1\n")):
+                    (stage / name).write_text(value); (stage / name).chmod(0o600)
+                current = root / "current"; current.symlink_to(f"uap-observer-closures/{digest}")
+                if failure != "missing-closure":
+                    (closures / digest).mkdir()
+                if failure == "stage-payload":
+                    (stage / "payload").write_text("partial\n")
+                script = r'''. "$1"
+failure=$6
+fixture_stage=$2
+observer_sync_directory() { test "$failure" != pointer-sync; }
+cleanup_fixture() { test "$failure" != partial-cleanup; }
+rm() { test "$failure" != stage-payload || test "$3" != "$fixture_stage/payload" || return 73; command rm "$@"; }
+recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
+'''
+                result = subprocess.run(
+                    ["/bin/sh", "-c", script, "sh", str(helper), str(stage), str(closures), str(current), str(systemd), failure],
+                    text=True, capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue((stage / "journal-committed").is_file())
+
     def test_every_restore_removal_and_copy_failure_retains_recovery_journal(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
         units = (
@@ -1285,7 +1417,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             "uap-observer-runner.socket", "uap-observer-caddy.service",
             "uap-observer.service.d", "uap-observer-runner.service.d",
         )
-        for failure in range(1, 15):
+        for failure in range(1, 17):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 stage, closures, systemd = root / "stage", root / "closures", root / "systemd"
@@ -1301,9 +1433,9 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                      "sh", str(helper), str(stage / "systemd-backup"), str(systemd)], check=True,
                 )
                 digest = "c" * 64
-                (stage / "rollback-required").write_text("rollback-required\n")
+                (stage / "journal-committed").write_text("committed-v1\n")
                 (stage / "closure-digest").write_text(digest + "\n")
-                (stage / "rollback-required").chmod(0o600)
+                (stage / "journal-committed").chmod(0o600)
                 (stage / "closure-digest").chmod(0o600)
                 (closures / digest).mkdir()
                 script = r'''set -u
@@ -1312,7 +1444,7 @@ operation=0
 fail_at=$7
 rm() { operation=$((operation + 1)); test "$operation" -ne "$fail_at" || return 71; command rm "$@"; }
 cp() { operation=$((operation + 1)); test "$operation" -ne "$fail_at" || return 72; command cp "$@"; }
-cleanup_fixture() { command rm -rf "$2"; }
+cleanup_fixture() { :; }
 if recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture; then exit 99; fi
 exit 0
 '''
@@ -1323,7 +1455,7 @@ exit 0
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(stage.is_dir())
-                self.assertTrue((stage / "rollback-required").is_file())
+                self.assertTrue((stage / "journal-committed").is_file())
                 self.assertTrue((stage / "systemd-backup/manifest").is_file())
 
     def test_cgroup_v2_path_stays_beneath_mount_and_kills_descendants_after_leader_exit(self) -> None:
@@ -1485,6 +1617,17 @@ exit 0
         ))
         with self.assertRaisesRegex(ValueError, "membership"):
             validate()
+        groups["uap-observer-adapter-config"] = config_group
+        for primary in ("caddy", "uap-observer", "uap-observer-codex"):
+            with self.subTest(primary_group=primary):
+                original = groups[primary]
+                groups[primary] = fixed_runner.grp.struct_group((
+                    original.gr_name, original.gr_passwd, original.gr_gid,
+                    ["unexpected-supplemental-member"],
+                ))
+                with self.assertRaisesRegex(ValueError, "membership"):
+                    validate()
+                groups[primary] = original
 
     def test_adapter_input_access_is_checked_for_every_identity_on_reinstall(self) -> None:
         if os.geteuid() != 0:
@@ -1534,24 +1677,35 @@ exit 0
             }
             config_group = fixed_runner.grp.struct_group(("uap-observer-adapter-config", "x", 0, []))
             with mock.patch.object(fixed_runner.grp, "getgrnam", return_value=config_group):
+                probes: list[tuple[int, int, frozenset[int], tuple[tuple[Path, bool], ...]]] = []
                 self.assertEqual(len(fixed_runner.validate_adapter_input_access(
                     config, protected_root=protected, identities=identities,
+                    access_probe=lambda uid, gid, gids, paths: probes.append((uid, gid, gids, paths)),
                 )), 7)
-                protected.chmod(0o700)
-                with self.assertRaisesRegex(ValueError, "every adapter identity"):
+                self.assertEqual(
+                    [(uid, gid, gids) for uid, gid, gids, _ in probes],
+                    list(identities.values()),
+                )
+                self.assertTrue(all(len(paths) == 7 for _, _, _, paths in probes))
+                for excluded, (denied_uid, _, _) in identities.items():
+                    with self.subTest(excluded=excluded):
+                        def deny(uid: int, _gid: int, _gids: frozenset[int], _paths: tuple[tuple[Path, bool], ...]) -> None:
+                            if uid == denied_uid:
+                                raise ValueError("kernel access denied")
+                        with self.assertRaisesRegex(ValueError, "kernel access denied"):
+                            fixed_runner.validate_adapter_input_access(
+                                config, protected_root=protected, identities=identities,
+                                access_probe=deny,
+                            )
+                Path(temporary).chmod(0o755)
+                try:
                     fixed_runner.validate_adapter_input_access(
                         config, protected_root=protected, identities=identities,
                     )
-                protected.chmod(0o750)
-                for excluded in identities:
-                    with self.subTest(excluded=excluded):
-                        adversarial = dict(identities)
-                        uid, gid, _ = adversarial[excluded]
-                        adversarial[excluded] = (uid, gid, frozenset({gid}))
-                        with self.assertRaisesRegex(ValueError, "every adapter identity"):
-                            fixed_runner.validate_adapter_input_access(
-                                config, protected_root=protected, identities=adversarial,
-                            )
+                except ValueError as error:
+                    if "Operation not permitted" in str(error):
+                        self.skipTest("provider sandbox blocks exact setuid/setgroups access probe")
+                    raise
 
     def test_fixed_runner_socket_executes_only_injected_reviewed_adapters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
