@@ -203,27 +203,51 @@ def destroy_job_cgroup(
         pass
 
 
-def tombstone_record(root: Path, challenge: str) -> None:
-    """Atomically consume a root-created challenge record after adapter success."""
+def transition_record(root: Path, challenge: str, action: str) -> None:
+    """Reserve, commit, or roll back a one-use root-created challenge record."""
     if not re.fullmatch(r"[a-f0-9]{64}", challenge):
         raise ValueError("challenge record identity is invalid")
-    pending = open_directory(root / "pending", allowed_owners={0})
-    consumed = open_directory(root / "consumed", allowed_owners={0})
+    if action not in {"reserve", "commit", "rollback"}:
+        raise ValueError("challenge transaction action is invalid")
+    directories = {name: open_directory(root / name, allowed_owners={0}) for name in ("pending", "reserved", "consumed")}
     try:
         source = f"{challenge}.json"
-        try:
-            os.stat(source, dir_fd=consumed, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
+        if action == "reserve":
+            source_name, destination_name = "pending", "reserved"
+            try:
+                os.stat(source, dir_fd=directories["consumed"], follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ValueError("challenge record was already consumed")
+        elif action == "commit":
+            source_name, destination_name = "reserved", "consumed"
+            try:
+                os.stat(source, dir_fd=directories["consumed"], follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                return
         else:
-            raise ValueError("challenge record was already consumed")
-        info = os.stat(source, dir_fd=pending, follow_symlinks=False)
+            source_name, destination_name = "reserved", "pending"
+            try:
+                os.stat(source, dir_fd=directories["reserved"], follow_symlinks=False)
+            except FileNotFoundError:
+                return
+        info = os.stat(source, dir_fd=directories[source_name], follow_symlinks=False)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o640 or info.st_nlink != 1:
             raise ValueError("challenge record is not trusted")
-        os.rename(source, source, src_dir_fd=pending, dst_dir_fd=consumed)
+        os.rename(source, source, src_dir_fd=directories[source_name], dst_dir_fd=directories[destination_name])
+        os.fsync(directories[source_name])
+        os.fsync(directories[destination_name])
     finally:
-        os.close(pending)
-        os.close(consumed)
+        for descriptor in directories.values():
+            os.close(descriptor)
+
+
+def transition_records(challenge: str, action: str) -> None:
+    for root in (Path("/var/lib/uap-observer-consent"), Path("/var/lib/uap-observer-human")):
+        transition_record(root, challenge, action)
 
 
 @dataclass(frozen=True)
@@ -340,17 +364,23 @@ class ReviewedRunner:
                     if return_code != 0:
                         raise ValueError("reviewed adapter failed")
                     partials.append(json.loads(read_owned_regular(output, MAX_ADAPTER_OUTPUT, owner_uid=uid)))
-                    if self.protected and adapter.artifact in {"consent.json", "chatgpt-cloudflare-attestation.json"}:
-                        challenge = context["request"]["challenge"]["value"]
-                        root = Path("/var/lib/uap-observer-consent" if adapter.artifact == "consent.json" else "/var/lib/uap-observer-human")
-                        tombstone_record(root, challenge)
                 if len(partials) == 1:
                     artifacts[adapter.artifact] = partials[0]
                 else:
-                    if not all(isinstance(partial, dict) and set(partial) == {"schema_version", "attestations"} and partial["schema_version"] == 1 and isinstance(partial["attestations"], list) for partial in partials):
+                    allowed_partial_fields = {"schema_version", "attestations", "external_pr_evidence"}
+                    if not all(isinstance(partial, dict) and set(partial).issubset(allowed_partial_fields) and {"schema_version", "attestations"}.issubset(partial) and partial["schema_version"] == 1 and isinstance(partial["attestations"], list) for partial in partials):
                         raise ValueError("split adapter artifact is not canonical")
-                    artifacts[adapter.artifact] = {"schema_version": 1, "attestations": [record for partial in partials for record in partial["attestations"]]}
-            return validate_artifacts(artifacts)
+                    merged = {"schema_version": 1, "attestations": [record for partial in partials for record in partial["attestations"]]}
+                    external_values = [partial.get("external_pr_evidence") for partial in partials]
+                    if any(value is not None for value in external_values):
+                        if any(value != external_values[0] for value in external_values):
+                            raise ValueError("split adapters disagree on immutable external PR evidence")
+                        merged["external_pr_evidence"] = external_values[0]
+                    artifacts[adapter.artifact] = merged
+            result = validate_artifacts(artifacts)
+            if self.protected:
+                transition_records(context["request"]["challenge"]["value"], "reserve")
+            return result
         finally:
             shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -381,8 +411,14 @@ def handle(stream: socket.socket, runner: ReviewedRunner, allowed_uid: int) -> N
         length = struct.unpack("!I", read_exact(stream, 4))[0]
         if not 1 <= length <= MAX_MESSAGE:
             raise ValueError("runner request length is invalid")
-        context = json.loads(read_exact(stream, length))
-        response = canonical_json({"artifacts": runner.execute(context)})
+        request = json.loads(read_exact(stream, length))
+        if isinstance(request, dict) and request.get("operation") == "execute" and set(request) == {"operation", "context"}:
+            response = canonical_json({"artifacts": runner.execute(request["context"])})
+        elif isinstance(request, dict) and request.get("operation") in {"commit", "rollback"} and set(request) == {"operation", "challenge"}:
+            transition_records(request["challenge"], request["operation"])
+            response = canonical_json({"transaction": request["operation"]})
+        else:
+            response = canonical_json({"artifacts": runner.execute(request)})
     except Exception:
         response = canonical_json({"error": "reviewed runner failed"})
     try:

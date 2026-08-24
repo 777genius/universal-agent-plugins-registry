@@ -42,7 +42,7 @@ class SocketRunner:
 
     def run(self, run_dir: Path, context: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
         del run_dir  # The runner UID cannot access observer-owned state directories.
-        payload = canonical_json(context)
+        payload = canonical_json({"operation": "execute", "context": context})
         if len(payload) > MAX_RUNNER_MESSAGE:
             raise ValueError("runner request exceeds size bound")
         remaining = self.timeout_seconds
@@ -66,6 +66,27 @@ class SocketRunner:
         if not isinstance(response, dict) or set(response) != {"artifacts"}:
             raise ValueError("reviewed observer runner returned an invalid response")
         return validate_artifacts(response["artifacts"])
+
+    def transaction(self, challenge: str, action: str, *, deadline: float | None = None) -> None:
+        if action not in {"commit", "rollback"}:
+            raise ValueError("runner transaction action is invalid")
+        payload = canonical_json({"operation": action, "challenge": challenge})
+        remaining = self.timeout_seconds if deadline is None else min(self.timeout_seconds, deadline - time.monotonic())
+        if remaining <= 0:
+            raise TimeoutError("observer deadline expired before runner transaction")
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(remaining)
+                client.connect(str(self.socket_path))
+                if _peer_uid(client) != self.expected_uid:
+                    raise ValueError("runner socket peer is not trusted")
+                client.sendall(struct.pack("!I", len(payload)) + payload)
+                length = struct.unpack("!I", _read_exact(client, 4, deadline))[0]
+                response = json.loads(_read_exact(client, length, deadline))
+        except (OSError, TimeoutError, socket.timeout, json.JSONDecodeError, UnicodeError):
+            raise ValueError("reviewed observer runner transaction failed") from None
+        if response != {"transaction": action}:
+            raise ValueError("reviewed observer runner transaction was not acknowledged")
 
 
 def _read_exact(stream: socket.socket, size: int, deadline: float | None) -> bytes:

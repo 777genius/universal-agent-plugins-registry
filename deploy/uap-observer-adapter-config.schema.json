@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "request_policy", "git", "clients", "matrix", "consent_record", "chatgpt", "workspace_root"],
+  "required": ["schema_version", "request_policy", "git", "clients", "matrix", "consent_record", "chatgpt", "workspace_root", "external_pr_evidence"],
   "properties": {
     "schema_version": {"const": 1},
     "request_policy": {
@@ -19,7 +19,8 @@
       "additionalProperties": false
     },
     "workspace_root": {"const": "/var/lib/uap-observer/workspaces"},
-    "git": {"$ref": "#/$defs/binary"},
+    "git": {"type":"object","required":["binary","sha256"],"properties":{"binary":{"const":"/opt/uap-observer-inputs/bin/git"},"sha256":{"$ref":"#/$defs/digest"}},"additionalProperties":false},
+    "external_pr_evidence": {"type":"object","required":["path","sha256"],"properties":{"path":{"const":"/opt/uap-observer-inputs/external-pr-evidence.json"},"sha256":{"$ref":"#/$defs/digest"}},"additionalProperties":false},
     "clients": {
       "type": "object",
       "required": ["codex", "cursor", "kiro"],
@@ -41,13 +42,13 @@
       "type": "object",
       "required": ["app_binding_path", "app_binding_sha256", "app_id", "mcp_endpoint", "human_attestation_directory", "tuple", "client_version", "projection_receipt_path", "projection_receipt_sha256"],
       "properties": {
-        "app_binding_path": {"type": "string", "pattern": "^/"},
+        "app_binding_path": {"const": "/opt/uap-observer-inputs/chatgpt/app-binding.json"},
         "app_binding_sha256": {"$ref": "#/$defs/digest"},
         "app_id": {"type": "string", "pattern": "^plugin_asdk_app_[a-f0-9]{32}$"},
         "mcp_endpoint": {"const": "https://docs.mcp.cloudflare.com/mcp"},
         "human_attestation_directory": {"const": "/var/lib/uap-observer-human/pending"},
         "tuple": {"type": "object"}, "client_version": {"type": "string", "minLength": 1},
-        "projection_receipt_path": {"type": "string", "pattern": "^/"},
+        "projection_receipt_path": {"const": "/opt/uap-observer-inputs/chatgpt/projection-receipt.json"},
         "projection_receipt_sha256": {"$ref": "#/$defs/digest"}
       },
       "additionalProperties": false
@@ -68,10 +69,15 @@
     "client": {
       "type": "object", "required": ["binary", "sha256", "profile", "client_id"],
       "properties": {
-        "binary": {"type": "string", "pattern": "^/"}, "sha256": {"$ref": "#/$defs/digest"},
+        "binary": {"enum": ["/opt/uap-observer-inputs/bin/codex", "/opt/uap-observer-inputs/bin/cursor", "/opt/uap-observer-inputs/bin/kiro"]}, "sha256": {"$ref": "#/$defs/digest"},
         "profile": {"type": "string", "pattern": "^/var/lib/uap-observer/profiles/"},
         "client_id": {"enum": ["codex", "cursor", "kiro"]}
       },
+      "allOf": [
+        {"if": {"properties": {"client_id": {"const": "codex"}}}, "then": {"properties": {"binary": {"const": "/opt/uap-observer-inputs/bin/codex"}, "profile": {"const": "/var/lib/uap-observer/profiles/codex"}}}},
+        {"if": {"properties": {"client_id": {"const": "cursor"}}}, "then": {"properties": {"binary": {"const": "/opt/uap-observer-inputs/bin/cursor"}, "profile": {"const": "/var/lib/uap-observer/profiles/cursor"}}}},
+        {"if": {"properties": {"client_id": {"const": "kiro"}}}, "then": {"properties": {"binary": {"const": "/opt/uap-observer-inputs/bin/kiro"}, "profile": {"const": "/var/lib/uap-observer/profiles/kiro"}}}}
+      ],
       "additionalProperties": false
     },
     "matrix": {

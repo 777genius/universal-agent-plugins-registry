@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 5b252f9be97da7f890e01fa30ef799dd472c7620eef3213c2b96c093ad0231a1
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 3fc1cc44553ea0ff83fdd448d684119d640ec2c3a378b8789e6010847009e97a
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -21,7 +21,10 @@ untrusted_caddy_archive=${6:?$usage}
 untrusted_caddy_config=${7:?$usage}
 caddy_config_digest=${8:?$usage}
 stage_root=/opt/uap-observer-source.new
-closure_digest=2d012f7f6100e83666e44acdd0571d127dfe6534fc6814d239b4a7920da7df47
+runtime_manifest_digest=f36815a90c69cfe1064cc054460290975facee77fe9180a675e77288082e1cbc
+closure_digest=
+closure_stage=
+closure_final=
 activation_started=0
 activation_complete=0
 systemd_mutation_started=0
@@ -31,13 +34,19 @@ exec 9>/run/lock/uap-observer-install.lock
 flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
 if [ -d "$stage_root" ]; then
   if [ -f "$stage_root/rollback-required" ] && [ -f "$stage_root/systemd-backup/manifest" ]; then
-    if [ "$(readlink /opt/uap-observer-current 2>/dev/null || true)" != "uap-observer-closures/$closure_digest" ]; then
+    recovered_digest=$(cat "$stage_root/closure-digest")
+    printf '%s\n' "$recovered_digest" | grep -Eq '^[0-9a-f]{64}$' || { echo "installer recovery journal is invalid" >&2; exit 1; }
+    if [ "$(readlink /opt/uap-observer-current 2>/dev/null || true)" != "uap-observer-closures/$recovered_digest" ]; then
       restore_observer_systemd "$stage_root/systemd-backup" /etc/systemd/system
+      observer_sync_tree /etc/systemd/system
       systemctl daemon-reload
-      rm -rf "/opt/uap-observer-closures/$closure_digest"
+      rm -rf "/opt/uap-observer-closures/$recovered_digest"
     fi
   fi
-  rm -rf "$stage_root" /opt/uap-observer-venv.new /opt/uap-observer-runtime.new "/opt/uap-observer-closures/.new-$closure_digest"
+  for orphan in /opt/uap-observer-closures/.new-*; do
+    if [ -d "$orphan" ] && [ ! -L "$orphan" ]; then rm -rf "$orphan"; fi
+  done
+  rm -rf "$stage_root" /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
   rm -f /opt/uap-observer-current.new
   rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
     /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
@@ -50,30 +59,40 @@ install -d -o root -g root -m 0700 "$stage_root"
 cleanup() {
   status=${1:-1}
   trap - EXIT HUP INT TERM
+  rollback_ok=1
   if [ "$systemd_mutation_started" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
     set +e
     restore_observer_systemd "$systemd_backup" /etc/systemd/system
+    restore_status=$?
+    if [ "$restore_status" -eq 0 ]; then observer_sync_tree /etc/systemd/system; restore_status=$?; fi
     systemctl daemon-reload
+    reload_status=$?
+    if [ "$restore_status" -ne 0 ] || [ "$reload_status" -ne 0 ]; then rollback_ok=0; fi
     set -e
   fi
-  rm -rf /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
-  rm -rf "/opt/uap-observer-closures/.new-$closure_digest"
-  if [ "$closure_published" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
-    rm -rf "/opt/uap-observer-closures/$closure_digest"
+  if [ "$rollback_ok" -eq 0 ]; then
+    echo "observer rollback incomplete; durable recovery journal retained" >&2
+  else
+    rm -rf /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new
+    test -z "$closure_stage" || rm -rf "$closure_stage"
+    if [ "$closure_published" -eq 1 ] && [ "$activation_complete" -eq 0 ]; then
+      rm -rf "$closure_final"
+    fi
+    rm -f /opt/uap-observer-current.new
+    rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
+      /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
+      /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
+      /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
+    for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
+    rm -rf "$stage_root"
   fi
-  rm -f /opt/uap-observer-current.new
-  rm -f /usr/local/libexec/uap-observer-runner.new /usr/local/libexec/uap-observer-fixed-adapter.new \
-    /usr/local/libexec/uap-observer-attest-chatgpt.new /usr/local/libexec/uap-observer-attest-consent.new /usr/local/libexec/uap-observer-provision-profile.new \
-    /usr/local/bin/caddy.new /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
-    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new
-  for name in runtime notion chatgpt consent; do rm -f "/usr/local/libexec/uap-observer-adapter-$name.new"; done
   exit "$status"
 }
 trap 'cleanup $?' EXIT
 trap 'exit 1' HUP INT TERM
 
 install -D -o root -g root -m 0444 "$untrusted_source_root/deploy/uap-observer-runtime.sha256" "$stage_root/deploy/uap-observer-runtime.sha256"
-test "$(sha256sum "$stage_root/deploy/uap-observer-runtime.sha256" | cut -d' ' -f1)" = "$closure_digest"
+test "$(sha256sum "$stage_root/deploy/uap-observer-runtime.sha256" | cut -d' ' -f1)" = "$runtime_manifest_digest"
 while read -r expected relative extra; do
   test -z "${extra:-}"
   case "$expected:$relative" in
@@ -102,8 +121,8 @@ caddy_binary=$stage_root/caddy
 caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
-runner_digest=06e666cbe50134032751cf7fab28eea496c47299ecf62b1b62bcfc62e5d8e455
-adapter_digest=804d2e85c8bd74e497beb16c6df6f13396c88858ee439f06f3394369f9d8d400
+runner_digest=46c161d23bdf457a9cd08be7a088e9ed8431dae2a84a2d5e84765b0aa6d6360b
+adapter_digest=977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 
@@ -175,9 +194,11 @@ done
 install -d -o root -g root -m 0755 /var/lib/uap-observer-human
 install -d -o root -g uap-observer-control -m 0750 /var/lib/uap-observer-human/pending
 install -d -o root -g root -m 0700 /var/lib/uap-observer-human/consumed
+install -d -o root -g root -m 0700 /var/lib/uap-observer-human/reserved
 install -d -o root -g root -m 0755 /var/lib/uap-observer-consent
 install -d -o root -g uap-observer-adapter-config -m 0750 /var/lib/uap-observer-consent/pending
 install -d -o root -g root -m 0700 /var/lib/uap-observer-consent/consumed
+install -d -o root -g root -m 0700 /var/lib/uap-observer-consent/reserved
 install -d -o caddy -g caddy -m 0700 /var/lib/caddy /var/log/caddy
 
 test ! -e /opt/uap-observer-venv.new
@@ -274,10 +295,34 @@ for service in uap-observer uap-observer-runner; do
     while read -r address; do printf 'IPAddressAllow=%s\n' "$address"; done < "$stage_root/egress-addresses"
     if [ "$service" = uap-observer-runner ]; then
       python3 - "$adapter_config" <<'PY'
-import json,sys
+import grp,hashlib,json,os,stat,sys
+from pathlib import Path
 value=json.load(open(sys.argv[1], encoding="utf-8"))
-paths=[value["git"]["binary"], *(item["binary"] for item in value["clients"].values()), value["chatgpt"]["app_binding_path"], value["chatgpt"]["projection_receipt_path"]]
+expected=["/opt/uap-observer-inputs/bin/git","/opt/uap-observer-inputs/bin/codex","/opt/uap-observer-inputs/bin/cursor","/opt/uap-observer-inputs/bin/kiro","/opt/uap-observer-inputs/chatgpt/app-binding.json","/opt/uap-observer-inputs/chatgpt/projection-receipt.json","/opt/uap-observer-inputs/external-pr-evidence.json"]
+config_gid=grp.getgrnam("uap-observer-adapter-config").gr_gid
+paths=[value["git"]["binary"], *(item["binary"] for item in value["clients"].values()), value["chatgpt"]["app_binding_path"], value["chatgpt"]["projection_receipt_path"], value["external_pr_evidence"]["path"]]
+if sorted(set(paths)) != sorted(expected): raise SystemExit("adapter bind paths differ from literal dedicated allowlist")
+if any(value["clients"][client]["binary"] != f"/opt/uap-observer-inputs/bin/{client}" for client in ("codex","cursor","kiro")): raise SystemExit("adapter client binary differs from its literal dedicated path")
+digests={value["git"]["binary"]:value["git"]["sha256"], **{item["binary"]:item["sha256"] for item in value["clients"].values()}, value["chatgpt"]["app_binding_path"]:value["chatgpt"]["app_binding_sha256"], value["chatgpt"]["projection_receipt_path"]:value["chatgpt"]["projection_receipt_sha256"], value["external_pr_evidence"]["path"]:value["external_pr_evidence"]["sha256"]}
 for path in sorted(set(paths)):
+    candidate=Path(path)
+    if candidate.resolve(strict=True) != candidate: raise SystemExit("adapter input path traverses a symlink")
+    dedicated=Path("/opt/uap-observer-inputs")
+    if dedicated not in candidate.parents: raise SystemExit("adapter input escaped its dedicated root")
+    for parent in (dedicated, *[item for item in candidate.parents if dedicated in item.parents]):
+        parent_info=os.lstat(parent)
+        if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid != 0 or parent_info.st_mode & 0o022:
+            raise SystemExit("adapter input parent is not root-controlled")
+        if not parent_info.st_mode & stat.S_IXOTH and not (parent_info.st_gid == config_gid and parent_info.st_mode & stat.S_IXGRP):
+            raise SystemExit("adapter input parent is not accessible to the reviewed identities")
+    info=os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_nlink != 1:
+        raise SystemExit("adapter input is not an immutable root-owned regular file")
+    expected_mode=0o755 if candidate.parent == Path("/opt/uap-observer-inputs/bin") else 0o640
+    if stat.S_IMODE(info.st_mode) != expected_mode or (expected_mode == 0o640 and info.st_gid != config_gid):
+        raise SystemExit("adapter input mode or group differs")
+    actual="sha256:"+hashlib.sha256(open(path,"rb").read()).hexdigest()
+    if actual != digests[path]: raise SystemExit("adapter input digest differs")
     print(f"BindReadOnlyPaths={path}")
 PY
     fi
@@ -306,8 +351,7 @@ cmp "$caddy_config" /etc/caddy/Caddyfile.new
 # Build one immutable, complete version. No consumer references it until the
 # single current-pointer rename below.
 install -d -o root -g root -m 0755 /opt/uap-observer-closures
-closure_stage="/opt/uap-observer-closures/.new-$closure_digest"
-closure_final="/opt/uap-observer-closures/$closure_digest"
+closure_stage="/opt/uap-observer-closures/.new-$$"
 test ! -e "$closure_stage"
 test ! -e "$closure_final"
 install -d -o root -g root -m 0755 "$closure_stage/libexec" "$closure_stage/bin" "$closure_stage/etc"
@@ -327,8 +371,12 @@ mv /etc/uap-observer-adapter-config.json.new "$closure_stage/etc/uap-observer-ad
 mv /etc/uap-observer-adapters.json.new "$closure_stage/etc/uap-observer-adapters.json"
 mv /etc/caddy/Caddyfile.new "$closure_stage/etc/Caddyfile"
 mv "$stage_root/hosts" "$closure_stage/etc/hosts"
-printf '%s\n' "$closure_digest" > "$closure_stage/.complete"
+printf '%s\n' 'complete-v1' > "$closure_stage/.complete"
 apply_observer_closure_modes "$closure_stage"
+observer_sync_tree "$closure_stage"
+closure_digest=$(observer_closure_identity "$closure_stage")
+closure_final="/opt/uap-observer-closures/$closure_digest"
+test ! -e "$closure_final"
 unit_validation="$stage_root/unit-validation"
 install -d -o root -g root -m 0700 "$unit_validation"
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
@@ -351,21 +399,25 @@ config_digest="sha256:" + hashlib.sha256(encoded).hexdigest()
 adapters=tuple(Adapter(name, root / f"libexec/uap-observer-adapter-{kind}", "sha256:" + sys.argv[3], config, config_digest) for name,kind in zip(ARTIFACT_ORDER,("runtime","notion","chatgpt","consent")))
 ReviewedRunner(adapters, Path("/var/lib/uap-observer/jobs"))
 PY
-mv "$closure_stage" "$closure_final"
-closure_published=1
-
-# Unit definitions are stable bootstrap files; all release-varying paths flow
-# through the immutable closure pointer.
 systemd_backup="$stage_root/systemd-backup"
 journal_observer_systemd "$systemd_backup" /etc/systemd/system
-sync -f "$systemd_backup/manifest"
+observer_sync_tree "$systemd_backup"
+printf '%s\n' "$closure_digest" > "$stage_root/closure-digest"
+sync -f "$stage_root/closure-digest"
 printf '%s\n' rollback-required > "$stage_root/rollback-required"
 sync -f "$stage_root/rollback-required"
+sync -f "$stage_root"
+mv "$closure_stage" "$closure_final"
+closure_stage=
+closure_published=1
+sync -f /opt/uap-observer-closures
 systemd_mutation_started=1
 activate_observer_systemd "$systemd_stage" /etc/systemd/system
+observer_sync_tree /etc/systemd/system
 reload_observer_systemd systemctl
 activation_started=1
 ln -s "uap-observer-closures/$closure_digest" /opt/uap-observer-current.new
 mv -T /opt/uap-observer-current.new /opt/uap-observer-current
+sync -f /opt
 activation_complete=1
 echo "observer files installed; provision the root key and reviewed adapters before enabling services"

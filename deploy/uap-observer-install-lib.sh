@@ -5,6 +5,45 @@
 
 observer_units='uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service'
 
+observer_closure_identity() {
+  python3 - "$1" <<'PY'
+import hashlib,os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+identity=hashlib.sha256()
+for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+    info=path.lstat(); relative=path.relative_to(root).as_posix().encode()
+    kind=b"d" if stat.S_ISDIR(info.st_mode) else b"f" if stat.S_ISREG(info.st_mode) else b"l" if stat.S_ISLNK(info.st_mode) else b"?"
+    identity.update(b"\0".join((relative,kind,str(stat.S_IMODE(info.st_mode)).encode(),str(info.st_uid).encode(),str(info.st_gid).encode()))+b"\0")
+    if kind == b"f": identity.update(hashlib.sha256(path.read_bytes()).digest())
+    elif kind == b"l": identity.update(os.readlink(path).encode())
+    elif kind == b"?": raise SystemExit("closure contains a special file")
+print(identity.hexdigest())
+PY
+}
+
+observer_sync_tree() {
+  python3 - "$1" <<'PY'
+import os,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+directories=[]
+for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+    info=path.lstat()
+    if stat.S_ISREG(info.st_mode):
+        descriptor=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)
+        try: os.fsync(descriptor)
+        finally: os.close(descriptor)
+    elif stat.S_ISDIR(info.st_mode): directories.append(path)
+    elif not stat.S_ISLNK(info.st_mode): raise SystemExit("durability tree contains a special file")
+directories.append(root)
+for path in directories:
+    descriptor=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+PY
+}
+
 apply_observer_closure_modes() {
   closure=$1
   chown -R root "$closure"

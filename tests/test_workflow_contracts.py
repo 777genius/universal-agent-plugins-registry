@@ -108,7 +108,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--release-tag", body)
         production = (ROOT / "tests/e2e/production-launch.json").read_text()
         self.assertIn('"cli_release_repository": "777genius/plugin-kit-ai"', production)
-        self.assertIn('"cli_release_tag": "agentplugins-v0.1.12"', production)
+        self.assertIn('"cli_release_tag": "agentplugins-v0.1.13"', production)
         prepare = (ROOT / "scripts/prepare_launch_evidence.py").read_text()
         self.assertNotIn('os.environ.get("GITHUB_TOKEN")', prepare)
         self.assertIn("token=None", prepare)

@@ -66,11 +66,12 @@ def authoritative_rows() -> list[dict]:
             ordinal += 1
     rows.append({
         "id": f"{ordinal:024x}", "scenario": "chatgpt_registered_binding",
-        "plugin": "cloudflare-docs", "client": "chatgpt", "level": "oauth",
+        "plugin": "cloudflare-docs", "client": "chatgpt", "level": "runtime",
         "outcome": "passed", "tuple": tuple_value("cloudflare-docs", "chatgpt", ordinal),
         "reason": "observed", "details": {
             "evidence_basis": "protected_external_observer",
-            "native_discovery_proof": True,
+            "native_discovery_proof": False,
+            "public_mcp_proof": True,
         },
     })
     return rows
@@ -109,8 +110,8 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         rows.append({"scenario": "hero_5x3_lifecycle", "level": "materialization"})
         selected = evidence.selected_rows({"matrix": rows})
         self.assertEqual(len(selected), 16)
-        self.assertEqual(sum(row["level"] == "runtime" for row in selected), 15)
-        self.assertEqual(sum(row["level"] == "oauth" for row in selected), 1)
+        self.assertEqual(sum(row["level"] == "runtime" for row in selected), 16)
+        self.assertEqual(sum(row["client"] == "chatgpt" and row["level"] == "runtime" for row in selected), 1)
 
     def test_duplicate_applicability_is_rejected(self) -> None:
         rows = authoritative_rows()

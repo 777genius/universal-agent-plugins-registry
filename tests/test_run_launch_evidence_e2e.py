@@ -83,7 +83,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
 
     def test_enforced_mode_refuses_missing_live_inputs_before_evidence(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing required input"):
-            e2e.LaunchHarness(None, None, mode="enforced", consent=CONSENT)
+            e2e.LaunchHarness(None, None, mode="enforced", consent=None)
 
     def test_stable_version_floor(self) -> None:
         with self.assertRaisesRegex(ValueError, "0.1.8 or newer"):
@@ -97,13 +97,24 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
 
     def test_challenge_binds_github_release_directory_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e.secrets, "token_hex", return_value="ab" * 32):
-            first = e2e.make_challenge("a" * 40, "12", "3", "sha256:" + "b" * 64, "sha256:" + "c" * 64, Path(tmp))
-            changed = e2e.make_challenge("a" * 40, "12", "3", "sha256:" + "d" * 64, "sha256:" + "c" * 64, Path(tmp))
+            first = e2e.make_challenge("a" * 40, "12", "3", "sha256:" + "b" * 64, "sha256:" + "c" * 64, "sha256:" + "e" * 64, Path(tmp))
+            changed = e2e.make_challenge("a" * 40, "12", "3", "sha256:" + "d" * 64, "sha256:" + "c" * 64, "sha256:" + "e" * 64, Path(tmp))
         self.assertNotEqual(first["value"], changed["value"])
         self.assertEqual(first["github_sha"], "a" * 40)
         self.assertEqual(first["root_id"], e2e.hashlib.sha256(str(Path(tmp).resolve()).encode()).hexdigest())
         self.assertTrue(e2e.challenge_context_valid(first))
         self.assertFalse(e2e.challenge_context_valid({**first, "directory_digest": "sha256:" + "d" * 64}))
+
+    def test_earlier_attempt_native_observations_keep_the_same_thirty_minute_freshness_bound(self) -> None:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        self.assertTrue(e2e.current_or_earlier_attempt("2", "3"))
+        self.assertFalse(e2e.current_or_earlier_attempt("4", "3"))
+        self.assertTrue(e2e.fresh_observation_interval(
+            (now - timedelta(minutes=5)).isoformat(), (now - timedelta(minutes=4)).isoformat(), now=now,
+        ))
+        self.assertFalse(e2e.fresh_observation_interval(
+            (now - timedelta(minutes=31)).isoformat(), (now - timedelta(minutes=31)).isoformat(), now=now,
+        ))
 
     def test_live_artifacts_require_fresh_challenge_bound_ed25519_bundle(self) -> None:
         private_key = Ed25519PrivateKey.generate()
@@ -279,14 +290,30 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         config = e2e.read_production_config()
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
-        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.12")
+        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.13")
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
         self.assertEqual(
             schema["properties"]["github_asset_attestation"]["properties"]["workflow"]["const"],
             e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
         )
+        self.assertEqual(schema["properties"]["cli_release_tag"]["const"], e2e.TRUSTED_CLI_RELEASE_TAG)
         self.assertNotIn("repository", config)
+        observer = json.loads((ROOT / "deploy/uap-observer.json").read_text())
+        self.assertEqual(observer["cli_release_tag"], e2e.TRUSTED_CLI_RELEASE_TAG)
+        self.assertEqual(observer["policies"], [{
+            "repository": e2e.TRUSTED_CATALOG_REPOSITORY,
+            "repository_id": e2e.TRUSTED_CATALOG_REPOSITORY_ID,
+            "repository_owner_id": e2e.TRUSTED_CATALOG_REPOSITORY_OWNER_ID,
+            "ref": e2e.TRUSTED_OBSERVER_REF,
+            "ref_type": "branch",
+            "environment": e2e.TRUSTED_OBSERVER_ENVIRONMENT,
+            "workflow_ref": e2e.TRUSTED_OBSERVER_WORKFLOW_REF,
+            "job_workflow_ref": e2e.TRUSTED_OBSERVER_JOB_WORKFLOW_REF,
+            "workflow": "Signed Directory publication",
+            "event_names": ["push", "workflow_dispatch"],
+            "job_name_suffix": "protected-observer-inputs",
+        }])
 
     def test_hero_contract_is_exactly_five_by_three(self) -> None:
         scenarios = json.loads(e2e.SCENARIOS.read_text())

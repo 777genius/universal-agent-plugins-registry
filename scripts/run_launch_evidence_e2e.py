@@ -65,8 +65,16 @@ RELEASE_MANIFEST_NAME = "release-manifest.json"
 RELEASE_CHECKSUMS_NAME = "checksums.txt"
 RELEASE_MANIFEST_SCHEMA = ROOT / "schemas" / "e2e" / "release-manifest.schema.json"
 TRUSTED_CATALOG_REPOSITORY = "777genius/universal-agent-plugins"
+TRUSTED_CATALOG_REPOSITORY_OWNER = "777genius"
+TRUSTED_CATALOG_REPOSITORY_ID = "1326737541"
+TRUSTED_CATALOG_REPOSITORY_OWNER_ID = "13103045"
+TRUSTED_OBSERVER_REF = "refs/heads/main"
+TRUSTED_OBSERVER_ENVIRONMENT = "stable-launch-e2e"
+TRUSTED_OBSERVER_SUBJECT = f"repo:{TRUSTED_CATALOG_REPOSITORY}:environment:{TRUSTED_OBSERVER_ENVIRONMENT}"
+TRUSTED_OBSERVER_WORKFLOW_REF = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@{TRUSTED_OBSERVER_REF}"
+TRUSTED_OBSERVER_JOB_WORKFLOW_REF = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml@{TRUSTED_OBSERVER_REF}"
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
-TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.12"
+TRUSTED_CLI_RELEASE_TAG = "agentplugins-v0.1.13"
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
@@ -176,6 +184,27 @@ def authoritative_native_client_evidence(
         and discovery["argv"][0] == expected_client
         and discovery.get("discovered") is True
         and (product_id is None or discovery.get("product_id") == product_id)
+    )
+
+
+def authoritative_public_mcp_evidence(evidence: Any) -> bool:
+    """Validate the distinct tokenless public-MCP proof used by ChatGPT."""
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "basis", "observer", "endpoint", "protocol_version", "initialize", "list", "read",
+    }:
+        return False
+    initialize, listed, read = evidence.get("initialize"), evidence.get("list"), evidence.get("read")
+    return bool(
+        evidence.get("basis") == "protected_external_observer"
+        and evidence.get("observer") == "public-mcp-command-v1"
+        and evidence.get("endpoint") == "https://docs.mcp.cloudflare.com/mcp"
+        and evidence.get("protocol_version") == "2025-06-18"
+        and initialize == {"method": "initialize", "passed": True}
+        and listed == {"method": "tools/list", "required_name": "search_cloudflare_documentation", "passed": True}
+        and isinstance(read, dict) and set(read) == {"method", "name", "read_only", "marker_digest", "passed"}
+        and read.get("method") == "tools/call" and read.get("name") == "search_cloudflare_documentation"
+        and read.get("read_only") is True and read.get("passed") is True
+        and DIGEST.fullmatch(str(read.get("marker_digest", ""))) is not None
     )
 
 
@@ -517,6 +546,29 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def fresh_observation_interval(started_value: Any, observed_value: Any, *, now: datetime | None = None) -> bool:
+    """Apply the same hard freshness window to current- and earlier-attempt evidence."""
+    try:
+        started = datetime.fromisoformat(str(started_value).replace("Z", "+00:00"))
+        observed = datetime.fromisoformat(str(observed_value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    current = now or datetime.now(timezone.utc)
+    return bool(
+        started.tzinfo is not None and observed.tzinfo is not None
+        and started <= observed <= current + timedelta(minutes=2)
+        and current - observed <= MAX_ATTESTATION_AGE
+    )
+
+
+def current_or_earlier_attempt(observed_attempt: Any, current_attempt: Any) -> bool:
+    return bool(
+        str(observed_attempt).isascii() and str(observed_attempt).isdigit()
+        and str(current_attempt).isascii() and str(current_attempt).isdigit()
+        and 1 <= int(str(observed_attempt)) <= int(str(current_attempt))
+    )
+
+
 def sha256_file(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -832,40 +884,42 @@ def collect_digests(value: Any) -> set[str]:
     return found
 
 
-def make_challenge(github_sha: str, run_id: str, run_attempt: str, release_digest: str, directory_digest: str, run_root: Path) -> dict[str, str]:
+def make_challenge(github_sha: str, run_id: str, run_attempt: str, release_digest: str, directory_digest: str, scenario_contract_digest: str, run_root: Path) -> dict[str, str]:
     if not FULL_SHA.fullmatch(github_sha) or not run_id.isdigit() or not run_attempt.isdigit():
         raise ValueError("enforced evidence requires exact GitHub SHA/run identity")
-    if not DIGEST.fullmatch(release_digest) or not DIGEST.fullmatch(directory_digest):
+    if not all(DIGEST.fullmatch(item) for item in (release_digest, directory_digest, scenario_contract_digest)):
         raise ValueError("challenge inputs require release and Directory digests")
     nonce = secrets.token_hex(32)
     root_id = hashlib.sha256(str(run_root.resolve()).encode()).hexdigest()
     framed = json.dumps({
         "github_sha": github_sha, "run_id": run_id, "run_attempt": run_attempt,
         "release_manifest_digest": release_digest, "directory_digest": directory_digest,
+        "scenario_contract_digest": scenario_contract_digest,
         "root_id": root_id, "nonce": nonce,
     }, sort_keys=True, separators=(",", ":")).encode()
     return {
         "value": hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest(),
         "nonce": nonce, "github_sha": github_sha, "run_id": run_id,
         "run_attempt": run_attempt, "release_manifest_digest": release_digest,
-        "directory_digest": directory_digest, "root_id": root_id,
+        "directory_digest": directory_digest, "scenario_contract_digest": scenario_contract_digest, "root_id": root_id,
     }
 
 
 def challenge_context_valid(value: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != {"value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest", "root_id"}:
+    if not isinstance(value, dict) or set(value) != {"value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest", "scenario_contract_digest", "root_id"}:
         return False
     if not all(isinstance(value.get(field), str) for field in value):
         return False
     if not FULL_SHA.fullmatch(value["github_sha"]) or not value["run_id"].isdigit() or not value["run_attempt"].isdigit():
         return False
-    if not DIGEST.fullmatch(value["release_manifest_digest"]) or not DIGEST.fullmatch(value["directory_digest"]):
+    if not all(DIGEST.fullmatch(value[field]) for field in ("release_manifest_digest", "directory_digest", "scenario_contract_digest")):
         return False
     if not re.fullmatch(r"[a-f0-9]{64}", value["nonce"]) or not re.fullmatch(r"[a-f0-9]{64}", value["root_id"]):
         return False
     framed = json.dumps({
         "github_sha": value["github_sha"], "run_id": value["run_id"], "run_attempt": value["run_attempt"],
         "release_manifest_digest": value["release_manifest_digest"], "directory_digest": value["directory_digest"],
+        "scenario_contract_digest": value["scenario_contract_digest"],
         "root_id": value["root_id"], "nonce": value["nonce"],
     }, sort_keys=True, separators=(",", ":")).encode()
     return value["value"] == hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest()
@@ -1045,7 +1099,7 @@ class LaunchHarness:
         if mode == "enforced" and self.challenge is None and self.run_root and self.release_manifest_digest and self.snapshot_digest:
             self.challenge = make_challenge(
                 str(github_sha), str(github_run_id), str(github_run_attempt),
-                self.release_manifest_digest, self.snapshot_digest, self.run_root,
+                self.release_manifest_digest, self.snapshot_digest, sha256_file(SCENARIOS), self.run_root,
             )
         self.consent, self.consent_digest = self._load_consent(consent)
         self.external_pr_evidence: dict[str, Any] | None = None
@@ -1059,7 +1113,7 @@ class LaunchHarness:
         if any(record.get("outcome") != "passed" for record in notion_records.values()):
             raise ValueError("all Notion runtime records must be passed")
         chatgpt_records = self._load_attestations(chatgpt_attestation)
-        if any(key != ("cloudflare-docs", "chatgpt", "oauth") for key in chatgpt_records):
+        if any(key != ("cloudflare-docs", "chatgpt", "runtime") for key in chatgpt_records):
             raise ValueError("ChatGPT artifact is scoped only to Cloudflare Docs registered binding")
         for records in (notion_records, chatgpt_records):
             overlap = set(self.attestations).intersection(records)
@@ -1093,12 +1147,16 @@ class LaunchHarness:
             and value.get("scenario_contract_digest") == sha256_file(SCENARIOS)
         )
         proof = value.get("no_real_project_proof")
-        proof_valid = isinstance(proof, dict) and proof == {
+        base_proof = {
             "real_project_accessed": False,
             "absolute_paths_exported": False,
             "credential_material_exported": False,
             "auth_copied": False,
         }
+        proof_valid = isinstance(proof, dict) and proof == (
+            {**base_proof, "enforcement": "systemd-positive-mount-allowlist-v1"}
+            if self.mode == "enforced" else base_proof
+        )
         if self.mode == "enforced":
             bound = self.challenge is None or (
                 value.get("mode") == "enforced"
@@ -1316,13 +1374,21 @@ class LaunchHarness:
                 github = record.get("github_attestation")
                 github_valid = bool(
                     isinstance(github, dict)
-                    and github.get("repository") == read_production_config()["catalog_repository"]
+                    and github.get("subject") == TRUSTED_OBSERVER_SUBJECT
+                    and github.get("repository") == TRUSTED_CATALOG_REPOSITORY
+                    and github.get("repository_owner") == TRUSTED_CATALOG_REPOSITORY_OWNER
+                    and str(github.get("repository_id")) == TRUSTED_CATALOG_REPOSITORY_ID
+                    and str(github.get("repository_owner_id")) == TRUSTED_CATALOG_REPOSITORY_OWNER_ID
+                    and github.get("ref") == TRUSTED_OBSERVER_REF
+                    and github.get("environment") == TRUSTED_OBSERVER_ENVIRONMENT
+                    and github.get("workflow_ref") == TRUSTED_OBSERVER_WORKFLOW_REF
+                    and github.get("job_workflow_ref") == TRUSTED_OBSERVER_JOB_WORKFLOW_REF
                     and github.get("sha") == self.github_sha
                     and str(github.get("run_id")) == str(self.github_run_id)
                     and str(github.get("run_attempt")) == str(self.github_run_attempt)
                     and github.get("challenge") == self.challenge["value"]
                     and github.get("workflow") == "launch-evidence-e2e.yml"
-                    and github.get("job") == "enforced-stable-gate"
+                    and github.get("job") == "protected-observer-inputs"
                 )
                 if not github_valid:
                     raise ValueError(f"passed external observation is not GitHub-attested for this run: {key}")
@@ -1359,12 +1425,16 @@ class LaunchHarness:
                     raise ValueError(f"runtime pass lacks the supplied consent artifact: {key}")
                 if record.get("runtime_invocation") is not True or record.get("discovery_verified") is not True:
                     raise ValueError(f"runtime pass lacks invocation/discovery proof: {key}")
-                native_evidence = record.get("native_discovery_evidence")
-                if not authoritative_native_client_evidence(
-                    native_evidence, client_version=tuple_value.get("client_version"),
-                    product_id=record["plugin"], client=record["client"],
-                ):
-                    raise ValueError(f"runtime pass lacks authoritative exact-version client discovery evidence: {key}")
+                if record["client"] == "chatgpt":
+                    if "native_discovery_evidence" in record or not authoritative_public_mcp_evidence(record.get("public_mcp_evidence")):
+                        raise ValueError(f"ChatGPT runtime pass lacks authoritative public MCP evidence: {key}")
+                else:
+                    native_evidence = record.get("native_discovery_evidence")
+                    if not authoritative_native_client_evidence(
+                        native_evidence, client_version=tuple_value.get("client_version"),
+                        product_id=record["plugin"], client=record["client"],
+                    ):
+                        raise ValueError(f"runtime pass lacks authoritative exact-version client discovery evidence: {key}")
                 for observation_name in ("manager_observation", "native_observation"):
                     observation = record.get(observation_name)
                     if not isinstance(observation, dict) or not all(isinstance(observation.get(field), str) and observation[field] for field in ("observer", "before_digest", "after_digest", "observed_at")):
@@ -1394,7 +1464,11 @@ class LaunchHarness:
             for key, child in value.items():
                 if key in {"revision", "source_revision", "commit_sha"} and child is not None and (not isinstance(child, str) or not FULL_SHA.fullmatch(child)):
                     raise ValueError("evidence contains a mutable or invalid source revision")
-                if key == "ref":
+                if key == "ref" and not (
+                    value.get("subject") == TRUSTED_OBSERVER_SUBJECT
+                    and value.get("repository") == TRUSTED_CATALOG_REPOSITORY
+                    and child == TRUSTED_OBSERVER_REF
+                ):
                     raise ValueError("evidence must not contain mutable refs")
                 LaunchHarness._reject_mutable_refs(child)
         elif isinstance(value, list):
@@ -1792,13 +1866,14 @@ class LaunchHarness:
             "scenario_id", "run_id", "run_attempt", "pseudonymous_identity_id",
             "pseudonymous_workspace_id", "dedicated_identity", "disposable_project_status",
             "operation_mode", "auth_origin", "cleanup_outcome", "no_real_project_proof",
-            "native_discovery_evidence",
+            "native_discovery_evidence", "public_mcp_evidence", "oauth_artifact_approved",
         )
         return {
             **{field: record[field] for field in fields if field in record},
             "evidence_basis": "protected_external_observer",
             "runtime_proof": record.get("level") in {"runtime", "oauth"},
-            "native_discovery_proof": True,
+            "native_discovery_proof": record.get("client") != "chatgpt",
+            "public_mcp_proof": record.get("client") == "chatgpt",
         }
 
     def hero_runtime_matrix(self) -> None:
@@ -1814,13 +1889,13 @@ class LaunchHarness:
                     reason = "runtime client/isolated identity attestation was not supplied" if plugin == "notion" else "client runtime attestation was not supplied"
                     self.add("hero_5x3_runtime", plugin, client, "runtime", "failed", reason, tuple_value=self.evidence_tuple(plugin, [client], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"resolution": release})
         chatgpt_release = self.directory_release("cloudflare-docs", ["chatgpt"])
-        chatgpt = self.attestations.get(("cloudflare-docs", "chatgpt", "oauth"))
+        chatgpt = self.attestations.get(("cloudflare-docs", "chatgpt", "runtime"))
         if chatgpt:
             details = self.runtime_attestation_details(chatgpt)
             details["resolution"] = chatgpt_release
-            self.add("chatgpt_registered_binding", "cloudflare-docs", "chatgpt", "oauth", chatgpt["outcome"], chatgpt.get("reason", "explicit OAuth/runtime attestation"), tuple_value=chatgpt.get("tuple"), details=details)
+            self.add("chatgpt_registered_binding", "cloudflare-docs", "chatgpt", "runtime", chatgpt["outcome"], chatgpt.get("reason", "explicit registered-binding/UI/public-MCP runtime attestation"), tuple_value=chatgpt.get("tuple"), details=details)
         else:
-            self.add("chatgpt_registered_binding", "cloudflare-docs", "chatgpt", "oauth", "failed", "registered app binding and human UI consent attestation were not supplied", tuple_value=self.evidence_tuple("cloudflare-docs", ["chatgpt"], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"resolution": chatgpt_release})
+            self.add("chatgpt_registered_binding", "cloudflare-docs", "chatgpt", "runtime", "failed", "registered app binding, human UI, and public MCP runtime attestation were not supplied", tuple_value=self.evidence_tuple("cloudflare-docs", ["chatgpt"], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"resolution": chatgpt_release})
 
     def hero_lifecycle_matrix(self) -> None:
         for plugin in self.config["heroes"]:
@@ -1931,11 +2006,6 @@ class LaunchHarness:
             value = records[(kind, os_name, architecture)]
             challenge_context = value.get("challenge_context")
             trace = value.get("command_trace", {})
-            try:
-                started = datetime.fromisoformat(str(value.get("started_at", "")).replace("Z", "+00:00"))
-                observed = datetime.fromisoformat(str(value.get("observed_at", "")).replace("Z", "+00:00"))
-            except ValueError:
-                started = observed = datetime.min.replace(tzinfo=timezone.utc)
             declared = next((item for item in self.release_manifest.get("assets", {}).values() if item.get("file") == value.get("asset_name")), None) if kind == "binary" else None
             npm_package = value.get("npm_package", {}) if kind == "npm" else {}
             expected_npm_tarball = f"https://registry.npmjs.org/universal-agent-plugins/-/universal-agent-plugins-{self.expected_version}.tgz"
@@ -1985,14 +2055,14 @@ class LaunchHarness:
                 and challenge_context_valid(challenge_context)
                 and challenge_context.get("github_sha") == self.github_sha
                 and str(challenge_context.get("run_id")) == str(self.github_run_id)
-                and str(challenge_context.get("run_attempt")) == str(self.github_run_attempt)
+                and current_or_earlier_attempt(challenge_context.get("run_attempt"), self.github_run_attempt)
                 and challenge_context.get("release_manifest_digest") == self.release_manifest_digest
                 and challenge_context.get("directory_digest") == self.snapshot_digest
+                and challenge_context.get("scenario_contract_digest") == sha256_file(SCENARIOS)
                 and value.get("challenge") == challenge_context.get("value")
                 and trace.get("challenge") == value.get("challenge") and trace.get("exit_code") == 0
                 and trace.get("argv") == ["agentplugins", "version"]
-                and started <= observed <= datetime.now(timezone.utc) + timedelta(minutes=2)
-                and datetime.now(timezone.utc) - observed <= MAX_ATTESTATION_AGE
+                and fresh_observation_interval(value.get("started_at"), value.get("observed_at"))
                 and distribution_valid
                 and attestation_valid
                 and release_identity_valid

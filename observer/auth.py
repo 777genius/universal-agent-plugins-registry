@@ -147,7 +147,7 @@ class OidcVerifier:
         self.config, self.fetch, self.now = config, fetch or JsonFetcher(), now
         self.jwks = JwksCache(config.jwks_url, self.fetch, monotonic)
 
-    def verify(self, token: str, github: dict[str, Any]) -> AuthContext:
+    def verify(self, token: str, github: dict[str, Any] | None = None) -> AuthContext:
         if not isinstance(token, str) or len(token) > 16_384:
             raise AuthenticationError("invalid GitHub OIDC token")
         parts = token.split(".")
@@ -174,10 +174,10 @@ class OidcVerifier:
         policy = self._validate_claims(claims, github)
         return AuthContext(claims=claims, policy=policy)
 
-    def _validate_claims(self, claims: dict[str, Any], github: dict[str, Any]) -> IdentityPolicy:
+    def _validate_claims(self, claims: dict[str, Any], github: dict[str, Any] | None) -> IdentityPolicy:
         required = {
             "iss", "aud", "sub", "iat", "nbf", "exp", "jti", "repository",
-            "repository_id", "repository_owner_id", "ref", "sha", "run_id",
+            "repository_owner", "repository_id", "repository_owner_id", "ref", "sha", "run_id",
             "run_attempt", "environment", "workflow_ref", "job_workflow_ref",
             "workflow_sha", "job_workflow_sha", "workflow", "event_name", "ref_type",
         }
@@ -194,20 +194,19 @@ class OidcVerifier:
             raise AuthenticationError("GitHub OIDC token lifetime is invalid")
         if not isinstance(claims["jti"], str) or not JTI.fullmatch(claims["jti"]):
             raise AuthenticationError("GitHub OIDC jti is invalid")
-        if not isinstance(github, dict) or set(github) != {"sha", "run_id", "run_attempt"}:
-            raise AuthenticationError("request GitHub identity is invalid")
-        if not HEX40.fullmatch(str(github["sha"])) or not all(DIGITS.fullmatch(str(github[key])) for key in ("run_id", "run_attempt")):
-            raise AuthenticationError("request GitHub identity is invalid")
-        if any(str(claims[key]) != str(github[key]) for key in ("sha", "run_id", "run_attempt")):
-            raise AuthenticationError("request and OIDC GitHub identities differ")
+        if github is not None:
+            if not isinstance(github, dict) or set(github) != {"sha", "run_id", "run_attempt"}:
+                raise AuthenticationError("request GitHub identity is invalid")
+            if not HEX40.fullmatch(str(github["sha"])) or not all(DIGITS.fullmatch(str(github[key])) for key in ("run_id", "run_attempt")):
+                raise AuthenticationError("request GitHub identity is invalid")
+            if any(str(claims[key]) != str(github[key]) for key in ("sha", "run_id", "run_attempt")):
+                raise AuthenticationError("request and OIDC GitHub identities differ")
         for policy in self.config.policies:
-            owner, name = policy.repository.split("/", 1)
-            expected_sub = (
-                f"repo:{owner}@{policy.repository_owner_id}/{name}@{policy.repository_id}:"
-                f"environment:{policy.environment}"
-            )
+            owner = policy.repository.split("/", 1)[0]
+            expected_sub = f"repo:{policy.repository}:environment:{policy.environment}"
             exact = {
-                "repository": policy.repository, "repository_id": policy.repository_id,
+                "repository": policy.repository, "repository_owner": owner,
+                "repository_id": policy.repository_id,
                 "repository_owner_id": policy.repository_owner_id, "ref": policy.ref,
                 "environment": policy.environment, "ref_type": policy.ref_type,
                 "workflow_ref": policy.workflow_ref, "job_workflow_ref": policy.job_workflow_ref,

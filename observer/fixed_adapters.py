@@ -36,6 +36,15 @@ ENTRYPOINT_ARTIFACT = {
 }
 CONFIG_PATH = Path("/opt/uap-observer-current/etc/uap-observer-adapter-config.json")
 CONSENT_DIRECTORY = Path("/var/lib/uap-observer-consent/pending")
+FIXED_INPUT_PATHS = {
+    "/opt/uap-observer-inputs/bin/git",
+    "/opt/uap-observer-inputs/bin/codex",
+    "/opt/uap-observer-inputs/bin/cursor",
+    "/opt/uap-observer-inputs/bin/kiro",
+    "/opt/uap-observer-inputs/chatgpt/app-binding.json",
+    "/opt/uap-observer-inputs/chatgpt/projection-receipt.json",
+    "/opt/uap-observer-inputs/external-pr-evidence.json",
+}
 PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,
     "credential_material_exported": False, "auth_copied": False,
@@ -176,15 +185,26 @@ def validate_context(value: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def validate_config(value: dict[str, Any]) -> None:
-    required = {"schema_version", "request_policy", "git", "clients", "matrix", "consent_record", "chatgpt", "workspace_root"}
+    required = {"schema_version", "request_policy", "git", "clients", "matrix", "consent_record", "chatgpt", "workspace_root", "external_pr_evidence"}
     if set(value) != required or value.get("schema_version") != 1:
         raise ValueError("adapter config is not canonical")
     if set(value.get("clients", {})) != CLIENTS:
         raise ValueError("adapter client allowlist differs")
     if any(value["clients"][client].get("client_id") != client for client in CLIENTS):
         raise ValueError("adapter client identity differs")
+    if any(value["clients"][client].get("binary") != f"/opt/uap-observer-inputs/bin/{client}" for client in CLIENTS):
+        raise ValueError("adapter client binary differs from its literal dedicated path")
     if any(value["clients"][client].get("profile") != f"/var/lib/uap-observer/profiles/{client}" for client in CLIENTS):
         raise ValueError("adapter client profile root differs")
+    actual_paths = {
+        value.get("git", {}).get("binary"),
+        *(value["clients"][client].get("binary") for client in CLIENTS),
+        value.get("chatgpt", {}).get("app_binding_path"),
+        value.get("chatgpt", {}).get("projection_receipt_path"),
+        value.get("external_pr_evidence", {}).get("path"),
+    }
+    if actual_paths != FIXED_INPUT_PATHS:
+        raise ValueError("adapter input paths differ from the literal dedicated allowlist")
     matrix = value.get("matrix")
     if not isinstance(matrix, list) or {
         (item.get("plugin"), item.get("client")) for item in matrix if isinstance(item, dict)
@@ -207,6 +227,9 @@ def validate_config(value: dict[str, Any]) -> None:
         raise ValueError("ChatGPT adapter config is not canonical")
     if chat["human_attestation_directory"] != "/var/lib/uap-observer-human/pending":
         raise ValueError("ChatGPT human attestation directory differs")
+    external = value.get("external_pr_evidence")
+    if not isinstance(external, dict) or set(external) != {"path", "sha256"}:
+        raise ValueError("external PR evidence source is not digest-bound")
 
 
 def validate_request_policy(config: dict[str, Any], request: dict[str, Any]) -> None:
@@ -259,17 +282,18 @@ def _mount_path(value: str) -> str:
     )
 
 
-def verify_positive_mount_namespace(mountinfo: str, *, fixed_paths: tuple[str, ...] = ()) -> None:
+def verify_positive_mount_namespace(mountinfo: str) -> None:
     """Prove every non-kernel filesystem is mounted at an explicit runtime path."""
     if len(mountinfo) > (1 << 20):
         raise ValueError("mount namespace description exceeds size bound")
+    fixed_paths = tuple(sorted(FIXED_INPUT_PATHS))
     allowed = (
         "/opt/uap-observer-current", "/usr/bin", "/usr/lib", "/usr/lib64",
         "/lib", "/lib64",
         "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/hosts", "/etc/ssl", "/etc/pki",
         "/var/lib/uap-observer/jobs", "/var/lib/uap-observer/workspaces", "/var/lib/uap-observer/profiles",
-        "/var/lib/uap-observer-human/pending", "/var/lib/uap-observer-human/consumed",
-        "/var/lib/uap-observer-consent/pending", "/var/lib/uap-observer-consent/consumed",
+        "/var/lib/uap-observer-human/pending", "/var/lib/uap-observer-human/reserved", "/var/lib/uap-observer-human/consumed",
+        "/var/lib/uap-observer-consent/pending", "/var/lib/uap-observer-consent/reserved", "/var/lib/uap-observer-consent/consumed",
     )
     kernel_filesystems = {
         "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
@@ -310,11 +334,7 @@ def isolation_proof(config: dict[str, Any]) -> dict[str, Any]:
     if os.environ.get("UAP_OBSERVER_ISOLATION") != "systemd-positive-mount-allowlist-v1":
         raise ValueError("reviewed adapter mount isolation was not established")
     mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-    fixed_paths = (
-        config["git"]["binary"], *(item["binary"] for item in config["clients"].values()),
-        config["chatgpt"]["app_binding_path"], config["chatgpt"]["projection_receipt_path"],
-    )
-    verify_positive_mount_namespace(mountinfo, fixed_paths=tuple(fixed_paths))
+    verify_positive_mount_namespace(mountinfo)
     return dict(PRIVACY_RESULT)
 
 
@@ -607,7 +627,7 @@ def runtime_record(item: dict[str, Any], client_config: dict[str, Any], request:
     digest = lambda name: marker[name] if isinstance(marker.get(name), str) and str(marker[name]).startswith("sha256:") else (_ for _ in ()).throw(ValueError("fixed client digest marker is invalid"))
     safe_trace = [client, "protected-runtime-check", plugin, sha256(canonical_json(argv))]
     record = {
-        "plugin": plugin, "client": client, "level": "oauth" if plugin == "notion" else "runtime", "outcome": "passed",
+        "plugin": plugin, "client": client, "level": "runtime", "outcome": "passed",
         "reason": "fixed protected disposable runtime marker verified", "tuple": complete_tuple(item, marker, observed),
         "challenge": challenge, "run_id": request["github"]["run_id"], "run_attempt": request["github"]["run_attempt"],
         "scenario_id": "hero_5x3_runtime", "started_at": started, "observed_at": observed,
@@ -651,7 +671,7 @@ def inconclusive_runtime_record(
     tuple_value = dict(item["tuple"])
     tuple_value["observed_at"] = observed
     return {
-        "plugin": item["plugin"], "client": item["client"], "level": "oauth" if item["plugin"] == "notion" else "runtime",
+        "plugin": item["plugin"], "client": item["client"], "level": "runtime",
         "outcome": "inconclusive", "reason": reason, "tuple": tuple_value,
         "challenge": request["challenge"]["value"], "run_id": request["github"]["run_id"],
         "run_attempt": request["github"]["run_attempt"], "scenario_id": "hero_5x3_runtime",
@@ -701,7 +721,25 @@ def runtime_artifact(config: dict[str, Any], request: dict[str, Any], github: di
         if record is None:
             raise ValueError("fixed runtime observation produced no record")
         records.append(record)
-    return {"schema_version": 1, "attestations": records}
+    artifact = {"schema_version": 1, "attestations": records}
+    if not notion_only:
+        source = config["external_pr_evidence"]
+        evidence = load_json(Path(source["path"]), source["sha256"], owner_uid=0, mode=0o640)
+        binding = evidence.get("binding") if isinstance(evidence, dict) else None
+        if (
+            evidence.get("challenge") != request["challenge"]["value"]
+            or evidence.get("catalog_repository") != request["catalog_repository"]
+            or not isinstance(binding, dict)
+            or binding.get("catalog_repository") != request["catalog_repository"]
+            or binding.get("catalog_sha") != request["github"]["sha"]
+            or binding.get("directory_snapshot_digest") != request["directory_digest"]
+            or binding.get("release_repository") != request["cli_release_repository"]
+            or binding.get("release_tag") != request["cli_release_tag"]
+            or binding.get("release_manifest_digest") != request["release_manifest_digest"]
+        ):
+            raise ValueError("immutable external PR evidence differs from the authorized request")
+        artifact["external_pr_evidence"] = evidence
+    return artifact
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -794,7 +832,7 @@ def wait_human(config: dict[str, Any], request: dict[str, Any], owner_uid: int) 
 def chatgpt_artifact(config: dict[str, Any], request: dict[str, Any], github: dict[str, Any], consent: dict[str, Any], owner_uid: int) -> dict[str, Any]:
     chat = config["chatgpt"]
     binding_path = Path(chat["app_binding_path"])
-    if binding_path.name != ".app.json":
+    if binding_path != Path("/opt/uap-observer-inputs/chatgpt/app-binding.json"):
         raise ValueError("ChatGPT app binding path is not exact")
     binding = load_json(binding_path, chat["app_binding_sha256"], owner_uid=owner_uid, mode=0o640)
     if binding != {"apps": {"cloudflare-docs": {"id": chat["app_id"]}}} or chat["mcp_endpoint"] != MCP_ENDPOINT:
@@ -831,7 +869,7 @@ def chatgpt_artifact(config: dict[str, Any], request: dict[str, Any], github: di
     item = chat["tuple"]
     marker = {"client_version": chat["client_version"]}
     record = {
-        "plugin": "cloudflare-docs", "client": "chatgpt", "level": "oauth", "outcome": "passed",
+        "plugin": "cloudflare-docs", "client": "chatgpt", "level": "runtime", "outcome": "passed",
         "reason": "exact app binding, public read-only MCP, and one-time human activation verified",
         "tuple": complete_tuple({"plugin": "cloudflare-docs", "tuple": item}, marker, observed),
         "challenge": request["challenge"]["value"], "run_id": request["github"]["run_id"], "run_attempt": request["github"]["run_attempt"],

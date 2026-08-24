@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .auth import GitHubCorroborator, OidcVerifier, ReplayStore
+from .auth import AuthContext, GitHubCorroborator, OidcVerifier, ReplayStore
 from .canonical import canonical_json, request_digest
 from .config import Config
 from .runner import SocketRunner
@@ -98,13 +98,36 @@ class ObserverService:
             validated = validate_request(request, self.config)
         except ValueError as error:
             raise RequestValidationError("observer request is invalid") from error
-        auth = self.verifier.verify(bearer_token, validated["github"])
-        if validated["catalog_repository"] != auth.policy.repository:
-            raise ValueError("request catalog repository is not allowlisted")
+        auth = self.authenticate(bearer_token, on_authenticated=on_authenticated)
+        return self._observe_validated(validated, auth, deadline=deadline)
+
+    def authenticate(
+        self, bearer_token: str, *, on_authenticated: Callable[[], None] | None = None,
+    ) -> AuthContext:
+        """Authenticate, publicly corroborate, and replay-charge before body I/O."""
+        auth = self.verifier.verify(bearer_token)
         self.corroborator.corroborate(auth)
         self.replay.consume(auth.claims["jti"], auth.claims["exp"])
         if on_authenticated is not None:
             on_authenticated()
+        return auth
+
+    def observe_authenticated(
+        self, request: Any, auth: AuthContext, *, deadline: float,
+    ) -> bytes:
+        try:
+            validated = validate_request(request, self.config)
+        except ValueError as error:
+            raise RequestValidationError("observer request is invalid") from error
+        return self._observe_validated(validated, auth, deadline=deadline)
+
+    def _observe_validated(
+        self, validated: dict[str, Any], auth: AuthContext, *, deadline: float,
+    ) -> bytes:
+        if any(str(auth.claims[key]) != str(validated["github"][key]) for key in ("sha", "run_id", "run_attempt")):
+            raise RequestValidationError("request and authenticated GitHub identities differ")
+        if validated["catalog_repository"] != auth.policy.repository:
+            raise RequestValidationError("request catalog repository is not allowlisted")
         digest = request_digest(validated)
         leader = self._coordinator.enter(digest, deadline)
         if not leader:
@@ -117,7 +140,7 @@ class ObserverService:
                 cached = self._cached_response(validated, digest)
                 if cached is not None:
                     return cached
-                return self._execute(validated, auth.claims, digest, deadline)
+                return self._execute(validated, auth, digest, deadline)
         finally:
             self._coordinator.leave(digest)
 
@@ -153,9 +176,12 @@ class ObserverService:
             self.signer.verify_cached(data, challenge=request["challenge"]["value"], now=self.now())
         except (FileNotFoundError, CacheExpiredError):
             return None
+        if hasattr(self.runner, "transaction"):
+            self.runner.transaction(request["challenge"]["value"], "commit")
         return data
 
-    def _execute(self, request: dict[str, Any], claims: dict[str, Any], digest: str, deadline: float) -> bytes:
+    def _execute(self, request: dict[str, Any], auth: AuthContext, digest: str, deadline: float) -> bytes:
+        claims = auth.claims
         runs = self.config.state_root / "runs"
         runs.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._retain_cache(runs)
@@ -163,10 +189,19 @@ class ObserverService:
         temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=runs))
         os.chmod(temporary, 0o700)
         try:
+            if hasattr(self.runner, "transaction"):
+                self.runner.transaction(request["challenge"]["value"], "rollback", deadline=deadline)
             github_attestation = {
-                "repository": claims["repository"], "sha": claims["sha"],
+                "subject": claims["sub"], "repository": claims["repository"],
+                "repository_owner": claims["repository_owner"],
+                "repository_id": str(claims["repository_id"]),
+                "repository_owner_id": str(claims["repository_owner_id"]),
+                "ref": claims["ref"], "environment": claims["environment"],
+                "workflow_ref": claims["workflow_ref"],
+                "job_workflow_ref": claims["job_workflow_ref"],
+                "sha": claims["sha"],
                 "run_id": claims["run_id"], "run_attempt": claims["run_attempt"],
-                "workflow": "launch-evidence-e2e.yml", "job": "protected-observer-inputs",
+                "workflow": "launch-evidence-e2e.yml", "job": auth.policy.job_name_suffix,
                 "challenge": request["challenge"]["value"],
             }
             artifacts = self.runner.run(
@@ -197,13 +232,33 @@ class ObserverService:
                 os.replace(target, retired)
                 os.replace(temporary, target)
                 shutil.rmtree(retired, ignore_errors=True)
+                self._sync_published(target)
+                if hasattr(self.runner, "transaction"):
+                    self.runner.transaction(request["challenge"]["value"], "commit", deadline=deadline)
                 return response
             os.replace(temporary, target)
+            self._sync_published(target)
+            if hasattr(self.runner, "transaction"):
+                self.runner.transaction(request["challenge"]["value"], "commit", deadline=deadline)
             return response
         except Exception:
             if temporary.exists():
                 shutil.rmtree(temporary)
             raise
+
+    @staticmethod
+    def _sync_published(target: Path) -> None:
+        response_fd = os.open(target / "response.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        directory_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        parent_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(response_fd)
+            os.fsync(directory_fd)
+            os.fsync(parent_fd)
+        finally:
+            os.close(response_fd)
+            os.close(directory_fd)
+            os.close(parent_fd)
 
     def _retain_cache(self, runs: Path) -> None:
         """Bound observer-owned cache entries without following hostile links."""

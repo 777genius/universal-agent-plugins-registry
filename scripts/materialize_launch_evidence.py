@@ -107,12 +107,12 @@ def selected_rows(launch: dict[str, Any]) -> list[dict[str, Any]]:
             and row.get("plugin") in HEROES and row.get("client") in HERO_CLIENTS
             and row.get("level") == "runtime"
         )
-        chatgpt_oauth = (
+        chatgpt_runtime = (
             row.get("scenario") == "chatgpt_registered_binding"
             and row.get("plugin") == "cloudflare-docs" and row.get("client") == "chatgpt"
-            and row.get("level") == "oauth"
+            and row.get("level") == "runtime"
         )
-        if not (hero_runtime or chatgpt_oauth):
+        if not (hero_runtime or chatgpt_runtime):
             continue
         if row.get("outcome") != "passed":
             fail(f"authoritative launch row did not pass: {row.get('id')}")
@@ -120,18 +120,19 @@ def selected_rows(launch: dict[str, Any]) -> list[dict[str, Any]]:
         if (
             not isinstance(details, dict)
             or details.get("evidence_basis") != "protected_external_observer"
-            or details.get("native_discovery_proof") is not True
+            or (row.get("client") == "chatgpt" and details.get("public_mcp_proof") is not True)
+            or (row.get("client") != "chatgpt" and details.get("native_discovery_proof") is not True)
         ):
             fail(f"launch row is not authoritative protected observer evidence: {row.get('id')}")
         rows.append(row)
     if len(rows) != 16:
         fail(f"expected 16 authoritative hero runtime/OAuth rows, found {len(rows)}")
     expected_runtime = {(plugin, client) for plugin in HEROES for client in HERO_CLIENTS}
-    actual_runtime = {(row["plugin"], row["client"]) for row in rows if row["level"] == "runtime"}
+    actual_runtime = {(row["plugin"], row["client"]) for row in rows if row["client"] in HERO_CLIENTS}
     if actual_runtime != expected_runtime:
         fail("hero runtime applicability matrix is incomplete or duplicated")
-    if sum(row["level"] == "oauth" for row in rows) != 1:
-        fail("exactly one Cloudflare ChatGPT OAuth record is required")
+    if sum(row["client"] == "chatgpt" and row["level"] == "runtime" for row in rows) != 1:
+        fail("exactly one Cloudflare ChatGPT public-MCP runtime record is required")
     keys = [canonical_json(applicability(row)) for row in rows]
     if len(keys) != len(set(keys)):
         fail("duplicate current-evidence applicability tuple")

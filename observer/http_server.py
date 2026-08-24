@@ -106,18 +106,23 @@ class ObserverHandler(BaseHTTPRequestHandler):
             self._json_error(401, "authentication failed")
             return
         try:
+            def charge_verified_caller() -> None:
+                if not self.server.rate_limiter.allow(time.monotonic()):  # type: ignore[attr-defined]
+                    raise VerifiedRateLimitError("verified caller rate limit exceeded")
+            auth = self.service.authenticate(authorization[7:], on_authenticated=charge_verified_caller)
+        except AuthenticationError:
+            self._json_error(401, "authentication failed")
+            return
+        except VerifiedRateLimitError:
+            self._json_error(429, "rate limit exceeded", retry_after="60")
+            return
+        try:
             request = self._read_request()
         except (ValueError, UnicodeError, json.JSONDecodeError, TimeoutError, socket.timeout):
             self._json_error(400, "request rejected")
             return
         try:
-            def charge_verified_caller() -> None:
-                if not self.server.rate_limiter.allow(time.monotonic()):  # type: ignore[attr-defined]
-                    raise VerifiedRateLimitError("verified caller rate limit exceeded")
-            response = self.service.observe(
-                request, authorization[7:], deadline=started + END_TO_END_SECONDS,
-                on_authenticated=charge_verified_caller,
-            )
+            response = self.service.observe_authenticated(request, auth, deadline=started + END_TO_END_SECONDS)
             if len(response) > MAX_RESPONSE_BYTES:
                 raise ValueError("observer response exceeds size bound")
         except AuthenticationError:

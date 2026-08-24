@@ -347,7 +347,11 @@ class WorkflowHardeningTests(unittest.TestCase):
     def test_reordered_workflow_rechecks_protected_main_before_candidate_sign_and_push(self) -> None:
         workflow = yaml.load((ROOT / ".github" / "workflows" / "directory-publication.yml").read_text(), Loader=yaml.BaseLoader)
         prepare_steps = workflow["jobs"]["prepare"]["steps"]
-        prepare_guard = next(step["run"] for step in prepare_steps if step.get("name") == "Require event source to remain protected main")
+        prepare_guard = next(
+            step["run"] for step in prepare_steps
+            if step.get("env", {}).get("EVENT_SOURCE_COMMIT") == "${{ github.sha }}"
+            and "directory_publication_cas.py marker" in step.get("run", "")
+        )
         freshness = next(step for step in workflow["jobs"]["sign"]["steps"] if step.get("id") == "freshness")
         signer = next(step["run"] for step in workflow["jobs"]["sign"]["steps"] if step.get("id") == "signed")
         publisher = next(step["run"] for step in workflow["jobs"]["sign"]["steps"] if step.get("id") == "commit")
