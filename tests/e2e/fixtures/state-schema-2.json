@@ -4,15 +4,40 @@
     {
       "id": "fixture-context7",
       "declared_name": "context7",
-      "source": {"kind": "local", "locator": "fixture://packages/context7"},
+      "manifest_name": "context7",
+      "product_id": "context7",
+      "source": {
+        "kind": "catalog",
+        "locator": "upstash/context7@1111111111111111111111111111111111111111//plugins/context7",
+        "repository": "upstash/context7",
+        "path": "plugins/context7",
+        "revision": "1111111111111111111111111111111111111111"
+      },
+      "package": {
+        "tree_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "closure_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
       "clients": {
         "cursor:user": {
           "client": "cursor",
           "scope": "user",
           "materialization": "materialized",
           "target_locator": "fixture://cursor/context7",
-          "receipts": []
+          "receipts": [
+            {
+              "artifact_id": "fixture-cursor-context7",
+              "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "locator": "fixture://cursor/context7"
+            }
+          ]
         }
+      },
+      "data_receipt": {
+        "backend": "cursor",
+        "scope": "user",
+        "locator": "fixture://data/context7",
+        "ownership_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
       }
     }
   ]

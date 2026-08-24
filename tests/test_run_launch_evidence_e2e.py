@@ -670,7 +670,7 @@ print(json.dumps({"schema_version": 1, "command": "update", "data": {"result": {
         }
         harness.snapshot_digest = "sha256:" + "c" * 64
         harness.binary_digest = "sha256:" + "d" * 64
-        harness.expected_version = "0.1.8"
+        harness.expected_version = "0.1.14"
         commands = [[operation, "context7", "--target", "codex,cursor,kiro", "--format", "json"] for operation in ("add", "update", "repair", "remove")]
         value = {
             "commands": commands, "acquisition_digests": ["sha256:" + "a" * 64],
@@ -709,12 +709,24 @@ if operation == "remove":
         if path.exists(): path.unlink()
 value = {"mutated": operation != "update"}
 if operation == "add":
-    value.update({"acquisition_count": 1, "tree_digest": "sha256:" + "a" * 64})
+    acquisition_id = "fetch-1"
+    tree_digest = "sha256:" + "a" * 64
+    manifest_digest = "sha256:" + "e" * 64
+    closure_digest = "sha256:" + "c" * 64
+    value = {"schema_version": 1, "command": "add", "result": "success", "data": {
+        "operation_id": "op-grouped-add-1", "batch": True, "status": "completed",
+        "succeeded": 3, "failed": 0, "plugin": product, "version": "1.0.0",
+        "source": "upstash/context7", "revision": "1" * 40,
+        "tree_digest": tree_digest, "manifest_digest": manifest_digest,
+        "dry_run": False, "targets": target.split(","),
+        "acquisition": {"acquisition_id": acquisition_id, "acquisition_count": 1, "tree_digest": tree_digest, "manifest_digest": manifest_digest, "closure_digest": closure_digest, "source_kind": "github", "fetched": True, "validated": True},
+        "target_outcomes": {client: {"outcome": "passed", "acquisition_id": acquisition_id, "tree_digest": tree_digest, "manifest_digest": manifest_digest, "closure_digest": closure_digest} for client in target.split(",")},
+    }}
 print(json.dumps(value))
 '''
         context = {
             "value": "c" * 64, "directory_digest": "sha256:" + "d" * 64,
-            "binary_digest": "sha256:" + "b" * 64, "expected_version": "0.1.8",
+            "binary_digest": "sha256:" + "b" * 64, "expected_version": "0.1.14",
             "snapshot_sequence": 7,
             "release": {
                 "product_id": "context7", "tree_digest": "sha256:" + "a" * 64,
@@ -740,9 +752,203 @@ print(json.dumps(value))
         self.assertIsNone(value["client_version"])
         self.assertTrue(value["no_newer_release_update_noop"])
         self.assertEqual(value["acquisition_digests"], ["sha256:" + "a" * 64])
+        self.assertEqual(value["acquisition"]["acquisition_id"], "fetch-1")
+        self.assertEqual(value["acquisition"]["closure_digest"], "sha256:" + "c" * 64)
+        self.assertNotEqual(value["acquisition"]["closure_digest"], value["acquisition"]["tree_digest"])
         self.assertEqual(set(value["target_outcomes"]), {"codex", "cursor", "kiro"})
         self.assertTrue(all(item["after"]["manager"]["committed_receipts"] >= item["before"]["manager"]["committed_receipts"] for item in value["operation_observations"]))
         self.assertEqual(value["operation_observations"][-1]["after"]["materialized_mentions"], {"codex": 0, "cursor": 0, "kiro": 0})
+
+    def test_grouped_acquisition_proof_fails_closed_when_event_is_missing_or_ambiguous(self) -> None:
+        clients = ("codex", "cursor", "kiro")
+        event = {
+            "acquisition_id": "fetch-1", "acquisition_count": 1,
+            "tree_digest": "sha256:" + "a" * 64,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "closure_digest": "sha256:" + "c" * 64, "source_kind": "github",
+            "fetched": True, "validated": True,
+        }
+        outcomes = {
+            client: {
+                "outcome": "passed", "acquisition_id": event["acquisition_id"],
+                "tree_digest": event["tree_digest"], "manifest_digest": event["manifest_digest"],
+                "closure_digest": event["closure_digest"],
+            }
+            for client in clients
+        }
+        valid = {
+            "schema_version": 1, "command": "add", "result": "success",
+            "data": {
+                "operation_id": "op-grouped-add-1", "batch": True, "status": "completed",
+                "succeeded": 3, "failed": 0, "plugin": "context7", "version": "1.0.0",
+                "source": "upstash/context7", "revision": "1" * 40,
+                "tree_digest": event["tree_digest"], "manifest_digest": event["manifest_digest"],
+                "dry_run": False, "targets": list(clients),
+                "acquisition": event, "target_outcomes": outcomes,
+            },
+        }
+        self.assertIsNotNone(observer.grouped_acquisition_proof(valid, clients))
+        failures = (
+            {key: child for key, child in valid.items() if key != "schema_version"},
+            {**valid, "schema_version": 2},
+            {key: child for key, child in valid.items() if key != "command"},
+            {**valid, "command": "update"},
+            {key: child for key, child in valid.items() if key != "result"},
+            {**valid, "result": "failed"},
+            {key: child for key, child in valid.items() if key != "data"},
+            {**valid, "data": []},
+            {"schema_version": 1, "command": "add", "result": "success", "acquisition": event, "target_outcomes": outcomes},
+            {**valid, "acquisition": event, "target_outcomes": outcomes},
+            {**valid, "data": {**valid["data"], "acquisition": event, "metadata": {"acquisition": event}}},
+            {**valid, "data": {**valid["data"], "metadata": {"target_outcomes": outcomes}}},
+            {**valid, "data": {key: child for key, child in valid["data"].items() if key != "acquisition"}},
+            {**valid, "data": {key: child for key, child in valid["data"].items() if key != "target_outcomes"}},
+            {**valid, "data": {**valid["data"], "acquisition": {key: child for key, child in event.items() if key != "acquisition_id"}}},
+            {**valid, "data": {**valid["data"], "acquisition": {key: child for key, child in event.items() if key != "closure_digest"}}},
+            {**valid, "data": {**valid["data"], "acquisition": {**event, "acquisition_count": True}}},
+            {**valid, "data": {**valid["data"], "target_outcomes": {**outcomes, "windsurf": outcomes["codex"]}}},
+            {**valid, "data": {**valid["data"], "target_outcomes": {key: child for key, child in outcomes.items() if key != "kiro"}}},
+            {**valid, "data": {**valid["data"], "target_outcomes": {**outcomes, "kiro": {**outcomes["kiro"], "closure_digest": event["tree_digest"]}}}},
+        )
+        for value in failures:
+            with self.subTest(value=value):
+                self.assertIsNone(observer.grouped_acquisition_proof(value, clients))
+        self.assertIsNone(observer.grouped_acquisition_proof(valid, (*clients, "kiro")))
+
+    def test_state_migration_observes_stale_refusal_backup_and_exact_provenance(self) -> None:
+        fake_binary = '''#!/usr/bin/python3
+import hashlib, json, os, pathlib, shutil, sys
+manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"])
+state_path = manager / "state.json"
+operation = sys.argv[1]
+body = state_path.read_bytes()
+digest = "sha256:" + hashlib.sha256(body).hexdigest()
+guidance = "agentplugins migrate-state --dry-run\\nagentplugins migrate-state --expected-digest " + digest
+if operation == "info":
+    print(json.dumps({"schema_version": 2, "read_only": True}))
+elif operation == "add":
+    print(guidance, file=sys.stderr)
+    raise SystemExit(2)
+elif "--dry-run" in sys.argv:
+    print(json.dumps({"state_digest": digest, "mutated": False}))
+else:
+    supplied = sys.argv[sys.argv.index("--expected-digest") + 1]
+    if supplied != digest:
+        print("stale expected digest refused\\n" + guidance, file=sys.stderr)
+        raise SystemExit(3)
+    state = json.loads(body)
+    shutil.copyfile(state_path, manager / "state.backup.json")
+    state["schema_version"] = 3
+    for installation in state["installations"]:
+        installation["origin_mode"] = "directory" if installation["source"]["kind"] == "catalog" else "direct"
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    print(json.dumps({"mutated": True, "schema_version": 3}))
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "agentplugins"
+            binary.write_text(fake_binary)
+            binary.chmod(0o700)
+            home, manager, workspace = root / "home", root / "manager", root / "workspace"
+            workspace.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}, clear=False):
+                passed, value = observer.migration_scenario(binary, workspace, "challenge")
+        self.assertTrue(passed, value)
+        self.assertTrue(all(value["proof"].values()))
+        self.assertEqual(value["expected_provenance"], value["observed_provenance"])
+        self.assertNotEqual(value["input_digest"], value["stale_digest"])
+
+    def test_migration_provenance_fails_closed_on_missing_or_changed_identity(self) -> None:
+        state = json.loads((ROOT / "tests/e2e/fixtures/state-schema-2.json").read_text())
+        record = observer.installation_record(state, "context7")
+        expected = observer.migration_provenance(record, legacy=True)
+        self.assertIsNotNone(expected)
+        missing = json.loads(json.dumps(record))
+        del missing["package"]["closure_digest"]
+        self.assertIsNone(observer.migration_provenance(missing, legacy=True))
+        changed = json.loads(json.dumps(record))
+        changed["source"]["revision"] = "2" * 40
+        self.assertNotEqual(expected, observer.migration_provenance(changed, legacy=True))
+        self.assertIsNone(observer._one_semantic(
+            {"input_digest": "sha256:" + "a" * 64, "state_digest": "sha256:" + "b" * 64},
+            {"input_digest", "state_digest"},
+        ))
+
+    def test_plugin_data_update_requires_changed_package_and_preserves_exact_receipt(self) -> None:
+        fake_binary = '''#!/usr/bin/python3
+import hashlib, json, os, pathlib, shutil, sys
+operation = sys.argv[1]
+workspace = pathlib.Path.cwd()
+home = pathlib.Path(os.environ["HOME"])
+manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"])
+state_path = manager / "state.json"
+native = home / ".cursor" / "e2e-external-package.json"
+data = manager / "data" / "e2e-external-package"
+def digest(package):
+    framed = bytearray()
+    for path in sorted(item for item in package.rglob("*") if item.is_file()):
+        framed.extend(path.relative_to(package).as_posix().encode() + b"\\0" + path.read_bytes())
+    return "sha256:" + hashlib.sha256(framed).hexdigest()
+def load():
+    return json.loads(state_path.read_text()) if state_path.exists() else {"schema_version": 3, "installations": []}
+def save(state):
+    manager.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, sort_keys=True))
+def materialize():
+    native.parent.mkdir(parents=True, exist_ok=True)
+    native.write_text(json.dumps({"product": "e2e-external-package"}))
+if operation == "add":
+    package = workspace / sys.argv[2].removeprefix("./")
+    data.mkdir(parents=True, exist_ok=True)
+    state = {"schema_version": 3, "installations": [{
+        "declared_name": "e2e-external-package", "product_id": "e2e-external-package",
+        "source": {"canonical_source": str(package)},
+        "package": {"tree_digest": digest(package), "manifest_digest": "sha256:" + "b" * 64},
+        "data_receipt": {"locator": str(data), "ownership_digest": "sha256:" + "e" * 64, "backend": "cursor", "scope": "user"},
+    }]}
+    save(state); materialize()
+elif operation == "update":
+    state = load(); package = workspace / "package-plugin-data"
+    state["installations"][0]["package"]["tree_digest"] = digest(package)
+    save(state); materialize()
+elif operation == "repair":
+    materialize()
+elif operation == "switch":
+    state = load(); package = workspace / sys.argv[sys.argv.index("--to") + 1].removeprefix("./")
+    state["installations"][0]["package"]["tree_digest"] = digest(package)
+    save(state); materialize()
+elif operation == "remove" and "--purge-data" in sys.argv:
+    if data.exists(): shutil.rmtree(data)
+    state = load(); state["installations"] = []; save(state)
+elif operation == "remove":
+    if native.exists(): native.unlink()
+print(json.dumps({"mutated": True}))
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "agentplugins"
+            binary.write_text(fake_binary)
+            binary.chmod(0o700)
+            home, manager, workspace = root / "home", root / "manager", root / "workspace"
+            workspace.mkdir()
+            with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}, clear=False):
+                passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+        self.assertTrue(passed, value)
+        self.assertTrue(value["proof"]["update_changed_package_digest"])
+        self.assertTrue(value["proof"]["update_preserved_data_receipt"])
+        self.assertEqual(value["initial_data_receipt"], value["updated_data_receipt"])
+
+    def test_plugin_data_update_proof_fails_closed_for_no_change_or_receipt_replacement(self) -> None:
+        first = {"tree_digest": "sha256:" + "a" * 64}
+        second = {"tree_digest": "sha256:" + "b" * 64}
+        receipt = {"locator": "/disposable/data", "ownership_digest": "sha256:" + "c" * 64}
+        self.assertEqual(observer.plugin_data_update_proof(first, first, receipt, receipt), (False, True))
+        self.assertEqual(
+            observer.plugin_data_update_proof(
+                first, second, receipt, {**receipt, "ownership_digest": "sha256:" + "d" * 64},
+            ),
+            (True, False),
+        )
 
     def test_policy_conformance_directory_is_test_signed_and_never_the_production_root(self) -> None:
         snapshot = json.loads((PUBLICATION / "snapshot.json").read_text())
