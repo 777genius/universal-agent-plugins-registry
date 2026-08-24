@@ -51,6 +51,141 @@ FIXED_ENTRYPOINTS = {
     }.items()
 }
 
+SERVICE_ROLES = {
+    "caddy": ("caddy", "caddy", "/var/lib/caddy", ()),
+    "observer": (
+        "uap-observer", "uap-observer", "/nonexistent",
+        ("uap-observer-signer-ipc", "uap-observer-runner-ipc"),
+    ),
+    **{
+        identity: (
+            f"uap-observer-{identity}", f"uap-observer-{identity}",
+            f"/var/empty/uap-observer-{identity}",
+            ("uap-observer-adapter-config",),
+        )
+        for identity in ("codex", "cursor", "kiro", "control")
+    },
+}
+
+
+def reviewed_service_identities() -> dict[str, tuple[int, int, frozenset[int]]]:
+    """Resolve the exact, alias-free NSS identities used by observer services."""
+    required_groups = {
+        group_name
+        for _, group_name, _, supplemental in SERVICE_ROLES.values()
+        for group_name in (group_name, *supplemental)
+    }
+    groups = {name: grp.getgrnam(name) for name in required_groups}
+    if any(group.gr_gid == 0 for group in groups.values()):
+        raise ValueError("reviewed service group uses the root identity")
+    if len({group.gr_gid for group in groups.values()}) != len(groups):
+        raise ValueError("reviewed service groups are not distinct")
+    all_groups = grp.getgrall()
+    for name, group in groups.items():
+        if grp.getgrgid(group.gr_gid).gr_name != name:
+            raise ValueError("reviewed service group lookup is not canonical")
+        aliases = {item.gr_name for item in all_groups if item.gr_gid == group.gr_gid}
+        if aliases != {name}:
+            raise ValueError("reviewed service group has an NSS alias")
+
+    result: dict[str, tuple[int, int, frozenset[int]]] = {}
+    all_users = pwd.getpwall()
+    for role, (name, group_name, home, supplemental) in SERVICE_ROLES.items():
+        user = pwd.getpwnam(name)
+        expected_group_ids = frozenset(
+            groups[item].gr_gid for item in (group_name, *supplemental)
+        )
+        actual_group_ids = frozenset(os.getgrouplist(name, user.pw_gid))
+        if (
+            user.pw_uid == 0 or user.pw_gid != groups[group_name].gr_gid
+            or user.pw_dir != home
+            or user.pw_shell not in {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false"}
+            or actual_group_ids != expected_group_ids
+        ):
+            raise ValueError(f"reviewed service account {name} differs")
+        if pwd.getpwuid(user.pw_uid).pw_name != name:
+            raise ValueError("reviewed service UID lookup is not canonical")
+        aliases = {item.pw_name for item in all_users if item.pw_uid == user.pw_uid}
+        if aliases != {name}:
+            raise ValueError("reviewed service account has an NSS alias")
+        result[role] = (user.pw_uid, user.pw_gid, actual_group_ids)
+    if len({uid for uid, _, _ in result.values()}) != len(result):
+        raise ValueError("reviewed service UIDs are not distinct")
+
+    supplemental_members = {
+        "uap-observer-adapter-config": {
+            "uap-observer-codex", "uap-observer-cursor",
+            "uap-observer-kiro", "uap-observer-control",
+        },
+        "uap-observer-signer-ipc": {"uap-observer"},
+        "uap-observer-runner-ipc": {"uap-observer"},
+    }
+    for name, expected in supplemental_members.items():
+        if set(groups[name].gr_mem) != expected:
+            raise ValueError("reviewed supplemental group membership differs")
+    return result
+
+
+def validate_adapter_input_access(
+    config_path: Path, *, protected_root: Path = Path("/opt/uap-observer-inputs"),
+    identities: dict[str, tuple[int, int, frozenset[int]]] | None = None,
+) -> tuple[Path, ...]:
+    """Validate immutable inputs and prove each adapter identity can access them."""
+    identities = identities or reviewed_service_identities()
+    adapters = {name: identities[name] for name in ("codex", "cursor", "kiro", "control")}
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config_gid = grp.getgrnam("uap-observer-adapter-config").gr_gid
+    expected_files = {
+        Path(config["git"]["binary"]): config["git"]["sha256"],
+        **{Path(item["binary"]): item["sha256"] for item in config["clients"].values()},
+        Path(config["chatgpt"]["app_binding_path"]): config["chatgpt"]["app_binding_sha256"],
+        Path(config["chatgpt"]["projection_receipt_path"]): config["chatgpt"]["projection_receipt_sha256"],
+        Path(config["external_pr_evidence"]["path"]): config["external_pr_evidence"]["sha256"],
+    }
+    literal = (
+        {protected_root / "bin" / name for name in ("git", "codex", "cursor", "kiro")}
+        | {protected_root / "chatgpt" / name for name in ("app-binding.json", "projection-receipt.json")}
+        | {protected_root / "external-pr-evidence.json"}
+    )
+    if set(expected_files) != literal:
+        raise ValueError("protected input paths differ")
+    expected_dirs = {protected_root, protected_root / "bin", protected_root / "chatgpt"}
+    actual = set(protected_root.rglob("*")) | {protected_root}
+    if actual != expected_dirs | literal:
+        raise ValueError("protected input tree contains an unexpected path")
+
+    def permits(info: os.stat_result, uid: int, gids: frozenset[int], permission: int) -> bool:
+        shift = 6 if uid == info.st_uid else 3 if info.st_gid in gids else 0
+        return bool((stat.S_IMODE(info.st_mode) >> shift) & permission)
+
+    for directory in expected_dirs:
+        if directory.resolve(strict=True) != directory:
+            raise ValueError("protected input path traverses a symlink")
+        info = os.lstat(directory)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("protected input directory is not root-controlled")
+        if any(not permits(info, uid, gids, 0o1) for uid, _, gids in adapters.values()):
+            raise ValueError("protected input directory is not accessible to every adapter identity")
+    for path, digest in expected_files.items():
+        if path.resolve(strict=True) != path:
+            raise ValueError("protected input path traverses a symlink")
+        info = os.lstat(path)
+        executable = path.parent == protected_root / "bin"
+        expected_mode = 0o755 if executable else 0o640
+        if (
+            not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != expected_mode
+            or (not executable and info.st_gid != config_gid)
+        ):
+            raise ValueError("protected input metadata differs")
+        permission = 0o5 if executable else 0o4
+        if any(not permits(info, uid, gids, permission) for uid, _, gids in adapters.values()):
+            raise ValueError("protected input is not accessible to every adapter identity")
+        actual_digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_digest != digest:
+            raise ValueError("protected input digest differs")
+    return tuple(sorted(expected_files))
+
 
 def canonical_json(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -269,28 +404,19 @@ class ReviewedRunner:
         self.protected = protected
         self._owner_uid = 0 if protected else os.geteuid()
         if protected:
+            service_identities = reviewed_service_identities()
             self._identities = {}
             self._config_gid = grp.getgrnam("uap-observer-adapter-config").gr_gid
             for identity in ("codex", "cursor", "kiro", "control"):
-                account = pwd.getpwnam(f"uap-observer-{identity}")
-                group = grp.getgrnam(f"uap-observer-{identity}")
+                uid, gid, _ = service_identities[identity]
                 expected_home = f"/var/empty/uap-observer-{identity}"
-                if (
-                    account.pw_uid == 0 or account.pw_gid != group.gr_gid
-                    or account.pw_dir != expected_home
-                    or account.pw_shell not in {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false"}
-                ):
-                    raise ValueError("reviewed adapter execution identity differs")
                 home = os.stat(expected_home, follow_symlinks=False)
                 if (
-                    not stat.S_ISDIR(home.st_mode) or home.st_uid != account.pw_uid
-                    or home.st_gid != account.pw_gid or stat.S_IMODE(home.st_mode) != 0o700
-                    or set(os.getgrouplist(account.pw_name, account.pw_gid)) != {account.pw_gid, self._config_gid}
+                    not stat.S_ISDIR(home.st_mode) or home.st_uid != uid
+                    or home.st_gid != gid or stat.S_IMODE(home.st_mode) != 0o700
                 ):
                     raise ValueError("reviewed adapter home or groups differ")
-                self._identities[identity] = (account.pw_uid, account.pw_gid)
-            if len({uid for uid, _ in self._identities.values()}) != 4 or len({gid for _, gid in self._identities.values()}) != 4:
-                raise ValueError("reviewed adapter execution identities are not distinct")
+                self._identities[identity] = (uid, gid)
         else:
             self._identities = {identity: (os.geteuid(), os.getegid()) for identity in ("codex", "cursor", "kiro", "control")}
             self._config_gid = os.getegid()

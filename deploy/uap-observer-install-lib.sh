@@ -137,6 +137,10 @@ observer_validate_completed_closure() {
   expected_install_identity=$3
   expected_owner=${4:-0:0}
   systemd_root=${5:-/etc/systemd/system}
+  config_gid=${6:-$(getent group uap-observer-adapter-config | cut -d: -f3)}
+  caddy_gid=${7:-$(getent group caddy | cut -d: -f3)}
+  test -n "$config_gid"
+  test -n "$caddy_gid"
   test -d "$closures_root"
   test ! -L "$closures_root"
   test "$(stat -c '%u:%g:%a' "$closures_root")" = "$expected_owner:755"
@@ -163,6 +167,8 @@ observer_validate_completed_closure() {
   test "$(cat "$closure/.install-identity")" = "$expected_install_identity"
   actual_identity=$(observer_closure_identity "$closure")
   test "$actual_identity" = "$digest"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$config_gid:640:1"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/Caddyfile")" = "0:$caddy_gid:640:1"
   test -d "$systemd_root"
   test ! -L "$systemd_root"
   test "$(stat -c '%u:%g:%a' "$systemd_root")" = "$expected_owner:755"
@@ -194,29 +200,16 @@ observer_validate_completed_closure() {
 }
 
 observer_validate_installed_accounts_and_state() {
-  python3 - <<'PY'
+  observer_runtime=${1:-/opt/uap-observer-current/runtime}
+  PYTHONPATH="$observer_runtime" python3 - <<'PY'
 import grp,os,pwd,stat
 from pathlib import Path
+from observer.fixed_runner import reviewed_service_identities
 
-def account(name, group, home, supplemental):
-    user=pwd.getpwnam(name); primary=grp.getgrnam(group)
-    if user.pw_uid == 0 or user.pw_gid != primary.gr_gid or user.pw_dir != home:
-        raise SystemExit(f"installed account {name} differs")
-    if user.pw_shell not in ("/usr/sbin/nologin","/sbin/nologin","/bin/false"):
-        raise SystemExit(f"installed account {name} has a login shell")
-    actual={group_name for group_name in os.getgrouplist(name,user.pw_gid) for group_name in (grp.getgrgid(group_name).gr_name,)}
-    if actual != {group,*supplemental}: raise SystemExit(f"installed account {name} groups differ")
-    return user
-
-identities=[]
-for suffix in ("codex","cursor","kiro","control"):
-    name=f"uap-observer-{suffix}"
-    user=account(name,name,f"/var/empty/{name}",{"uap-observer-adapter-config"})
-    identities.append((user.pw_uid,user.pw_gid))
-if len({uid for uid,_ in identities}) != 4 or len({gid for _,gid in identities}) != 4:
-    raise SystemExit("adapter account identities are not distinct")
-observer=account("uap-observer","uap-observer","/nonexistent",{"uap-observer-signer-ipc","uap-observer-runner-ipc"})
-caddy=account("caddy","caddy","/var/lib/caddy",set())
+services=reviewed_service_identities()
+identities=[services[name][:2] for name in ("codex","cursor","kiro","control")]
+observer_uid,observer_gid,_=services["observer"]
+caddy_uid,caddy_gid,_=services["caddy"]
 
 def directory(path,uid,gid,mode):
     info=os.lstat(path)
@@ -227,7 +220,7 @@ directory("/var/empty",0,0,0o755)
 for suffix,(uid,gid) in zip(("codex","cursor","kiro","control"),identities):
     directory(f"/var/empty/uap-observer-{suffix}",uid,gid,0o700)
 directory("/var/lib/uap-observer",0,0,0o711)
-directory("/var/lib/uap-observer/state",observer.pw_uid,observer.pw_gid,0o700)
+directory("/var/lib/uap-observer/state",observer_uid,observer_gid,0o700)
 for name in ("jobs","workspaces","profiles"): directory(f"/var/lib/uap-observer/{name}",0,0,0o711)
 for suffix,(uid,gid) in zip(("codex","cursor","kiro"),identities):
     directory(f"/var/lib/uap-observer/profiles/{suffix}",uid,gid,0o700)
@@ -239,44 +232,20 @@ config_gid=grp.getgrnam("uap-observer-adapter-config").gr_gid
 directory("/var/lib/uap-observer-consent",0,0,0o755)
 directory("/var/lib/uap-observer-consent/pending",0,config_gid,0o750)
 for name in ("consumed","reserved"): directory(f"/var/lib/uap-observer-consent/{name}",0,0,0o700)
-directory("/var/lib/caddy",caddy.pw_uid,caddy.pw_gid,0o700)
-directory("/var/log/caddy",caddy.pw_uid,caddy.pw_gid,0o700)
+directory("/var/lib/caddy",caddy_uid,caddy_gid,0o700)
+directory("/var/log/caddy",caddy_uid,caddy_gid,0o700)
 PY
 }
 
 observer_validate_protected_inputs() {
   closure=$1
-  python3 - "$closure/etc/uap-observer-adapter-config.json" <<'PY'
-import grp,hashlib,json,os,stat,sys
+  observer_runtime=${2:-$closure/runtime}
+  protected_root=${3:-/opt/uap-observer-inputs}
+  PYTHONPATH="$observer_runtime" python3 - "$closure/etc/uap-observer-adapter-config.json" "$protected_root" <<'PY'
+import sys
 from pathlib import Path
-config=json.load(open(sys.argv[1],encoding="utf-8"))
-root=Path("/opt/uap-observer-inputs")
-config_gid=grp.getgrnam("uap-observer-adapter-config").gr_gid
-expected_files={
-    Path(config["git"]["binary"]):config["git"]["sha256"],
-    **{Path(item["binary"]):item["sha256"] for item in config["clients"].values()},
-    Path(config["chatgpt"]["app_binding_path"]):config["chatgpt"]["app_binding_sha256"],
-    Path(config["chatgpt"]["projection_receipt_path"]):config["chatgpt"]["projection_receipt_sha256"],
-    Path(config["external_pr_evidence"]["path"]):config["external_pr_evidence"]["sha256"],
-}
-
-literal={root/"bin"/name for name in ("git","codex","cursor","kiro")}|{root/"chatgpt"/name for name in ("app-binding.json","projection-receipt.json")}|{root/"external-pr-evidence.json"}
-if set(expected_files) != literal: raise SystemExit("protected input paths differ")
-expected_dirs={root,root/"bin",root/"chatgpt"}
-actual=set(root.rglob("*"))|{root}
-if actual != expected_dirs|literal: raise SystemExit("protected input tree contains an unexpected path")
-for directory in expected_dirs:
-    info=os.lstat(directory)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-        raise SystemExit("protected input directory is not root-controlled")
-for path,digest in expected_files.items():
-    info=os.lstat(path)
-    expected_mode=0o755 if path.parent == root/"bin" else 0o640
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != expected_mode:
-        raise SystemExit("protected input metadata differs")
-    if expected_mode == 0o640 and info.st_gid != config_gid: raise SystemExit("protected evidence group differs")
-    actual_digest="sha256:"+hashlib.sha256(path.read_bytes()).hexdigest()
-    if actual_digest != digest: raise SystemExit("protected input digest differs")
+from observer.fixed_runner import validate_adapter_input_access
+validate_adapter_input_access(Path(sys.argv[1]),protected_root=Path(sys.argv[2]))
 PY
 }
 
@@ -341,17 +310,22 @@ PY
 
 apply_observer_closure_modes() {
   closure=$1
+  config_group=${2:-uap-observer-adapter-config}
+  caddy_group=${3:-caddy}
   chown -R root "$closure"
   find "$closure" -type d -exec chmod 0755 {} +
   find "$closure" -type f -perm /0111 -exec chmod 0755 {} +
   find "$closure" -type f ! -perm /0111 -exec chmod 0644 {} +
   chmod 0640 "$closure/etc/uap-observer-adapter-config.json" "$closure/etc/Caddyfile"
+  chown "root:$config_group" "$closure/etc/uap-observer-adapter-config.json"
+  chown "root:$caddy_group" "$closure/etc/Caddyfile"
   chmod 0755 "$closure/libexec/uap-observer-runner" "$closure/libexec/uap-observer-fixed-adapter"
   for name in runtime notion chatgpt consent; do
     chmod 0755 "$closure/libexec/uap-observer-adapter-$name"
   done
   test "$(stat -c '%u:%g:%a' "$closure/etc/uap-observer.json")" = '0:0:644'
-  test "$(stat -c '%u:%a' "$closure/etc/uap-observer-adapter-config.json")" = '0:640'
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$(getent group "$config_group" | cut -d: -f3):640:1"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/Caddyfile")" = "0:$(getent group "$caddy_group" | cut -d: -f3):640:1"
   test "$(stat -c '%u:%g:%a' "$closure/etc/uap-observer-adapters.json")" = '0:0:644'
   test "$(stat -c '%u:%g:%a' "$closure/libexec/uap-observer-runner")" = '0:0:755'
   test -z "$(find "$closure" \( -type d -o -type f \) -perm /0022 -print -quit)"
@@ -424,9 +398,9 @@ restore_observer_systemd() {
   systemd_root=$2
   while read -r state index relative; do
     target="$systemd_root/$relative"
-    rm -rf "$target"
+    rm -rf "$target" || return 1
     if [ "$state" = present ]; then
-      cp -a "$backup/items/$index" "$target"
+      cp -a "$backup/items/$index" "$target" || return 1
     fi
   done < "$backup/manifest"
 }
@@ -468,15 +442,15 @@ recover_observer_install() {
       test -L "$current_pointer"
       test "$(readlink "$current_pointer")" = "uap-observer-closures/$recovered_digest"
     else
-      restore_observer_systemd "$stage/systemd-backup" "$systemd_root"
-      observer_sync_tree "$systemd_root"
-      "$manager" daemon-reload
+      restore_observer_systemd "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_sync_tree "$systemd_root" || return 1
+      "$manager" daemon-reload || return 1
       candidate="$closures_root/$recovered_digest"
-      if [ -e "$candidate" ] || [ -L "$candidate" ]; then rm -rf -- "$candidate"; fi
-      observer_sync_tree "$closures_root"
+      if [ -e "$candidate" ] || [ -L "$candidate" ]; then rm -rf -- "$candidate" || return 1; fi
+      observer_sync_tree "$closures_root" || return 1
     fi
   fi
-  "$cleanup_partials"
+  "$cleanup_partials" || return 1
 }
 
 observer_install_failpoint() {

@@ -6,6 +6,7 @@ import http.client
 import importlib.util
 import json
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -869,6 +871,10 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         install_identity = "a" * 64
         (staged / ".install-identity").write_text(install_identity + "\n")
         (staged / "payload").write_text("reviewed closure\n")
+        etc = staged / "etc"
+        etc.mkdir()
+        (etc / "uap-observer-adapter-config.json").write_text("{}\n")
+        (etc / "Caddyfile").write_text("{}\n")
         libexec = staged / "libexec"
         libexec.mkdir()
         fixed_adapter = libexec / "uap-observer-fixed-adapter"
@@ -887,6 +893,8 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             (dropin / "egress.conf").write_text(f"reviewed {service} egress\n")
         for path in (staged / ".complete", staged / ".install-identity", staged / "payload"):
             path.chmod(0o644)
+        for path in (etc / "uap-observer-adapter-config.json", etc / "Caddyfile"):
+            path.chmod(0o640)
         identity = subprocess.check_output(
             ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"', "sh", str(helper), str(staged)],
             text=True,
@@ -906,12 +914,17 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         current.symlink_to(f"uap-observer-closures/{identity}")
         return closure, current, install_identity, f"{os.getuid()}:{os.getgid()}"
 
-    def _validate_completed_closure(self, root: Path, identity: str, owner: str) -> subprocess.CompletedProcess[str]:
+    def _validate_completed_closure(
+        self, root: Path, identity: str, owner: str, *,
+        config_gid: int | None = None, caddy_gid: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
-        script = 'set -eu; . "$1"; observer_validate_completed_closure "$2" "$3" "$4" "$5" "$6"'
+        script = 'set -eu; . "$1"; observer_validate_completed_closure "$2" "$3" "$4" "$5" "$6" "$7" "$8"'
         return subprocess.run(
             ["/bin/sh", "-c", script, "sh", str(helper), str(root / "uap-observer-closures"),
-             str(root / "uap-observer-current"), identity, owner, str(root / "systemd")],
+             str(root / "uap-observer-current"), identity, owner, str(root / "systemd"),
+             str(os.getgid() if config_gid is None else config_gid),
+             str(os.getgid() if caddy_gid is None else caddy_gid)],
             text=True, capture_output=True,
         )
 
@@ -963,6 +976,24 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             wrong_owner = f"{os.getuid() + 1}:{os.getgid()}"
             result = self._validate_completed_closure(root, install_identity, wrong_owner)
             self.assertNotEqual(result.returncode, 0)
+
+    def test_completed_closure_binds_configuration_metadata_to_current_groups(self) -> None:
+        for name, kwargs in (
+            ("adapter config GID drift", {"config_gid": os.getgid() + 1}),
+            ("Caddyfile GID drift", {"caddy_gid": os.getgid() + 1}),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, _, install_identity, owner = self._completed_closure_fixture(root)
+                result = self._validate_completed_closure(root, install_identity, owner, **kwargs)
+                self.assertNotEqual(result.returncode, 0)
+        for relative in ("etc/uap-observer-adapter-config.json", "etc/Caddyfile"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                closure, _, install_identity, owner = self._completed_closure_fixture(root)
+                os.link(closure / relative, root / "external-link")
+                result = self._validate_completed_closure(root, install_identity, owner)
+                self.assertNotEqual(result.returncode, 0)
 
     @staticmethod
     def _replace_adapter_with_copy(closure: Path) -> None:
@@ -1025,6 +1056,72 @@ recover_observer_install "$2" "$4" "$5" "$6" "$7" cleanup_fixture
             self.assertFalse(stage.exists())
             self.assertFalse(staged_partial.exists())
             self.assertFalse(published.exists())
+
+    def test_production_entry_recovers_current_present_before_argument_expansion(self) -> None:
+        if os.geteuid() != 0:
+            self.skipTest("production installer entry requires root")
+        repository = Path(__file__).parents[2]
+        source_installer = (repository / "deploy/uap-observer-install.sh").read_text()
+        source_helper = (repository / "deploy/uap-observer-install-lib.sh").read_text()
+        for valid in (True, False):
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                replacements = {
+                    "/opt/": f"{root}/opt/", "/usr/local/": f"{root}/usr/local/",
+                    "/etc/": f"{root}/etc/", "/run/": f"{root}/run/",
+                    "/var/": f"{root}/var/",
+                }
+                helper_text = source_helper
+                installer_text = source_installer
+                for old, new in replacements.items():
+                    helper_text = helper_text.replace(old, new)
+                    installer_text = installer_text.replace(old, new)
+                helper = root / "uap-observer-install-lib.sh"
+                installer = root / "uap-observer-install.sh"
+                helper.write_text(helper_text)
+                helper_digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+                installer_text = re.sub(
+                    r'test "\$\(sha256sum "\$install_lib" \| cut -d\' \' -f1\)" = [0-9a-f]{64}',
+                    f'test "$(sha256sum "$install_lib" | cut -d\' \' -f1)" = {helper_digest}',
+                    installer_text,
+                )
+                installer.write_text(installer_text)
+                installer.chmod(0o755)
+                stage = root / "opt/uap-observer-source.new"
+                closures = root / "opt/uap-observer-closures"
+                systemd = root / "etc/systemd/system"
+                stage.mkdir(parents=True, mode=0o700)
+                closures.mkdir(parents=True)
+                systemd.mkdir(parents=True)
+                if valid:
+                    backup = stage / "systemd-backup"
+                    subprocess.run(
+                        ["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                         "sh", str(helper), str(backup), str(systemd)], check=True,
+                    )
+                    digest = "a" * 64
+                    (stage / "rollback-required").write_text("rollback-required\n")
+                    (stage / "closure-digest").write_text(digest + "\n")
+                    (stage / "rollback-required").chmod(0o600)
+                    (stage / "closure-digest").chmod(0o600)
+                    current = root / "opt/uap-observer-current"
+                    current.symlink_to(f"uap-observer-closures/{digest}")
+                else:
+                    (stage / "rollback-required").write_text("invalid\n")
+                    (stage / "rollback-required").chmod(0o600)
+                    current = root / "opt/uap-observer-current"
+                    current.symlink_to("uap-observer-closures/" + "b" * 64)
+                result = subprocess.run(
+                    [str(installer)], text=True, capture_output=True,
+                    env={**os.environ, "PATH": "/usr/bin:/bin"},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                if valid:
+                    self.assertFalse(stage.exists())
+                    self.assertIn("usage: uap-observer-install.sh", result.stderr)
+                else:
+                    self.assertTrue(stage.exists())
+                    self.assertNotIn("usage: uap-observer-install.sh", result.stderr)
 
     def test_every_installer_new_path_is_in_shared_partial_inventory(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
@@ -1131,7 +1228,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             for name in ("uap-observer.json", "uap-observer-adapter-config.json", "uap-observer-adapters.json", "Caddyfile"):
                 (closure / "etc" / name).write_text("{}")
             helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
-            subprocess.run(["/bin/sh", "-c", '. "$1"; apply_observer_closure_modes "$2"', "sh", str(helper), str(closure)], check=True)
+            subprocess.run(["/bin/sh", "-c", '. "$1"; apply_observer_closure_modes "$2" "$3" "$3"', "sh", str(helper), str(closure), str(os.getgid())], check=True)
             digest = "sha256:" + hashlib.sha256(runner.read_bytes()).hexdigest()
             SocketRunner(Path(temporary) / "unused.sock", runner, digest, 840)
             fixed_runner.read_owned_regular(closure / "etc/uap-observer.json", 1024, owner_uid=0, exact_mode=0o644, group_gid=0)
@@ -1180,6 +1277,54 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                 environment = dict(os.environ, UAP_OBSERVER_INSTALL_FAIL_AT=str(failure))
                 subprocess.run(["/bin/sh", "-c", script, "sh", str(helper), str(backup), str(systemd_root), str(staged), str(manager)], env=environment, check=True)
                 self.assertEqual(snapshot(systemd_root), before)
+
+    def test_every_restore_removal_and_copy_failure_retains_recovery_journal(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        units = (
+            "uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
+            "uap-observer-runner.socket", "uap-observer-caddy.service",
+            "uap-observer.service.d", "uap-observer-runner.service.d",
+        )
+        for failure in range(1, 15):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                stage, closures, systemd = root / "stage", root / "closures", root / "systemd"
+                stage.mkdir(mode=0o700); closures.mkdir(); systemd.mkdir()
+                for name in units:
+                    path = systemd / name
+                    if name.endswith(".d"):
+                        path.mkdir(); (path / "old.conf").write_text("old\n")
+                    else:
+                        path.write_text("old\n")
+                subprocess.run(
+                    ["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                     "sh", str(helper), str(stage / "systemd-backup"), str(systemd)], check=True,
+                )
+                digest = "c" * 64
+                (stage / "rollback-required").write_text("rollback-required\n")
+                (stage / "closure-digest").write_text(digest + "\n")
+                (stage / "rollback-required").chmod(0o600)
+                (stage / "closure-digest").chmod(0o600)
+                (closures / digest).mkdir()
+                script = r'''set -u
+. "$1"
+operation=0
+fail_at=$7
+rm() { operation=$((operation + 1)); test "$operation" -ne "$fail_at" || return 71; command rm "$@"; }
+cp() { operation=$((operation + 1)); test "$operation" -ne "$fail_at" || return 72; command cp "$@"; }
+cleanup_fixture() { command rm -rf "$2"; }
+if recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture; then exit 99; fi
+exit 0
+'''
+                result = subprocess.run(
+                    ["/bin/sh", "-c", script, "sh", str(helper), str(stage), str(closures),
+                     str(root / "current"), str(systemd), "/bin/true", str(failure)],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(stage.is_dir())
+                self.assertTrue((stage / "rollback-required").is_file())
+                self.assertTrue((stage / "systemd-backup/manifest").is_file())
 
     def test_cgroup_v2_path_stays_beneath_mount_and_kills_descendants_after_leader_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1268,6 +1413,145 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
         self.assertEqual(fixed_runner.ARTIFACT_IDENTITIES["notion-oauth-attestations.json"], ("codex", "cursor", "kiro"))
         self.assertEqual(fixed_runner.ARTIFACT_IDENTITIES["chatgpt-cloudflare-attestation.json"], ("control",))
         self.assertEqual(len({identity for values in fixed_runner.ARTIFACT_IDENTITIES.values() for identity in values}), 4)
+
+    def test_service_accounts_reject_all_uid_and_group_aliases(self) -> None:
+        role_values = list(fixed_runner.SERVICE_ROLES.values())
+        group_names = sorted({name for _, primary, _, supplemental in role_values for name in (primary, *supplemental)})
+        group_ids = {name: 2000 + index for index, name in enumerate(group_names)}
+        supplemental_members = {
+            "uap-observer-adapter-config": [
+                "uap-observer-codex", "uap-observer-cursor",
+                "uap-observer-kiro", "uap-observer-control",
+            ],
+            "uap-observer-signer-ipc": ["uap-observer"],
+            "uap-observer-runner-ipc": ["uap-observer"],
+        }
+        groups = {
+            name: fixed_runner.grp.struct_group((name, "x", gid, supplemental_members.get(name, [])))
+            for name, gid in group_ids.items()
+        }
+        users = {}
+        memberships = {}
+        for index, (_, (name, primary, home, supplemental)) in enumerate(fixed_runner.SERVICE_ROLES.items()):
+            user = fixed_runner.pwd.struct_passwd((
+                name, "x", 1000 + index, group_ids[primary], "", home, "/usr/sbin/nologin",
+            ))
+            users[name] = user
+            memberships[name] = [group_ids[item] for item in (primary, *supplemental)]
+
+        def validate(user_values=None, group_values=None) -> None:  # type: ignore[no-untyped-def]
+            user_values = list(users.values()) if user_values is None else user_values
+            group_values = list(groups.values()) if group_values is None else group_values
+            by_uid = {item.pw_uid: item for item in users.values()}
+            by_gid = {item.gr_gid: item for item in groups.values()}
+            with (
+                mock.patch.object(fixed_runner.pwd, "getpwnam", side_effect=users.__getitem__),
+                mock.patch.object(fixed_runner.pwd, "getpwuid", side_effect=by_uid.__getitem__),
+                mock.patch.object(fixed_runner.pwd, "getpwall", return_value=user_values),
+                mock.patch.object(fixed_runner.grp, "getgrnam", side_effect=groups.__getitem__),
+                mock.patch.object(fixed_runner.grp, "getgrgid", side_effect=by_gid.__getitem__),
+                mock.patch.object(fixed_runner.grp, "getgrall", return_value=group_values),
+                mock.patch.object(fixed_runner.os, "getgrouplist", side_effect=lambda name, _gid: memberships[name]),
+            ):
+                fixed_runner.reviewed_service_identities()
+
+        validate()
+        caddy = users["caddy"]
+        observer = users["uap-observer"]
+        shared_caddy = fixed_runner.pwd.struct_passwd((
+            caddy.pw_name, caddy.pw_passwd, observer.pw_uid, caddy.pw_gid,
+            caddy.pw_gecos, caddy.pw_dir, caddy.pw_shell,
+        ))
+        users["caddy"] = shared_caddy
+        with self.assertRaisesRegex(ValueError, "alias|distinct|canonical"):
+            validate()
+        users["caddy"] = caddy
+        alias = fixed_runner.pwd.struct_passwd((
+            "unrelated-alias", "x", users["uap-observer-codex"].pw_uid,
+            65500, "", "/nonexistent", "/bin/false",
+        ))
+        with self.assertRaisesRegex(ValueError, "alias"):
+            validate(user_values=[*users.values(), alias])
+        canonical_group = groups["uap-observer-codex"]
+        group_alias = fixed_runner.grp.struct_group((
+            "unrelated-group-alias", "x", canonical_group.gr_gid, [],
+        ))
+        with self.assertRaisesRegex(ValueError, "alias"):
+            validate(group_values=[*groups.values(), group_alias])
+        config_group = groups["uap-observer-adapter-config"]
+        groups["uap-observer-adapter-config"] = fixed_runner.grp.struct_group((
+            config_group.gr_name, config_group.gr_passwd, config_group.gr_gid,
+            [*config_group.gr_mem, "unrelated-user"],
+        ))
+        with self.assertRaisesRegex(ValueError, "membership"):
+            validate()
+
+    def test_adapter_input_access_is_checked_for_every_identity_on_reinstall(self) -> None:
+        if os.geteuid() != 0:
+            self.skipTest("root ownership fixture requires root")
+        with tempfile.TemporaryDirectory() as temporary:
+            protected = Path(temporary) / "uap-observer-inputs"
+            (protected / "bin").mkdir(parents=True)
+            (protected / "chatgpt").mkdir()
+            files = {
+                protected / "bin/git": b"git",
+                protected / "bin/codex": b"codex",
+                protected / "bin/cursor": b"cursor",
+                protected / "bin/kiro": b"kiro",
+                protected / "chatgpt/app-binding.json": b"app",
+                protected / "chatgpt/projection-receipt.json": b"receipt",
+                protected / "external-pr-evidence.json": b"evidence",
+            }
+            for path, payload in files.items():
+                path.write_bytes(payload)
+                path.chmod(0o755 if path.parent == protected / "bin" else 0o640)
+                os.chown(path, 0, 0)
+            for directory in (protected, protected / "bin", protected / "chatgpt"):
+                directory.chmod(0o755)
+                os.chown(directory, 0, 0)
+            digest = lambda path: "sha256:" + hashlib.sha256(files[path]).hexdigest()
+            config = Path(temporary) / "config.json"
+            config.write_text(json.dumps({
+                "git": {"binary": str(protected / "bin/git"), "sha256": digest(protected / "bin/git")},
+                "clients": {
+                    name: {"binary": str(protected / f"bin/{name}"), "sha256": digest(protected / f"bin/{name}")}
+                    for name in ("codex", "cursor", "kiro")
+                },
+                "chatgpt": {
+                    "app_binding_path": str(protected / "chatgpt/app-binding.json"),
+                    "app_binding_sha256": digest(protected / "chatgpt/app-binding.json"),
+                    "projection_receipt_path": str(protected / "chatgpt/projection-receipt.json"),
+                    "projection_receipt_sha256": digest(protected / "chatgpt/projection-receipt.json"),
+                },
+                "external_pr_evidence": {
+                    "path": str(protected / "external-pr-evidence.json"),
+                    "sha256": digest(protected / "external-pr-evidence.json"),
+                },
+            }))
+            identities = {
+                name: (3000 + index, 4000 + index, frozenset({0, 4000 + index}))
+                for index, name in enumerate(("codex", "cursor", "kiro", "control"))
+            }
+            config_group = fixed_runner.grp.struct_group(("uap-observer-adapter-config", "x", 0, []))
+            with mock.patch.object(fixed_runner.grp, "getgrnam", return_value=config_group):
+                self.assertEqual(len(fixed_runner.validate_adapter_input_access(
+                    config, protected_root=protected, identities=identities,
+                )), 7)
+                protected.chmod(0o700)
+                with self.assertRaisesRegex(ValueError, "every adapter identity"):
+                    fixed_runner.validate_adapter_input_access(
+                        config, protected_root=protected, identities=identities,
+                    )
+                protected.chmod(0o750)
+                for excluded in identities:
+                    with self.subTest(excluded=excluded):
+                        adversarial = dict(identities)
+                        uid, gid, _ = adversarial[excluded]
+                        adversarial[excluded] = (uid, gid, frozenset({gid}))
+                        with self.assertRaisesRegex(ValueError, "every adapter identity"):
+                            fixed_runner.validate_adapter_input_access(
+                                config, protected_root=protected, identities=adversarial,
+                            )
 
     def test_fixed_runner_socket_executes_only_injected_reviewed_adapters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

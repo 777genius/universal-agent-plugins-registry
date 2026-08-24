@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 5f48bda0a127dd37790192d5597055cc25105298f5d1c8bedf3246c7e805bf23
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 4ad999df2e3eb6446bd45cfd4615a0aef57bc89ad97b1370ba8f1ed3d89c898d
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=e9ed2c4b131c8a8f8c120b7c2c6ed37b058a6ce78858c1f59c2f3add0f7feec5
+runtime_manifest_digest=b2fc820cb0e77ca4d1d90b27da81e98951d0ec255df2016c0bcc4684f6c333a6
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -29,9 +29,7 @@ flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
 # Recovery is deliberately before even requiring, opening, hashing, or
 # otherwise validating caller-controlled arguments.  A retry after power loss
 # must be able to restore the fixed system state with every input unavailable.
-if [ ! -e /opt/uap-observer-current ] && [ ! -L /opt/uap-observer-current ]; then
-  recover_observer_install "$stage_root" /opt/uap-observer-closures /opt/uap-observer-current /etc/systemd/system systemctl
-fi
+recover_observer_install "$stage_root" /opt/uap-observer-closures /opt/uap-observer-current /etc/systemd/system systemctl
 
 untrusted_source_root=${1:-/opt/uap-observer}
 untrusted_adapter_config=${2:?$usage}
@@ -54,7 +52,7 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" \
-    46c161d23bdf457a9cd08be7a088e9ed8431dae2a84a2d5e84765b0aa6d6360b \
+    cb2d9c4ba3baabc61d3e98d36d432f6b07316b51f05a3b643b28e5c676596213 \
     977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state
@@ -122,7 +120,7 @@ caddy_binary=$stage_root/caddy
 caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
-runner_digest=46c161d23bdf457a9cd08be7a088e9ed8431dae2a84a2d5e84765b0aa6d6360b
+runner_digest=cb2d9c4ba3baabc61d3e98d36d432f6b07316b51f05a3b643b28e5c676596213
 adapter_digest=977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
@@ -156,6 +154,7 @@ getent group caddy >/dev/null || groupadd --system caddy
 id caddy >/dev/null 2>&1 || useradd --system --gid caddy --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy
 id uap-observer >/dev/null 2>&1 || useradd --system --gid uap-observer --home-dir /nonexistent --shell /usr/sbin/nologin uap-observer
 usermod -a -G uap-observer-signer-ipc,uap-observer-runner-ipc uap-observer
+PYTHONPATH="$source_root" python3 -c 'from observer.fixed_runner import reviewed_service_identities; reviewed_service_identities()'
 
 identity_uids=
 identity_gids=
@@ -200,6 +199,7 @@ install -d -o root -g uap-observer-adapter-config -m 0750 /var/lib/uap-observer-
 install -d -o root -g root -m 0700 /var/lib/uap-observer-consent/consumed
 install -d -o root -g root -m 0700 /var/lib/uap-observer-consent/reserved
 install -d -o caddy -g caddy -m 0700 /var/lib/caddy /var/log/caddy
+observer_validate_installed_accounts_and_state "$source_root"
 
 test ! -e /opt/uap-observer-venv.new
 python3 -m venv /opt/uap-observer-venv.new
@@ -294,35 +294,11 @@ for service in uap-observer uap-observer-runner; do
     if [ "$service" = uap-observer ]; then printf '%s\n' 'IPAddressAllow=127.0.0.0/8 ::1/128'; fi
     while read -r address; do printf 'IPAddressAllow=%s\n' "$address"; done < "$stage_root/egress-addresses"
     if [ "$service" = uap-observer-runner ]; then
-      python3 - "$adapter_config" <<'PY'
-import grp,hashlib,json,os,stat,sys
+      PYTHONPATH="$source_root" python3 - "$adapter_config" <<'PY'
+import sys
 from pathlib import Path
-value=json.load(open(sys.argv[1], encoding="utf-8"))
-expected=["/opt/uap-observer-inputs/bin/git","/opt/uap-observer-inputs/bin/codex","/opt/uap-observer-inputs/bin/cursor","/opt/uap-observer-inputs/bin/kiro","/opt/uap-observer-inputs/chatgpt/app-binding.json","/opt/uap-observer-inputs/chatgpt/projection-receipt.json","/opt/uap-observer-inputs/external-pr-evidence.json"]
-config_gid=grp.getgrnam("uap-observer-adapter-config").gr_gid
-paths=[value["git"]["binary"], *(item["binary"] for item in value["clients"].values()), value["chatgpt"]["app_binding_path"], value["chatgpt"]["projection_receipt_path"], value["external_pr_evidence"]["path"]]
-if sorted(set(paths)) != sorted(expected): raise SystemExit("adapter bind paths differ from literal dedicated allowlist")
-if any(value["clients"][client]["binary"] != f"/opt/uap-observer-inputs/bin/{client}" for client in ("codex","cursor","kiro")): raise SystemExit("adapter client binary differs from its literal dedicated path")
-digests={value["git"]["binary"]:value["git"]["sha256"], **{item["binary"]:item["sha256"] for item in value["clients"].values()}, value["chatgpt"]["app_binding_path"]:value["chatgpt"]["app_binding_sha256"], value["chatgpt"]["projection_receipt_path"]:value["chatgpt"]["projection_receipt_sha256"], value["external_pr_evidence"]["path"]:value["external_pr_evidence"]["sha256"]}
-for path in sorted(set(paths)):
-    candidate=Path(path)
-    if candidate.resolve(strict=True) != candidate: raise SystemExit("adapter input path traverses a symlink")
-    dedicated=Path("/opt/uap-observer-inputs")
-    if dedicated not in candidate.parents: raise SystemExit("adapter input escaped its dedicated root")
-    for parent in (dedicated, *[item for item in candidate.parents if dedicated in item.parents]):
-        parent_info=os.lstat(parent)
-        if not stat.S_ISDIR(parent_info.st_mode) or parent_info.st_uid != 0 or parent_info.st_mode & 0o022:
-            raise SystemExit("adapter input parent is not root-controlled")
-        if not parent_info.st_mode & stat.S_IXOTH and not (parent_info.st_gid == config_gid and parent_info.st_mode & stat.S_IXGRP):
-            raise SystemExit("adapter input parent is not accessible to the reviewed identities")
-    info=os.lstat(path)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_nlink != 1:
-        raise SystemExit("adapter input is not an immutable root-owned regular file")
-    expected_mode=0o755 if candidate.parent == Path("/opt/uap-observer-inputs/bin") else 0o640
-    if stat.S_IMODE(info.st_mode) != expected_mode or (expected_mode == 0o640 and info.st_gid != config_gid):
-        raise SystemExit("adapter input mode or group differs")
-    actual="sha256:"+hashlib.sha256(open(path,"rb").read()).hexdigest()
-    if actual != digests[path]: raise SystemExit("adapter input digest differs")
+from observer.fixed_runner import validate_adapter_input_access
+for path in validate_adapter_input_access(Path(sys.argv[1])):
     print(f"BindReadOnlyPaths={path}")
 PY
     fi
