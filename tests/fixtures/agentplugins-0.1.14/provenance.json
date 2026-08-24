@@ -9,13 +9,8 @@
     "binary_sha256": null,
     "binary_digest_status": "not_retained_in_capture",
     "capture_evidence_level": "sanitized_manifest_only_no_raw_or_binary_linkage",
-    "release_authentication": {
-      "workflow": "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml",
-      "predicate_type": "https://slsa.dev/provenance/v1",
-      "subject_repository": "777genius/plugin-kit-ai",
-      "subject_tag": "agentplugins-v0.1.14",
-      "tag_commit": "cd766a39f79938b10c212dbe73e52ecf6731937a"
-    }
+    "release_binary_authenticated": false,
+    "release_provenance_linkage": "unlinked_sanitized_fixture_provenance"
   },
   "sanitization_rules": [
     "replace disposable absolute roots with /fixture roots without changing path relationships",

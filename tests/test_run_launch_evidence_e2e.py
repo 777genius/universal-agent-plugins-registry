@@ -320,11 +320,49 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             asset = Path(tmp) / "agentplugins_0.1.8_linux_amd64"
             asset.write_bytes(b"native")
             with self.assertRaisesRegex(ValueError, "no verified"):
-                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, "a" * 40, "sha256:" + e2e.hashlib.sha256(b"native").hexdigest())
-            wrong = [{"verificationResult": {"statement": {"subject": [{"name": "wrong", "digest": {"sha256": "0" * 64}}]}}}]
+                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, "sha256:" + e2e.hashlib.sha256(b"native").hexdigest())
+            wrong = [{"verificationResult": {"statement": {"predicateType": "https://slsa.dev/provenance/v1", "subject": [{"name": "wrong", "digest": {"sha256": "0" * 64}}]}}}]
             verified.stdout = json.dumps(wrong)
             with self.assertRaisesRegex(ValueError, "subject name/digest"):
-                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, "a" * 40, "sha256:" + e2e.hashlib.sha256(b"native").hexdigest())
+                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, "sha256:" + e2e.hashlib.sha256(b"native").hexdigest())
+
+    def test_github_attestation_pins_release_identity_predicate_subject_and_hosted_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "agentplugins_0.1.14_linux_amd64"
+            asset.write_bytes(b"native")
+            digest = "sha256:" + hashlib.sha256(asset.read_bytes()).hexdigest()
+            statement = [{"verificationResult": {"statement": {
+                "predicateType": "https://slsa.dev/provenance/v1",
+                "subject": [{"name": asset.name, "digest": {"sha256": digest.removeprefix("sha256:")}}],
+            }}}]
+            completed = subprocess.CompletedProcess([], 0, json.dumps(statement), "")
+            with mock.patch.object(e2e.subprocess, "run", return_value=completed) as invoked:
+                verified = e2e.verify_github_asset_attestation(
+                    asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+                    e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest,
+                )
+            argv = invoked.call_args.args[0]
+            for flag in (
+                "--repo", "--signer-workflow", "--source-ref", "--source-digest",
+                "--predicate-type", "--deny-self-hosted-runners",
+            ):
+                self.assertIn(flag, argv)
+            self.assertEqual(verified["subject_name"], asset.name)
+            self.assertEqual(verified["subject_digest"], digest)
+            self.assertEqual(verified["runner_environment"], "github-hosted")
+            wrong_predicate = json.loads(json.dumps(statement))
+            wrong_predicate[0]["verificationResult"]["statement"]["predicateType"] = "https://example.invalid/claim"
+            with mock.patch.object(e2e.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(wrong_predicate), "")):
+                with self.assertRaisesRegex(ValueError, "subject name/digest"):
+                    e2e.verify_github_asset_attestation(
+                        asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+                        e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest,
+                    )
+            with self.assertRaisesRegex(ValueError, "trusted release identity"):
+                e2e.verify_github_asset_attestation(
+                    asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, "caller/workflow.yml",
+                    e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest,
+                )
 
     def test_npm_installed_executable_must_equal_authenticated_native_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,24 +524,23 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
     def test_info_reconciliation_requires_exact_boolean_proofs(self) -> None:
         authoritative = {
             "receipt_reconciled": True, "native_discovery_reconciled": True,
-            "client_version": "cursor-1.2.3",
+            "client_version": "1.0.80",
             "native_discovery_evidence": {
-                "basis": "protected_external_observer",
-                "observer": "native-client-command-v1", "client": "cursor",
-                "version_operation": {"operation": "version", "argv": ["cursor", "--version"], "observed_client_version": "cursor-1.2.3"},
-                "discovery_operation": {"operation": "list", "argv": ["cursor", "plugins", "list"], "discovered": True, "product_id": "context7"},
+                "basis": "protected_external_observer", "observer": "native-client-command-v1", "client": "vscode",
+                "version_operation": {"operation": "version", "argv": ["copilot", "--version"], "observed_client_version": "1.0.80"},
+                "discovery_operation": {"operation": "list", "argv": ["copilot", "plugin", "list"], "discovered": True, "product_id": "context7"},
             },
         }
-        self.assertTrue(e2e.LaunchHarness.info_reconciled(authoritative))
+        self.assertTrue(e2e.LaunchHarness.info_reconciled(authoritative, "vscode"))
         self.assertFalse(e2e.LaunchHarness.info_reconciled({"receipt_reconciled": True, "native_discovery_reconciled": True}))
         self.assertFalse(e2e.LaunchHarness.info_reconciled({"receipts": ["owned"], "discovery": {"state": "found"}}))
         self.assertFalse(e2e.LaunchHarness.info_reconciled({"receipt_reconciled": True, "native_discovery_reconciled": False}))
         missing_observer = json.loads(json.dumps(authoritative))
         del missing_observer["native_discovery_evidence"]["observer"]
-        self.assertFalse(e2e.LaunchHarness.info_reconciled(missing_observer, "cursor"))
+        self.assertFalse(e2e.LaunchHarness.info_reconciled(missing_observer, "vscode"))
         wrong_client = json.loads(json.dumps(authoritative))
-        wrong_client["native_discovery_evidence"]["client"] = "codex"
-        self.assertFalse(e2e.LaunchHarness.info_reconciled(wrong_client, "cursor"))
+        wrong_client["native_discovery_evidence"]["client"] = "cursor"
+        self.assertFalse(e2e.LaunchHarness.info_reconciled(wrong_client, "vscode"))
 
     def test_repository_owned_proof_cannot_be_promoted_to_discovery(self) -> None:
         harness = self.fixture_harness()
@@ -839,6 +876,10 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 "snapshot_schema": 1, "snapshot_sequence": 1,
                 "snapshot_digest": "sha256:" + "c" * 64,
             }
+            for binding in state["installations"][0]["clients"].values():
+                binding["package_revision"].update(
+                    distribution_id="upstash/context7", release_sequence=1,
+                )
             retained_receipt = next(iter(state["installations"][0]["data_receipts"].values()))
             remove["data"]["retained_data"] = [{
                 key: retained_receipt[key]
@@ -1037,20 +1078,33 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 "reviewed_default_distribution", "recorded_revision", "current_revision",
                 "current_repository", "current_package_path", "recorded_release_sequence",
                 "current_release_sequence", "recorded_snapshot_sequence",
-                "current_snapshot_sequence", "current_immutable_evidence",
+                "current_snapshot_sequence",
             },
         )
         client = data["clients"][0]
         self.assertIn("evidence", client["package_revision"])
         self.assertIn("native_discovery_evidence", client)
         self.assertIn("warnings", data)
-        self.assertIn("convergence_action", data)
+        self.assertFalse(data["mixed_version"])
+        self.assertNotIn("convergence_action", data)
         for field, replacement in (
             ("directory", {**data["directory"], "distribution": "invented"}),
             ("warnings", [{**data["warnings"][0], "next_action": True}]),
             ("clients", [{**client, "native_discovery_evidence": "managed"}]),
         ):
             forged = json.loads(json.dumps(value)); forged["data"][field] = replacement
+            self.assertFalse(observer.validate_cli_envelope(forged, "info"))
+        for mutate in (
+            lambda item: item["trust"].update(workflow="attacker/repo/.github/workflows/evidence.yml"),
+            lambda item: item["trust"].update(source_digest="f" * 40),
+            lambda item: item["artifact"].update(revision="e" * 40),
+        ):
+            forged = json.loads(json.dumps(value))
+            mutate(forged["data"]["clients"][0]["package_revision"]["evidence"][0])
+            self.assertFalse(observer.validate_cli_envelope(forged, "info"))
+        for argv in (["copilot", "plugin", "list", "--all"], ["cursor", "plugin", "list"]):
+            forged = json.loads(json.dumps(value))
+            forged["data"]["clients"][0]["native_discovery_evidence"]["discovery_operation"]["argv"] = argv
             self.assertFalse(observer.validate_cli_envelope(forged, "info"))
 
     def test_real_envelopes_reject_wrong_commands_target_forgery_and_identity_mismatch(self) -> None:
@@ -1292,6 +1346,26 @@ print((fixtures / name).read_text(), end="")
         forged["data"]["failed"] = 2
         self.assertFalse(observer.validate_full_sha_update_failure(forged, stderr, **kwargs))
         self.assertFalse(observer.validate_full_sha_update_failure(value, stderr.rstrip(), **kwargs))
+        self.assertFalse(observer.validate_full_sha_update_failure(
+            value, stderr, **{**kwargs, "requested_argv": [*kwargs["requested_argv"], "--yes"]},
+        ))
+
+    def test_grouped_optional_directory_envelope_is_semantically_exact(self) -> None:
+        value = release_fixture("add.json")
+        value["data"]["directory"] = {
+            "product_id": "context7", "distribution_id": "upstash/context7",
+            "distribution_kind": "upstream", "desired_release_sequence": 1,
+            "snapshot_schema": 1, "snapshot_sequence": 41,
+            "snapshot_digest": "sha256:" + "a" * 64,
+        }
+        self.assertTrue(observer.validate_cli_envelope(value, "add"))
+        for mutation in (
+            {**value["data"]["directory"], "product_id": "unrelated"},
+            {key: child for key, child in value["data"]["directory"].items() if key != "snapshot_digest"},
+            {**value["data"]["directory"], "distribution_kind": "invented"},
+        ):
+            forged = json.loads(json.dumps(value)); forged["data"]["directory"] = mutation
+            self.assertFalse(observer.validate_cli_envelope(forged, "add"))
 
     def test_capture_provenance_binds_every_retained_fixture_byte(self) -> None:
         provenance = e2e.validate_capture_provenance()
@@ -1327,6 +1401,9 @@ print((fixtures / name).read_text(), end="")
 
     def test_sanitized_captures_bind_to_independently_authenticated_release_contract(self) -> None:
         captured = e2e.validate_capture_provenance()["release"]
+        self.assertFalse(captured["release_binary_authenticated"])
+        self.assertEqual(captured["tag_commit"], "cd766a39f79938b10c212dbe73e52ecf6731937a")
+        self.assertNotEqual(captured["tag_commit"], e2e.TRUSTED_CLI_RELEASE_COMMIT)
         slots = (
             ("darwin-amd64", "darwin", "amd64", ""), ("darwin-arm64", "darwin", "arm64", ""),
             ("linux-amd64", "linux", "amd64", ""), ("linux-arm64", "linux", "arm64", ""),
@@ -1338,18 +1415,24 @@ print((fixtures / name).read_text(), end="")
             for index, (key, os_name, arch, suffix) in enumerate(slots)
         }
         manifest = {
-            "schema_version": 2, "tag": captured["tag"], "commit": captured["tag_commit"],
+            "schema_version": 2, "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
             "version": "0.1.14", "assets": assets,
         }
         asset = assets["linux-amd64"]
         digest = "sha256:" + asset["sha256"]
         identity = {
-            "repository": captured["repository"], "tag": captured["tag"],
-            "tag_commit": captured["tag_commit"], "release_id": 114, "immutable": True,
+            "repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY, "tag": e2e.TRUSTED_CLI_RELEASE_TAG,
+            "tag_commit": e2e.TRUSTED_CLI_RELEASE_COMMIT, "release_id": 114, "immutable": True,
         }
         attestation = {
-            "repository": captured["repository"], "workflow": e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
-            "tag": captured["tag"], "tag_commit": captured["tag_commit"],
+            "repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY, "workflow": e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+            "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "tag_commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
+            "issuer": "https://token.actions.githubusercontent.com",
+            "source_ref": f"refs/tags/{e2e.TRUSTED_CLI_RELEASE_TAG}",
+            "source_digest": e2e.TRUSTED_CLI_RELEASE_COMMIT,
+            "predicate_type": "https://slsa.dev/provenance/v1",
+            "subject_name": asset["file"], "subject_digest": digest,
+            "runner_environment": "github-hosted",
             "asset_name": asset["file"], "asset_digest": digest, "verified": True,
         }
         arguments = {
@@ -1359,56 +1442,12 @@ print((fixtures / name).read_text(), end="")
             "asset_name": asset["file"], "asset_digest": digest,
             "asset_attestation": attestation,
         }
-        provenance = e2e.validate_capture_provenance()
-        transcript = {
-            "schema_version": 1,
-            "release": {"repository": captured["repository"], "tag": captured["tag"], "commit": captured["tag_commit"]},
-            "binary": {"asset": asset["file"], "digest": digest},
-            "attestation": {
-                "predicate_type": "https://slsa.dev/provenance/v1",
-                "workflow": e2e.TRUSTED_CLI_RELEASE_WORKFLOW, "verified": True,
-            },
-            "sanitization": {"transform": "agentplugins-deterministic-sanitization", "version": 1},
-            "captures": [
-                {
-                    "fixture": item["fixture"], "fixture_root": item.get("fixture_root", "."),
-                    "argv": item["argv"], "exit_code": 1 if item["fixture"] == "direct-update-failure.json" else 0,
-                    "raw_stdout_digest": "sha256:" + f"{index + 100:064x}",
-                    "raw_stderr_digest": "sha256:" + f"{index + 200:064x}",
-                    "sanitized_stdout_digest": item["sanitized_sha256"],
-                    **({"sanitized_stderr_digest": item["stderr_sha256"]} if "stderr_sha256" in item else {}),
-                }
-                for index, item in enumerate(provenance["captures"])
-            ],
-        }
-        transcript_digest = "sha256:" + hashlib.sha256(e2e.canonical_json(transcript)).hexdigest()
-        transcript_attestation = {
-            "predicate_type": "https://slsa.dev/provenance/v1",
-            "workflow": e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
-            "subject_digest": transcript_digest, "verified": True,
-        }
-        arguments.update(
-            capture_transcript_manifest=transcript,
-            capture_transcript_attestation=transcript_attestation,
-        )
         binding = e2e.validate_capture_release_binding(**arguments)
-        self.assertTrue(binding["release_binary_authenticated"])
+        self.assertFalse(binding["fixture_release_binary_authenticated"])
+        self.assertTrue(binding["enforced_binary_authenticated"])
+        self.assertEqual(binding["fixture_recorded_tag_commit"], captured["tag_commit"])
+        self.assertEqual(binding["enforced_release_tag_commit"], e2e.TRUSTED_CLI_RELEASE_COMMIT)
         self.assertEqual(binding["capture_evidence_level"], "sanitized_manifest_only_no_raw_or_binary_linkage")
-        for missing in ("capture_transcript_manifest", "capture_transcript_attestation"):
-            incomplete = {key: value for key, value in arguments.items() if key != missing}
-            with self.assertRaisesRegex(ValueError, "authenticated raw transcript"):
-                e2e.validate_capture_release_binding(**incomplete)
-        forged_raw = json.loads(json.dumps(transcript))
-        forged_raw["captures"][0].pop("raw_stdout_digest")
-        forged_attestation = {
-            **transcript_attestation,
-            "subject_digest": "sha256:" + hashlib.sha256(e2e.canonical_json(forged_raw)).hexdigest(),
-        }
-        with self.assertRaisesRegex(ValueError, "invalid record"):
-            e2e.validate_capture_release_binding(**{
-                **arguments, "capture_transcript_manifest": forged_raw,
-                "capture_transcript_attestation": forged_attestation,
-            })
         for name, mutation in (
             ("binary", {**arguments, "asset_digest": "sha256:" + "f" * 64}),
             ("commit", {**arguments, "release_identity": {**identity, "tag_commit": "f" * 40}}),
@@ -1495,6 +1534,13 @@ print((fixtures / name).read_text(), end="")
             mutations = []
             missing_revision = json.loads(json.dumps(state))
             next(iter(missing_revision["installations"][0]["clients"].values())).pop("package_revision")
+            path.write_text(json.dumps(missing_revision))
+            self.assertIsNotNone(observer.manager_state(manager), "released Go permits absent direct-local client revision")
+            missing_revision["installations"][0]["origin_mode"] = "directory"
+            missing_revision["installations"][0]["directory"] = {
+                "product_id": "context7", "distribution_id": "upstash/context7",
+                "distribution_kind": "upstream", "desired_release_sequence": 1,
+            }
             mutations.append(missing_revision)
             dangling = json.loads(json.dumps(state))
             next(iter(dangling["installations"][0]["clients"].values()))["data_receipt_id"] = "missing-receipt"
@@ -1518,6 +1564,110 @@ print((fixtures / name).read_text(), end="")
             for mutation in mutations:
                 path.write_text(json.dumps(mutation))
                 self.assertIsNone(observer.manager_state(manager))
+
+    def test_state_v4_ports_leaf_origin_snapshot_and_global_source_invariants(self) -> None:
+        _, fixture = self.agentplugins_0_1_14_state_fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp)
+            state = self.sandbox_state_fixture(fixture, manager)
+            path = manager / "state-v2.json"
+            mutations = []
+            missing_origin = json.loads(json.dumps(state)); missing_origin["installations"][0].pop("origin_mode")
+            mutations.append(missing_origin)
+            invalid_leaf = json.loads(json.dumps(state)); invalid_leaf["installations"][0]["installation_id"] = "../escape"
+            mutations.append(invalid_leaf)
+            duplicate_source = json.loads(json.dumps(state)); duplicate_source["installations"].append(json.loads(json.dumps(duplicate_source["installations"][0])))
+            duplicate_source["installations"][1]["installation_id"] = "second-installation"
+            mutations.append(duplicate_source)
+            incoherent_snapshot = json.loads(json.dumps(state)); installation = incoherent_snapshot["installations"][0]
+            installation["origin_mode"] = "directory"
+            installation["directory"] = {
+                "product_id": "context7", "distribution_id": "upstash/context7",
+                "distribution_kind": "upstream", "desired_release_sequence": 1,
+                "snapshot_sequence": 41,
+            }
+            mutations.append(incoherent_snapshot)
+            for mutation in mutations:
+                path.write_text(json.dumps(mutation))
+                self.assertIsNone(observer.manager_state(manager))
+
+    def test_state_v4_validate_matches_released_go_leaf_retention_and_directory_rules(self) -> None:
+        _, fixture = self.agentplugins_0_1_14_state_fixture()
+        self.assertTrue(observer.validate_released_state_v4(fixture))
+
+        trimmed = json.loads(json.dumps(fixture))
+        installation = trimmed["installations"][0]
+        installation["installation_id"] = f"  {installation['installation_id']}  "
+        binding_key, binding = next(iter(installation["clients"].items()))
+        binding["physical_artifact_id"] = f"  {binding['physical_artifact_id']}  "
+        binding["receipts"][0]["operation_id"] = f"  {binding['receipts'][0]['operation_id']}  "
+        self.assertTrue(observer.validate_released_state_v4(trimmed), "Go validates leaf IDs after TrimSpace")
+
+        for field, replacement in (
+            ("physical_artifact_id", "../artifact"),
+            ("physical_artifact_id", "CON"),
+            ("physical_artifact_id", "artifact..part"),
+        ):
+            invalid = json.loads(json.dumps(fixture))
+            next(iter(invalid["installations"][0]["clients"].values()))[field] = replacement
+            self.assertFalse(observer.validate_released_state_v4(invalid))
+
+        retained_with_clients = json.loads(json.dumps(fixture))
+        retained_with_clients["installations"][0]["data_retained"] = True
+        self.assertFalse(observer.validate_released_state_v4(retained_with_clients))
+        retained_without_receipts = json.loads(json.dumps(fixture))
+        retained_without_receipts["installations"][0]["clients"] = {}
+        retained_without_receipts["installations"][0]["data_receipts"] = {}
+        retained_without_receipts["installations"][0]["data_retained"] = True
+        self.assertFalse(observer.validate_released_state_v4(retained_without_receipts))
+        retained = json.loads(json.dumps(fixture))
+        retained["installations"][0]["clients"] = {}
+        retained["installations"][0]["data_retained"] = True
+        self.assertTrue(observer.validate_released_state_v4(retained))
+
+        direct_revision = json.loads(json.dumps(fixture))
+        next(iter(direct_revision["installations"][0]["clients"].values()))["package_revision"]["resolved_revision"] = "not-a-sha"
+        self.assertTrue(observer.validate_released_state_v4(direct_revision))
+        directory = json.loads(json.dumps(fixture))
+        current = directory["installations"][0]
+        current["origin_mode"] = "directory"
+        current["directory"] = {
+            "product_id": "different-product-is-accepted-by-Go-Validate",
+            "distribution_id": "upstash/context7", "distribution_kind": "upstream",
+            "desired_release_sequence": 2,
+        }
+        for client in current["clients"].values():
+            client["package_revision"]["distribution_id"] = "upstash/context7"
+            client["package_revision"]["release_sequence"] = 1
+            client["package_revision"]["resolved_revision"] = "a" * 40
+        current["source"]["resolved_revision"] = "b" * 40
+        self.assertTrue(observer.validate_released_state_v4(directory))
+        current["directory"].update({"snapshot_schema": 1, "snapshot_sequence": 1, "snapshot_digest": "opaque-nonempty"})
+        self.assertTrue(observer.validate_released_state_v4(directory), "Go only requires a nonblank snapshot digest")
+        current["clients"][binding_key]["package_revision"]["release_sequence"] = 3
+        self.assertFalse(observer.validate_released_state_v4(directory))
+
+        nil_maps = json.loads(json.dumps(fixture))
+        nil_maps["installations"][0]["clients"] = None
+        nil_maps["installations"][0]["data_receipts"] = None
+        self.assertTrue(observer.validate_released_state_v4(nil_maps), "JSON null decodes to nil Go maps")
+
+    def test_state_v4_validate_rejects_duplicate_sources_receipt_ids_and_operation_ids(self) -> None:
+        _, fixture = self.agentplugins_0_1_14_state_fixture()
+        duplicate_source = json.loads(json.dumps(fixture))
+        duplicate_source["installations"].append(json.loads(json.dumps(duplicate_source["installations"][0])))
+        duplicate_source["installations"][1]["installation_id"] = "different-installation"
+        self.assertFalse(observer.validate_released_state_v4(duplicate_source))
+
+        bad_receipt = json.loads(json.dumps(fixture))
+        receipt_key, receipt = next(iter(bad_receipt["installations"][0]["data_receipts"].items()))
+        receipt["data_receipt_id"] = receipt_key + "-different"
+        self.assertFalse(observer.validate_released_state_v4(bad_receipt))
+
+        duplicate_operation = json.loads(json.dumps(fixture))
+        clients = list(duplicate_operation["installations"][0]["clients"].values())
+        clients[1]["receipts"][0]["operation_id"] = clients[0]["receipts"][0]["operation_id"]
+        self.assertFalse(observer.validate_released_state_v4(duplicate_operation))
 
     def test_state_v4_rejects_cross_owner_ancestor_target_overlap(self) -> None:
         _, fixture = self.agentplugins_0_1_14_state_fixture()
@@ -1772,6 +1922,48 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             self.assertFalse(marker.verify())
             marker.close()
 
+    def test_purge_freezes_all_deduplicated_existing_and_absent_authority_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "active"; target.mkdir()
+            data = root / "data"; data.mkdir()
+            staging = root / ".staging"
+            backup = root / ".backup"
+            historical = root / ".old" / "nested-backup"
+            receipt_id = "data-receipt"
+            installation = {
+                "data_receipts": {receipt_id: {
+                    "data_receipt_id": receipt_id, "physical_backend_id": "artifact",
+                    "scope": "user", "locator": str(data),
+                    "ownership_digest": "sha256:" + "a" * 64, "state": "owned",
+                }},
+                "clients": {"binding": {
+                    "target_locator": str(target),
+                    "native_objects": [{"path": str(target)}],
+                    "receipts": [{
+                        "active_path": str(target), "staging_path": str(staging),
+                        "backup_path": str(backup),
+                    }],
+                }},
+            }
+            public = [{
+                "data_receipt_id": receipt_id, "physical_backend_id": "artifact",
+                "scope": "user", "state": "owned",
+            }]
+            frozen_result = observer.freeze_complete_authority(
+                installation, (root,), public, [{"backup_path": str(historical)}],
+            )
+            self.assertIsNotNone(frozen_result)
+            frozen, data_paths = frozen_result
+            self.assertEqual(set(frozen.records), {str(target), str(data), str(staging), str(backup), str(historical)})
+            self.assertEqual(data_paths, {str(data)})
+            staging.mkdir()
+            self.assertFalse(frozen.absent_and_unlinked(), "an already-absent authorized name must stay absent")
+            staging.rmdir()
+            target.rmdir(); data.rmdir()
+            self.assertTrue(frozen.absent_and_unlinked())
+            frozen.close()
+
     def test_state_migration_observes_stale_refusal_backup_and_exact_provenance(self) -> None:
         legacy = json.loads((ROOT / "tests/e2e/fixtures/state-schema-2.json").read_text())
         self.assertEqual((legacy["schema_version"], legacy["installations"][0]["declared_name"]), (2, "demo"))
@@ -1812,7 +2004,7 @@ def write_state(package):
     target = manager / "managed/cursor/e2e-external-package"; target.mkdir(parents=True, exist_ok=True)
     receipt_id = "plugin-data-receipt"; binding_id = "plugin-data-cursor"
     state = {{"schema_version": 4, "installations": [{{"installation_id": "plugin-data-installation",
-      "declared_name": "e2e-external-package", "source": {{"source_binding_id": "local-source",
+      "declared_name": "e2e-external-package", "origin_mode": "direct", "source": {{"source_binding_id": "local-source",
       "requested_source": "./" + package.name, "canonical_source": "direct local source", "resolved_revision": "",
       "tree_digest": identity["tree_digest"]}}, "package": {{"loader_kind": "agent_plugins",
       "format_id": "agent-plugins/1.0.0", "schema_uri": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -1831,7 +2023,16 @@ if command == "add": write_state(pathlib.Path.cwd() / sys.argv[2].removeprefix("
 elif command == "update":
     state = json.loads(state_path.read_text()); write_state(pathlib.Path.cwd() / state["installations"][0]["source"]["requested_source"].removeprefix("./"))
 elif command in ("info", "repair", "switch"): pass
-elif command == "remove" and "--purge-data" not in sys.argv: pass
+elif command == "remove" and "--purge-data" not in sys.argv:
+    state = json.loads(state_path.read_text()); installation = state["installations"][0]
+    for binding in installation["clients"].values(): shutil.rmtree(binding["target_locator"], ignore_errors=True)
+    receipt = next(iter(installation["data_receipts"].values()))
+    installation["clients"] = {{}}; installation["data_retained"] = True
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    print(json.dumps({{"schema_version": 1, "command": "remove", "result": "success", "data": {{
+      "retained_data": [{{key: receipt[key] for key in ("data_receipt_id", "physical_backend_id", "scope", "state")}}]
+    }}}}))
+    raise SystemExit(0)
 elif command == "remove":
     state = json.loads(state_path.read_text()); locator = pathlib.Path(next(iter(state["installations"][0]["data_receipts"].values()))["locator"])
     if os.environ.get("RENAME_INSTEAD_OF_UNLINK"):
@@ -1888,7 +2089,7 @@ print("{{}}")
             receipt["operation_group_id"] = "different-authority"
             state_path.write_text(json.dumps(split))
             historical = observer.installation_receipts(manager, "context7")
-            self.assertEqual(len(historical or []), 3)
+            self.assertIsNone(historical)
             self.assertFalse(observer.receipts_bind_command([], historical or [], "add", ("codex", "cursor", "kiro")))
 
     def test_canonical_data_locator_rejects_traversal_and_symlink_escape(self) -> None:
@@ -1928,7 +2129,7 @@ if command == "add":
     (target / "plugin.json").write_text("{{}}")
     binding_id = "direct-cursor-binding"
     state = {{"schema_version": 4, "installations": [{{
-      "installation_id": "direct-installation", "declared_name": "e2e-external-package",
+      "installation_id": "direct-installation", "declared_name": "e2e-external-package", "origin_mode": "direct",
       "source": {{"source_binding_id": "direct-source", "requested_source": selector,
         "canonical_source": "https://github.com/" + repository + "@" + revision + "//" + package_path,
         "repository": repository, "package_subpath": package_path, "resolved_revision": revision, "tree_digest": tree}},

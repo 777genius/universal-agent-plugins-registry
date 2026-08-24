@@ -53,6 +53,16 @@ GITHUB_REPOSITORY = re.compile(
 )
 GITHUB_SOURCE_PATH = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+GITHUB_WORKFLOW = re.compile(
+    r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$"
+)
+GITHUB_BRANCH_REF = re.compile(r"^refs/heads/[A-Za-z0-9._/-]+$")
+LEAF_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+WINDOWS_RESERVED_LEAF_IDS = frozenset({
+    "CON", "PRN", "AUX", "NUL", "CLOCK$",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+})
 
 
 class DuplicateKeyError(ValueError):
@@ -92,15 +102,183 @@ def _digest(value: Any) -> bool:
     return isinstance(value, str) and DIGEST.fullmatch(value) is not None
 
 
+def _valid_leaf_id(value: Any) -> bool:
+    """Exact portable leaf-ID rule used by released agentplugins 0.1.14."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    if not value or len(value.encode()) > 64:
+        return False
+    if not LEAF_ID.fullmatch(value) or value in {".", ".."} or value.endswith(".") or ".." in value:
+        return False
+    return value.split(".", 1)[0].upper() not in WINDOWS_RESERVED_LEAF_IDS
+
+
+def _directory_snapshot_coherent(value: dict[str, Any]) -> bool:
+    fields = ("snapshot_schema", "snapshot_sequence", "snapshot_digest")
+    present = any(value.get(name) not in (None, "", 0) for name in fields)
+    return not present or bool(
+        _exact_int(value.get("snapshot_schema")) and value["snapshot_schema"] > 0
+        and _exact_int(value.get("snapshot_sequence")) and value["snapshot_sequence"] > 0
+        and _digest(value.get("snapshot_digest"))
+    )
+
+
+def _released_directory_snapshot_coherent(value: dict[str, Any]) -> bool:
+    """The weaker, exact snapshot rule in released State.Validate."""
+    schema = value.get("snapshot_schema", 0)
+    sequence = value.get("snapshot_sequence", 0)
+    digest = value.get("snapshot_digest", "")
+    if type(schema) is not int or type(sequence) is not int or not isinstance(digest, str) or sequence < 0:
+        return False
+    present = sequence > 0 or schema > 0 or digest != ""
+    return not present or (sequence >= 1 and schema >= 1 and bool(digest.strip()))
+
+
+def validate_released_state_v4(value: Any) -> bool:
+    """Exact acceptance semantics of agentplugins 0.1.14 statev2.Validate.
+
+    The evidence reader applies additional path/digest authority constraints
+    after this check; those constraints are not represented as State.Validate
+    parity.
+    """
+    if not isinstance(value, dict) or value.get("schema_version") != 4 or type(value.get("schema_version")) is not int:
+        return False
+    installations = value.get("installations")
+    if installations is None:
+        installations = []
+    if not isinstance(installations, list):
+        return False
+    installation_ids: set[str] = set()
+    source_ids: set[str] = set()
+    client_ids: set[str] = set()
+    operation_ids: set[str] = set()
+    for installation in installations:
+        if not isinstance(installation, dict):
+            return False
+        installation_id = installation.get("installation_id")
+        package = installation.get("package")
+        source = installation.get("source")
+        clients = installation.get("clients")
+        receipts = installation.get("data_receipts", {})
+        clients = {} if clients is None else clients
+        receipts = {} if receipts is None else receipts
+        if (
+            not _valid_leaf_id(installation_id) or installation_id in installation_ids
+            or not isinstance(package, dict) or not isinstance(source, dict)
+            or not isinstance(clients, dict) or not isinstance(receipts, dict)
+            or not _nonempty(installation.get("declared_name"))
+            or installation.get("declared_name") != package.get("declared_name")
+        ):
+            return False
+        installation_ids.add(installation_id)
+        group_id = installation.get("operation_group_id", "")
+        if group_id != "" and not _valid_leaf_id(group_id):
+            return False
+        origin = installation.get("origin_mode", "")
+        directory = installation.get("directory")
+        if origin == "direct":
+            if directory is not None:
+                return False
+        elif origin == "directory":
+            if not isinstance(directory, dict) or not (
+                _nonempty(directory.get("product_id")) and _nonempty(directory.get("distribution_id"))
+                and type(directory.get("desired_release_sequence")) is int
+                and directory["desired_release_sequence"] >= 1
+                and directory.get("distribution_kind") in {"upstream", "community_bridge", "community"}
+                and FULL_SHA.fullmatch(str(source.get("resolved_revision", ""))) is not None
+                and _released_directory_snapshot_coherent(directory)
+            ):
+                return False
+        else:
+            return False
+        retained = installation.get("data_retained", False)
+        if type(retained) is not bool or (retained and (clients or not receipts)):
+            return False
+        for receipt_key, receipt in receipts.items():
+            if not isinstance(receipt, dict) or receipt_key == "" or receipt_key != receipt.get("data_receipt_id"):
+                return False
+            if not _valid_leaf_id(receipt.get("data_receipt_id")) or not all(
+                _nonempty(receipt.get(field)) for field in ("physical_backend_id", "scope", "locator", "ownership_digest")
+            ) or receipt.get("state") not in {"owned", "unknown", "stale"}:
+                return False
+        source_id = source.get("source_binding_id")
+        if not _nonempty(source_id) or source_id in source_ids:
+            return False
+        source_ids.add(source_id)
+        if package.get("loader_kind") == "agent_plugins" and not (
+            _nonempty(package.get("format_id")) and _nonempty(source.get("tree_digest"))
+            and _nonempty(package.get("manifest_digest"))
+            and (package.get("format_id") != "agent-plugins/1.0.0" or _nonempty(package.get("schema_uri")))
+        ):
+            return False
+        for map_key, client in clients.items():
+            if not isinstance(client, dict) or map_key == "" or map_key != client.get("client_binding_id"):
+                return False
+            binding_id = client.get("client_binding_id")
+            if not _valid_leaf_id(binding_id) or binding_id in client_ids:
+                return False
+            client_ids.add(binding_id)
+            if not _nonempty(client.get("client_id")) or not _nonempty(client.get("target_locator")) or not _valid_leaf_id(client.get("physical_artifact_id")):
+                return False
+            if (
+                client.get("materialization") not in {"absent", "staged", "materialized", "degraded"}
+                or client.get("activation") not in {"not_required", "prepared", "manual_activation_required", "active", "failed"}
+                or client.get("authentication") not in {"not_required", "not_checked", "auth_pending", "authenticated", "failed"}
+                or client.get("policy") not in {"allowed", "blocked", "approval_required"}
+                or client.get("verification") not in {"not_run", "package_validated", "installation_verified", "runtime_verified", "failed"}
+            ):
+                return False
+            revision = client.get("package_revision")
+            if revision is not None and (not isinstance(revision, dict) or not _nonempty(revision.get("tree_digest")) or not _nonempty(revision.get("manifest_digest"))):
+                return False
+            if origin == "directory" and not (
+                isinstance(revision, dict) and revision.get("distribution_id") == directory.get("distribution_id")
+                and type(revision.get("release_sequence")) is int
+                and 1 <= revision["release_sequence"] <= directory["desired_release_sequence"]
+                and FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is not None
+            ):
+                return False
+            data_receipt_id = client.get("data_receipt_id", "")
+            if data_receipt_id != "" and data_receipt_id not in receipts:
+                return False
+            object_ids: set[str] = set()
+            native_objects = client.get("native_objects", [])
+            native_objects = [] if native_objects is None else native_objects
+            if not isinstance(native_objects, list):
+                return False
+            for native_object in native_objects:
+                if not isinstance(native_object, dict) or not _nonempty(native_object.get("object_id")) or not _nonempty(native_object.get("kind")) or native_object["object_id"] in object_ids:
+                    return False
+                object_ids.add(native_object["object_id"])
+            mutations = client.get("receipts", [])
+            mutations = [] if mutations is None else mutations
+            if not isinstance(mutations, list):
+                return False
+            for mutation in mutations:
+                if not isinstance(mutation, dict) or not _valid_leaf_id(mutation.get("operation_id")):
+                    return False
+                if mutation.get("client_binding_id") != binding_id or type(mutation.get("sequence")) is not int or mutation["sequence"] < 1 or mutation.get("phase", "") == "":
+                    return False
+                mutation_group = mutation.get("operation_group_id", "")
+                if mutation_group != "" and not _valid_leaf_id(mutation_group):
+                    return False
+                if mutation["operation_id"] in operation_ids:
+                    return False
+                operation_ids.add(mutation["operation_id"])
+    return True
+
+
 def _validate_package_revision(value: Any, *, revision: str | None, tree: str, manifest: str) -> bool:
     required = {"tree_digest", "manifest_digest"}
     optional = {"version", "resolved_revision", "distribution_id", "release_sequence", "catalog_evidence"}
     return bool(
         _keys(value, required, optional)
         and ("version" not in value or _nonempty(value["version"]))
+        and _nonempty(value["tree_digest"]) and _nonempty(value["manifest_digest"])
         and value["tree_digest"] == tree and value["manifest_digest"] == manifest
         and (not revision or value.get("resolved_revision") == revision)
-        and ("resolved_revision" not in value or FULL_SHA.fullmatch(value["resolved_revision"]) is not None)
+        and (not revision or FULL_SHA.fullmatch(value.get("resolved_revision", "")) is not None)
     )
 
 
@@ -206,6 +384,7 @@ def _validate_directory_evidence(value: Any) -> bool:
         and all(_optional_string(value, name) for name in optional - {"trust"})
     ):
         return False
+    trusted = False
     if "trust" in value:
         trust = value["trust"]
         if not isinstance(trust, dict) or not _nonempty(trust.get("kind")):
@@ -213,14 +392,25 @@ def _validate_directory_evidence(value: Any) -> bool:
         if trust["kind"] == "github_actions":
             if not _keys(trust, {"kind", "workflow", "source_ref", "source_digest"}):
                 return False
-            if not all(_nonempty(trust[name]) for name in ("workflow", "source_ref")) or FULL_SHA.fullmatch(str(trust["source_digest"])) is None:
+            if not (
+                GITHUB_WORKFLOW.fullmatch(str(trust["workflow"]))
+                and GITHUB_BRANCH_REF.fullmatch(str(trust["source_ref"]))
+                and FULL_SHA.fullmatch(str(trust["source_digest"]))
+                and trust["workflow"].startswith(artifact["repository"] + "/.github/workflows/")
+                and artifact["revision"] == trust["source_digest"]
+            ):
                 return False
+            trusted = True
         elif trust["kind"] == "reviewed_external":
             if set(trust) != {"kind"}:
                 return False
+            trusted = True
         else:
             return False
-    return True
+    eligible = trusted and value["level"] in {"discovery", "runtime", "oauth"}
+    if trusted and value["level"] in {"schema", "materialization"}:
+        eligible = value["trust"]["kind"] == "github_actions"
+    return value["trusted_for_eligibility"] is eligible
 
 
 def _validate_installed_directory(value: Any) -> bool:
@@ -259,19 +449,29 @@ def _validate_safety_warning(value: Any) -> bool:
     )
 
 
-def _validate_native_discovery(value: Any, client_id: str, client_version: Any) -> bool:
+def _managed_native_product_id(name: str, installation_id: str) -> str:
+    physical = name.strip() + "-" + hashlib.sha256(installation_id.encode()).hexdigest()[:12]
+    return name.strip() + "@agentplugins-" + hashlib.sha256(physical.encode()).hexdigest()[:12]
+
+
+def _validate_native_discovery(
+    value: Any, client_id: str, client_version: Any, *, name: str, installation_id: str,
+) -> bool:
     if not _keys(value, {"basis", "version_operation", "discovery_operation"}) or value["basis"] != "native_client_command":
         return False
     version = value["version_operation"]
     discovery = value["discovery_operation"]
+    if client_id not in {"copilot", "vscode"}:
+        return False
     return bool(
         _keys(version, {"argv"}, {"observed_client_version"})
-        and _string_list(version["argv"], nonempty=True)
+        and version["argv"] == ["copilot", "--version"]
         and _optional_string(version, "observed_client_version")
         and ("observed_client_version" not in version or version["observed_client_version"] == client_version)
         and _keys(discovery, {"argv", "discovered", "product_id"})
-        and _string_list(discovery["argv"], nonempty=True)
+        and discovery["argv"] == ["copilot", "plugin", "list"]
         and type(discovery["discovered"]) is bool and _nonempty(discovery["product_id"])
+        and re.fullmatch(re.escape(name.strip()) + r"@agentplugins-[0-9a-f]{12}", discovery["product_id"]) is not None
     )
 
 
@@ -389,6 +589,20 @@ def _validate_grouped(value: dict[str, Any], command: str, *, verify_acquisition
         and ("revision" not in data or FULL_SHA.fullmatch(data["revision"]) is not None)
     ):
         return False
+    if "directory" in data:
+        directory = data["directory"]
+        if not (
+            _keys(directory, {"product_id", "distribution_id", "distribution_kind", "desired_release_sequence"},
+                  {"snapshot_schema", "snapshot_sequence", "snapshot_digest"})
+            and directory["product_id"] == data["plugin"]
+            and _nonempty(directory["distribution_id"])
+            and directory["distribution_kind"] in {"upstream", "community_bridge", "community"}
+            and _exact_int(directory["desired_release_sequence"])
+            and directory["desired_release_sequence"] > 0
+            and _directory_snapshot_coherent(directory)
+            and FULL_SHA.fullmatch(str(data.get("revision", ""))) is not None
+        ):
+            return False
     installations: set[str] = set()
     targets = [_validate_group_target(item, command=command, data=data, installation_ids=installations) for item in data["targets"]]
     identities = {
@@ -407,10 +621,14 @@ def _validate_grouped(value: dict[str, Any], command: str, *, verify_acquisition
         receipts = data["retained_data"]
         if not (
             data["status"] == "data_retained" and data["plugin_data_preserved"] is True
-            and data["data_retained"] is True and isinstance(receipts, list) and len(receipts) == 1
-            and _keys(receipts[0], {"data_receipt_id", "physical_backend_id", "scope", "state"})
-            and all(_nonempty(receipts[0][key]) for key in receipts[0])
-            and receipts[0]["scope"] == "user" and receipts[0]["state"] == "owned"
+            and data["data_retained"] is True and isinstance(receipts, list) and receipts
+            and len({item.get("data_receipt_id") for item in receipts if isinstance(item, dict)}) == len(receipts)
+            and all(
+                _keys(item, {"data_receipt_id", "physical_backend_id", "scope", "state"})
+                and all(_nonempty(item[key]) for key in item)
+                and item["scope"] in {"user", "project"} and item["state"] in {"owned", "unknown", "stale"}
+                for item in receipts
+            )
             and _nonempty(data["retained_data_action"])
         ):
             return False
@@ -504,7 +722,10 @@ def validate_cli_envelope(
                 ):
                     return False
             native_evidence = client.get("native_discovery_evidence")
-            if native_evidence is not None and not _validate_native_discovery(native_evidence, client_id, client.get("client_version")):
+            if native_evidence is not None and not _validate_native_discovery(
+                native_evidence, client_id, client.get("client_version"),
+                name=data["name"], installation_id=data["installation_id"],
+            ):
                 return False
             seen.add((client_id, client["scope"]))
         valid = bool(
@@ -590,14 +811,7 @@ def validate_full_sha_update_failure(
     if requested_argv is None:
         return True
     argv = list(requested_argv)
-    try:
-        return bool(
-            argv[argv.index("update") + 1] == plugin
-            and tuple(argv[argv.index("--target") + 1].split(",")) == expected_targets
-            and argv[argv.index("--format") + 1] == "json"
-        )
-    except (ValueError, IndexError):
-        return False
+    return argv == ["update", plugin, "--target", ",".join(expected_targets), "--format", "json"]
 
 
 def now() -> str:
@@ -1042,15 +1256,15 @@ def manager_state(
         not isinstance(value, dict) or not {"schema_version", "installations"} <= set(value) <= {"schema_version", "installations", "transaction_receipts"}
         or not _exact_int(value.get("schema_version"), 4)
         or not isinstance(value.get("installations"), list)
+        or not validate_released_state_v4(value)
     ):
         return None
     installation_ids: set[str] = set()
-    names: set[str] = set()
+    source_binding_ids: set[str] = set()
     global_binding_ids: set[str] = set()
     global_receipt_ids: set[str] = set()
     global_operation_ids: set[str] = set()
     global_paths: dict[str, str] = {}
-    installation_groups: set[str] = set()
     binding_authority: dict[str, dict[str, Any]] = {}
 
     def owned_path(value: Any, owner: str) -> bool:
@@ -1074,37 +1288,34 @@ def manager_state(
             return None
         installation_id = installation["installation_id"]
         name = installation["declared_name"]
-        if not _nonempty(installation_id) or not _nonempty(name) or installation_id in installation_ids or name in names:
+        if not _valid_leaf_id(installation_id) or not _nonempty(name) or installation_id in installation_ids:
             return None
         installation_ids.add(installation_id)
-        names.add(name)
         origin_mode = installation.get("origin_mode")
         directory = installation.get("directory")
-        if origin_mode is not None and origin_mode not in {"direct", "directory"}:
+        if origin_mode not in {"direct", "directory"}:
             return None
-        if origin_mode != "directory" and directory is not None:
+        if origin_mode == "direct" and directory is not None:
             return None
         if origin_mode == "directory" and not (
             _keys(directory, {"product_id", "distribution_id", "distribution_kind", "desired_release_sequence"},
                   {"snapshot_schema", "snapshot_sequence", "snapshot_digest"})
-            and directory["product_id"] == name
+            and _nonempty(directory["product_id"])
             and _nonempty(directory["distribution_id"])
             and directory["distribution_kind"] in {"upstream", "community_bridge", "community"}
             and _exact_int(directory["desired_release_sequence"]) and directory["desired_release_sequence"] > 0
-            and ("snapshot_schema" not in directory or (_exact_int(directory["snapshot_schema"]) and directory["snapshot_schema"] > 0))
-            and ("snapshot_sequence" not in directory or (_exact_int(directory["snapshot_sequence"]) and directory["snapshot_sequence"] > 0))
-            and ("snapshot_digest" not in directory or _digest(directory["snapshot_digest"]))
+            and _directory_snapshot_coherent(directory)
         ):
             return None
         if "operation_group_id" in installation:
-            if not _nonempty(installation["operation_group_id"]) or installation["operation_group_id"] in installation_groups:
+            if not _valid_leaf_id(installation["operation_group_id"]):
                 return None
-            installation_groups.add(installation["operation_group_id"])
         source = installation["source"]
         package = installation["package"]
         if not (
             _keys(source, {"source_binding_id", "requested_source", "canonical_source", "resolved_revision", "tree_digest"}, {"repository", "package_subpath", "publisher"})
             and all(_nonempty(source[key]) for key in ("source_binding_id", "requested_source", "canonical_source", "tree_digest"))
+            and source["source_binding_id"] not in source_binding_ids
             and isinstance(source["resolved_revision"], str)
             and _digest(source["tree_digest"])
             and (not source.get("repository") or (
@@ -1119,6 +1330,9 @@ def manager_state(
             and ("version" not in package or _nonempty(package["version"]))
         ):
             return None
+        source_binding_ids.add(source["source_binding_id"])
+        if origin_mode == "directory" and FULL_SHA.fullmatch(source["resolved_revision"]) is None:
+            return None
         clients = installation["clients"]
         if not isinstance(clients, dict):
             return None
@@ -1128,11 +1342,11 @@ def manager_state(
                 "client_binding_id", "client_id", "scope", "target_locator", "physical_artifact_id",
                 "materialization", "activation", "authentication", "policy", "verification", "updated_at",
             }
-            optional_binding = {"data_receipt_id", "affected_surfaces", "native_objects", "receipts"}
-            required_binding |= {"package_revision"}
+            optional_binding = {"package_revision", "data_receipt_id", "affected_surfaces", "native_objects", "receipts"}
             if (
                 not _keys(binding, required_binding, optional_binding)
-                or binding.get("client_binding_id") != binding_id or binding_id in global_binding_ids
+                or binding.get("client_binding_id") != binding_id or not _valid_leaf_id(binding_id)
+                or binding_id in global_binding_ids
             ):
                 return None
             global_binding_ids.add(binding_id)
@@ -1147,7 +1361,7 @@ def manager_state(
                 and binding["authentication"] in {"not_required", "not_checked", "auth_pending", "authenticated", "failed"}
                 and binding["policy"] in {"allowed", "blocked", "approval_required"}
                 and binding["verification"] in {"not_run", "package_validated", "installation_verified", "runtime_verified", "failed"}
-                and _nonempty(binding["physical_artifact_id"])
+                and _valid_leaf_id(binding["physical_artifact_id"])
                 and owned_path(binding["target_locator"], binding_id)
                 and ("affected_surfaces" not in binding or _string_list(binding["affected_surfaces"], nonempty=True))
             ):
@@ -1156,10 +1370,21 @@ def manager_state(
                 return None
             if "receipts" in binding and not isinstance(binding["receipts"], list):
                 return None
-            revision = binding["package_revision"]
-            if not _validate_package_revision(revision, revision=None, tree=revision.get("tree_digest", ""), manifest=revision.get("manifest_digest", "")):
+            revision = binding.get("package_revision")
+            if revision is not None and not _validate_package_revision(
+                revision, revision=None, tree=revision.get("tree_digest", ""), manifest=revision.get("manifest_digest", ""),
+            ):
+                return None
+            if origin_mode == "directory" and not (
+                isinstance(revision, dict)
+                and revision.get("distribution_id") == directory["distribution_id"]
+                and _exact_int(revision.get("release_sequence"))
+                and 1 <= revision["release_sequence"] <= directory["desired_release_sequence"]
+                and FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is not None
+            ):
                 return None
             native_objects = binding.get("native_objects", [])
+            object_ids: set[str] = set()
             for native_object in native_objects:
                 if not (
                     _keys(native_object, {"object_id", "kind", "protection_class"},
@@ -1168,13 +1393,17 @@ def manager_state(
                     and all(_optional_string(native_object, key) for key in ("logical_name", "path"))
                     and all(key not in native_object or _digest(native_object[key]) for key in ("before_digest", "managed_digest"))
                     and ("user_modified" not in native_object or type(native_object["user_modified"]) is bool)
+                    and native_object["object_id"] not in object_ids
+                    and ("path" not in native_object or owned_path(native_object["path"], binding_id))
                 ):
                     return None
+                object_ids.add(native_object["object_id"])
             for receipt in binding.get("receipts", []):
                 if not (
                     _keys(receipt, {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "staging_path", "backup_path", "after_digest", "phase"}, {"before_digest"})
-                    and _nonempty(receipt["operation_id"]) and receipt["operation_id"] not in global_operation_ids
-                    and _nonempty(receipt["operation_group_id"])
+                    and _valid_leaf_id(receipt["operation_id"]) and receipt["operation_id"] not in global_operation_ids
+                    and _valid_leaf_id(receipt["operation_group_id"])
+                    and receipt["operation_group_id"] == installation.get("operation_group_id")
                     and receipt["client_binding_id"] == binding_id and _exact_int(receipt["sequence"])
                     and receipt["sequence"] >= 1 and receipt["mutation_type"] == "directory_swap"
                     and receipt["phase"] == "committed" and receipt["active_path"] == binding["target_locator"]
@@ -1183,7 +1412,11 @@ def manager_state(
                     and owned_path(receipt["staging_path"], receipt["operation_id"])
                     and owned_path(receipt["backup_path"], receipt["operation_id"])
                     and _digest(receipt["after_digest"])
-                    and receipt["after_digest"] in {item["managed_digest"] for item in native_objects}
+                    and len([
+                        item for item in native_objects
+                        if item.get("path") == receipt["active_path"]
+                        and item.get("managed_digest") == receipt["after_digest"]
+                    ]) == 1
                     and ("before_digest" not in receipt or _digest(receipt["before_digest"]))
                 ):
                     return None
@@ -1199,10 +1432,13 @@ def manager_state(
         data_receipts = installation.get("data_receipts", {})
         if not isinstance(data_receipts, dict):
             return None
+        if installation.get("data_retained") is True and (clients or not data_receipts):
+            return None
         for receipt_id, receipt in data_receipts.items():
             if not (
                 _keys(receipt, {"data_receipt_id", "physical_backend_id", "scope", "locator", "ownership_digest", "state"}, {"created_at", "updated_at"})
-                and receipt.get("data_receipt_id") == receipt_id and receipt.get("scope") in {"user", "project"}
+                and receipt.get("data_receipt_id") == receipt_id and _valid_leaf_id(receipt_id)
+                and receipt.get("scope") in {"user", "project"}
                 and receipt.get("state") in {"owned", "unknown", "stale"} and _digest(receipt.get("ownership_digest"))
                 and receipt_id not in global_receipt_ids and _nonempty(receipt.get("physical_backend_id"))
                 and owned_path(receipt.get("locator"), receipt_id)
@@ -1222,20 +1458,25 @@ def manager_state(
     for receipt in transaction_receipts:
         if not (
             _keys(receipt, {"operation_id", "sequence", "mutation_type", "client_binding_id", "phase"}, {"operation_group_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest"})
-            and _nonempty(receipt["operation_id"]) and _exact_int(receipt["sequence"])
+            and _valid_leaf_id(receipt["operation_id"]) and _exact_int(receipt["sequence"])
             and receipt["sequence"] >= 1 and _nonempty(receipt["client_binding_id"])
             and receipt["phase"] == "committed"
             and receipt["operation_id"] not in global_operation_ids
         ):
             return None
         if receipt["mutation_type"] == "directory_remove":
+            removed = removal_authority.get(receipt["client_binding_id"]) if removal_authority else None
             if not (
                 set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "backup_path", "before_digest", "phase"}
-                and _nonempty(receipt["operation_group_id"])
+                and _valid_leaf_id(receipt["operation_group_id"])
                 and owned_path(receipt["active_path"], receipt["client_binding_id"])
                 and owned_path(receipt["backup_path"], receipt["operation_id"])
                 and PurePosixPath(receipt["active_path"]).parent == PurePosixPath(receipt["backup_path"]).parent
                 and _digest(receipt["before_digest"])
+                and (removed is None or (
+                    receipt["active_path"] == removed.get("active_path")
+                    and receipt["before_digest"] == removed.get("before_digest")
+                ))
             ):
                 return None
         elif receipt["mutation_type"] == "directory_swap":
@@ -1250,6 +1491,7 @@ def manager_state(
                 and owned_path(receipt["backup_path"], receipt["operation_id"])
                 and PurePosixPath(receipt["staging_path"]).parent == PurePosixPath(receipt["active_path"]).parent
                 and PurePosixPath(receipt["backup_path"]).parent == PurePosixPath(receipt["active_path"]).parent
+                and receipt["after_digest"] == authority["before_digest"]
             ):
                 return None
         else:
@@ -1299,6 +1541,53 @@ def removal_authority_from_installation(installation: Any) -> dict[str, dict[str
         if not all(_nonempty(value) for value in authority[binding_id].values()):
             return None
     return authority or None
+
+
+def frozen_data_receipt_map(installation: Any) -> dict[str, dict[str, Any]] | None:
+    """Freeze every persistent-data authority field before a non-purge remove.
+
+    ``updated_at`` is the sole documented mutable field; removal may refresh
+    that timestamp but may not redirect authority or alter ownership state.
+    ``created_at`` remains immutable when present.
+    """
+    receipts = installation.get("data_receipts") if isinstance(installation, dict) else None
+    if not isinstance(receipts, dict) or not receipts:
+        return None
+    frozen: dict[str, dict[str, Any]] = {}
+    for receipt_id, receipt in receipts.items():
+        if not (
+            isinstance(receipt, dict) and receipt.get("data_receipt_id") == receipt_id
+            and _valid_leaf_id(receipt_id) and _nonempty(receipt.get("physical_backend_id"))
+            and receipt.get("scope") in {"user", "project"} and _nonempty(receipt.get("locator"))
+            and _digest(receipt.get("ownership_digest"))
+            and receipt.get("state") in {"owned", "unknown", "stale"}
+        ):
+            return None
+        frozen[receipt_id] = {
+            key: copy.deepcopy(receipt.get(key))
+            for key in (
+                "data_receipt_id", "physical_backend_id", "scope", "locator",
+                "ownership_digest", "state", "created_at",
+            )
+        }
+    return frozen
+
+
+def public_receipts_bind_frozen_authority(value: Any, frozen: Any) -> bool:
+    if not isinstance(value, list) or not isinstance(frozen, dict):
+        return False
+    public = {
+        receipt_id: {
+            "data_receipt_id": receipt_id,
+            "physical_backend_id": receipt["physical_backend_id"],
+            "scope": receipt["scope"], "state": receipt["state"],
+        }
+        for receipt_id, receipt in frozen.items()
+    }
+    observed = {
+        item.get("data_receipt_id"): item for item in value if isinstance(item, dict)
+    }
+    return len(observed) == len(value) and observed == public
 
 
 def removal_receipts_bind_command(
@@ -1763,19 +2052,12 @@ def lifecycle(
             transactions = state.get("transaction_receipts", []) if state else []
             identity = installation_identity(installation)
             identities[operation] = identity
+            before_data = frozen_data_receipt_map(before_installation)
+            after_data = frozen_data_receipt_map(installation)
             passed = passed and bool(
                 installation and installation.get("clients") == {} and installation.get("data_retained") is True
-                and len(installation.get("data_receipts", {})) == 1
-                and {
-                    item["data_receipt_id"]: item for item in value["data"].get("retained_data", [])
-                } == {
-                    receipt_id: {
-                        "data_receipt_id": receipt_id,
-                        "physical_backend_id": receipt["physical_backend_id"],
-                        "scope": receipt["scope"], "state": receipt["state"],
-                    }
-                    for receipt_id, receipt in installation.get("data_receipts", {}).items()
-                }
+                and before_data is not None and before_data == after_data
+                and public_receipts_bind_frozen_authority(value["data"].get("retained_data"), before_data)
                 and isinstance(operation_group_id, str)
                 and removal_receipts_bind_command(
                     before_manager_state, state, removal_authority, operation_group_id, clients, installation,
@@ -2171,10 +2453,18 @@ def validate_placeholder_transformation(
     )
     if record["input_digest"] != independently_expected:
         return False
+    if original_raw is not None:
+        try:
+            raw_value = strict_json_loads(original_raw)
+        except (json.JSONDecodeError, DuplicateKeyError, ValueError):
+            return False
+        if raw_value != original:
+            return False
     try:
         mappings = tuple((item["placeholder"], Path(item["sandbox"])) for item in record["mappings"] if set(item) == {"placeholder", "sandbox"})
         replayed, replay_record = transform_sanitized_placeholders(
-            original, trusted_input_digest=independently_expected, mappings=mappings,
+            original, original_raw=original_raw, trusted_input_digest=None if original_raw is not None else independently_expected,
+            mappings=mappings,
         )
     except (KeyError, OSError, TypeError, ValueError):
         return False
@@ -2804,6 +3094,162 @@ class RetainedMarker:
                 pass
 
 
+class FrozenAuthoritySet:
+    """Descriptor-bound, deduplicated path authority retained across purge."""
+
+    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str | None]]):
+        self.records = records
+
+    def retained(self, paths: set[str]) -> bool:
+        try:
+            for path in paths:
+                kind, descriptor, identity, _ = self.records[path]
+                if kind != "existing":
+                    return False
+                opened = os.fstat(descriptor)
+                current = os.lstat(path)
+                if (opened.st_dev, opened.st_ino) != identity or (current.st_dev, current.st_ino) != identity:
+                    return False
+            return True
+        except (KeyError, OSError):
+            return False
+
+    def absent_and_unlinked(self) -> bool:
+        try:
+            for path, (kind, descriptor, identity, name) in self.records.items():
+                opened = os.fstat(descriptor)
+                if kind == "existing":
+                    if os.path.lexists(path) or (opened.st_dev, opened.st_ino) != identity or opened.st_nlink != 0:
+                        return False
+                else:
+                    if (opened.st_dev, opened.st_ino) != identity or name is None:
+                        return False
+                    try:
+                        os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                        return False
+                    except FileNotFoundError:
+                        pass
+            return True
+        except OSError:
+            return False
+
+    def partitioned(self, retained_paths: set[str]) -> bool:
+        try:
+            for path, (kind, descriptor, identity, name) in self.records.items():
+                opened = os.fstat(descriptor)
+                if (opened.st_dev, opened.st_ino) != identity:
+                    return False
+                if path in retained_paths:
+                    if kind != "existing":
+                        return False
+                    current = os.lstat(path)
+                    if (current.st_dev, current.st_ino) != identity:
+                        return False
+                elif kind == "existing":
+                    if os.path.lexists(path) or opened.st_nlink != 0:
+                        return False
+                else:
+                    try:
+                        os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                        return False
+                    except FileNotFoundError:
+                        pass
+            return True
+        except OSError:
+            return False
+
+    def close(self) -> None:
+        for _, descriptor, _, _ in self.records.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def freeze_complete_authority(
+    installation: Any, allowed_roots: tuple[Path, ...], public_receipts: Any,
+    transaction_receipts: Any = (),
+) -> tuple[FrozenAuthoritySet, set[str]] | None:
+    """Freeze every state/public-receipt authorized locator exactly once."""
+    data = frozen_data_receipt_map(installation)
+    if data is None or not public_receipts_bind_frozen_authority(public_receipts, data):
+        return None
+    data_paths = {receipt["locator"] for receipt in data.values()}
+    paths = set(data_paths)
+    clients = installation.get("clients") if isinstance(installation, dict) else None
+    if not isinstance(clients, dict):
+        return None
+    for binding in clients.values():
+        if not isinstance(binding, dict) or not _nonempty(binding.get("target_locator")):
+            return None
+        paths.add(binding["target_locator"])
+        for native in binding.get("native_objects", []):
+            if isinstance(native, dict) and "path" in native:
+                paths.add(native["path"])
+        for receipt in binding.get("receipts", []):
+            if isinstance(receipt, dict):
+                for field in ("active_path", "staging_path", "backup_path"):
+                    if _nonempty(receipt.get(field)):
+                        paths.add(receipt[field])
+    if not isinstance(transaction_receipts, (list, tuple)):
+        return None
+    for receipt in transaction_receipts:
+        if not isinstance(receipt, dict):
+            return None
+        for field in ("active_path", "staging_path", "backup_path"):
+            if _nonempty(receipt.get(field)):
+                paths.add(receipt[field])
+    records: dict[str, tuple[str, int, tuple[int, int], str | None]] = {}
+    try:
+        for value in sorted(paths):
+            path = Path(value)
+            if not path.is_absolute() or ".." in path.parts:
+                raise ValueError("authority path is not absolute and lexical")
+            roots = tuple(root.resolve(strict=True) for root in allowed_roots)
+            try:
+                current = path.lstat()
+            except FileNotFoundError:
+                ancestor = path.parent
+                while not ancestor.exists():
+                    if ancestor == ancestor.parent:
+                        raise ValueError("absent authority path has no existing ancestor")
+                    ancestor = ancestor.parent
+                parent = ancestor.resolve(strict=True)
+                try:
+                    relative = path.relative_to(ancestor)
+                except ValueError as error:
+                    raise ValueError("absent authority path changed lexically") from error
+                missing_name = relative.parts[0] if relative.parts else ""
+                if parent != ancestor or str(ancestor / relative) != value or not missing_name or not any(root == parent or root in parent.parents for root in roots):
+                    raise ValueError("absent authority path is not canonical and contained")
+                descriptor = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+                metadata = os.fstat(descriptor)
+                if (metadata.st_dev, metadata.st_ino) != (parent.stat().st_dev, parent.stat().st_ino):
+                    os.close(descriptor)
+                    raise ValueError("absent authority parent changed while freezing")
+                try:
+                    os.stat(missing_name, dir_fd=descriptor, follow_symlinks=False)
+                    os.close(descriptor)
+                    raise ValueError("absent authority path appeared while freezing")
+                except FileNotFoundError:
+                    records[value] = ("absent", descriptor, (metadata.st_dev, metadata.st_ino), missing_name)
+            else:
+                canonical = canonical_allowed_locator(path, allowed_roots)
+                if canonical is None or str(canonical) != value:
+                    raise ValueError("authority path is not canonical and contained")
+                descriptor = os.open(canonical, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                metadata = os.fstat(descriptor)
+                identity = (metadata.st_dev, metadata.st_ino)
+                if identity != (current.st_dev, current.st_ino):
+                    os.close(descriptor)
+                    raise ValueError("authority path changed while freezing")
+                records[value] = ("existing", descriptor, identity, None)
+        return FrozenAuthoritySet(records), data_paths
+    except (OSError, ValueError):
+        FrozenAuthoritySet(records).close()
+        return None
+
+
 def create_contained_marker(
     locator: Path | None, allowed_roots: tuple[Path, ...], leaf: str, body: bytes,
 ) -> RetainedMarker | None:
@@ -2992,8 +3438,44 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     repair_preserved = marker is not None and marker.verify()
     switch = execute(["switch", "e2e-external-package", "--to", "./" + alternate.name, "--format", "json"])
     switch_preserved = marker is not None and marker.verify()
+    pre_remove_state = manager_state(manager)
+    pre_remove_installation = selected_manager_installation(manager, "e2e-external-package")
+    pre_remove_data = frozen_data_receipt_map(pre_remove_installation)
+    projected_public_receipts = [
+        {
+            "data_receipt_id": receipt_id, "physical_backend_id": receipt["physical_backend_id"],
+            "scope": receipt["scope"], "state": receipt["state"],
+        }
+        for receipt_id, receipt in (pre_remove_data or {}).items()
+    ]
+    removal_frozen_result = freeze_complete_authority(
+        pre_remove_installation, (root, manager), projected_public_receipts,
+        pre_remove_state.get("transaction_receipts", []) if pre_remove_state else None,
+    )
+    removal_authority, frozen_data_paths = removal_frozen_result if removal_frozen_result is not None else (None, set())
     remove = execute(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"])
-    remove_preserved = marker is not None and marker.verify()
+    try:
+        remove_value = strict_json_loads(remove.stdout)
+    except (json.JSONDecodeError, DuplicateKeyError, ValueError):
+        remove_value = None
+    retained_state = manager_state(manager)
+    retained_installation = selected_manager_installation(manager, "e2e-external-package")
+    remove_checks = {
+        "marker_retained": marker is not None and marker.verify(),
+        "authority_partitioned": removal_authority is not None and removal_authority.partitioned(frozen_data_paths),
+        "data_map_unchanged": pre_remove_data == frozen_data_receipt_map(retained_installation),
+        "stdout_bound": isinstance(remove_value, dict) and isinstance(remove_value.get("data"), dict)
+        and public_receipts_bind_frozen_authority(
+            remove_value["data"].get("retained_data"), pre_remove_data,
+        ),
+    }
+    remove_preserved = all(remove_checks.values())
+    purge_public_receipts = remove_value.get("data", {}).get("retained_data") if isinstance(remove_value, dict) else None
+    purge_frozen_result = freeze_complete_authority(
+        retained_installation, (root, manager), purge_public_receipts,
+        retained_state.get("transaction_receipts", []) if retained_state else None,
+    )
+    purge_authority, purge_data_paths = purge_frozen_result if purge_frozen_result is not None else (None, set())
     purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
     purge_state = manager_state(manager)
     remaining = [
@@ -3001,7 +3483,11 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         if isinstance(item, dict) and item.get("installation_id") == (initial_installation or {}).get("installation_id")
     ] if purge_state else []
     authority_consumed = data_receipt(manager, "e2e-external-package") is None and not remaining
-    purge_deleted = marker is not None and marker.purged((root, manager)) and authority_consumed
+    purge_deleted = bool(
+        marker is not None and marker.purged((root, manager)) and authority_consumed
+        and purge_authority is not None and purge_data_paths == frozen_data_paths
+        and purge_authority.absent_and_unlinked()
+    )
     after = observe(home, manager)
     proof = {
         "info_preserved": info_preserved,
@@ -3014,11 +3500,16 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     exits = (add, info, update, repair, switch, remove, purge)
     if marker is not None:
         marker.close()
+    if removal_authority is not None:
+        removal_authority.close()
+    if purge_authority is not None:
+        purge_authority.close()
     return safe_locator and all(item.returncode == 0 for item in exits) and all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof,
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,
         "updated_identity": updated_identity, "initial_data_receipt": initial_receipt,
         "updated_data_receipt": updated_receipt,
+        "remove_authority_checks": remove_checks,
         "purge_authority_consumed": authority_consumed,
         "expected_initial_identity": expected_initial_identity,
         "expected_updated_identity": expected_updated_identity,

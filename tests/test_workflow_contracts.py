@@ -94,6 +94,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(job["permissions"], {"contents": "read"})
         self.assertLessEqual(int(job["timeout-minutes"]), 10)
 
+    def test_enforced_jobs_are_not_disabled_by_impossible_capture_lineage(self) -> None:
+        workflow = load(LAUNCH)
+        self.assertNotIn("CAPTURE_TRUST_READY", workflow["env"])
+        self.assertNotIn("capture-trust-unavailable", workflow["jobs"])
+        for name in (
+            "native-release", "node22-npm-facade", "aggregate-one-release",
+            "protected-observer-inputs", "enforced-stable-gate", "attest-stable-evidence",
+        ):
+            self.assertNotIn("CAPTURE_TRUST", workflow["jobs"][name]["if"])
+        self.assertNotIn("capture-transcript", commands(workflow["jobs"]["enforced-stable-gate"]))
+
     def test_live_gate_resolves_official_release_and_native_matrix(self) -> None:
         workflow = load(LAUNCH)
         native = workflow["jobs"]["native-release"]

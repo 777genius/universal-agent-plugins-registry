@@ -87,7 +87,8 @@ TRUSTED_OBSERVER_JOB_WORKFLOW_REF = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workf
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
 TRUSTED_CLI_RELEASE_TAG = "agentplugins-v" + STABLE_LAUNCH_VERSION_FILE.read_text(encoding="utf-8").strip()
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
-TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:c894da042d20c71274822aa943410343df7fc519076ae11b80d96a403a318d08"
+TRUSTED_CLI_RELEASE_COMMIT = "caffa9ac2a962462a05d5342250f4810ddce0856"
+TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:1e7e5ca4d72be2e188bbfa002cf19975b4e1b100913a329bbaf963b5633abb85"
 
 
 def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, Any]:
@@ -99,7 +100,8 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
     if not (
         set(release) == {
             "repository", "tag", "tag_commit", "asset", "version_stdout", "binary_sha256",
-            "binary_digest_status", "capture_evidence_level", "release_authentication",
+            "binary_digest_status", "capture_evidence_level", "release_binary_authenticated",
+            "release_provenance_linkage",
         }
         and
         release.get("repository") == "777genius/plugin-kit-ai"
@@ -110,13 +112,8 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
         and release.get("binary_sha256") is None
         and release.get("binary_digest_status") == "not_retained_in_capture"
         and release.get("capture_evidence_level") == "sanitized_manifest_only_no_raw_or_binary_linkage"
-        and release.get("release_authentication") == {
-            "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
-            "predicate_type": "https://slsa.dev/provenance/v1",
-            "subject_repository": TRUSTED_CLI_RELEASE_REPOSITORY,
-            "subject_tag": TRUSTED_CLI_RELEASE_TAG,
-            "tag_commit": release.get("tag_commit"),
-        }
+        and release.get("release_binary_authenticated") is False
+        and release.get("release_provenance_linkage") == "unlinked_sanitized_fixture_provenance"
     ):
         raise ValueError("invalid capture release identity")
     if not isinstance(value["sanitization_rules"], list) or len(value["sanitization_rules"]) < 5:
@@ -181,15 +178,13 @@ def validate_capture_release_binding(
     *, release_manifest: dict[str, Any], release_identity: dict[str, Any],
     release_manifest_digest: str, release_checksums_digest: str,
     asset_name: str, asset_digest: str, asset_attestation: dict[str, Any],
-    capture_transcript_manifest: dict[str, Any] | None = None,
-    capture_transcript_attestation: dict[str, Any] | None = None,
     provenance_path: Path = CAPTURE_PROVENANCE,
 ) -> dict[str, Any]:
-    """Bind sanitized conformance captures to separately authenticated release evidence.
+    """Validate fixture truth and independently authenticate the enforced binary.
 
-    The retained captures do not contain raw stdout or a binary linkage.  This
-    contract therefore authenticates the exact release used by enforced runs
-    while preserving that narrower, explicit evidence claim.
+    The immutable fixtures have no retained raw transcript or binary linkage.
+    Successful release verification says only that the binary selected for the
+    enforced run is the independently authenticated immutable release asset.
     """
     provenance = validate_capture_provenance(provenance_path)
     captured = provenance["release"]
@@ -201,7 +196,14 @@ def validate_capture_release_binding(
         "repository": TRUSTED_CLI_RELEASE_REPOSITORY,
         "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
         "tag": TRUSTED_CLI_RELEASE_TAG,
-        "tag_commit": captured["tag_commit"],
+        "tag_commit": TRUSTED_CLI_RELEASE_COMMIT,
+        "issuer": "https://token.actions.githubusercontent.com",
+        "source_ref": f"refs/tags/{TRUSTED_CLI_RELEASE_TAG}",
+        "source_digest": TRUSTED_CLI_RELEASE_COMMIT,
+        "predicate_type": "https://slsa.dev/provenance/v1",
+        "subject_name": asset_name,
+        "subject_digest": asset_digest,
+        "runner_environment": "github-hosted",
         "asset_name": asset_name,
         "asset_digest": asset_digest,
         "verified": True,
@@ -209,94 +211,36 @@ def validate_capture_release_binding(
     if not (
         set(release_identity) == {"repository", "tag", "tag_commit", "release_id", "immutable"}
         and release_identity == {
-            "repository": captured["repository"], "tag": captured["tag"],
-            "tag_commit": captured["tag_commit"], "release_id": release_identity.get("release_id"),
+            "repository": TRUSTED_CLI_RELEASE_REPOSITORY, "tag": TRUSTED_CLI_RELEASE_TAG,
+            "tag_commit": TRUSTED_CLI_RELEASE_COMMIT, "release_id": release_identity.get("release_id"),
             "immutable": True,
         }
         and type(release_identity.get("release_id")) is int and release_identity["release_id"] > 0
-        and release_manifest.get("tag") == captured["tag"]
-        and release_manifest.get("commit") == captured["tag_commit"]
+        and release_manifest.get("tag") == TRUSTED_CLI_RELEASE_TAG
+        and release_manifest.get("commit") == TRUSTED_CLI_RELEASE_COMMIT
         and release_manifest.get("version") == captured["version_stdout"].removeprefix("agentplugins ")
-        and isinstance(declared, dict) and declared.get("file") == captured["asset"] == asset_name
+        and isinstance(declared, dict) and declared.get("file") == asset_name
         and isinstance(declared.get("sha256"), str)
         and asset_digest == "sha256:" + declared["sha256"] and DIGEST.fullmatch(asset_digest)
         and DIGEST.fullmatch(release_manifest_digest) and DIGEST.fullmatch(release_checksums_digest)
         and asset_attestation == expected_attestation
     ):
-        raise ValueError("sanitized captures are not bound to the authenticated immutable release")
+        raise ValueError("enforced binary is not bound to the authenticated immutable release")
     validate_release_manifest(
         release_manifest, repository=TRUSTED_CLI_RELEASE_REPOSITORY,
-        tag=TRUSTED_CLI_RELEASE_TAG, tag_commit=captured["tag_commit"],
+        tag=TRUSTED_CLI_RELEASE_TAG, tag_commit=TRUSTED_CLI_RELEASE_COMMIT,
     )
-    if capture_transcript_manifest is None or capture_transcript_attestation is None:
-        raise ValueError("enforced captures require an externally authenticated raw transcript manifest")
-    manifest = capture_transcript_manifest
-    manifest_digest = "sha256:" + hashlib.sha256(canonical_json(manifest)).hexdigest()
-    if not (
-        set(manifest) == {"schema_version", "release", "binary", "attestation", "sanitization", "captures"}
-        and manifest.get("schema_version") == 1
-        and manifest.get("release") == {
-            "repository": captured["repository"], "tag": captured["tag"], "commit": captured["tag_commit"],
-        }
-        and manifest.get("binary") == {"asset": asset_name, "digest": asset_digest}
-        and manifest.get("attestation") == {
-            "predicate_type": "https://slsa.dev/provenance/v1",
-            "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
-            "verified": True,
-        }
-        and manifest.get("sanitization") == {
-            "transform": "agentplugins-deterministic-sanitization",
-            "version": 1,
-        }
-        and capture_transcript_attestation == {
-            "predicate_type": "https://slsa.dev/provenance/v1",
-            "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
-            "subject_digest": manifest_digest,
-            "verified": True,
-        }
-        and isinstance(manifest.get("captures"), list)
-    ):
-        raise ValueError("capture transcript manifest lacks release/binary/attestation binding")
-    retained = {
-        (item.get("fixture_root", "."), item["fixture"]): item for item in provenance["captures"]
-    }
-    observed: set[tuple[str, str]] = set()
-    for item in manifest["captures"]:
-        required = {
-            "fixture", "fixture_root", "argv", "exit_code", "raw_stdout_digest",
-            "raw_stderr_digest", "sanitized_stdout_digest",
-        }
-        optional = {"sanitized_stderr_digest"}
-        if not isinstance(item, dict) or not required <= set(item) <= required | optional:
-            raise ValueError("capture transcript manifest has an invalid record")
-        key = (item["fixture_root"], item["fixture"])
-        capture = retained.get(key)
-        if key in observed or capture is None or item["argv"] != capture["argv"]:
-            raise ValueError("capture transcript manifest is not bound to retained fixture argv")
-        if not (
-            type(item["exit_code"]) is int
-            and DIGEST.fullmatch(str(item["raw_stdout_digest"]))
-            and DIGEST.fullmatch(str(item["raw_stderr_digest"]))
-            and item["sanitized_stdout_digest"] == capture["sanitized_sha256"]
-            and (
-                ("stderr_sha256" not in capture and "sanitized_stderr_digest" not in item)
-                or item.get("sanitized_stderr_digest") == capture.get("stderr_sha256")
-            )
-        ):
-            raise ValueError("capture transcript manifest lacks raw/sanitized digest binding")
-        observed.add(key)
-    if observed != set(retained):
-        raise ValueError("capture transcript manifest does not cover every retained capture")
     return {
+        "fixture_release_binary_authenticated": False,
+        "fixture_release_provenance_linkage": "unlinked",
+        "enforced_binary_authenticated": True,
         "capture_evidence_level": captured["capture_evidence_level"],
-        "release_binary_authenticated": True,
         "binary_digest": asset_digest,
-        "tag_commit": captured["tag_commit"],
+        "fixture_recorded_tag_commit": captured["tag_commit"],
+        "enforced_release_tag_commit": TRUSTED_CLI_RELEASE_COMMIT,
         "release_manifest_digest": release_manifest_digest,
         "release_checksums_digest": release_checksums_digest,
         "attestation": copy.deepcopy(asset_attestation),
-        "capture_transcript_manifest_digest": manifest_digest,
-        "capture_transcript_attestation": copy.deepcopy(capture_transcript_attestation),
     }
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
@@ -440,18 +384,16 @@ def authoritative_native_client_evidence(
     discovery = evidence.get("discovery_operation")
     expected_client = client or evidence.get("client")
     return bool(
-        expected_client in CLIENT_ROOTS
+        expected_client in {"copilot", "vscode"}
         and evidence.get("client") == expected_client
         and isinstance(client_version, str) and client_version
         and isinstance(version, dict)
         and version.get("operation") == "version"
-        and isinstance(version.get("argv"), list) and version["argv"]
-        and version["argv"][0] == expected_client
+        and version.get("argv") == ["copilot", "--version"]
         and version.get("observed_client_version") == client_version
         and isinstance(discovery, dict)
-        and discovery.get("operation") in {"discovery", "list"}
-        and isinstance(discovery.get("argv"), list) and discovery["argv"]
-        and discovery["argv"][0] == expected_client
+        and discovery.get("operation") == "list"
+        and discovery.get("argv") == ["copilot", "plugin", "list"]
         and discovery.get("discovered") is True
         and (product_id is None or discovery.get("product_id") == product_id)
     )
@@ -719,14 +661,20 @@ def verify_github_asset_attestation(
     asset: Path, repository: str, workflow: str, tag: str, tag_commit: str, digest: str,
 ) -> dict[str, Any]:
     """Cryptographically verify one GitHub artifact attestation with fixed identities."""
-    if repository != TRUSTED_CLI_RELEASE_REPOSITORY or workflow != TRUSTED_CLI_RELEASE_WORKFLOW:
+    if (
+        repository != TRUSTED_CLI_RELEASE_REPOSITORY
+        or workflow != TRUSTED_CLI_RELEASE_WORKFLOW
+        or tag != TRUSTED_CLI_RELEASE_TAG
+        or tag_commit != TRUSTED_CLI_RELEASE_COMMIT
+    ):
         raise ValueError("artifact attestation repository/workflow is not the trusted release identity")
     if not FULL_SHA.fullmatch(tag_commit) or not DIGEST.fullmatch(digest):
         raise ValueError("artifact attestation commit or digest is invalid")
     command = [
         "gh", "attestation", "verify", str(asset), "--repo", repository,
         "--signer-workflow", workflow, "--source-ref", f"refs/tags/{tag}",
-        "--source-digest", tag_commit, "--format", "json",
+        "--source-digest", tag_commit, "--predicate-type", "https://slsa.dev/provenance/v1",
+        "--deny-self-hosted-runners", "--format", "json",
     ]
     try:
         completed = subprocess.run(command, text=True, capture_output=True, timeout=120, check=False)
@@ -735,8 +683,8 @@ def verify_github_asset_attestation(
     if completed.returncode:
         raise ValueError("GitHub artifact attestation is missing, invalid, or has the wrong release identity")
     try:
-        records = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
+        records = strict_json_loads(completed.stdout)
+    except (json.JSONDecodeError, ValueError) as error:
         raise ValueError("GitHub artifact attestation verifier returned invalid JSON") from error
     if not isinstance(records, list) or not records:
         raise ValueError("GitHub artifact attestation verifier returned no verified statement")
@@ -745,13 +693,20 @@ def verify_github_asset_attestation(
     for record in records:
         statement = record.get("verificationResult", {}).get("statement", {}) if isinstance(record, dict) else {}
         subjects = statement.get("subject", []) if isinstance(statement, dict) else []
-        if any(subject.get("name") == asset.name and subject.get("digest", {}).get("sha256") == expected_sha for subject in subjects if isinstance(subject, dict)):
+        if (
+            statement.get("predicateType") == "https://slsa.dev/provenance/v1"
+            and any(subject.get("name") == asset.name and subject.get("digest", {}).get("sha256") == expected_sha for subject in subjects if isinstance(subject, dict))
+        ):
             matching.append(record)
     if not matching:
         raise ValueError("GitHub artifact attestation subject name/digest does not match the native asset")
     return {
         "repository": repository, "workflow": workflow, "tag": tag,
-        "tag_commit": tag_commit, "asset_name": asset.name, "asset_digest": digest,
+        "tag_commit": tag_commit, "issuer": "https://token.actions.githubusercontent.com",
+        "source_ref": f"refs/tags/{tag}", "source_digest": tag_commit,
+        "predicate_type": "https://slsa.dev/provenance/v1", "subject_name": asset.name,
+        "subject_digest": digest, "runner_environment": "github-hosted",
+        "asset_name": asset.name, "asset_digest": digest,
         "verified": True,
     }
 
@@ -2739,8 +2694,6 @@ def main() -> int:
     parser.add_argument("--directory-trust", type=Path)
     parser.add_argument("--prepared-context", type=Path, help="workflow-prepared official release/Directory/challenge context")
     parser.add_argument("--asset-name", help="manifest-listed native binary asset for this runner")
-    parser.add_argument("--capture-transcript-manifest", type=Path, help="raw-to-sanitized capture transcript manifest")
-    parser.add_argument("--capture-transcript-attestation", type=Path, help="verified attestation for the capture transcript manifest")
     parser.add_argument("--native-observations", type=Path, help="directory containing six native and one Node 22 observations")
     parser.add_argument("--copilot-executable", type=Path, help="exact local GitHub Copilot CLI executable")
     parser.add_argument("--copilot-metadata", type=Path, help="validated npm signature/version/integrity metadata")
@@ -2757,8 +2710,8 @@ def main() -> int:
     challenge = None
     github: dict[str, str] = {}
     if args.mode == "enforced":
-        if not all((args.prepared_context, args.asset_name, args.observer_bundle, args.capture_transcript_manifest, args.capture_transcript_attestation)):
-            raise ValueError("enforced mode requires prepared official context, asset, observer, and authenticated capture transcript")
+        if not all((args.prepared_context, args.asset_name, args.observer_bundle)):
+            raise ValueError("enforced mode requires prepared official context, asset, and observer")
         if any(value is not None for value in (args.binary, args.binary_digest, args.expected_version, args.directory_origin, args.directory_snapshot, args.directory_envelope, args.directory_trust)):
             raise ValueError("enforced mode forbids caller-paired binary/version/digest/Directory/driver inputs")
         prepared = json.loads(args.prepared_context.read_text())
@@ -2823,8 +2776,6 @@ def main() -> int:
             release_checksums_digest=release_checksums_digest,
             asset_name=args.asset_name, asset_digest=prepared_asset_digest,
             asset_attestation=prepared_attestation,
-            capture_transcript_manifest=strict_json_loads(args.capture_transcript_manifest.read_bytes()),
-            capture_transcript_attestation=strict_json_loads(args.capture_transcript_attestation.read_bytes()),
         )
         args.binary = binary_path
         args.binary_digest = "sha256:" + declared["sha256"]
