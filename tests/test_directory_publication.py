@@ -1243,7 +1243,10 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertEqual(prepare_job["permissions"], {"contents": "read"})
         self.assertNotIn("secrets.", json.dumps(prepare_job))
         self.assertEqual(signer["environment"], "directory-publication")
-        self.assertEqual(signer["if"], "github.ref == 'refs/heads/main'")
+        self.assertEqual(
+            signer["if"],
+            "github.ref == 'refs/heads/main' && needs.prepare.outputs.completed != 'true'",
+        )
         signer_commands = "\n".join(step.get("run", "") for step in signer["steps"] if isinstance(step, dict))
         self.assertNotIn("build_registry.py", signer_commands)
         self.assertNotIn("plugins/", signer_commands)

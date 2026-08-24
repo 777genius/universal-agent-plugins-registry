@@ -771,20 +771,48 @@ class OpenAIAppBindingTests(unittest.TestCase):
         ]
         evidence_id = "atlassian/atlassian/materialization-codex"
         policy["current_evidence"] = [evidence_id]
-        source["evidence"].append({
+        evidence = {
+            "schema_version": 1,
             "id": evidence_id,
+            "product_id": product["id"],
             "distribution_id": upstream["id"],
             "release_sequence": release["sequence"],
             "package_tree_digest": release["tree_digest"],
+            "manifest_digest": release["manifest_digest"],
+            "source_repository": local["releases"][0]["package_source"]["repository"],
+            "source_revision": local["releases"][0]["package_source"]["revision"],
+            "source_path": local["releases"][0]["package_source"]["path"],
             "level": "materialization",
             "outcome": "passed",
             "client": "codex",
-        })
+            "client_version": "1.0.0",
+            "installer_version": policy["minimum_installer_version"],
+            "os": "linux",
+            "architecture": "amd64",
+            "observed_at": "2026-08-24T00:00:00Z",
+            "artifact": {
+                "repository": "atlassian/evidence",
+                "revision": "b" * 40,
+                "path": "evidence/materialization-codex.json",
+                "digest": "sha256:" + "c" * 64,
+            },
+        }
+        source["evidence"].append(evidence)
         product["distributions"].append(upstream["id"])
         product["distributions"].sort()
         source["distributions"].append(upstream)
         source["distributions"].sort(key=lambda item: item["id"])
 
+        with self.assertRaisesRegex(
+            registry.RegistryError,
+            rf"^{upstream['id']}: release {release['sequence']} lacks current positive "
+            r"package compatibility evidence \(passed materialization\) for codex$",
+        ):
+            registry.resolve_directory(source, upstream["id"], ["codex"])
+
+        evidence["source_repository"] = release["package_source"]["repository"]
+        evidence["source_revision"] = release["package_source"]["revision"]
+        evidence["source_path"] = release["package_source"]["path"]
         selection = registry.resolve_directory(source, "atlassian", ["codex"])
         self.assertEqual(selection["distribution_id"], upstream["id"])
         self.assertNotIn("atlassian", self.generated_names(source))
