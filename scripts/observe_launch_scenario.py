@@ -99,7 +99,7 @@ def _validate_package_revision(value: Any, *, revision: str | None, tree: str, m
         _keys(value, required, optional)
         and ("version" not in value or _nonempty(value["version"]))
         and value["tree_digest"] == tree and value["manifest_digest"] == manifest
-        and (revision is None or value.get("resolved_revision") == revision)
+        and (not revision or value.get("resolved_revision") == revision)
         and ("resolved_revision" not in value or FULL_SHA.fullmatch(value["resolved_revision"]) is not None)
     )
 
@@ -194,13 +194,17 @@ def _validate_group_target(
     if not (
         output["operation_id"] == data["operation_id"]
         and output["plugin"] == data["plugin"]
+        and _nonempty(output["version"])
         and output["version"] == data.get("version", output["version"])
+        and _nonempty(output["source"])
         and output["source"] == data.get("source", output["source"])
         and output["tree_digest"] == data.get("tree_digest", output["tree_digest"])
         and _digest(output["tree_digest"])
         and _digest(output["manifest_digest"])
+        and output["manifest_digest"] == data.get("manifest_digest", output["manifest_digest"])
         and output["dry_run"] is False
         and ("revision" not in output or FULL_SHA.fullmatch(output["revision"]) is not None)
+        and ("revision" not in data or "revision" in output)
         and ("revision" not in data or output.get("revision") == data["revision"])
     ):
         return None
@@ -264,6 +268,8 @@ def _validate_grouped(value: dict[str, Any], command: str, *, verify_acquisition
         and data["status"] in ({"completed"} if command != "remove" else {"completed", "data_retained"})
         and _exact_int(data["succeeded"]) and data["succeeded"] > 0
         and _exact_int(data["failed"], 0) and _nonempty(data["plugin"])
+        and ("version" not in data or _nonempty(data["version"]))
+        and ("source" not in data or _nonempty(data["source"]))
         and data["dry_run"] is False and isinstance(data["targets"], list) and data["targets"]
         and ("tree_digest" not in data or _digest(data["tree_digest"]))
         and ("manifest_digest" not in data or _digest(data["manifest_digest"]))
@@ -302,6 +308,13 @@ def validate_cli_envelope(
     value: Any, command: str, *, requested_argv: list[str] | tuple[str, ...] | None = None,
 ) -> bool:
     """Validate public agentplugins 0.1.14 JSON, without accepting invented shapes."""
+    if requested_argv is not None:
+        normalized_argv = list(requested_argv)
+        try:
+            command_index = normalized_argv.index(command)
+        except ValueError:
+            return False
+        requested_argv = normalized_argv[command_index:]
     if not (
         _keys(value, {"schema_version", "command", "result", "data"})
         and _exact_int(value.get("schema_version"), 1)
@@ -320,7 +333,10 @@ def validate_cli_envelope(
                 requested_targets = argv[argv.index("--target") + 1].split(",")
             except (ValueError, IndexError):
                 return False
+            expected_argv = [command, requested_source, "--target", ",".join(requested_targets), "--format", "json"]
             valid = bool(
+                argv == expected_argv
+                and
                 requested_targets == [item["target"] for item in data["targets"]]
                 and _requested_source_matches(requested_source, data, command)
             )
@@ -346,11 +362,17 @@ def validate_cli_envelope(
                 or client["authentication"] not in AUTHENTICATIONS
                 or client["policy"] not in POLICIES or client["verification"] not in VERIFICATIONS
                 or ((client["activation"] == "active") != (client["verification"] == "installation_verified"))
-                or not isinstance(revision, dict) or not _digest(revision.get("tree_digest"))
+                or not isinstance(revision, dict)
+                or set(revision) != {"version", "resolved_revision", "tree_digest", "manifest_digest"}
+                or not _digest(revision.get("tree_digest"))
                 or not _digest(revision.get("manifest_digest"))
                 or revision.get("version") != data["version"]
                 or FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is None
                 or ("affected_surfaces" in client and client["affected_surfaces"] != [client_id])
+                or ("receipt_reconciled" in client and type(client["receipt_reconciled"]) is not bool)
+                or ("native_discovery_reconciled" in client and type(client["native_discovery_reconciled"]) is not bool)
+                or ("native_identity_state" in client and not _nonempty(client["native_identity_state"]))
+                or ("client_version" in client and not _nonempty(client["client_version"]))
             ):
                 return False
             seen.add(client_id)
@@ -364,6 +386,8 @@ def validate_cli_envelope(
             argv = list(requested_argv)
             try:
                 valid = (
+                    argv == ["info", data["name"], "--target", ",".join(item["client_id"] for item in clients), "--format", "json"]
+                    and
                     argv[argv.index("info") + 1] == data["name"]
                     and argv[argv.index("--target") + 1].split(",") == [item["client_id"] for item in clients]
                 )
@@ -381,7 +405,13 @@ def validate_cli_envelope(
             and type(data["backup_created"]) is bool
         ):
             return False
-        return (data["migrated"], data["backup_created"]) == ((0, False) if data["dry_run"] else (data["installations"], True))
+        valid = (data["migrated"], data["backup_created"]) == ((0, False) if data["dry_run"] else (data["installations"], True))
+        if valid and requested_argv is not None:
+            valid = list(requested_argv) == (
+                ["migrate-state", "--dry-run", "--format", "json"]
+                if data["dry_run"] else ["migrate-state", "--format", "json"]
+            )
+        return valid
     return False
 
 
@@ -457,7 +487,14 @@ def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[s
         current_root = root.lstat()
         if not stat.S_ISDIR(opened_root.st_mode) or (opened_root.st_dev, opened_root.st_ino) != (current_root.st_dev, current_root.st_ino):
             raise ValueError("snapshot root changed during observation")
-        snapshot["."] = {"kind": "directory", "mode": stat.S_IMODE(opened_root.st_mode)}
+        def metadata_identity(metadata: os.stat_result) -> dict[str, int]:
+            return {
+                "device": metadata.st_dev, "inode": metadata.st_ino,
+                "ctime_ns": metadata.st_ctime_ns, "mtime_ns": metadata.st_mtime_ns,
+                "mode": stat.S_IMODE(metadata.st_mode),
+            }
+
+        snapshot["."] = {"kind": "directory", **metadata_identity(opened_root)}
         def walk(directory_fd: int, relative_directory: str) -> None:
             before = os.fstat(directory_fd)
             names = sorted(os.listdir(directory_fd))
@@ -466,7 +503,7 @@ def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[s
                     raise ValueError("invalid directory entry during observation")
                 relative = name if relative_directory == "." else relative_directory + "/" + name
                 metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                common = {"mode": stat.S_IMODE(metadata.st_mode)}
+                common = metadata_identity(metadata)
                 if stat.S_ISLNK(metadata.st_mode) or not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
                     raise ValueError(f"unsupported filesystem object during observation: {relative}")
                 if stat.S_ISDIR(metadata.st_mode):
@@ -514,6 +551,24 @@ def _stable_tree_snapshot(root: Path) -> tuple[dict[str, dict[str, Any]], dict[s
             if (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns):
                 raise ValueError(f"directory changed during observation: {relative_directory}")
         walk(root_fd, ".")
+        # Directory digests deliberately exclude filesystem identity.  The
+        # identity fields above make local before/after mutation comparisons
+        # replacement-sensitive; these closure digests remain portable.
+        for relative in sorted(
+            (name for name, item in snapshot.items() if item["kind"] == "directory"),
+            key=lambda name: len(PurePosixPath(name).parts), reverse=True,
+        ):
+            prefix = "" if relative == "." else relative + "/"
+            children = []
+            for name, item in snapshot.items():
+                if name == relative or not name.startswith(prefix):
+                    continue
+                remainder = name[len(prefix):]
+                if "/" in remainder:
+                    continue
+                children.append([remainder, item["kind"], item.get("digest", ""), item["mode"]])
+            framed = canonical_json(children)
+            snapshot[relative]["digest"] = "sha256:" + hashlib.sha256(framed).hexdigest()
         current_root = root.lstat()
         if (opened_root.st_dev, opened_root.st_ino) != (current_root.st_dev, current_root.st_ino):
             raise ValueError("snapshot root was replaced during observation")
@@ -829,7 +884,9 @@ def manager_facts(manager: Path, product: str) -> dict[str, Any]:
     }
 
 
-def manager_state(manager: Path) -> dict[str, Any] | None:
+def manager_state(
+    manager: Path, *, removal_authority: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     """Read only the State-v4 contract file, without following a link."""
     try:
         _, bodies = _stable_tree_snapshot(manager)
@@ -849,6 +906,7 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
     global_operation_ids: set[str] = set()
     global_paths: dict[str, str] = {}
     installation_groups: set[str] = set()
+    binding_authority: dict[str, dict[str, Any]] = {}
 
     def owned_path(value: Any, owner: str) -> bool:
         if not isinstance(value, str) or not value.startswith("/") or "\\" in value:
@@ -904,7 +962,8 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
                 "client_binding_id", "client_id", "scope", "target_locator", "physical_artifact_id",
                 "materialization", "activation", "authentication", "policy", "verification", "updated_at",
             }
-            optional_binding = {"package_revision", "data_receipt_id", "affected_surfaces", "native_objects", "receipts"}
+            optional_binding = {"data_receipt_id", "affected_surfaces", "native_objects", "receipts"}
+            required_binding |= {"package_revision"}
             if (
                 not _keys(binding, required_binding, optional_binding)
                 or binding.get("client_binding_id") != binding_id or binding_id in global_binding_ids
@@ -928,8 +987,8 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
                 return None
             if "receipts" in binding and not isinstance(binding["receipts"], list):
                 return None
-            revision = binding.get("package_revision")
-            if revision is not None and not (
+            revision = binding["package_revision"]
+            if not (
                 _validate_package_revision(
                     revision, revision=source["resolved_revision"], tree=source["tree_digest"],
                     manifest=package["manifest_digest"],
@@ -965,6 +1024,14 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
                 ):
                     return None
                 global_operation_ids.add(receipt["operation_id"])
+            binding_authority[binding_id] = {
+                "client_binding_id": binding_id,
+                "client_id": client_id,
+                "active_path": binding["target_locator"],
+                "physical_artifact_id": binding["physical_artifact_id"],
+                "before_digest": next(iter({item["managed_digest"] for item in native_objects}), None),
+                "operation_group_id": installation.get("operation_group_id"),
+            }
         data_receipts = installation.get("data_receipts", {})
         if not isinstance(data_receipts, dict):
             return None
@@ -978,7 +1045,11 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
             ):
                 return None
             global_receipt_ids.add(receipt_id)
-        if data_receipts and any(binding.get("data_receipt_id") not in data_receipts for binding in clients.values()):
+        if any(
+            ("data_receipt_id" in binding) != bool(data_receipts)
+            or ("data_receipt_id" in binding and binding["data_receipt_id"] not in data_receipts)
+            for binding in clients.values()
+        ):
             return None
     transaction_receipts = value.get("transaction_receipts", [])
     if not isinstance(transaction_receipts, list):
@@ -986,40 +1057,54 @@ def manager_state(manager: Path) -> dict[str, Any] | None:
     transaction_bindings: set[str] = set()
     for receipt in transaction_receipts:
         if not (
-            _keys(receipt, {"operation_id", "sequence", "mutation_type", "client_binding_id", "phase"}, {"operation_group_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest"})
+            _keys(receipt, {"operation_id", "sequence", "mutation_type", "client_binding_id", "phase"}, {"operation_group_id", "client_id", "physical_artifact_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest"})
             and _nonempty(receipt["operation_id"]) and _exact_int(receipt["sequence"])
             and receipt["sequence"] >= 1 and _nonempty(receipt["client_binding_id"])
             and receipt["client_binding_id"] not in transaction_bindings
             and receipt["phase"] == "committed"
-            and receipt.get("operation_group_id") in installation_groups
             and receipt["operation_id"] not in global_operation_ids
         ):
             return None
         if receipt["mutation_type"] == "directory_remove":
+            authority = (removal_authority or {}).get(receipt["client_binding_id"])
             if not (
-                set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "backup_path", "before_digest", "phase"}
+                set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "client_id", "physical_artifact_id", "active_path", "backup_path", "before_digest", "phase"}
+                and isinstance(authority, dict)
+                and set(authority) == {"client_binding_id", "client_id", "physical_artifact_id", "active_path", "before_digest"}
+                and all(receipt[field] == authority[field] for field in ("client_binding_id", "client_id", "physical_artifact_id", "active_path", "before_digest"))
                 and owned_path(receipt["active_path"], receipt["client_binding_id"])
                 and owned_path(receipt["backup_path"], receipt["operation_id"])
                 and PurePosixPath(receipt["active_path"]).parent == PurePosixPath(receipt["backup_path"]).parent
                 and _digest(receipt["before_digest"])
             ):
                 return None
-        elif receipt["mutation_type"] not in {"directory_swap"}:
+        elif receipt["mutation_type"] == "directory_swap":
+            authority = binding_authority.get(receipt["client_binding_id"])
+            if not (
+                set(receipt) == {"operation_id", "operation_group_id", "sequence", "mutation_type", "client_binding_id", "active_path", "staging_path", "backup_path", "before_digest", "after_digest", "phase"}
+                and authority is not None
+                and receipt["operation_group_id"] == authority["operation_group_id"]
+                and receipt["active_path"] == authority["active_path"]
+                and _digest(receipt["before_digest"]) and _digest(receipt["after_digest"])
+                and owned_path(receipt["staging_path"], receipt["operation_id"])
+                and owned_path(receipt["backup_path"], receipt["operation_id"])
+                and PurePosixPath(receipt["staging_path"]).parent == PurePosixPath(receipt["active_path"]).parent
+                and PurePosixPath(receipt["backup_path"]).parent == PurePosixPath(receipt["active_path"]).parent
+            ):
+                return None
+        else:
             return None
         transaction_bindings.add(receipt["client_binding_id"])
         global_operation_ids.add(receipt["operation_id"])
     if global_paths:
         try:
             authority_root = Path(os.path.commonpath(tuple(global_paths)))
-            manager_parent = manager.resolve(strict=True).parent
+            manager_root = manager.resolve(strict=True)
         except (OSError, ValueError):
             return None
-        fixture_authority = PurePosixPath("/fixture/agentplugins-home")
-        fixture_paths = all(
-            PurePosixPath(path) == fixture_authority or fixture_authority in PurePosixPath(path).parents
-            for path in global_paths
-        )
-        if authority_root == Path("/") or (not fixture_paths and authority_root != manager_parent):
+        if authority_root == Path("/") or not (
+            authority_root == manager_root or manager_root in authority_root.parents
+        ):
             return None
     return value
 
@@ -1031,6 +1116,28 @@ def selected_manager_installation(manager: Path, product: str) -> dict[str, Any]
         return None
     installation = state["installations"][0]
     return copy.deepcopy(installation) if installation.get("declared_name") == product else None
+
+
+def removal_authority_from_installation(installation: Any) -> dict[str, dict[str, Any]] | None:
+    if not isinstance(installation, dict) or not _nonempty(installation.get("operation_group_id")):
+        return None
+    authority: dict[str, dict[str, Any]] = {}
+    for binding_id, binding in installation.get("clients", {}).items():
+        native = binding.get("native_objects") if isinstance(binding, dict) else None
+        digests = {
+            item.get("managed_digest") for item in native or []
+            if isinstance(item, dict) and _digest(item.get("managed_digest"))
+        }
+        if not isinstance(binding_id, str) or len(digests) != 1:
+            return None
+        authority[binding_id] = {
+            "client_binding_id": binding_id, "client_id": binding.get("client_id"),
+            "physical_artifact_id": binding.get("physical_artifact_id"),
+            "active_path": binding.get("target_locator"), "before_digest": next(iter(digests)),
+        }
+        if not all(_nonempty(value) for value in authority[binding_id].values()):
+            return None
+    return authority or None
 
 
 def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] | None:
@@ -1353,6 +1460,7 @@ def lifecycle(
     identities: dict[str, dict[str, Any]] = {}
     previous_receipts = installation_receipts(manager, product) or []
     for operation in operations:
+        before_installation = selected_manager_installation(manager, product)
         before_receipts = installation_receipts(manager, product) or []
         before = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": before_receipts, "materialized_mentions": materialized_product_mentions(home, product, clients)}
         argv = [operation, product, "--target", target, "--format", "json"]
@@ -1386,9 +1494,16 @@ def lifecycle(
             previous_receipts = after_receipts
         elif operation == "remove":
             operation_group_id = value.get("data", {}).get("operation_id") if value else None
-            state = manager_state(manager)
-            installation = selected_manager_installation(manager, product)
+            removal_authority = removal_authority_from_installation(before_installation)
+            state = manager_state(manager, removal_authority=removal_authority)
+            matches = [
+                item for item in state.get("installations", [])
+                if isinstance(item, dict) and item.get("declared_name") == product
+            ] if state else []
+            installation = matches[0] if len(matches) == 1 else None
             transactions = state.get("transaction_receipts", []) if state else []
+            identity = installation_identity(installation)
+            identities[operation] = identity
             passed = passed and bool(
                 installation and installation.get("clients") == {} and installation.get("data_retained") is True
                 and len(installation.get("data_receipts", {})) == 1
@@ -1572,7 +1687,11 @@ def no_hidden_yes_scenario(binary: Path, root: Path, challenge: str) -> tuple[bo
 
 def manager_identity(manager: Path, product: str) -> dict[str, Any]:
     """Return identity fields from exactly one owned installation record."""
-    installation = selected_manager_installation(manager, product)
+    return installation_identity(selected_manager_installation(manager, product))
+
+
+def installation_identity(installation: Any) -> dict[str, Any]:
+    """Extract identity only after the caller has validated one State-v4 record."""
     if installation is None:
         return {}
     directory = installation.get("directory") if isinstance(installation.get("directory"), dict) else {}
@@ -1681,6 +1800,111 @@ def migration_provenance(record: dict[str, Any] | None, *, legacy: bool) -> dict
         required_values.extend(value for key, value in binding.items() if key != "package_revision")
         required_values.extend(binding["package_revision"].values())
     return normalized if all(child not in (None, "") for child in required_values) else None
+
+
+SANITIZED_PATH_FIELDS = frozenset({
+    "target_locator", "active_path", "staging_path", "backup_path", "locator", "path",
+})
+
+
+def transform_sanitized_placeholders(
+    value: Any, *, fixture_digest: str, mappings: tuple[tuple[str, Path], ...],
+) -> tuple[Any, dict[str, Any]]:
+    """Rehome explicitly sanitized path placeholders into one sandbox.
+
+    The record binds the exact input digest, ordered mapping, output digest and
+    algorithm.  Only known path-valued fields are rewritten and every absolute
+    placeholder must match exactly one mapping, so this cannot become a live
+    path-authority exception.
+    """
+    if not _digest(fixture_digest) or not mappings:
+        raise ValueError("invalid sanitized fixture transformation authority")
+    ordered = sorted((placeholder, str(destination.resolve(strict=True))) for placeholder, destination in mappings)
+    placeholders = [item[0] for item in ordered]
+    destinations = [item[1] for item in ordered]
+    if (
+        len(set(placeholders)) != len(placeholders) or len(set(destinations)) != len(destinations)
+        or any(not PurePosixPath(item).is_absolute() or item == "/" for item in placeholders + destinations)
+    ):
+        raise ValueError("ambiguous sanitized fixture transformation")
+
+    def rewrite(child: Any, key: str | None = None) -> Any:
+        if isinstance(child, dict):
+            return {name: rewrite(item, name) for name, item in child.items()}
+        if isinstance(child, list):
+            return [rewrite(item, key) for item in child]
+        if key not in SANITIZED_PATH_FIELDS:
+            return copy.deepcopy(child)
+        if not isinstance(child, str) or not PurePosixPath(child).is_absolute():
+            raise ValueError("sanitized fixture contains an invalid path field")
+        matches = [
+            (placeholder, destination) for placeholder, destination in ordered
+            if child == placeholder or child.startswith(placeholder + "/")
+        ]
+        if len(matches) != 1:
+            raise ValueError("sanitized fixture path has no unique sandbox mapping")
+        placeholder, destination = matches[0]
+        suffix = child[len(placeholder):].lstrip("/")
+        return str(PurePosixPath(destination) / suffix) if suffix else destination
+
+    transformed = rewrite(value)
+    output_digest = sha256_digest(canonical_json(transformed))
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "algorithm": "agentplugins-sanitized-placeholder-to-sandbox-v1",
+        "input_digest": fixture_digest,
+        "mappings": [{"placeholder": source, "sandbox": target} for source, target in ordered],
+        "output_digest": output_digest,
+    }
+    record["record_digest"] = sha256_digest(canonical_json(record))
+    return transformed, record
+
+
+def validate_placeholder_transformation(
+    original: Any, transformed: Any, record: Any,
+) -> bool:
+    if not _keys(record, {"schema_version", "algorithm", "input_digest", "mappings", "output_digest", "record_digest"}):
+        return False
+    unsigned = {key: copy.deepcopy(value) for key, value in record.items() if key != "record_digest"}
+    if not (
+        _exact_int(record["schema_version"], 1)
+        and record["algorithm"] == "agentplugins-sanitized-placeholder-to-sandbox-v1"
+        and _digest(record["input_digest"])
+        and record["output_digest"] == sha256_digest(canonical_json(transformed))
+        and record["record_digest"] == sha256_digest(canonical_json(unsigned))
+        and isinstance(record["mappings"], list) and record["mappings"]
+    ):
+        return False
+    try:
+        mappings = tuple((item["placeholder"], Path(item["sandbox"])) for item in record["mappings"] if set(item) == {"placeholder", "sandbox"})
+        replayed, replay_record = transform_sanitized_placeholders(
+            original, fixture_digest=record["input_digest"], mappings=mappings,
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+    return replayed == transformed and replay_record == record
+
+
+def normalized_migration_provenance(
+    record: dict[str, Any] | None, *, inverse_mappings: tuple[tuple[Path, str], ...], legacy: bool,
+) -> dict[str, Any] | None:
+    provenance = migration_provenance(record, legacy=legacy)
+    if provenance is None:
+        return None
+    normalized = copy.deepcopy(provenance)
+    for binding in normalized["bindings"].values():
+        path = binding["target_locator"]
+        matches = []
+        for sandbox, placeholder in inverse_mappings:
+            root = str(sandbox.resolve(strict=True))
+            if path == root or path.startswith(root + "/"):
+                matches.append((root, placeholder))
+        if len(matches) != 1:
+            return None
+        root, placeholder = matches[0]
+        suffix = path[len(root):].lstrip("/")
+        binding["target_locator"] = str(PurePosixPath(placeholder) / suffix) if suffix else placeholder
+    return normalized
 
 
 def validate_schema_2_state(value: Any) -> bool:
@@ -1900,6 +2124,7 @@ def managed_tamper_scenario(binary: Path, root: Path, challenge: str) -> tuple[b
 def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
     manager.mkdir(parents=True, exist_ok=True)
     fixture = Path(__file__).resolve().parents[1] / "tests/e2e/fixtures/state-schema-2.json"
     state_path = manager / "state-v2.json"
@@ -1907,11 +2132,20 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     legacy_state = strict_json_loads(fixture_bytes)
     if not validate_schema_2_state(legacy_state):
         raise ValueError("migration fixture is not a valid sanitized schema-2 capture")
-    state_path.write_bytes(fixture_bytes)
+    fixture_digest = "sha256:" + hashlib.sha256(fixture_bytes).hexdigest()
+    migrated_fixture_root = manager / "sanitized-schema2-root"
+    migrated_fixture_root.mkdir()
+    transformed_state, transformation = transform_sanitized_placeholders(
+        legacy_state, fixture_digest=fixture_digest, mappings=(("/fixture/home", migrated_fixture_root),),
+    )
+    if not validate_placeholder_transformation(legacy_state, transformed_state, transformation):
+        raise ValueError("migration fixture sandbox transformation is invalid")
+    transformed_bytes = canonical_json(transformed_state)
+    state_path.write_bytes(transformed_bytes)
     product = legacy_state["installations"][0]["declared_name"]
     legacy_record = installation_record(legacy_state, product)
     expected_provenance = migration_provenance(legacy_record, legacy=True)
-    input_digest = "sha256:" + hashlib.sha256(fixture_bytes).hexdigest()
+    input_digest = "sha256:" + hashlib.sha256(transformed_bytes).hexdigest()
     state_fd = os.open(state_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     state_identity = os.fstat(state_fd)
 
@@ -1929,7 +2163,7 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
             return bool(
                 (opened.st_dev, opened.st_ino) == (state_identity.st_dev, state_identity.st_ino)
                 and (current.st_dev, current.st_ino) == (state_identity.st_dev, state_identity.st_ino)
-                and body == fixture_bytes
+                and body == transformed_bytes
             )
         except OSError:
             return False
@@ -1974,7 +2208,9 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     except (OSError, KeyError, ValueError, json.JSONDecodeError):
         pass
     migrated_record = installation_record(migrated_state, product) if migrated_state else None
-    observed_provenance = migration_provenance(migrated_record, legacy=False)
+    observed_provenance = normalized_migration_provenance(
+        migrated_record, inverse_mappings=((migrated_fixture_root, "/fixture/home"),), legacy=False,
+    )
     changed_manager_files = {
         path for path in set(before_apply_files) | set(after_apply_files)
         if before_apply_files.get(path) != after_apply_files.get(path)
@@ -1985,11 +2221,12 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
         if before_apply_all.get(path) != after.get(path)
     }
     allowed_global_changes = {
+        ".", manager_relative,
         f"{manager_relative}/state-v2.json", f"{manager_relative}/mutation.lock",
         *(f"{manager_relative}/{path}" for path in changed_backups),
     }
     allowed_apply_mutation = bool(
-        changed_manager_files <= {"state-v2.json", "mutation.lock", *changed_backups}
+        changed_manager_files <= {".", "state-v2.json", "mutation.lock", *changed_backups}
         and "state-v2.json" in changed_manager_files
         and len(changed_backups) == 1
         and Path(changed_backups[0]).name.startswith("state-v2.json.schema2.backup-agentplugins-")
@@ -2003,7 +2240,7 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
         "dry_run_bound_exact_bytes": bool(
             dry.returncode == 0 and dry_value and validate_cli_envelope(dry_value, "migrate-state")
             and dry_value["data"] == {
-                "dry_run": True, "source_schema": legacy_state["schema_version"],
+                "dry_run": True, "source_schema": transformed_state["schema_version"],
                 "installations": len(legacy_state["installations"]), "needs_rebind": 0,
                 "migrated": 0, "backup_created": False,
             }
@@ -2016,7 +2253,7 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
             and len(manager_state(manager)["installations"]) == 1
             and apply_value and validate_cli_envelope(apply_value, "migrate-state")
             and apply_value["data"] == {
-                "dry_run": False, "source_schema": legacy_state["schema_version"],
+                "dry_run": False, "source_schema": transformed_state["schema_version"],
                 "installations": len(legacy_state["installations"]), "needs_rebind": 0,
                 "migrated": len(legacy_state["installations"]), "backup_created": True,
             }
@@ -2029,6 +2266,7 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     return all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof, **proof,
         "input_digest": input_digest,
+        "sanitized_fixture_digest": fixture_digest, "sandbox_transformation": transformation,
         "expected_provenance": expected_provenance, "observed_provenance": observed_provenance,
     }
 
@@ -2220,6 +2458,33 @@ class RetainedMarker:
                 and observed == self.body
             )
         except OSError:
+            return False
+
+    def purged(
+        self, allowed_roots: tuple[Path, ...], *, max_entries: int = 10000, max_depth: int = 32,
+    ) -> bool:
+        """Prove unlink of this inode, not disappearance of its former name."""
+        try:
+            opened = os.fstat(self.marker_fd)
+            if (opened.st_dev, opened.st_ino) != self.marker_identity or opened.st_nlink != 0:
+                return False
+            visited = 0
+            for root in allowed_roots:
+                anchor = root.resolve(strict=True)
+                for directory, names, files in os.walk(anchor, followlinks=False):
+                    relative = Path(directory).relative_to(anchor)
+                    if len(relative.parts) > max_depth:
+                        return False
+                    names[:] = sorted(names)
+                    for name in sorted([*names, *files]):
+                        visited += 1
+                        if visited > max_entries:
+                            return False
+                        metadata = os.lstat(Path(directory) / name)
+                        if (metadata.st_dev, metadata.st_ino) == self.marker_identity:
+                            return False
+            return True
+        except (OSError, ValueError):
             return False
 
     def close(self) -> None:
@@ -2418,7 +2683,7 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     remove = execute(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"])
     remove_preserved = marker is not None and marker.verify()
     purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
-    purge_deleted = canonical_locator is not None and not canonical_locator.exists()
+    purge_deleted = marker is not None and marker.purged((root, manager))
     after = observe(home, manager)
     proof = {
         "info_preserved": info_preserved,

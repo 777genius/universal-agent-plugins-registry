@@ -87,6 +87,7 @@ TRUSTED_OBSERVER_JOB_WORKFLOW_REF = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workf
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
 TRUSTED_CLI_RELEASE_TAG = "agentplugins-v" + STABLE_LAUNCH_VERSION_FILE.read_text(encoding="utf-8").strip()
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
+TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:c894da042d20c71274822aa943410343df7fc519076ae11b80d96a403a318d08"
 
 
 def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, Any]:
@@ -96,6 +97,11 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
         raise ValueError("invalid capture provenance envelope")
     release = value["release"]
     if not (
+        set(release) == {
+            "repository", "tag", "tag_commit", "asset", "version_stdout", "binary_sha256",
+            "binary_digest_status", "capture_evidence_level", "release_authentication",
+        }
+        and
         release.get("repository") == "777genius/plugin-kit-ai"
         and release.get("tag") == "agentplugins-v0.1.14"
         and re.fullmatch(r"[0-9a-f]{40}", str(release.get("tag_commit", "")))
@@ -103,6 +109,14 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
         and release.get("version_stdout") == "agentplugins 0.1.14"
         and release.get("binary_sha256") is None
         and release.get("binary_digest_status") == "not_retained_in_capture"
+        and release.get("capture_evidence_level") == "sanitized_manifest_only_no_raw_or_binary_linkage"
+        and release.get("release_authentication") == {
+            "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
+            "predicate_type": "https://slsa.dev/provenance/v1",
+            "subject_repository": TRUSTED_CLI_RELEASE_REPOSITORY,
+            "subject_tag": TRUSTED_CLI_RELEASE_TAG,
+            "tag_commit": release.get("tag_commit"),
+        }
     ):
         raise ValueError("invalid capture release identity")
     if not isinstance(value["sanitization_rules"], list) or len(value["sanitization_rules"]) < 5:
@@ -111,6 +125,13 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
     default_root = path.parent
     seen: set[tuple[str, str]] = set()
     for capture in value["captures"]:
+        if not isinstance(capture, dict) or not {
+            "fixture", "argv", "sanitized_sha256",
+        } <= set(capture) <= {
+            "fixture", "fixture_root", "argv", "sanitized_sha256",
+            "stderr_fixture", "stderr_sha256",
+        }:
+            raise ValueError("invalid sanitized capture manifest record")
         fixture_root = capture.get("fixture_root", ".")
         root = default_root if fixture_root == "." else roots.get(fixture_root)
         fixture = capture.get("fixture")
@@ -126,8 +147,6 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
             raise ValueError("capture fixture is missing") from error
         if capture.get("sanitized_sha256") != "sha256:" + hashlib.sha256(body).hexdigest():
             raise ValueError("capture fixture digest mismatch")
-        if not DIGEST.fullmatch(str(capture.get("capture_sha256", ""))):
-            raise ValueError("invalid original capture digest")
         stderr_fixture = capture.get("stderr_fixture")
         if stderr_fixture is not None:
             if Path(stderr_fixture).name != stderr_fixture:
@@ -141,7 +160,81 @@ def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, An
     serialized = json.dumps(value, sort_keys=True)
     if re.search(r"/(?:home|tmp|srv|root)/", serialized, re.IGNORECASE):
         raise ValueError("capture provenance contains a host path")
+    authenticated_manifest = {
+        "release": release,
+        "sanitization_rules": value["sanitization_rules"],
+        "captures": [
+            {
+                key: capture[key]
+                for key in ("fixture", "fixture_root", "argv", "sanitized_sha256", "stderr_fixture", "stderr_sha256")
+                if key in capture
+            }
+            for capture in value["captures"]
+        ],
+    }
+    if "sha256:" + hashlib.sha256(canonical_json(authenticated_manifest)).hexdigest() != TRUSTED_SANITIZED_CAPTURE_MANIFEST:
+        raise ValueError("sanitized capture manifest differs from the trusted repository root")
     return value
+
+
+def validate_capture_release_binding(
+    *, release_manifest: dict[str, Any], release_identity: dict[str, Any],
+    release_manifest_digest: str, release_checksums_digest: str,
+    asset_name: str, asset_digest: str, asset_attestation: dict[str, Any],
+    provenance_path: Path = CAPTURE_PROVENANCE,
+) -> dict[str, Any]:
+    """Bind sanitized conformance captures to separately authenticated release evidence.
+
+    The retained captures do not contain raw stdout or a binary linkage.  This
+    contract therefore authenticates the exact release used by enforced runs
+    while preserving that narrower, explicit evidence claim.
+    """
+    provenance = validate_capture_provenance(provenance_path)
+    captured = provenance["release"]
+    declared = next(
+        (item for item in release_manifest.get("assets", {}).values() if item.get("file") == asset_name),
+        None,
+    )
+    expected_attestation = {
+        "repository": TRUSTED_CLI_RELEASE_REPOSITORY,
+        "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
+        "tag": TRUSTED_CLI_RELEASE_TAG,
+        "tag_commit": captured["tag_commit"],
+        "asset_name": asset_name,
+        "asset_digest": asset_digest,
+        "verified": True,
+    }
+    if not (
+        set(release_identity) == {"repository", "tag", "tag_commit", "release_id", "immutable"}
+        and release_identity == {
+            "repository": captured["repository"], "tag": captured["tag"],
+            "tag_commit": captured["tag_commit"], "release_id": release_identity.get("release_id"),
+            "immutable": True,
+        }
+        and type(release_identity.get("release_id")) is int and release_identity["release_id"] > 0
+        and release_manifest.get("tag") == captured["tag"]
+        and release_manifest.get("commit") == captured["tag_commit"]
+        and release_manifest.get("version") == captured["version_stdout"].removeprefix("agentplugins ")
+        and isinstance(declared, dict) and declared.get("file") == captured["asset"] == asset_name
+        and isinstance(declared.get("sha256"), str)
+        and asset_digest == "sha256:" + declared["sha256"] and DIGEST.fullmatch(asset_digest)
+        and DIGEST.fullmatch(release_manifest_digest) and DIGEST.fullmatch(release_checksums_digest)
+        and asset_attestation == expected_attestation
+    ):
+        raise ValueError("sanitized captures are not bound to the authenticated immutable release")
+    validate_release_manifest(
+        release_manifest, repository=TRUSTED_CLI_RELEASE_REPOSITORY,
+        tag=TRUSTED_CLI_RELEASE_TAG, tag_commit=captured["tag_commit"],
+    )
+    return {
+        "capture_evidence_level": captured["capture_evidence_level"],
+        "release_binary_authenticated": True,
+        "binary_digest": asset_digest,
+        "tag_commit": captured["tag_commit"],
+        "release_manifest_digest": release_manifest_digest,
+        "release_checksums_digest": release_checksums_digest,
+        "attestation": copy.deepcopy(asset_attestation),
+    }
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
     "AGENTPLUGINS_DIRECTORY_SNAPSHOT",
@@ -2652,6 +2745,20 @@ def main() -> int:
         if sha256_file(prepared_root / "release" / RELEASE_CHECKSUMS_NAME) != release_checksums_digest:
             raise ValueError("fresh GitHub checksums differ from the prepared immutable release")
         declared = next(item for item in release_manifest["assets"].values() if item["file"] == args.asset_name)
+        prepared_asset_digest = prepared.get("authenticated_asset", {}).get("digest")
+        prepared_attestation = prepared.get("github_asset_attestation")
+        fresh_attestation = json.loads(
+            (prepared_root / "release" / f"{args.asset_name}.attestation.json").read_text()
+        )
+        if prepared_attestation != fresh_attestation or prepared_asset_digest != "sha256:" + declared["sha256"]:
+            raise ValueError("fresh GitHub asset authentication differs from prepared context")
+        validate_capture_release_binding(
+            release_manifest=release_manifest, release_identity=release_identity,
+            release_manifest_digest=release_manifest_digest,
+            release_checksums_digest=release_checksums_digest,
+            asset_name=args.asset_name, asset_digest=prepared_asset_digest,
+            asset_attestation=prepared_attestation,
+        )
         args.binary = binary_path
         args.binary_digest = "sha256:" + declared["sha256"]
         args.expected_version = release_manifest["version"]

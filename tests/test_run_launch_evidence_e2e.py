@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import base64
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -75,6 +77,17 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             ),
         )
         return raw, value
+
+    def sandbox_state_fixture(self, value: dict, manager: Path) -> dict:
+        transformed, record = observer.transform_sanitized_placeholders(
+            value,
+            fixture_digest="sha256:" + hashlib.sha256(
+                AGENTPLUGINS_0_1_14_STATE_V2.read_bytes()
+            ).hexdigest(),
+            mappings=(("/fixture/agentplugins-home", manager),),
+        )
+        self.assertTrue(observer.validate_placeholder_transformation(value, transformed, record))
+        return transformed
 
     def fixture_harness(self, root: Path | None = None, **kwargs):
         return e2e.LaunchHarness(
@@ -796,8 +809,118 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         self.assertEqual([row["outcome"] for row in rejected.rows], ["failed"] * 4)
 
     def test_repository_observer_derives_grouped_lifecycle_from_receipts_and_native_files(self) -> None:
+        clients = ("codex", "cursor", "kiro")
         add = release_fixture("add.json")
-        self.assertIsNotNone(observer.grouped_acquisition_proof(add, ("codex", "cursor", "kiro")))
+        repair = release_fixture("repair.json")
+        info = release_fixture("info.json")
+        remove = release_fixture("remove.json")
+        update = json.loads(json.dumps(add))
+        update["command"] = "update"
+        update["data"].pop("acquisition")
+        update["data"].pop("target_outcomes")
+        for target in update["data"]["targets"]:
+            target["selected"] = True
+            target["output"]["result"]["mutated"] = False
+            target["output"]["result"]["no_change"] = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            manager = root / "manager"
+            workspace = root / "workspace"
+            for path in (home, manager, workspace):
+                path.mkdir()
+            state_path = manager / "state-v2.json"
+            state = self.sandbox_state_fixture(release_fixture("state-v2.json"), manager)
+            envelopes = {"add": add, "update": update, "repair": repair, "info": info, "remove": remove}
+
+            def write_state(value: dict) -> None:
+                state_path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+            def materialize() -> None:
+                roots = {"codex": home / ".codex", "cursor": home / ".cursor", "kiro": home / ".kiro"}
+                for client, client_root in roots.items():
+                    client_root.mkdir(parents=True, exist_ok=True)
+                    (client_root / "context7.json").write_text(json.dumps({"plugin": "context7", "client": client}))
+
+            def invoke(binary: Path, argv: list[str], cwd: Path, challenge: str):
+                del binary, cwd
+                command = argv[0]
+                if command == "add":
+                    write_state(state)
+                    materialize()
+                elif command == "repair":
+                    repaired = json.loads(json.dumps(state))
+                    for binding in repaired["installations"][0]["clients"].values():
+                        receipt = binding["receipts"][0]
+                        receipt["operation_id"] += "-repair"
+                        receipt["sequence"] = 2
+                    state.clear()
+                    state.update(repaired)
+                    write_state(state)
+                elif command == "remove":
+                    installation = state["installations"][0]
+                    authority = observer.removal_authority_from_installation(installation)
+                    self.assertIsNotNone(authority)
+                    removed = json.loads(json.dumps(state))
+                    removed_installation = removed["installations"][0]
+                    removed_installation["clients"] = {}
+                    removed_installation["data_retained"] = True
+                    removed["transaction_receipts"] = [
+                        {
+                            "operation_id": f"remove-{index}",
+                            "operation_group_id": remove["data"]["operation_id"],
+                            "sequence": 1,
+                            "mutation_type": "directory_remove",
+                            **record,
+                            "backup_path": str(Path(record["active_path"]).parent / f".removed-{index}"),
+                            "phase": "committed",
+                        }
+                        for index, record in enumerate(authority.values(), 1)
+                    ]
+                    write_state(removed)
+                    for client_root in (home / ".codex", home / ".cursor", home / ".kiro"):
+                        (client_root / "context7.json").unlink()
+                value = envelopes[command]
+                completed = subprocess.CompletedProcess(
+                    [str(root / "agentplugins"), *argv], 0, json.dumps(value), "",
+                )
+                trace = {
+                    "challenge": challenge, "argv": argv,
+                    "started_at": "2026-08-24T00:00:00Z", "ended_at": "2026-08-24T00:00:01Z",
+                    "exit_code": 0, "stdout_digest": "sha256:" + "a" * 64,
+                    "stderr_digest": "sha256:" + "b" * 64,
+                }
+                return completed, trace
+
+            context = {
+                "release": {
+                    "product_id": "context7", "distribution_id": "upstash/context7",
+                    "distribution_kind": "upstream", "release_sequence": 1,
+                    "tree_digest": add["data"]["tree_digest"],
+                    "manifest_digest": add["data"]["manifest_digest"],
+                    "package_version": add["data"]["version"],
+                    "source_repository": "upstash/context7",
+                    "source_revision": add["data"]["revision"],
+                    "source_path": "plugins/agent-plugins/context7",
+                },
+                "snapshot_sequence": 1, "snapshot_digest": "sha256:" + "c" * 64,
+                "directory_digest": "sha256:" + "c" * 64,
+                "binary_digest": "sha256:" + "d" * 64, "expected_version": "0.1.14",
+            }
+            with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}), mock.patch.object(
+                observer, "traced", side_effect=invoke,
+            ):
+                passed, value = observer.lifecycle(
+                    root / "agentplugins", "context7", clients, workspace, "challenge", context,
+                    include_repair=True,
+                )
+
+        self.assertTrue(passed, value["operation_outcomes"])
+        self.assertEqual(value["operation_outcomes"], {name: "passed" for name in ("add", "update", "repair", "info", "remove")})
+        self.assertTrue(value["no_newer_release_update_noop"])
+        self.assertEqual(len(value["operation_observations"]), 5)
+        self.assertIsNotNone(observer.grouped_acquisition_proof(value["values"]["add"], clients))
     def test_grouped_acquisition_proof_fails_closed_when_event_is_missing_or_ambiguous(self) -> None:
         valid = release_fixture("add.json")
         clients = ("codex", "cursor", "kiro")
@@ -854,7 +977,8 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         self.assertIsNone(observer.grouped_acquisition_proof(duplicated_target, ("codex", "cursor", "kiro")))
         with tempfile.TemporaryDirectory() as tmp:
             manager = Path(tmp)
-            (manager / "state-v2.json").write_bytes(state_bytes)
+            state_fixture = self.sandbox_state_fixture(state_fixture, manager)
+            (manager / "state-v2.json").write_text(json.dumps(state_fixture))
             installation = observer.selected_manager_installation(manager, "context7")
             receipts = observer.installation_receipts(manager, "context7")
             self.assertEqual(installation["operation_group_id"], envelope["data"]["operation_id"])
@@ -956,6 +1080,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             state_path.symlink_to(target)
             self.assertIsNone(observer.manager_state(manager))
             state_path.unlink()
+            state = self.sandbox_state_fixture(state, manager)
             state_path.write_text(json.dumps(state))
             (manager / "arbitrary.json").write_text('{"installations":[{"declared_name":"context7"}]}')
             self.assertIsNotNone(observer.selected_manager_installation(manager, "context7"))
@@ -999,6 +1124,43 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 {**envelope, "data": {}},
             ):
                 self.assertFalse(observer.validate_cli_envelope(mutation, command))
+
+    def test_public_envelopes_reject_hybrid_empty_typed_and_argv_mutations(self) -> None:
+        add = release_fixture("add.json")
+        valid_argv = ["add", "context7", "--target", "codex,cursor,kiro", "--format", "json"]
+        self.assertTrue(observer.validate_cli_envelope(add, "add", requested_argv=valid_argv))
+        mutations = []
+        for field in ("version", "source"):
+            changed = json.loads(json.dumps(add))
+            changed["data"][field] = ""
+            for target in changed["data"]["targets"]:
+                target["output"][field] = ""
+            mutations.append(changed)
+        manifest = json.loads(json.dumps(add))
+        manifest["data"]["targets"][0]["output"]["manifest_digest"] = "sha256:" + "0" * 64
+        mutations.append(manifest)
+        legacy = json.loads(json.dumps(add))
+        legacy["data"]["mutated"] = True
+        mutations.append(legacy)
+        for changed in mutations:
+            self.assertFalse(observer.validate_cli_envelope(changed, "add", requested_argv=valid_argv))
+        self.assertFalse(observer.validate_cli_envelope(add, "add", requested_argv=[*valid_argv, "--yes"]))
+
+        info = release_fixture("info.json")
+        client = info["data"]["clients"][0]
+        client["receipt_reconciled"] = "yes"
+        self.assertFalse(observer.validate_cli_envelope(info, "info"))
+        empty = release_fixture("info.json")
+        empty["data"]["source"] = ""
+        self.assertFalse(observer.validate_cli_envelope(empty, "info"))
+
+        dry = release_fixture("migrate-dry-run.json")
+        self.assertTrue(observer.validate_cli_envelope(
+            dry, "migrate-state", requested_argv=["migrate-state", "--dry-run", "--format", "json"],
+        ))
+        self.assertFalse(observer.validate_cli_envelope(
+            dry, "migrate-state", requested_argv=["migrate-state", "--format", "json"],
+        ))
 
     def test_filesystem_snapshot_covers_symlink_empty_directory_mode_and_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1088,6 +1250,11 @@ print((fixtures / name).read_text(), end="")
         provenance = e2e.validate_capture_provenance()
         self.assertGreaterEqual(len(provenance["captures"]), 11)
         self.assertEqual(provenance["release"]["version_stdout"], "agentplugins 0.1.14")
+        self.assertEqual(
+            provenance["release"]["capture_evidence_level"],
+            "sanitized_manifest_only_no_raw_or_binary_linkage",
+        )
+        self.assertTrue(all("capture_sha256" not in item for item in provenance["captures"]))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); fixture = root / "one.json"; fixture.write_text("{}")
             forged = json.loads(json.dumps(provenance))
@@ -1095,6 +1262,68 @@ print((fixtures / name).read_text(), end="")
             path = root / "provenance.json"; path.write_text(json.dumps(forged))
             with self.assertRaises(ValueError):
                 e2e.validate_capture_provenance(path)
+
+    def test_capture_fixture_and_provenance_cannot_move_together_without_trusted_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            copied = Path(tmp) / "agentplugins-0.1.14"
+            shutil.copytree(AGENTPLUGINS_0_1_14_FIXTURES, copied)
+            fixture = copied / "add.json"
+            fixture.write_bytes(fixture.read_bytes() + b"\n")
+            provenance_path = copied / "provenance.json"
+            provenance = json.loads(provenance_path.read_text())
+            capture = next(item for item in provenance["captures"] if item["fixture"] == "add.json")
+            capture["sanitized_sha256"] = "sha256:" + hashlib.sha256(fixture.read_bytes()).hexdigest()
+            provenance_path.write_text(json.dumps(provenance))
+            with mock.patch.object(e2e, "ROOT", ROOT):
+                with self.assertRaisesRegex(ValueError, "trusted repository root"):
+                    e2e.validate_capture_provenance(provenance_path)
+
+    def test_sanitized_captures_bind_to_independently_authenticated_release_contract(self) -> None:
+        captured = e2e.validate_capture_provenance()["release"]
+        slots = (
+            ("darwin-amd64", "darwin", "amd64", ""), ("darwin-arm64", "darwin", "arm64", ""),
+            ("linux-amd64", "linux", "amd64", ""), ("linux-arm64", "linux", "arm64", ""),
+            ("windows-amd64", "windows", "amd64", ".exe"),
+            ("windows-arm64", "windows", "arm64", ".exe"),
+        )
+        assets = {
+            key: {"file": f"agentplugins_0.1.14_{os_name}_{arch}{suffix}", "sha256": f"{index + 1:064x}", "size": index + 1}
+            for index, (key, os_name, arch, suffix) in enumerate(slots)
+        }
+        manifest = {
+            "schema_version": 2, "tag": captured["tag"], "commit": captured["tag_commit"],
+            "version": "0.1.14", "assets": assets,
+        }
+        asset = assets["linux-amd64"]
+        digest = "sha256:" + asset["sha256"]
+        identity = {
+            "repository": captured["repository"], "tag": captured["tag"],
+            "tag_commit": captured["tag_commit"], "release_id": 114, "immutable": True,
+        }
+        attestation = {
+            "repository": captured["repository"], "workflow": e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+            "tag": captured["tag"], "tag_commit": captured["tag_commit"],
+            "asset_name": asset["file"], "asset_digest": digest, "verified": True,
+        }
+        arguments = {
+            "release_manifest": manifest, "release_identity": identity,
+            "release_manifest_digest": "sha256:" + "a" * 64,
+            "release_checksums_digest": "sha256:" + "b" * 64,
+            "asset_name": asset["file"], "asset_digest": digest,
+            "asset_attestation": attestation,
+        }
+        binding = e2e.validate_capture_release_binding(**arguments)
+        self.assertTrue(binding["release_binary_authenticated"])
+        self.assertEqual(binding["capture_evidence_level"], "sanitized_manifest_only_no_raw_or_binary_linkage")
+        for name, mutation in (
+            ("binary", {**arguments, "asset_digest": "sha256:" + "f" * 64}),
+            ("commit", {**arguments, "release_identity": {**identity, "tag_commit": "f" * 40}}),
+            ("manifest", {**arguments, "release_manifest_digest": "invalid"}),
+            ("checksums", {**arguments, "release_checksums_digest": "invalid"}),
+            ("attestation", {**arguments, "asset_attestation": {**attestation, "verified": False}}),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "not bound"):
+                e2e.validate_capture_release_binding(**mutation)
 
     def test_schema_two_capture_has_complete_cross_record_identities(self) -> None:
         state = json.loads((ROOT / "tests/e2e/fixtures/state-schema-2.json").read_text())
@@ -1107,27 +1336,131 @@ print((fixtures / name).read_text(), end="")
                 forged["installations"][0]["clients"]["client_a"]["package_revision"][field] = "sha256:" + "0" * 64
             self.assertFalse(observer.validate_schema_2_state(forged))
 
+    def test_sanitized_schema_two_paths_are_digest_bound_rehomed_and_normalized(self) -> None:
+        fixture_path = ROOT / "tests/e2e/fixtures/state-schema-2.json"
+        raw = fixture_path.read_bytes()
+        legacy = json.loads(raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = Path(tmp)
+            home = sandbox / "home"
+            home.mkdir()
+            transformed, record = observer.transform_sanitized_placeholders(
+                legacy,
+                fixture_digest="sha256:" + hashlib.sha256(raw).hexdigest(),
+                mappings=(("/fixture/home", home),),
+            )
+            self.assertTrue(observer.validate_placeholder_transformation(legacy, transformed, record))
+            binding = transformed["installations"][0]["clients"]["client_a"]
+            self.assertEqual(binding["target_locator"], str(home / ".codex/plugins/demo"))
+            expected = observer.migration_provenance(legacy["installations"][0], legacy=True)
+            observed = observer.normalized_migration_provenance(
+                transformed["installations"][0], inverse_mappings=((home, "/fixture/home"),), legacy=False,
+            )
+            self.assertEqual(observed, expected)
+            forged = json.loads(json.dumps(record))
+            forged["input_digest"] = "sha256:" + "0" * 64
+            self.assertFalse(observer.validate_placeholder_transformation(legacy, transformed, forged))
+            escaped = json.loads(json.dumps(legacy))
+            escaped["installations"][0]["clients"]["client_a"]["target_locator"] = "/etc/demo"
+            with self.assertRaisesRegex(ValueError, "no unique sandbox mapping"):
+                observer.transform_sanitized_placeholders(
+                    escaped, fixture_digest=record["input_digest"], mappings=(("/fixture/home", home),),
+                )
+
     def test_state_v4_rejects_split_identity_receipt_and_path_authority(self) -> None:
         _, state = self.agentplugins_0_1_14_state_fixture()
-        mutations = []
-        revision = json.loads(json.dumps(state))
-        next(iter(revision["installations"][0]["clients"].values()))["package_revision"]["tree_digest"] = "sha256:" + "0" * 64
-        mutations.append(revision)
-        duplicate = json.loads(json.dumps(state))
-        bindings = list(duplicate["installations"][0]["clients"].values())
-        bindings[1]["receipts"][0]["operation_id"] = bindings[0]["receipts"][0]["operation_id"]
-        mutations.append(duplicate)
-        escaped = json.loads(json.dumps(state))
-        binding = next(iter(escaped["installations"][0]["clients"].values()))
-        binding["target_locator"] = "/etc/agentplugins-context7"
-        binding["native_objects"][0]["path"] = binding["target_locator"]
-        binding["receipts"][0]["active_path"] = binding["target_locator"]
-        mutations.append(escaped)
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "state-v2.json"
+            manager = Path(tmp)
+            state = self.sandbox_state_fixture(state, manager)
+            mutations = []
+            revision = json.loads(json.dumps(state))
+            next(iter(revision["installations"][0]["clients"].values()))["package_revision"]["tree_digest"] = "sha256:" + "0" * 64
+            mutations.append(revision)
+            duplicate = json.loads(json.dumps(state))
+            bindings = list(duplicate["installations"][0]["clients"].values())
+            bindings[1]["receipts"][0]["operation_id"] = bindings[0]["receipts"][0]["operation_id"]
+            mutations.append(duplicate)
+            escaped = json.loads(json.dumps(state))
+            binding = next(iter(escaped["installations"][0]["clients"].values()))
+            binding["target_locator"] = "/etc/agentplugins-context7"
+            binding["native_objects"][0]["path"] = binding["target_locator"]
+            binding["receipts"][0]["active_path"] = binding["target_locator"]
+            mutations.append(escaped)
+            path = manager / "state-v2.json"
             for mutation in mutations:
                 path.write_text(json.dumps(mutation))
-                self.assertIsNone(observer.manager_state(Path(tmp)))
+                self.assertIsNone(observer.manager_state(manager))
+
+    def test_state_v4_rejects_missing_revisions_dangling_data_and_unknown_transactions(self) -> None:
+        _, fixture = self.agentplugins_0_1_14_state_fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp)
+            state = self.sandbox_state_fixture(fixture, manager)
+            path = manager / "state-v2.json"
+            mutations = []
+            missing_revision = json.loads(json.dumps(state))
+            next(iter(missing_revision["installations"][0]["clients"].values())).pop("package_revision")
+            mutations.append(missing_revision)
+            dangling = json.loads(json.dumps(state))
+            next(iter(dangling["installations"][0]["clients"].values()))["data_receipt_id"] = "missing-receipt"
+            mutations.append(dangling)
+            missing_receipts = json.loads(json.dumps(state))
+            missing_receipts["installations"][0]["data_receipts"] = {}
+            mutations.append(missing_receipts)
+            unknown = json.loads(json.dumps(state))
+            unknown["transaction_receipts"] = [{
+                "operation_id": "unknown", "sequence": 1, "mutation_type": "file_copy",
+                "client_binding_id": "missing", "phase": "committed",
+            }]
+            mutations.append(unknown)
+            incomplete = json.loads(json.dumps(state))
+            incomplete["transaction_receipts"] = [{
+                "operation_id": "swap", "operation_group_id": state["installations"][0]["operation_group_id"],
+                "sequence": 2, "mutation_type": "directory_swap",
+                "client_binding_id": next(iter(state["installations"][0]["clients"])), "phase": "committed",
+            }]
+            mutations.append(incomplete)
+            for mutation in mutations:
+                path.write_text(json.dumps(mutation))
+                self.assertIsNone(observer.manager_state(manager))
+
+    def test_removal_receipt_requires_exact_pre_remove_binding_authority(self) -> None:
+        _, fixture = self.agentplugins_0_1_14_state_fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp)
+            state = self.sandbox_state_fixture(fixture, manager)
+            installation = state["installations"][0]
+            binding_id, binding = next(iter(installation["clients"].items()))
+            authority = {
+                binding_id: {
+                    "client_binding_id": binding_id, "client_id": binding["client_id"],
+                    "physical_artifact_id": binding["physical_artifact_id"],
+                    "active_path": binding["target_locator"],
+                    "before_digest": binding["native_objects"][0]["managed_digest"],
+                }
+            }
+            removal = {
+                "operation_id": "remove-operation", "operation_group_id": installation["operation_group_id"],
+                "sequence": 2, "mutation_type": "directory_remove", "client_binding_id": binding_id,
+                "client_id": binding["client_id"], "physical_artifact_id": binding["physical_artifact_id"],
+                "active_path": binding["target_locator"],
+                "backup_path": str(Path(binding["target_locator"]).parent / ".agentplugins-remove-backup"),
+                "before_digest": binding["native_objects"][0]["managed_digest"], "phase": "committed",
+            }
+            removed_state = {"schema_version": 4, "installations": [], "transaction_receipts": [removal]}
+            path = manager / "state-v2.json"
+            path.write_text(json.dumps(removed_state))
+            self.assertIsNotNone(observer.manager_state(manager, removal_authority=authority))
+            self.assertIsNone(observer.manager_state(manager))
+            for field, replacement in (
+                ("client_binding_id", "other-binding"), ("client_id", "kiro"),
+                ("physical_artifact_id", "other-artifact"),
+                ("active_path", str(manager / "other")), ("before_digest", "sha256:" + "0" * 64),
+            ):
+                forged = json.loads(json.dumps(removed_state))
+                forged["transaction_receipts"][0][field] = replacement
+                path.write_text(json.dumps(forged))
+                self.assertIsNone(observer.manager_state(manager, removal_authority=authority))
 
     def test_snapshot_revalidates_directory_binding_after_descendants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1145,6 +1478,31 @@ print((fixtures / name).read_text(), end="")
                 with self.assertRaisesRegex(ValueError, "directory (?:binding )?changed"):
                     observer.filesystem_snapshot(root)
 
+    def test_no_mutation_snapshot_detects_identical_atomic_file_and_directory_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / "child"
+            child.mkdir()
+            body = child / "same.txt"
+            body.write_bytes(b"identical")
+            before = observer.filesystem_snapshot(root)
+            replacement = root / "replacement.txt"
+            replacement.write_bytes(b"identical")
+            replacement.chmod(body.stat().st_mode & 0o777)
+            os.replace(replacement, body)
+            after_file = observer.filesystem_snapshot(root)
+            self.assertEqual(before["child/same.txt"]["digest"], after_file["child/same.txt"]["digest"])
+            self.assertNotEqual(before["child/same.txt"]["inode"], after_file["child/same.txt"]["inode"])
+            replacement_dir = root / "replacement-child"
+            replacement_dir.mkdir()
+            (replacement_dir / "same.txt").write_bytes(b"identical")
+            old = root / "old-child"
+            child.rename(old)
+            replacement_dir.rename(child)
+            after_directory = observer.filesystem_snapshot(root)
+            self.assertEqual(after_file["child"]["digest"], after_directory["child"]["digest"])
+            self.assertNotEqual(after_file["child"]["inode"], after_directory["child"]["inode"])
+
     def test_migration_stdout_without_state_transition_fails(self) -> None:
         fake = f'''#!/usr/bin/python3
 import pathlib, sys
@@ -1161,6 +1519,48 @@ else: raise SystemExit(2)
                 passed, value = observer.migration_scenario(binary, workspace, "challenge")
         self.assertFalse(passed, value)
         self.assertFalse(value["proof"]["migration_applied"])
+
+    def test_migration_scenario_executes_positive_stateful_transition(self) -> None:
+        fake = f'''#!/usr/bin/python3
+import json, os, pathlib, shutil, sys
+manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"])
+state_path = manager / "state-v2.json"
+command = sys.argv[1]
+if command == "info":
+    print("{{}}")
+elif command == "add":
+    print("migration required", file=sys.stderr)
+    raise SystemExit(2)
+elif command == "migrate-state" and "--dry-run" in sys.argv:
+    print(pathlib.Path({str(AGENTPLUGINS_0_1_14_FIXTURES / "migrate-dry-run.json")!r}).read_text(), end="")
+elif command == "migrate-state":
+    body = state_path.read_bytes()
+    (manager / "state-v2.json.schema2.backup-agentplugins-fixture").write_bytes(body)
+    value = json.loads(body)
+    value["schema_version"] = 4
+    state_path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    print(pathlib.Path({str(AGENTPLUGINS_0_1_14_FIXTURES / "migrate-apply.json")!r}).read_text(), end="")
+else:
+    raise SystemExit(2)
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "agentplugins"
+            binary.write_text(fake)
+            binary.chmod(0o700)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with mock.patch.dict(os.environ, {
+                "HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"),
+            }, clear=False):
+                passed, value = observer.migration_scenario(binary, workspace, "challenge")
+        self.assertTrue(passed, value)
+        self.assertTrue(all(value["proof"].values()))
+        self.assertEqual(
+            value["sandbox_transformation"]["algorithm"],
+            "agentplugins-sanitized-placeholder-to-sandbox-v1",
+        )
+        self.assertEqual(value["sandbox_transformation"]["input_digest"], value["sanitized_fixture_digest"])
 
     def test_plugin_data_stdout_without_state_or_filesystem_mutation_fails(self) -> None:
         fake = '''#!/usr/bin/python3
@@ -1187,6 +1587,19 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             marker.path.write_bytes(b"proof")
             marker.path.chmod(0o600)
             self.assertFalse(marker.verify())
+            marker.close()
+
+    def test_purge_proof_rejects_rename_and_accepts_exact_unlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            locator = root / "owned"
+            locator.mkdir()
+            marker = observer.create_contained_marker(locator, (root,), "marker", b"proof")
+            self.assertIsNotNone(marker)
+            marker.path.rename(root / "renamed-marker")
+            self.assertFalse(marker.purged((root,)))
+            (root / "renamed-marker").unlink()
+            self.assertTrue(marker.purged((root,)))
             marker.close()
 
             marker = observer.create_contained_marker(locator, (root,), "second", b"proof")
@@ -1225,7 +1638,57 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
         ))
 
     def test_plugin_data_update_requires_changed_package_and_preserves_exact_receipt(self) -> None:
-        self.test_retained_marker_rejects_identical_file_and_directory_replacement()
+        fake = f'''#!/usr/bin/python3
+import json, os, pathlib, shutil, sys
+manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"]); manager.mkdir(parents=True, exist_ok=True)
+state_path = manager / "state-v2.json"; command = sys.argv[1]
+def write_state(package):
+    manifest = json.loads((package / "plugin.json").read_text())
+    identity = ({{"tree_digest": "sha256:c350f133f09cbf95f3ddb05ffad6d1064d8478f9046d19caaaefe60d8a2707bb", "manifest_digest": "sha256:5e07ebffdfc936c72db176327fa360d9dc825fcbe239259f1b3ca92d1ac9ff5e"}}
+      if manifest.get("version") == "1.0.0" else
+      {{"tree_digest": "sha256:342346b9df16ce5649862255326ac8c7ed56fe578c2f9d7b41d7d3f0e25c2bf9", "manifest_digest": "sha256:82224daacc9b4af90c77494728efbd632363d1501ac31c40da56e5e9edd51356"}})
+    data = manager / "plugin-data/e2e-external-package-owned"; data.mkdir(parents=True, exist_ok=True)
+    target = manager / "managed/cursor/e2e-external-package"; target.mkdir(parents=True, exist_ok=True)
+    receipt_id = "plugin-data-receipt"; binding_id = "plugin-data-cursor"
+    state = {{"schema_version": 4, "installations": [{{"installation_id": "plugin-data-installation",
+      "declared_name": "e2e-external-package", "source": {{"source_binding_id": "local-source",
+      "requested_source": "./" + package.name, "canonical_source": "direct local source", "resolved_revision": "",
+      "tree_digest": identity["tree_digest"]}}, "package": {{"loader_kind": "agent_plugins",
+      "format_id": "agent-plugins/1.0.0", "schema_uri": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+      "declared_name": "e2e-external-package", "version": manifest.get("version", "1.0.0"),
+      "manifest_digest": identity["manifest_digest"], "inventory": {{}}}},
+      "data_receipts": {{receipt_id: {{"data_receipt_id": receipt_id, "physical_backend_id": "owned-backend",
+      "scope": "user", "locator": str(data), "ownership_digest": "sha256:" + "3" * 64, "state": "owned"}}}},
+      "clients": {{binding_id: {{"client_binding_id": binding_id, "client_id": "cursor", "scope": "user",
+      "target_locator": str(target), "physical_artifact_id": "owned-artifact", "data_receipt_id": receipt_id,
+      "materialization": "materialized", "activation": "manual_activation_required", "authentication": "not_checked",
+      "policy": "allowed", "verification": "package_validated", "package_revision": {{"version": manifest.get("version", "1.0.0"),
+      "tree_digest": identity["tree_digest"], "manifest_digest": identity["manifest_digest"]}},
+      "updated_at": "2026-08-24T00:00:00Z"}}}}, "created_at": "2026-08-24T00:00:00Z", "updated_at": "2026-08-24T00:00:00Z"}}]}}
+    state_path.write_text(json.dumps(state, sort_keys=True))
+if command == "add": write_state(pathlib.Path.cwd() / sys.argv[2].removeprefix("./"))
+elif command == "update":
+    state = json.loads(state_path.read_text()); write_state(pathlib.Path.cwd() / state["installations"][0]["source"]["requested_source"].removeprefix("./"))
+elif command in ("info", "repair", "switch"): pass
+elif command == "remove" and "--purge-data" not in sys.argv: pass
+elif command == "remove":
+    state = json.loads(state_path.read_text()); locator = pathlib.Path(next(iter(state["installations"][0]["data_receipts"].values()))["locator"])
+    if os.environ.get("RENAME_INSTEAD_OF_UNLINK"):
+        locator.joinpath("launch-marker.txt").rename(manager / "renamed-launch-marker.txt")
+    shutil.rmtree(locator, ignore_errors=True); state_path.unlink(missing_ok=True)
+else: raise SystemExit(2)
+print("{{}}")
+'''
+        for adversarial in (False, True):
+            with self.subTest(adversarial=adversarial), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
+                workspace = root / "workspace"; workspace.mkdir()
+                environment = {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"), "PYTHONDONTWRITEBYTECODE": "1"}
+                if adversarial: environment["RENAME_INSTEAD_OF_UNLINK"] = "1"
+                with mock.patch.dict(os.environ, environment, clear=False):
+                    passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+                self.assertEqual(passed, not adversarial, value)
+                self.assertEqual(value["proof"]["explicit_owned_purge_deleted"], not adversarial)
     def test_plugin_data_update_proof_fails_closed_for_no_change_or_receipt_replacement(self) -> None:
         first = {"tree_digest": "sha256:" + "a" * 64, "manifest_digest": "sha256:" + "e" * 64}
         second = {"tree_digest": "sha256:" + "b" * 64, "manifest_digest": "sha256:" + "f" * 64}
@@ -1248,6 +1711,7 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
         _, authoritative = self.agentplugins_0_1_14_state_fixture()
         with tempfile.TemporaryDirectory() as tmp:
             manager = Path(tmp)
+            authoritative = self.sandbox_state_fixture(authoritative, manager)
             state_path = manager / "state-v2.json"
             state_path.write_text(json.dumps(authoritative))
             receipts = observer.installation_receipts(manager, "context7")
@@ -1284,9 +1748,90 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
         self.assertTrue(observer.validate_cli_envelope(update, "update"))
         self.assertIsNone(observer.command_acquisition_proof(update, ("codex", "cursor", "kiro"), command="update"))
     def test_direct_full_sha_scenario_fails_without_explicit_update_refetch(self) -> None:
-        diagnostic = "agentplugins: group update preflight failed; no target was changed: direct full-SHA installations require explicit switch"
-        self.assertIn("explicit switch", diagnostic)
-        self.assertNotIn("--expected-digest", diagnostic)
+        fake = f'''#!/usr/bin/python3
+import hashlib, json, os, pathlib, shutil, sys
+manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"])
+manager.mkdir(parents=True, exist_ok=True)
+state_path = manager / "state-v2.json"
+command = sys.argv[1]
+tree = "sha256:" + "1" * 64
+manifest = "sha256:" + "2" * 64
+if command == "add":
+    selector = sys.argv[2]
+    repository_revision, package_path = selector.split("//", 1)
+    repository, revision = repository_revision.split("@", 1)
+    target = manager / "managed/cursor/e2e-external-package"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "plugin.json").write_text("{{}}")
+    binding_id = "direct-cursor-binding"
+    state = {{"schema_version": 4, "installations": [{{
+      "installation_id": "direct-installation", "declared_name": "e2e-external-package",
+      "source": {{"source_binding_id": "direct-source", "requested_source": selector,
+        "canonical_source": "https://github.com/" + repository + "@" + revision + "//" + package_path,
+        "repository": repository, "package_subpath": package_path, "resolved_revision": revision, "tree_digest": tree}},
+      "package": {{"loader_kind": "agent_plugins", "format_id": "agent-plugins/1.0.0",
+        "schema_uri": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "declared_name": "e2e-external-package", "version": "1.0.0", "manifest_digest": manifest, "inventory": {{}}}},
+      "clients": {{binding_id: {{"client_binding_id": binding_id, "client_id": "cursor", "scope": "user",
+        "target_locator": str(target), "physical_artifact_id": "direct-artifact", "materialization": "materialized",
+        "activation": "manual_activation_required", "authentication": "not_checked", "policy": "allowed",
+        "verification": "package_validated", "package_revision": {{"version": "1.0.0", "resolved_revision": revision,
+          "tree_digest": tree, "manifest_digest": manifest}}, "updated_at": "2026-08-24T00:00:00Z"}}}},
+      "created_at": "2026-08-24T00:00:00Z", "updated_at": "2026-08-24T00:00:00Z"
+    }}]}}
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    value = json.loads(pathlib.Path({str(AGENTPLUGINS_0_1_14_FIXTURES / "add.json")!r}).read_text())
+    item = next(item for item in value["data"]["targets"] if item["target"] == "cursor")
+    source = repository + "//" + package_path
+    for output in (value["data"], item["output"]):
+        output["source"] = source; output["revision"] = revision; output["tree_digest"] = tree; output["manifest_digest"] = manifest
+        output["version"] = "1.0.0"
+    item["output"]["result"]["installation_id"] = "direct-installation"
+    value["data"]["targets"] = [item]; value["data"]["succeeded"] = 1
+    acquisition = value["data"]["acquisition"]
+    digest = hashlib.sha256()
+    for field in ("agentplugins/grouped-acquisition-closure/v1", "github", repository, package_path, revision, tree, manifest):
+        body = field.strip().encode(); digest.update(len(body).to_bytes(8, "big")); digest.update(body)
+    acquisition.update({{"tree_digest": tree, "manifest_digest": manifest, "closure_digest": "sha256:" + digest.hexdigest(), "source_kind": "github", "fetched": True, "validated": True}})
+    binding = {{"outcome": "passed", "acquisition_id": acquisition["acquisition_id"], "tree_digest": tree,
+      "manifest_digest": manifest, "closure_digest": acquisition["closure_digest"]}}
+    value["data"]["target_outcomes"] = {{"cursor": binding}}
+    print(json.dumps(value))
+elif command == "update":
+    if os.environ.get("MUTATE_DURING_REFUSAL"):
+        state_path.write_bytes(state_path.read_bytes() + b" ")
+    value = json.loads(pathlib.Path({str(AGENTPLUGINS_0_1_14_FIXTURES / "direct-update-failure.json")!r}).read_text())
+    state = json.loads(state_path.read_text()); source = state["installations"][0]["source"]
+    value["data"].update({{"failed": 1, "plugin": "e2e-external-package", "source": source["repository"] + "//" + source["package_subpath"],
+      "revision": source["resolved_revision"], "tree_digest": source["tree_digest"], "version": "1.0.0"}})
+    print(json.dumps(value))
+    print({observer.FULL_SHA_UPDATE_STDERR!r}, end="", file=sys.stderr)
+    raise SystemExit(1)
+elif command == "remove":
+    if state_path.exists():
+        state = json.loads(state_path.read_text()); shutil.rmtree(pathlib.Path(next(iter(state["installations"][0]["clients"].values()))["target_locator"]).parent.parent, ignore_errors=True); state_path.unlink()
+    print("{{}}")
+else: raise SystemExit(2)
+'''
+        context = {
+            "github_sha": "a" * 40,
+            "catalog_repository": "777genius/universal-agent-plugins",
+        }
+        for adversarial in (False, True):
+            with self.subTest(adversarial=adversarial), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                binary = root / "agentplugins"
+                binary.write_text(fake)
+                binary.chmod(0o700)
+                workspace = root / "workspace"
+                workspace.mkdir()
+                environment = {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager")}
+                if adversarial:
+                    environment["MUTATE_DURING_REFUSAL"] = "1"
+                with mock.patch.dict(os.environ, environment, clear=False):
+                    passed, value = observer.direct_full_sha_scenario(binary, workspace, "challenge", context)
+                self.assertEqual(passed, not adversarial, value)
+                self.assertEqual(value["proof"]["direct_update_refused_requires_switch"], not adversarial)
     def test_evidence_boundary_rejects_incomplete_or_forged_acquisition(self) -> None:
         targets = ("codex", "cursor", "kiro")
         tree = "sha256:" + "a" * 64
@@ -1539,6 +2084,7 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
         state = release_fixture("state-v2.json")
         with tempfile.TemporaryDirectory() as tmp:
             manager = Path(tmp)
+            state = self.sandbox_state_fixture(state, manager)
             (manager / "state-v2.json").write_text(json.dumps(state))
             self.assertEqual(observer.manager_identity(manager, "context7")["resolved_revision"], "769c6cd22c3d95462d1f55d789e9532cabefa5a9")
             extra = json.loads(json.dumps(state["installations"][0]))
