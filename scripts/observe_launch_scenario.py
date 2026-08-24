@@ -63,6 +63,11 @@ WINDOWS_RESERVED_LEAF_IDS = frozenset({
     *(f"COM{number}" for number in range(1, 10)),
     *(f"LPT{number}" for number in range(1, 10)),
 })
+GO_UNICODE_WHITE_SPACE = frozenset(
+    "\u0009\u000a\u000b\u000c\u000d\u0020\u0085\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
 
 
 class DuplicateKeyError(ValueError):
@@ -102,11 +107,21 @@ def _digest(value: Any) -> bool:
     return isinstance(value, str) and DIGEST.fullmatch(value) is not None
 
 
+def _go_trim_space(value: str) -> str:
+    """Match Go strings.TrimSpace's Unicode White_Space predicate exactly."""
+    start, end = 0, len(value)
+    while start < end and value[start] in GO_UNICODE_WHITE_SPACE:
+        start += 1
+    while end > start and value[end - 1] in GO_UNICODE_WHITE_SPACE:
+        end -= 1
+    return value[start:end]
+
+
 def _valid_leaf_id(value: Any) -> bool:
     """Exact portable leaf-ID rule used by released agentplugins 0.1.14."""
     if not isinstance(value, str):
         return False
-    value = value.strip()
+    value = _go_trim_space(value)
     if not value or len(value.encode()) > 64:
         return False
     if not LEAF_ID.fullmatch(value) or value in {".", ".."} or value.endswith(".") or ".." in value:
@@ -449,9 +464,9 @@ def _validate_safety_warning(value: Any) -> bool:
     )
 
 
-def _managed_native_product_id(name: str, installation_id: str) -> str:
-    physical = name.strip() + "-" + hashlib.sha256(installation_id.encode()).hexdigest()[:12]
-    return name.strip() + "@agentplugins-" + hashlib.sha256(physical.encode()).hexdigest()[:12]
+def _managed_native_product_id(name: str, physical_artifact_id: str) -> str:
+    name = _go_trim_space(name)
+    return name + "@agentplugins-" + hashlib.sha256(_go_trim_space(physical_artifact_id).encode()).hexdigest()[:12]
 
 
 def _validate_native_discovery(
@@ -471,7 +486,9 @@ def _validate_native_discovery(
         and _keys(discovery, {"argv", "discovered", "product_id"})
         and discovery["argv"] == ["copilot", "plugin", "list"]
         and type(discovery["discovered"]) is bool and _nonempty(discovery["product_id"])
-        and re.fullmatch(re.escape(name.strip()) + r"@agentplugins-[0-9a-f]{12}", discovery["product_id"]) is not None
+        # The released info surface omits physical_artifact_id. Exact managed
+        # identity is therefore bound later, where State-v4 is also available.
+        and re.fullmatch(re.escape(_go_trim_space(name)) + r"@agentplugins-[0-9a-f]{12}", discovery["product_id"]) is not None
     )
 
 
@@ -1305,6 +1322,9 @@ def manager_state(
             and directory["distribution_kind"] in {"upstream", "community_bridge", "community"}
             and _exact_int(directory["desired_release_sequence"]) and directory["desired_release_sequence"] > 0
             and _directory_snapshot_coherent(directory)
+            # Evidence-only strengthening: released State.Validate does not
+            # bind this product ID to the enclosing installation identity.
+            and directory["product_id"] == name
         ):
             return None
         if "operation_group_id" in installation:
@@ -3095,19 +3115,43 @@ class RetainedMarker:
 
 
 class FrozenAuthoritySet:
-    """Descriptor-bound, deduplicated path authority retained across purge."""
+    """Descriptor-bound path authority with every lexical component pinned."""
 
-    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str | None]]):
+    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]]):
         self.records = records
+
+    @staticmethod
+    def _ancestry_bound(ancestry: list[tuple[int, int | None, str | None, tuple[int, int]]]) -> bool:
+        if not ancestry:
+            return False
+        try:
+            fresh_root = os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                fresh = os.fstat(fresh_root)
+                if (fresh.st_dev, fresh.st_ino) != ancestry[0][3]:
+                    return False
+            finally:
+                os.close(fresh_root)
+            for descriptor, parent_fd, name, identity in ancestry:
+                opened = os.fstat(descriptor)
+                if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != identity:
+                    return False
+                if parent_fd is not None:
+                    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != identity:
+                        return False
+            return True
+        except OSError:
+            return False
 
     def retained(self, paths: set[str]) -> bool:
         try:
             for path in paths:
-                kind, descriptor, identity, _ = self.records[path]
-                if kind != "existing":
+                kind, descriptor, identity, name, ancestry = self.records[path]
+                if kind != "existing" or not self._ancestry_bound(ancestry):
                     return False
                 opened = os.fstat(descriptor)
-                current = os.lstat(path)
+                current = os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
                 if (opened.st_dev, opened.st_ino) != identity or (current.st_dev, current.st_ino) != identity:
                     return False
             return True
@@ -3116,41 +3160,50 @@ class FrozenAuthoritySet:
 
     def absent_and_unlinked(self) -> bool:
         try:
-            for path, (kind, descriptor, identity, name) in self.records.items():
+            for _path, (kind, descriptor, identity, name, ancestry) in self.records.items():
+                if not self._ancestry_bound(ancestry):
+                    return False
                 opened = os.fstat(descriptor)
                 if kind == "existing":
-                    if os.path.lexists(path) or (opened.st_dev, opened.st_ino) != identity or opened.st_nlink != 0:
+                    if (opened.st_dev, opened.st_ino) != identity or opened.st_nlink != 0:
                         return False
                 else:
-                    if (opened.st_dev, opened.st_ino) != identity or name is None:
+                    if (opened.st_dev, opened.st_ino) != identity:
                         return False
-                    try:
-                        os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-                        return False
-                    except FileNotFoundError:
-                        pass
+                try:
+                    os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
+                    return False
+                except FileNotFoundError:
+                    pass
             return True
         except OSError:
             return False
 
     def partitioned(self, retained_paths: set[str]) -> bool:
         try:
-            for path, (kind, descriptor, identity, name) in self.records.items():
+            for path, (kind, descriptor, identity, name, ancestry) in self.records.items():
+                if not self._ancestry_bound(ancestry):
+                    return False
                 opened = os.fstat(descriptor)
                 if (opened.st_dev, opened.st_ino) != identity:
                     return False
                 if path in retained_paths:
                     if kind != "existing":
                         return False
-                    current = os.lstat(path)
+                    current = os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
                     if (current.st_dev, current.st_ino) != identity:
                         return False
                 elif kind == "existing":
-                    if os.path.lexists(path) or opened.st_nlink != 0:
+                    if opened.st_nlink != 0:
                         return False
+                    try:
+                        os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
+                        return False
+                    except FileNotFoundError:
+                        pass
                 else:
                     try:
-                        os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                        os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
                         return False
                     except FileNotFoundError:
                         pass
@@ -3159,11 +3212,79 @@ class FrozenAuthoritySet:
             return False
 
     def close(self) -> None:
-        for _, descriptor, _, _ in self.records.values():
+        closed: set[int] = set()
+        for _, descriptor, _, _, ancestry in self.records.values():
+            for child in [descriptor, *(item[0] for item in ancestry)]:
+                if child not in closed:
+                    try:
+                        os.close(child)
+                    except OSError:
+                        pass
+                    closed.add(child)
+
+
+def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> FrozenAuthoritySet | None:
+    """Open an absolute path component-by-component and retain its lexical binding."""
+    records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]] = {}
+    opened_descriptors: list[int] = []
+    try:
+        roots = tuple(root.resolve(strict=True) for root in allowed_roots)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        for value in sorted(paths):
+            path = Path(value)
+            if not path.is_absolute() or ".." in path.parts or str(path) != value:
+                raise ValueError("authority path is not absolute and lexical")
+            if not any(root == path or root in path.parents for root in roots):
+                raise ValueError("authority path is outside the allowed roots")
+            root_fd = os.open("/", directory_flags)
+            opened_descriptors.append(root_fd)
+            root_metadata = os.fstat(root_fd)
+            ancestry = [(root_fd, None, None, (root_metadata.st_dev, root_metadata.st_ino))]
+            parent_fd = root_fd
+            parts = path.parts[1:]
+            if not parts:
+                raise ValueError("filesystem root cannot be purge authority")
+            for index, name in enumerate(parts):
+                final = index == len(parts) - 1
+                try:
+                    metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    opened_parent = os.fstat(parent_fd)
+                    records[value] = (
+                        "absent", parent_fd, (opened_parent.st_dev, opened_parent.st_ino), name, ancestry,
+                    )
+                    break
+                if stat.S_ISLNK(metadata.st_mode) or (not final and not stat.S_ISDIR(metadata.st_mode)):
+                    raise ValueError("authority path has a non-directory or symbolic ancestor")
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                if not final:
+                    flags |= getattr(os, "O_DIRECTORY", 0)
+                descriptor = os.open(name, flags, dir_fd=parent_fd)
+                opened_descriptors.append(descriptor)
+                opened = os.fstat(descriptor)
+                identity = (opened.st_dev, opened.st_ino)
+                if identity != (metadata.st_dev, metadata.st_ino):
+                    os.close(descriptor)
+                    raise ValueError("authority component changed while freezing")
+                if final:
+                    records[value] = ("existing", descriptor, identity, name, ancestry)
+                else:
+                    ancestry.append((descriptor, parent_fd, name, identity))
+                    parent_fd = descriptor
+            else:
+                if value not in records:
+                    raise ValueError("authority path was not frozen")
+        frozen = FrozenAuthoritySet(records)
+        if set(records) != paths:
+            raise ValueError("authority set is incomplete")
+        return frozen
+    except (OSError, ValueError):
+        for descriptor in set(opened_descriptors):
             try:
                 os.close(descriptor)
             except OSError:
                 pass
+        return None
 
 
 def freeze_complete_authority(
@@ -3199,55 +3320,8 @@ def freeze_complete_authority(
         for field in ("active_path", "staging_path", "backup_path"):
             if _nonempty(receipt.get(field)):
                 paths.add(receipt[field])
-    records: dict[str, tuple[str, int, tuple[int, int], str | None]] = {}
-    try:
-        for value in sorted(paths):
-            path = Path(value)
-            if not path.is_absolute() or ".." in path.parts:
-                raise ValueError("authority path is not absolute and lexical")
-            roots = tuple(root.resolve(strict=True) for root in allowed_roots)
-            try:
-                current = path.lstat()
-            except FileNotFoundError:
-                ancestor = path.parent
-                while not ancestor.exists():
-                    if ancestor == ancestor.parent:
-                        raise ValueError("absent authority path has no existing ancestor")
-                    ancestor = ancestor.parent
-                parent = ancestor.resolve(strict=True)
-                try:
-                    relative = path.relative_to(ancestor)
-                except ValueError as error:
-                    raise ValueError("absent authority path changed lexically") from error
-                missing_name = relative.parts[0] if relative.parts else ""
-                if parent != ancestor or str(ancestor / relative) != value or not missing_name or not any(root == parent or root in parent.parents for root in roots):
-                    raise ValueError("absent authority path is not canonical and contained")
-                descriptor = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-                metadata = os.fstat(descriptor)
-                if (metadata.st_dev, metadata.st_ino) != (parent.stat().st_dev, parent.stat().st_ino):
-                    os.close(descriptor)
-                    raise ValueError("absent authority parent changed while freezing")
-                try:
-                    os.stat(missing_name, dir_fd=descriptor, follow_symlinks=False)
-                    os.close(descriptor)
-                    raise ValueError("absent authority path appeared while freezing")
-                except FileNotFoundError:
-                    records[value] = ("absent", descriptor, (metadata.st_dev, metadata.st_ino), missing_name)
-            else:
-                canonical = canonical_allowed_locator(path, allowed_roots)
-                if canonical is None or str(canonical) != value:
-                    raise ValueError("authority path is not canonical and contained")
-                descriptor = os.open(canonical, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                metadata = os.fstat(descriptor)
-                identity = (metadata.st_dev, metadata.st_ino)
-                if identity != (current.st_dev, current.st_ino):
-                    os.close(descriptor)
-                    raise ValueError("authority path changed while freezing")
-                records[value] = ("existing", descriptor, identity, None)
-        return FrozenAuthoritySet(records), data_paths
-    except (OSError, ValueError):
-        FrozenAuthoritySet(records).close()
-        return None
+    frozen = freeze_path_authority(paths, allowed_roots)
+    return (frozen, data_paths) if frozen is not None else None
 
 
 def create_contained_marker(
@@ -3476,13 +3550,19 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         retained_state.get("transaction_receipts", []) if retained_state else None,
     )
     purge_authority, purge_data_paths = purge_frozen_result if purge_frozen_result is not None else (None, set())
+    purge_state_authority = freeze_path_authority({str(manager / "state-v2.json")}, (manager,))
     purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
     purge_state = manager_state(manager)
     remaining = [
         item for item in purge_state.get("installations", [])
         if isinstance(item, dict) and item.get("installation_id") == (initial_installation or {}).get("installation_id")
     ] if purge_state else []
-    authority_consumed = data_receipt(manager, "e2e-external-package") is None and not remaining
+    valid_absent_state = purge_state is not None and not remaining
+    state_file_authoritatively_absent = bool(
+        purge_state is None and purge_state_authority is not None
+        and purge_state_authority.absent_and_unlinked()
+    )
+    authority_consumed = bool(valid_absent_state or state_file_authoritatively_absent)
     purge_deleted = bool(
         marker is not None and marker.purged((root, manager)) and authority_consumed
         and purge_authority is not None and purge_data_paths == frozen_data_paths
@@ -3504,6 +3584,8 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         removal_authority.close()
     if purge_authority is not None:
         purge_authority.close()
+    if purge_state_authority is not None:
+        purge_state_authority.close()
     return safe_locator and all(item.returncode == 0 for item in exits) and all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof,
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,

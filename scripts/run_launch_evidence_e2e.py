@@ -52,6 +52,7 @@ from launch_observer_signatures import (  # noqa: E402
 )
 from build_registry import RegistryError, directory_tree_digest, resolve_directory  # noqa: E402
 from observe_launch_scenario import (  # noqa: E402
+    _managed_native_product_id,
     _stable_tree_snapshot,
     grouped_acquisition_closure_digest,
     installation_receipts,
@@ -421,7 +422,8 @@ def authoritative_public_mcp_evidence(evidence: Any) -> bool:
 
 
 def authoritative_repository_copilot_evidence(
-    evidence: Any, *, client_version: Any, product_id: str, expected_version: str,
+    evidence: Any, *, client_version: Any, product_id: str, physical_artifact_id: str,
+    expected_version: str,
 ) -> bool:
     """Validate native Copilot commands executed directly by Agent Plugins."""
     if (
@@ -442,7 +444,7 @@ def authoritative_repository_copilot_evidence(
         and set(discovery) == {"argv", "discovered", "product_id"}
         and discovery.get("argv") == ["copilot", "plugin", "list"]
         and discovery.get("discovered") is True
-        and re.fullmatch(re.escape(product_id) + r"@agentplugins-[a-f0-9]{12}", str(discovery.get("product_id", "")))
+        and discovery.get("product_id") == _managed_native_product_id(product_id, physical_artifact_id)
     )
 
 def read_production_config() -> dict[str, Any]:
@@ -452,6 +454,7 @@ def read_production_config() -> dict[str, Any]:
         or value.get("catalog_repository") != TRUSTED_CATALOG_REPOSITORY
         or value.get("cli_release_repository") != TRUSTED_CLI_RELEASE_REPOSITORY
         or value.get("cli_release_tag") != TRUSTED_CLI_RELEASE_TAG
+        or value.get("cli_release_commit") != TRUSTED_CLI_RELEASE_COMMIT
         or value.get("cli_release_workflow") != TRUSTED_CLI_RELEASE_WORKFLOW
         or value.get("copilot_cli_package") != "@github/copilot"
         or value.get("copilot_cli_version") != "1.0.80"
@@ -850,6 +853,11 @@ def observed_state_identity(environment: dict[str, str], product_id: str, client
     # protected external observer contract validated by _load_attestations.
     receipts = installation_receipts(manager, product_id) if installation else None
     committed = len(receipts or [])
+    physical_ids = {
+        binding.get("physical_artifact_id")
+        for binding in installation.get("clients", {}).values()
+        if isinstance(binding, dict) and isinstance(binding.get("physical_artifact_id"), str)
+    } if installation else set()
     return {
         "product_id": find_value(installation, {"product_id"}) if installation else None,
         "tree_digest": find_value(installation, {"tree_digest"}) if installation else None,
@@ -858,6 +866,7 @@ def observed_state_identity(environment: dict[str, str], product_id: str, client
         "distribution_kind": find_value(installation, {"distribution_kind"}) if installation else None,
         "release_sequence": find_value(installation, {"desired_release_sequence"}) if installation else None,
         "package_version": find_value(installation.get("package", {}), {"version"}) if installation else None,
+        "physical_artifact_id": next(iter(physical_ids)) if len(physical_ids) == 1 else None,
         "snapshot_sequence": find_value(installation, {"snapshot_sequence"}) if installation else None,
         "snapshot_digest": find_value(installation, {"snapshot_digest"}) if installation else None,
         "client_version": None,
@@ -2085,6 +2094,7 @@ class LaunchHarness:
                         or find_value(value, {"native_identity_state"}) != "managed"
                         or not authoritative_repository_copilot_evidence(
                             native_evidence, client_version=client_version, product_id=plugin,
+                            physical_artifact_id=str(value.get("_observed_state", {}).get("physical_artifact_id") or ""),
                             expected_version=config["copilot_cli_version"],
                         )
                     ):
@@ -2095,6 +2105,7 @@ class LaunchHarness:
                         details = {
                             "evidence_basis": "native_client_command", "runtime_proof": False,
                             "native_discovery_proof": True, "native_discovery_evidence": native_evidence,
+                            "physical_artifact_id": value.get("_observed_state", {}).get("physical_artifact_id"),
                             "native_identity_state": "managed",
                             "copilot_package": self.copilot_metadata, "operation": operation,
                             "resolution": release, "command_trace": value.get("_launch_command_trace"),
@@ -2590,7 +2601,8 @@ def assert_redacted(value: dict[str, Any]) -> None:
                     or tuple_value.get("dependency_identity") != expected_dependency
                     or not authoritative_repository_copilot_evidence(
                         native_evidence, client_version=tuple_value.get("client_version"),
-                        product_id=str(row.get("plugin")), expected_version=production["copilot_cli_version"],
+                        product_id=str(row.get("plugin")), physical_artifact_id=str(details.get("physical_artifact_id") or ""),
+                        expected_version=production["copilot_cli_version"],
                     )
                 ):
                     raise ValueError(f"passed discovery evidence lacks exact repository-owned Copilot operations: {row.get('id')}")

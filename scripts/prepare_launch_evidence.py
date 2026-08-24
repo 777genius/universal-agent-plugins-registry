@@ -50,7 +50,6 @@ def main() -> int:
     release_identity = json.loads((args.run_root / "release" / "github-release-identity.json").read_text())
     if (
         release_identity.get("tag_commit") != config["cli_release_commit"]
-        or release_identity.get("release_id") != config["cli_release_id"]
         or release_identity.get("immutable") is not True
     ):
         raise ValueError("resolved CLI release differs from the immutable reviewed identity")

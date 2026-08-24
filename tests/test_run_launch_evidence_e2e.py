@@ -364,6 +364,51 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                     e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest,
                 )
 
+    def test_native_observation_schema_accepts_exact_producer_attestation(self) -> None:
+        schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
+        asset = "agentplugins_0.1.14_linux_amd64"
+        digest = "sha256:" + "a" * 64
+        observation = {
+            "schema_version": 1, "kind": "binary", "os": "linux", "architecture": "amd64",
+            "node_major": None, "executed": True, "version": "0.1.14",
+            "catalog_repository": e2e.TRUSTED_CATALOG_REPOSITORY, "catalog_sha": "b" * 40,
+            "cli_release_repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
+            "cli_release_tag": e2e.TRUSTED_CLI_RELEASE_TAG,
+            "github_release_identity": {
+                "repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
+                "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "tag_commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
+                "release_id": 114, "immutable": True,
+            },
+            "release_manifest_digest": "sha256:" + "c" * 64,
+            "release_checksums_digest": "sha256:" + "d" * 64,
+            "directory_digest": "sha256:" + "e" * 64,
+            "asset_name": asset, "asset_digest": digest,
+            "github_asset_attestation": {
+                "repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
+                "workflow": e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+                "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "tag_commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
+                "issuer": "https://token.actions.githubusercontent.com",
+                "source_ref": f"refs/tags/{e2e.TRUSTED_CLI_RELEASE_TAG}",
+                "source_digest": e2e.TRUSTED_CLI_RELEASE_COMMIT,
+                "predicate_type": "https://slsa.dev/provenance/v1",
+                "subject_name": asset, "subject_digest": digest,
+                "runner_environment": "github-hosted",
+                "asset_name": asset, "asset_digest": digest, "verified": True,
+            },
+            "challenge": "f" * 64, "challenge_context": {},
+            "started_at": "2026-08-24T00:00:00Z", "observed_at": "2026-08-24T00:00:01Z",
+            "command_trace": {}, "runner_platform": "Linux X64",
+        }
+        jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(observation)
+        for missing in (
+            "issuer", "source_ref", "source_digest", "predicate_type", "subject_name",
+            "subject_digest", "runner_environment",
+        ):
+            forged = json.loads(json.dumps(observation))
+            del forged["github_asset_attestation"][missing]
+            with self.subTest(missing=missing), self.assertRaises(jsonschema.ValidationError):
+                jsonschema.Draft202012Validator(schema).validate(forged)
+
     def test_npm_installed_executable_must_equal_authenticated_native_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             executable = Path(tmp) / "agentplugins"
@@ -406,6 +451,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
         self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.14")
+        self.assertEqual(config["cli_release_commit"], e2e.TRUSTED_CLI_RELEASE_COMMIT)
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
         self.assertEqual(
@@ -450,6 +496,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             ("catalog_repository", "attacker/catalog"),
             ("cli_release_repository", "attacker/binaries"),
             ("cli_release_tag", "agentplugins-v0.1.9"),
+            ("cli_release_commit", "f" * 40),
             ("cli_release_workflow", "attacker/repo/.github/workflows/agentplugins-release.yml"),
         ):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
@@ -564,11 +611,12 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             },
             "discovery_operation": {
                 "argv": ["copilot", "plugin", "list"], "discovered": True,
-                "product_id": "context7@agentplugins-f36027996b7a",
+                "product_id": "context7@agentplugins-d1b2efbd0485",
             },
         }
         validate = lambda evidence: e2e.authoritative_repository_copilot_evidence(
-            evidence, client_version="1.0.80", product_id="context7", expected_version="1.0.80",
+            evidence, client_version="1.0.80", product_id="context7",
+            physical_artifact_id="context7-05408cd487ce", expected_version="1.0.80",
         )
         self.assertTrue(validate(valid))
         for path, value in (
@@ -578,7 +626,8 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             (("discovery_operation", "argv"), ["copilot", "plugin", "list", "--fixture"]),
             (("discovery_operation", "product_id"), "context7"),
             (("discovery_operation", "product_id"), "context7@agentplugins-xyz"),
-            (("discovery_operation", "product_id"), "other@agentplugins-f36027996b7a"),
+            (("discovery_operation", "product_id"), "other@agentplugins-d1b2efbd0485"),
+            (("discovery_operation", "product_id"), "context7@agentplugins-05408cd487ce"),
             (("discovery_operation", "discovered"), False),
         ):
             mutated = json.loads(json.dumps(valid))
@@ -588,7 +637,8 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             target[path[-1]] = value
             self.assertFalse(validate(mutated), path)
         self.assertFalse(e2e.authoritative_repository_copilot_evidence(
-            valid, client_version="1.0.79", product_id="context7", expected_version="1.0.80",
+            valid, client_version="1.0.79", product_id="context7",
+            physical_artifact_id="context7-05408cd487ce", expected_version="1.0.80",
         ))
         harness = self.fixture_harness()
         with mock.patch.object(harness, "directory_release", return_value={}):
@@ -683,10 +733,12 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
 
             def command(argv, _sandbox, _clients):
                 plugin = argv[1]
+                physical_artifact_id = f"{plugin}-05408cd487ce"
                 value = {
                     "tree_digest": digest, "receipt_reconciled": True,
                     "native_discovery_reconciled": True, "native_identity_state": "managed",
                     "client_version": "1.0.80",
+                    "_observed_state": {"physical_artifact_id": physical_artifact_id},
                     "native_discovery_evidence": {
                         "basis": "native_client_command",
                         "version_operation": {
@@ -694,7 +746,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                         },
                         "discovery_operation": {
                             "argv": ["copilot", "plugin", "list"], "discovered": True,
-                            "product_id": f"{plugin}@agentplugins-f36027996b7a",
+                            "product_id": observer._managed_native_product_id(plugin, physical_artifact_id),
                         },
                     },
                 }
@@ -1603,6 +1655,17 @@ print((fixtures / name).read_text(), end="")
         binding["receipts"][0]["operation_id"] = f"  {binding['receipts'][0]['operation_id']}  "
         self.assertTrue(observer.validate_released_state_v4(trimmed), "Go validates leaf IDs after TrimSpace")
 
+        for whitespace in ("\t", "\u0085", "\u00a0", "\u1680", "\u2007", "\u202f", "\u3000"):
+            spaced = json.loads(json.dumps(fixture))
+            spaced["installations"][0]["installation_id"] = f"{whitespace}portable-id{whitespace}"
+            self.assertTrue(observer.validate_released_state_v4(spaced), repr(whitespace))
+        control_separator = json.loads(json.dumps(fixture))
+        control_separator["installations"][0]["installation_id"] = "\u001cportable-id\u001c"
+        self.assertFalse(
+            observer.validate_released_state_v4(control_separator),
+            "Go strings.TrimSpace does not trim U+001C even though Python str.strip does",
+        )
+
         for field, replacement in (
             ("physical_artifact_id", "../artifact"),
             ("physical_artifact_id", "CON"),
@@ -1642,6 +1705,22 @@ print((fixtures / name).read_text(), end="")
             client["package_revision"]["resolved_revision"] = "a" * 40
         current["source"]["resolved_revision"] = "b" * 40
         self.assertTrue(observer.validate_released_state_v4(directory))
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp)
+            strengthened = self.sandbox_state_fixture(fixture, manager)
+            strengthened_installation = strengthened["installations"][0]
+            strengthened_installation["origin_mode"] = "directory"
+            strengthened_installation["directory"] = json.loads(json.dumps(current["directory"]))
+            strengthened_installation["source"]["resolved_revision"] = "b" * 40
+            for client in strengthened_installation["clients"].values():
+                client["package_revision"]["distribution_id"] = "upstash/context7"
+                client["package_revision"]["release_sequence"] = 1
+                client["package_revision"]["resolved_revision"] = "a" * 40
+            (manager / "state-v2.json").write_text(json.dumps(strengthened))
+            self.assertIsNone(
+                observer.manager_state(manager),
+                "evidence validation binds directory.product_id even though released Go Validate does not",
+            )
         current["directory"].update({"snapshot_schema": 1, "snapshot_sequence": 1, "snapshot_digest": "opaque-nonempty"})
         self.assertTrue(observer.validate_released_state_v4(directory), "Go only requires a nonblank snapshot digest")
         current["clients"][binding_key]["package_revision"]["release_sequence"] = 3
@@ -1964,6 +2043,23 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             self.assertTrue(frozen.absent_and_unlinked())
             frozen.close()
 
+    def test_absent_purge_authority_rejects_lexical_ancestor_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "root"; root.mkdir()
+            path = root / ".old" / "nested"
+            frozen = observer.freeze_path_authority({str(path)}, (root,))
+            self.assertIsNotNone(frozen)
+            original = parent / "original-root"
+            root.rename(original)
+            path.mkdir(parents=True)
+            shutil.rmtree(original)
+            self.assertFalse(
+                frozen.absent_and_unlinked(),
+                "a held ancestor descriptor cannot authenticate a replacement lexical root",
+            )
+            frozen.close()
+
     def test_state_migration_observes_stale_refusal_backup_and_exact_provenance(self) -> None:
         legacy = json.loads((ROOT / "tests/e2e/fixtures/state-schema-2.json").read_text())
         self.assertEqual((legacy["schema_version"], legacy["installations"][0]["declared_name"]), (2, "demo"))
@@ -2038,19 +2134,23 @@ elif command == "remove":
     if os.environ.get("RENAME_INSTEAD_OF_UNLINK"):
         locator.joinpath("launch-marker.txt").rename(manager / "renamed-launch-marker.txt")
     shutil.rmtree(locator, ignore_errors=True); state_path.unlink(missing_ok=True)
+    if os.environ.get("CORRUPT_PURGE_STATE"):
+        state_path.write_text("{{")
 else: raise SystemExit(2)
 print("{{}}")
 '''
-        for adversarial in (False, True):
-            with self.subTest(adversarial=adversarial), tempfile.TemporaryDirectory() as tmp:
+        for mode in ("absent-state", "renamed-marker", "corrupt-state"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
                 workspace = root / "workspace"; workspace.mkdir()
                 environment = {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"), "PYTHONDONTWRITEBYTECODE": "1"}
-                if adversarial: environment["RENAME_INSTEAD_OF_UNLINK"] = "1"
+                if mode == "renamed-marker": environment["RENAME_INSTEAD_OF_UNLINK"] = "1"
+                if mode == "corrupt-state": environment["CORRUPT_PURGE_STATE"] = "1"
                 with mock.patch.dict(os.environ, environment, clear=False):
                     passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
-                self.assertEqual(passed, not adversarial, value)
-                self.assertEqual(value["proof"]["explicit_owned_purge_deleted"], not adversarial)
+                expected = mode == "absent-state"
+                self.assertEqual(passed, expected, value)
+                self.assertEqual(value["proof"]["explicit_owned_purge_deleted"], expected)
     def test_plugin_data_update_proof_fails_closed_for_no_change_or_receipt_replacement(self) -> None:
         first = {"tree_digest": "sha256:" + "a" * 64, "manifest_digest": "sha256:" + "e" * 64}
         second = {"tree_digest": "sha256:" + "b" * 64, "manifest_digest": "sha256:" + "f" * 64}

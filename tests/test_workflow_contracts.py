@@ -172,11 +172,14 @@ class WorkflowContractTests(unittest.TestCase):
         production = (ROOT / "tests/e2e/production-launch.json").read_text()
         self.assertIn('"cli_release_repository": "777genius/plugin-kit-ai"', production)
         self.assertIn('"cli_release_tag": "agentplugins-v0.1.14"', production)
+        self.assertIn('"cli_release_commit": "caffa9ac2a962462a05d5342250f4810ddce0856"', production)
         prepare = (ROOT / "scripts/prepare_launch_evidence.py").read_text()
         self.assertNotIn('os.environ.get("GITHUB_TOKEN")', prepare)
         self.assertIn("token=None", prepare)
         self.assertNotIn("fetch_production_directory", prepare)
         self.assertIn("fetch_staged_directory", prepare)
+        self.assertNotIn('config["cli_release_id"]', prepare)
+        self.assertEqual(LAUNCH.read_text().count("python scripts/prepare_launch_evidence.py --asset-name"), 2)
         self.assertIn("--publication-ledger-commit", commands(native))
 
     def test_false_consent_skips_every_live_and_aggregate_job(self) -> None:
