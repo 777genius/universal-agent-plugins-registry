@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from directory_publication import canonical_json, sha256_digest, signature_message, validate_snapshot_semantics, verify_envelope
+from build_registry import directory_tree_digest
 
 
 _CONFIG = json.loads((Path(__file__).resolve().parents[1] / "tests/e2e/launch-scenarios.json").read_text())
@@ -50,6 +51,20 @@ GITHUB_REPOSITORY = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
 )
 GITHUB_SOURCE_PATH = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+class DuplicateKeyError(ValueError):
+    """Raised before raw JSON object pairs can collapse into a dictionary."""
+
+
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        if key in value:
+            raise DuplicateKeyError(f"duplicate JSON object key: {key}")
+        value[key] = child
+    return value
 
 
 def now() -> str:
@@ -71,6 +86,16 @@ def observe(home: Path, manager: Path) -> dict[str, Any]:
     return {
         "manager": tree_digest(manager),
         "native": {name: tree_digest(home / name) for name in NATIVE_ROOTS},
+    }
+
+
+def file_digests(root: Path) -> dict[str, str]:
+    """Digest every regular, non-symlink file for an exact mutation allowlist."""
+    if not root.exists():
+        return {}
+    return {
+        path.relative_to(root).as_posix(): "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*")) if path.is_file() and not path.is_symlink()
     }
 
 
@@ -105,7 +130,9 @@ def find_values(value: Any, names: set[str]) -> list[Any]:
     return found
 
 
-def grouped_acquisition_proof(value: Any, clients: tuple[str, ...]) -> dict[str, Any] | None:
+def command_acquisition_proof(
+    value: Any, clients: tuple[str, ...], *, command: str,
+) -> dict[str, Any] | None:
     """Validate the exact grouped-add JSON envelope and return its proof.
 
     Installed state and package identity fields intentionally do not satisfy this
@@ -113,8 +140,9 @@ def grouped_acquisition_proof(value: Any, clients: tuple[str, ...]) -> dict[str,
     """
     if (
         not isinstance(value, dict)
+        or type(value.get("schema_version")) is not int
         or value.get("schema_version") != 1
-        or value.get("command") != "add"
+        or value.get("command") != command
         or value.get("result") != "success"
         or not isinstance(value.get("data"), dict)
         or "acquisition" in value
@@ -188,12 +216,16 @@ def grouped_acquisition_proof(value: Any, clients: tuple[str, ...]) -> dict[str,
     }
 
 
+def grouped_acquisition_proof(value: Any, clients: tuple[str, ...]) -> dict[str, Any] | None:
+    return command_acquisition_proof(value, clients, command="add")
+
+
 def json_output(completed: subprocess.CompletedProcess[str]) -> dict[str, Any] | None:
     if completed.returncode:
         return None
     try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError:
+        value = json.loads(completed.stdout, object_pairs_hook=unique_json_object)
+    except (json.JSONDecodeError, DuplicateKeyError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -272,6 +304,88 @@ def manager_facts(manager: Path, product: str) -> dict[str, Any]:
             elif isinstance(item, list):
                 stack.extend(item)
     return {"json_files": json_files, "committed_receipts": committed, "product_mentions": product_mentions, "installation_records": installation_records, "digests": sorted(digests)}
+
+
+def selected_manager_installation(manager: Path, product: str) -> dict[str, Any] | None:
+    """Select one installation without combining authority across files/records."""
+    matches: list[dict[str, Any]] = []
+    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        installations = value.get("installations") if isinstance(value, dict) else None
+        if not isinstance(installations, list):
+            continue
+        for installation in installations:
+            if not isinstance(installation, dict):
+                continue
+            identities = {
+                installation.get("declared_name"), installation.get("manifest_name"),
+                installation.get("product_id"),
+            }
+            if product in identities:
+                matches.append(copy.deepcopy(installation))
+    return matches[0] if len(matches) == 1 else None
+
+
+def installation_receipts(manager: Path, product: str) -> list[dict[str, Any]] | None:
+    """Return committed receipts only from the uniquely selected installation."""
+    installation = selected_manager_installation(manager, product)
+    if installation is None:
+        return None
+    entries: list[dict[str, Any]] = []
+
+    def append_receipts(raw: Any, binding_client: Any = None) -> bool:
+        if raw is None:
+            return True
+        receipts = raw if isinstance(raw, list) else [raw]
+        if not all(isinstance(receipt, dict) for receipt in receipts):
+            return False
+        for receipt in receipts:
+            if receipt.get("phase") != "committed":
+                continue
+            entries.append({"receipt": copy.deepcopy(receipt), "binding_client": binding_client})
+        return True
+
+    if not append_receipts(installation.get("receipts")):
+        return None
+    for bindings_name in ("bindings", "clients"):
+        bindings = installation.get(bindings_name)
+        if bindings is None:
+            continue
+        if not isinstance(bindings, dict):
+            return None
+        for binding in bindings.values():
+            if not isinstance(binding, dict) or not append_receipts(binding.get("receipts"), binding.get("client")):
+                return None
+    return entries
+
+
+def receipts_bind_command(
+    before: list[dict[str, Any]], after: list[dict[str, Any]], operation: str, clients: tuple[str, ...],
+) -> bool:
+    """Require newly committed receipts to name this operation and exact targets."""
+    if len(after) <= len(before) or after[:len(before)] != before:
+        return False
+    target_set = set(clients)
+    covered: set[str] = set()
+    for entry in after[len(before):]:
+        receipt = entry["receipt"]
+        if receipt.get("operation") != operation:
+            return False
+        raw_targets = receipt.get("targets")
+        if raw_targets is None:
+            raw_target = receipt.get("client", receipt.get("target", entry.get("binding_client")))
+            receipt_targets = {raw_target} if isinstance(raw_target, str) else set()
+        elif isinstance(raw_targets, list) and all(isinstance(item, str) for item in raw_targets):
+            receipt_targets = set(raw_targets)
+        else:
+            return False
+        if not receipt_targets or not receipt_targets.issubset(target_set):
+            return False
+        covered.update(receipt_targets)
+    return covered == target_set
 
 
 def materialized_product_mentions(home: Path, product: str, clients: tuple[str, ...]) -> dict[str, int]:
@@ -529,21 +643,23 @@ def lifecycle(
     observations: list[dict[str, Any]] = []
     outcomes: dict[str, str] = {}
     identities: dict[str, dict[str, Any]] = {}
-    previous_receipts = manager_facts(manager, product)["committed_receipts"]
+    previous_receipts = installation_receipts(manager, product) or []
     for operation in operations:
-        before = {"state": observe(home, manager), "manager": manager_facts(manager, product), "materialized_mentions": materialized_product_mentions(home, product, clients)}
+        before_receipts = installation_receipts(manager, product) or []
+        before = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": before_receipts, "materialized_mentions": materialized_product_mentions(home, product, clients)}
         argv = [operation, product, "--target", target, "--format", "json"]
         completed, trace = traced(binary, argv, root, challenge)
         traces.append(trace)
         value = json_output(completed)
-        after = {"state": observe(home, manager), "manager": manager_facts(manager, product), "materialized_mentions": materialized_product_mentions(home, product, clients)}
+        after_receipts = installation_receipts(manager, product) or []
+        after = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": after_receipts, "materialized_mentions": materialized_product_mentions(home, product, clients)}
         identity = manager_identity(manager, product)
         identities[operation] = identity
-        observations.append({"operation": operation, "before": before, "after": after})
+        observations.append({"operation": operation, "command": argv, "before": before, "after": after})
         passed = value is not None
         if operation in {"add", "repair", "remove"}:
-            passed = passed and after["manager"]["committed_receipts"] > previous_receipts
-            previous_receipts = after["manager"]["committed_receipts"]
+            passed = passed and receipts_bind_command(previous_receipts, after_receipts, operation, clients)
+            previous_receipts = after_receipts
         elif operation == "update":
             # This fixture contains exactly one release. A truthful update is a
             # successful no-op: it must neither recommit that release nor alter
@@ -552,7 +668,7 @@ def lifecycle(
                 passed
                 and find_value(value, {"mutated"}) is False
                 and after == before
-                and after["manager"]["committed_receipts"] == previous_receipts
+                and after_receipts == previous_receipts
             )
         passed = passed and identity_matches_release(identity, context)
         if operation == "add":
@@ -560,7 +676,7 @@ def lifecycle(
         elif operation == "info":
             # Files and receipts prove fixture materialization only. They do
             # not prove native client discovery.
-            passed = passed and after["manager"]["committed_receipts"] > 0
+            passed = passed and bool(after_receipts)
         elif operation == "remove":
             passed = passed and all(after["materialized_mentions"][client] == 0 for client in clients)
         # The info command is part of the receipt-backed lifecycle assertion.
@@ -718,22 +834,37 @@ def no_hidden_yes_scenario(binary: Path, root: Path, challenge: str) -> tuple[bo
 
 def manager_identity(manager: Path, product: str) -> dict[str, Any]:
     """Return identity fields from exactly one owned installation record."""
-    wanted = {"product_id", "resolved_revision", "canonical_source", "tree_digest", "manifest_digest", "distribution_id", "distribution_kind", "desired_release_sequence", "data_locator", "data_root", "affected_surfaces"}
-    matches: list[dict[str, Any]] = []
-    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        installations = value.get("installations", []) if isinstance(value, dict) else []
-        for installation in installations if isinstance(installations, list) else ():
-            if not isinstance(installation, dict):
-                continue
-            if product not in {installation.get("declared_name"), find_value(installation, {"product_id"})}:
-                continue
-            identity = {key: find_value(installation, {key}) for key in wanted}
-            matches.append({key: child for key, child in identity.items() if child not in (None, "")})
-    return matches[0] if len(matches) == 1 else {}
+    installation = selected_manager_installation(manager, product)
+    if installation is None:
+        return {}
+    directory = installation.get("directory") if isinstance(installation.get("directory"), dict) else {}
+    source = installation.get("source") if isinstance(installation.get("source"), dict) else {}
+    package = installation.get("package") if isinstance(installation.get("package"), dict) else {}
+    candidates = {
+        "product_id": (installation.get("product_id"),),
+        "resolved_revision": (installation.get("resolved_revision"), source.get("resolved_revision"), source.get("revision")),
+        "canonical_source": (installation.get("canonical_source"), source.get("canonical_source"), source.get("locator")),
+        "source_repository": (installation.get("source_repository"), source.get("source_repository"), source.get("repository")),
+        "source_revision": (installation.get("source_revision"), source.get("source_revision"), source.get("resolved_revision"), source.get("revision")),
+        "source_path": (installation.get("source_path"), source.get("source_path"), source.get("path")),
+        "tree_digest": (installation.get("tree_digest"), package.get("tree_digest"), package.get("package_tree_digest")),
+        "manifest_digest": (installation.get("manifest_digest"), package.get("manifest_digest")),
+        "distribution_id": (installation.get("distribution_id"), directory.get("distribution_id")),
+        "distribution_kind": (installation.get("distribution_kind"), directory.get("distribution_kind")),
+        "desired_release_sequence": (installation.get("desired_release_sequence"), directory.get("desired_release_sequence")),
+        "data_locator": (installation.get("data_locator"),),
+        "data_root": (installation.get("data_root"),),
+        "affected_surfaces": (installation.get("affected_surfaces"),),
+    }
+    identity: dict[str, Any] = {}
+    for key, raw_values in candidates.items():
+        values = [value for value in raw_values if value not in (None, "")]
+        distinct = {json.dumps(value, sort_keys=True, separators=(",", ":")) for value in values}
+        if len(distinct) > 1:
+            return {}
+        if values:
+            identity[key] = copy.deepcopy(values[0])
+    return identity
 
 
 def manager_has_flag(manager: Path, product: str, key: str, expected: Any) -> bool:
@@ -827,32 +958,81 @@ def copy_ready_migration_guidance(text: str, digest: str) -> bool:
     )
 
 
+def direct_package_identity_matches(
+    identity: dict[str, Any], *, repository: str, revision: str, package_path: str,
+) -> bool:
+    canonical = parse_canonical_github_source(identity.get("canonical_source"))
+    expected_source = {
+        "source_repository": repository,
+        "source_revision": revision,
+        "source_path": package_path,
+    }
+    return bool(
+        canonical == expected_source
+        and identity.get("product_id") == "e2e-external-package"
+        and identity.get("resolved_revision") == revision
+        and identity.get("source_repository") == repository
+        and identity.get("source_revision") == revision
+        and identity.get("source_path") == package_path
+        and isinstance(identity.get("tree_digest"), str) and DIGEST.fullmatch(identity["tree_digest"])
+        and isinstance(identity.get("manifest_digest"), str) and DIGEST.fullmatch(identity["manifest_digest"])
+    )
+
+
 def direct_full_sha_scenario(
     binary: Path, root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     revision = context["github_sha"]
-    selector = f'{context["catalog_repository"]}@{revision}//tests/e2e/fixtures/external-package'
+    repository = context["catalog_repository"]
+    package_path = "tests/e2e/fixtures/external-package"
+    selector = f"{repository}@{revision}//{package_path}"
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
     add, trace = traced(binary, ["add", selector, "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
+    add_value = json_output(add)
     installed_identity = manager_identity(manager, "e2e-external-package")
     update, trace = traced(binary, ["update", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
+    update_value = json_output(update)
     updated_identity = manager_identity(manager, "e2e-external-package")
     remove, trace = traced(binary, ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
     after = observe(home, manager)
-    stable_fields = ("resolved_revision", "canonical_source", "tree_digest", "manifest_digest")
-    identity_stable = bool(installed_identity) and all(installed_identity.get(field) == updated_identity.get(field) for field in stable_fields)
+    required_identity_fields = (
+        "product_id", "resolved_revision", "canonical_source", "source_repository",
+        "source_revision", "source_path", "tree_digest", "manifest_digest",
+    )
+    installed_exact = direct_package_identity_matches(
+        installed_identity, repository=repository, revision=revision, package_path=package_path,
+    )
+    updated_exact = direct_package_identity_matches(
+        updated_identity, repository=repository, revision=revision, package_path=package_path,
+    )
+    identity_stable = bool(
+        installed_exact and updated_exact
+        and all(installed_identity.get(field) == updated_identity.get(field) for field in required_identity_fields)
+    )
+    add_acquisition = command_acquisition_proof(add_value, ("cursor",), command="add")
+    update_acquisition = command_acquisition_proof(update_value, ("cursor",), command="update")
+    acquisition_bound = bool(
+        add_acquisition and update_acquisition
+        and all(
+            acquisition["tree_digest"] == installed_identity.get("tree_digest")
+            and acquisition["manifest_digest"] == installed_identity.get("manifest_digest")
+            and acquisition["source_kind"] == "github"
+            and acquisition["fetched"] is True and acquisition["validated"] is True
+            for acquisition in (add_acquisition, update_acquisition)
+        )
+    )
     proof = {
-        "full_sha": installed_identity.get("resolved_revision") == revision and revision in str(installed_identity.get("canonical_source", "")),
-        "network_refetch_unchanged": add.returncode == 0 and update.returncode == 0 and identity_stable,
+        "full_sha": installed_exact and updated_exact,
+        "network_refetch_unchanged": add.returncode == 0 and update.returncode == 0 and identity_stable and acquisition_bound,
         "mutable_ref_followed": False if identity_stable else True,
     }
-    return all((proof["full_sha"], proof["network_refetch_unchanged"], not proof["mutable_ref_followed"], remove.returncode == 0)), {"command_traces": traces, "before": before, "after": after, "proof": proof, "installed_identity": installed_identity, "updated_identity": updated_identity}
+    return all((proof["full_sha"], proof["network_refetch_unchanged"], not proof["mutable_ref_followed"], remove.returncode == 0)), {"command_traces": traces, "before": before, "after": after, "proof": proof, "installed_identity": installed_identity, "updated_identity": updated_identity, "add_acquisition": add_acquisition, "update_acquisition": update_acquisition}
 
 
 def missing_runtime_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
@@ -943,12 +1123,16 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     read, trace = traced(binary, ["info", "context7", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
     after_read = observe(home, manager)
+    before_hidden = observe(home, manager)
     hidden, trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
     traces.append(trace)
+    after_hidden = observe(home, manager)
     hidden_diagnostic = hidden.stdout + "\n" + hidden.stderr
-    unchanged_before_migration = state_path.read_bytes() == fixture.read_bytes()
+    unchanged_after_hidden = state_path.read_bytes() == fixture.read_bytes()
+    before_dry = observe(home, manager)
     dry, trace = traced(binary, ["migrate-state", "--dry-run", "--format", "json"], root, challenge)
     traces.append(trace)
+    after_dry = observe(home, manager)
     dry_value = json_output(dry)
     unchanged_after_dry = state_path.read_bytes() == fixture.read_bytes()
     stale_digest = "sha256:" + ("0" if input_digest[7] != "0" else "1") + input_digest[8:]
@@ -958,9 +1142,12 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     after_stale = observe(home, manager)
     unchanged_after_stale = state_path.read_bytes() == fixture.read_bytes()
     stale_diagnostic = stale.stdout + "\n" + stale.stderr
+    before_apply_files = file_digests(manager)
     apply, trace = traced(binary, ["migrate-state", "--expected-digest", input_digest, "--format", "json"], root, challenge)
     traces.append(trace)
+    apply_value = json_output(apply)
     after = observe(home, manager)
+    after_apply_files = file_digests(manager)
     backups = [path for path in manager.rglob("*") if path.is_file() and "backup" in path.name.lower()]
     migrated_schema = None
     migrated_state: dict[str, Any] | None = None
@@ -972,13 +1159,32 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     migrated_record = installation_record(migrated_state, "context7") if migrated_state else None
     observed_provenance = migration_provenance(migrated_record, legacy=False)
     dry_digest = _one_semantic(dry_value, {"input_digest", "expected_digest", "state_digest"}) if dry_value else None
+    changed_manager_files = {
+        path for path in set(before_apply_files) | set(after_apply_files)
+        if before_apply_files.get(path) != after_apply_files.get(path)
+    }
+    changed_backups = [path for path in changed_manager_files if path != "state.json"]
+    allowed_apply_mutation = bool(
+        changed_manager_files == {"state.json", *changed_backups}
+        and len(changed_backups) == 1
+        and "backup" in Path(changed_backups[0]).name.lower()
+        and changed_backups[0] not in before_apply_files
+        and after_apply_files.get(changed_backups[0]) == input_digest
+        and before["native"] == after["native"]
+    )
     proof = {
         "pre_migration_read_only": read.returncode == 0 and before == after_read,
-        "mutation_refused_with_guidance": hidden.returncode != 0 and copy_ready_migration_guidance(hidden_diagnostic, input_digest),
-        "dry_run_bound_exact_digest": dry.returncode == 0 and dry_digest == input_digest and unchanged_after_dry,
+        "mutation_refused_with_guidance": hidden.returncode != 0 and copy_ready_migration_guidance(hidden_diagnostic, input_digest) and before_hidden == after_hidden and unchanged_after_hidden,
+        "dry_run_bound_exact_digest": dry.returncode == 0 and dry_digest == input_digest and before_dry == after_dry and unchanged_after_dry,
         "stale_digest_refused_without_mutation": stale.returncode != 0 and before_stale == after_stale and unchanged_after_stale,
         "stale_refusal_copy_ready": copy_ready_migration_guidance(stale_diagnostic, input_digest),
-        "migration_applied": apply.returncode == 0 and migrated_schema not in (None, 2),
+        "migration_applied": bool(
+            apply.returncode == 0
+            and type(migrated_schema) is int and migrated_schema == 3
+            and apply_value and type(apply_value.get("schema_version")) is int
+            and apply_value.get("schema_version") == 3
+            and allowed_apply_mutation
+        ),
         "provenance_preserved": expected_provenance is not None and expected_provenance == observed_provenance,
         "backup_verified": any(path.read_bytes() == fixture.read_bytes() for path in backups),
     }
@@ -1099,25 +1305,22 @@ def sticky_scenario(
 
 
 def data_receipt(manager: Path, product: str) -> dict[str, Any] | None:
-    matches: list[dict[str, Any]] = []
-    for path in sorted(manager.rglob("*.json")) if manager.exists() else ():
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        if product not in json.dumps(value, sort_keys=True):
-            continue
-        stack = [value]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, dict):
-                if isinstance(item.get("locator"), str) and isinstance(item.get("ownership_digest"), str):
-                    matches.append(copy.deepcopy(item))
-                stack.extend(item.values())
-            elif isinstance(item, list):
-                stack.extend(item)
-    canonical = {json.dumps(item, sort_keys=True, separators=(",", ":")): item for item in matches}
-    return next(iter(canonical.values())) if len(canonical) == 1 else None
+    installation = selected_manager_installation(manager, product)
+    if installation is None:
+        return None
+    raw = installation.get("data_receipt", installation.get("data_receipts"))
+    receipts = raw if isinstance(raw, list) else [raw]
+    if len(receipts) != 1:
+        return None
+    receipt = receipts[0]
+    if not (
+        isinstance(receipt, dict)
+        and isinstance(receipt.get("locator"), str)
+        and isinstance(receipt.get("ownership_digest"), str)
+        and DIGEST.fullmatch(receipt["ownership_digest"])
+    ):
+        return None
+    return copy.deepcopy(receipt)
 
 
 def data_locator(manager: Path, product: str) -> Path | None:
@@ -1125,13 +1328,41 @@ def data_locator(manager: Path, product: str) -> Path | None:
     return Path(receipt["locator"]) if receipt else None
 
 
+def canonical_allowed_locator(locator: Path | None, allowed_roots: tuple[Path, ...]) -> Path | None:
+    """Resolve roots/locator and reject lexical traversal or symlink escapes."""
+    if locator is None or not locator.is_absolute() or ".." in locator.parts:
+        return None
+    try:
+        canonical_roots = tuple(root.resolve(strict=True) for root in allowed_roots)
+        canonical_locator = locator.resolve(strict=True)
+    except OSError:
+        return None
+    if any(root == canonical_locator or root in canonical_locator.parents for root in canonical_roots):
+        return canonical_locator
+    return None
+
+
+def package_identity(package: Path) -> dict[str, str]:
+    """Calculate the canonical tree and manifest identities from package bytes."""
+    manifest = package / "plugin.json"
+    return {
+        "tree_digest": directory_tree_digest(package),
+        "manifest_digest": "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }
+
+
 def plugin_data_update_proof(
     initial_identity: dict[str, Any], updated_identity: dict[str, Any],
     initial_receipt: dict[str, Any] | None, updated_receipt: dict[str, Any] | None,
+    expected_initial: dict[str, str], expected_updated: dict[str, str],
 ) -> tuple[bool, bool]:
     changed_package = bool(
-        initial_identity.get("tree_digest") and updated_identity.get("tree_digest")
-        and initial_identity["tree_digest"] != updated_identity["tree_digest"]
+        initial_identity.get("tree_digest") == expected_initial["tree_digest"]
+        and initial_identity.get("manifest_digest") == expected_initial["manifest_digest"]
+        and updated_identity.get("tree_digest") == expected_updated["tree_digest"]
+        and updated_identity.get("manifest_digest") == expected_updated["manifest_digest"]
+        and expected_initial["tree_digest"] != expected_updated["tree_digest"]
+        and expected_initial["manifest_digest"] != expected_updated["manifest_digest"]
     )
     preserved_receipt = initial_receipt is not None and initial_receipt == updated_receipt
     return changed_package, preserved_receipt
@@ -1155,6 +1386,7 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     initial_manifest["description"] = "Deterministic PLUGIN_DATA lifecycle fixture revision one."
     (package / "plugin.json").write_text(json.dumps(initial_manifest, sort_keys=True))
     (package / "fixture-revision.txt").write_text("revision-one\n")
+    expected_initial_identity = package_identity(package)
     alternate_manifest = json.loads((alternate / "plugin.json").read_text())
     alternate_manifest["description"] = "Alternate exact source for PLUGIN_DATA switch evidence."
     (alternate / "plugin.json").write_text(json.dumps(alternate_manifest, sort_keys=True))
@@ -1170,8 +1402,9 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     initial_identity = manager_identity(manager, "e2e-external-package")
     initial_receipt = data_receipt(manager, "e2e-external-package")
     locator = data_locator(manager, "e2e-external-package")
-    safe_locator = bool(locator and locator.is_absolute() and (root in locator.parents or Path(os.environ["AGENTPLUGINS_HOME"]) in locator.parents))
-    marker = locator / "launch-marker.txt" if safe_locator and locator else root / "invalid-data-locator"
+    canonical_locator = canonical_allowed_locator(locator, (root, manager))
+    safe_locator = canonical_locator is not None
+    marker = canonical_locator / "launch-marker.txt" if canonical_locator else root / "invalid-data-locator"
     if safe_locator:
         marker.write_text("stable-launch-marker")
     update_manifest = json.loads((package / "plugin.json").read_text())
@@ -1179,12 +1412,14 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     update_manifest["description"] = "Deterministic PLUGIN_DATA lifecycle fixture revision two."
     (package / "plugin.json").write_text(json.dumps(update_manifest, sort_keys=True))
     (package / "fixture-revision.txt").write_text("revision-two\n")
+    expected_updated_identity = package_identity(package)
     update = execute(["update", "e2e-external-package", "--target", "cursor", "--format", "json"])
     updated_identity = manager_identity(manager, "e2e-external-package")
     updated_receipt = data_receipt(manager, "e2e-external-package")
     update_preserved = marker.is_file() and marker.read_text() == "stable-launch-marker"
     update_changed_package, update_preserved_receipt = plugin_data_update_proof(
         initial_identity, updated_identity, initial_receipt, updated_receipt,
+        expected_initial_identity, expected_updated_identity,
     )
     cursor = home / ".cursor"
     for path in sorted(cursor.rglob("*"), reverse=True) if cursor.exists() else ():
@@ -1197,7 +1432,7 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     remove = execute(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"])
     remove_preserved = marker.is_file() and marker.read_text() == "stable-launch-marker"
     purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
-    purge_deleted = locator is not None and not locator.exists()
+    purge_deleted = canonical_locator is not None and not canonical_locator.exists()
     after = observe(home, manager)
     proof = {
         "update_changed_package_digest": update_changed_package,
@@ -1212,6 +1447,8 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,
         "updated_identity": updated_identity, "initial_data_receipt": initial_receipt,
         "updated_data_receipt": updated_receipt,
+        "expected_initial_identity": expected_initial_identity,
+        "expected_updated_identity": expected_updated_identity,
     }
 
 
@@ -1683,7 +1920,10 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, st
         )
         proof = {
             **lifecycle_value,
-            "commands": [[operation, "context7", "--target", "codex,cursor,kiro", "--format", "json"] for operation in ("add", "update", "repair", "remove")],
+            "commands": [
+                observation["command"] for observation in lifecycle_value["operation_observations"]
+                if observation["operation"] != "info"
+            ],
             "acquisition": acquisition,
             "acquisition_digests": [acquisition["tree_digest"]] if acquisition else [],
             "target_outcomes": {

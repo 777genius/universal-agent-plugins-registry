@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import hmac
 import json
@@ -118,6 +119,40 @@ CLIENT_ROOTS = {
     "vscode": ".config/Code/User",
 }
 SECRET_NAME = re.compile(r"(?i)(token|secret|password|cookie|authorization|oauth[_-]?code)")
+
+
+def complete_acquisition_proof(
+    value: Any, targets: tuple[str, ...], *, tree_digest: str, manifest_digest: str,
+) -> dict[str, Any] | None:
+    """Validate the complete grouped acquisition at the evidence boundary."""
+    if not isinstance(value, dict) or set(value) != {
+        "acquisition_id", "acquisition_count", "tree_digest", "manifest_digest",
+        "closure_digest", "source_kind", "fetched", "validated", "target_outcomes",
+    }:
+        return None
+    acquisition_id = value.get("acquisition_id")
+    if not (
+        isinstance(acquisition_id, str) and acquisition_id.strip()
+        and type(value.get("acquisition_count")) is int and value["acquisition_count"] == 1
+        and value.get("tree_digest") == tree_digest and DIGEST.fullmatch(tree_digest)
+        and value.get("manifest_digest") == manifest_digest and DIGEST.fullmatch(manifest_digest)
+        and isinstance(value.get("closure_digest"), str) and DIGEST.fullmatch(value["closure_digest"])
+        and value.get("source_kind") == "github"
+        and value.get("fetched") is True and value.get("validated") is True
+        and len(targets) == len(set(targets))
+    ):
+        return None
+    outcomes = value.get("target_outcomes")
+    if not isinstance(outcomes, dict) or set(outcomes) != set(targets):
+        return None
+    binding = {
+        "outcome": "passed", "acquisition_id": acquisition_id,
+        "tree_digest": tree_digest, "manifest_digest": manifest_digest,
+        "closure_digest": value["closure_digest"],
+    }
+    if any(outcome != binding for outcome in outcomes.values()):
+        return None
+    return copy.deepcopy(value)
 
 
 def parse_canonical_github_source(value: Any) -> dict[str, str] | None:
@@ -1436,7 +1471,7 @@ class LaunchHarness:
             "native_before_digests": before_state["native_digests"],
             "native_after_digests": after_state["native_digests"],
         }
-        if value.get("schema_version") != 1 or value.get("command") != argv[0]:
+        if type(value.get("schema_version")) is not int or value.get("schema_version") != 1 or value.get("command") != argv[0]:
             return "failed", value, "CLI returned an invalid command envelope"
         result = value.get("data", {}).get("result", {})
         if argv[0] in {"add", "repair", "remove"} and result.get("mutated") is not True:
@@ -1765,6 +1800,11 @@ class LaunchHarness:
         expected_commands = [[operation, "context7", "--target", target_arg, "--format", "json"] for operation in self.config["context7_lifecycle"]]
         valid = bool(value) and value.get("commands") == expected_commands
         valid = valid and value.get("acquisition_digests") == [expected_digest]
+        acquisition = complete_acquisition_proof(
+            value.get("acquisition") if value else None, targets,
+            tree_digest=expected_digest, manifest_digest=release["manifest_digest"],
+        )
+        valid = valid and acquisition is not None
         valid = valid and set(value.get("target_outcomes", {})) == set(targets)
         valid = valid and all(value["target_outcomes"][target] == "passed" for target in targets)
         valid = valid and self.tuple_matches_release("context7", targets, value.get("tuple") if value else None)
@@ -1778,7 +1818,7 @@ class LaunchHarness:
             self.add(
                 f"context7_three_target_{operation}", "context7", target_arg, "materialization", outcome, reason,
                 tuple_value=value.get("tuple") if value else self.evidence_tuple("context7", targets, client_version=None, dependency="single-acquisition"),
-                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "operation": operation, "target_argument": target_arg, "single_process_invocation": True, "reported_target_count": len(value.get("target_outcomes", {})) if value else 0, "command_traces": value.get("command_traces", []) if value else [], "operation_observations": value.get("operation_observations", []) if value else [], "resolution": release},
+                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "operation": operation, "target_argument": target_arg, "single_process_invocation": True, "reported_target_count": len(value.get("target_outcomes", {})) if value else 0, "acquisition": acquisition, "command_traces": value.get("command_traces", []) if value else [], "operation_observations": value.get("operation_observations", []) if value else [], "resolution": release},
             )
 
     @staticmethod

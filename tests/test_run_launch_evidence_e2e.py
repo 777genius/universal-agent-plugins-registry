@@ -4,6 +4,7 @@ import importlib.util
 import base64
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -672,8 +673,25 @@ print(json.dumps({"schema_version": 1, "command": "update", "data": {"result": {
         harness.binary_digest = "sha256:" + "d" * 64
         harness.expected_version = "0.1.14"
         commands = [[operation, "context7", "--target", "codex,cursor,kiro", "--format", "json"] for operation in ("add", "update", "repair", "remove")]
+        acquisition = {
+            "acquisition_id": "fetch-1", "acquisition_count": 1,
+            "tree_digest": "sha256:" + "a" * 64,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "closure_digest": "sha256:" + "e" * 64,
+            "source_kind": "github", "fetched": True, "validated": True,
+        }
+        acquisition["target_outcomes"] = {
+            client: {
+                "outcome": "passed", "acquisition_id": "fetch-1",
+                "tree_digest": acquisition["tree_digest"],
+                "manifest_digest": acquisition["manifest_digest"],
+                "closure_digest": acquisition["closure_digest"],
+            }
+            for client in ("codex", "cursor", "kiro")
+        }
         value = {
             "commands": commands, "acquisition_digests": ["sha256:" + "a" * 64],
+            "acquisition": acquisition,
             "target_outcomes": {client: "passed" for client in ("codex", "cursor", "kiro")},
             "operation_outcomes": {operation: "passed" for operation in ("add", "update", "repair", "remove")},
             "tuple": harness.evidence_tuple("context7", ["codex", "cursor", "kiro"], client_version="driver", dependency="single-acquisition"),
@@ -683,7 +701,19 @@ print(json.dumps({"schema_version": 1, "command": "update", "data": {"result": {
         self.assertEqual([row["outcome"] for row in harness.rows], ["passed"] * 4)
         self.assertTrue(all(row["details"]["evidence_basis"] == "repository_owned_disposable_observer" for row in harness.rows))
         self.assertTrue(all(row["details"]["target_argument"] == "codex,cursor,kiro" for row in harness.rows))
+        self.assertTrue(all(row["details"]["acquisition"] == acquisition for row in harness.rows))
         self.assertNotIn("--yes", commands[0])
+
+        invalid = json.loads(json.dumps(value))
+        del invalid["acquisition"]["closure_digest"]
+        rejected = self.fixture_harness()
+        rejected.snapshot = harness.snapshot
+        rejected.snapshot_digest = harness.snapshot_digest
+        rejected.binary_digest = harness.binary_digest
+        rejected.expected_version = harness.expected_version
+        with mock.patch.object(rejected, "driven_scenario", return_value=("passed", invalid, "claimed")):
+            rejected.context7_multi_target()
+        self.assertEqual([row["outcome"] for row in rejected.rows], ["failed"] * 4)
 
     def test_repository_observer_derives_grouped_lifecycle_from_receipts_and_native_files(self) -> None:
         fake_binary = '''#!/usr/bin/python3
@@ -696,7 +726,7 @@ state_path = manager / "state.json"
 state = json.loads(state_path.read_text()) if state_path.exists() else {"installations": [{"declared_name": product, "product_id": product, "receipts": [], "directory": {"distribution_id": "upstash/context7", "distribution_kind": "upstream", "desired_release_sequence": 1}, "source": {"resolved_revision": "1" * 40, "canonical_source": "https://github.com/upstash/context7@" + "1" * 40 + "//plugins/context7"}, "package": {"tree_digest": "sha256:" + "a" * 64, "manifest_digest": "sha256:" + "e" * 64}}]}
 roots = {"codex": home / ".codex", "cursor": home / ".cursor", "kiro": home / ".kiro"}
 if operation in {"add", "repair", "remove"}:
-    state["installations"][0]["receipts"].append({"phase": "committed", "operation": operation})
+    state["installations"][0]["receipts"].append({"phase": "committed", "operation": operation, "targets": target.split(",")})
     manager.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(state))
 if operation == "add":
@@ -815,6 +845,24 @@ print(json.dumps(value))
                 self.assertIsNone(observer.grouped_acquisition_proof(value, clients))
         self.assertIsNone(observer.grouped_acquisition_proof(valid, (*clients, "kiro")))
 
+    def test_raw_cli_json_rejects_duplicate_keys_and_non_integer_schema_versions(self) -> None:
+        event = '{"acquisition_id":"fetch-1","acquisition_count":1,"tree_digest":"sha256:' + "a" * 64 + '","manifest_digest":"sha256:' + "b" * 64 + '","closure_digest":"sha256:' + "c" * 64 + '","source_kind":"github","fetched":true,"validated":true}'
+        binding = '{"outcome":"passed","acquisition_id":"fetch-1","tree_digest":"sha256:' + "a" * 64 + '","manifest_digest":"sha256:' + "b" * 64 + '","closure_digest":"sha256:' + "c" * 64 + '"}'
+        outcomes = '"codex":' + binding + ',"cursor":' + binding + ',"kiro":' + binding
+        prefix = '{"schema_version":1,"command":"add","result":"success","data":{'
+        duplicate_proof = prefix + '"acquisition":' + event + ',"acquisition":' + event + ',"target_outcomes":{' + outcomes + '}}}'
+        duplicate_client = prefix + '"acquisition":' + event + ',"target_outcomes":{' + outcomes + ',"cursor":' + binding + '}}}'
+        for raw in (duplicate_proof, duplicate_client):
+            completed = subprocess.CompletedProcess(["agentplugins"], 0, stdout=raw, stderr="")
+            self.assertIsNone(observer.json_output(completed))
+        for version in (True, 1.0):
+            value = {
+                "schema_version": version, "command": "add", "result": "success",
+                "data": {"acquisition": json.loads(event), "target_outcomes": json.loads("{" + outcomes + "}")},
+            }
+            completed = subprocess.CompletedProcess(["agentplugins"], 0, stdout=json.dumps(value), stderr="")
+            self.assertIsNone(observer.grouped_acquisition_proof(observer.json_output(completed), ("codex", "cursor", "kiro")))
+
     def test_state_migration_observes_stale_refusal_backup_and_exact_provenance(self) -> None:
         fake_binary = '''#!/usr/bin/python3
 import hashlib, json, os, pathlib, shutil, sys
@@ -858,6 +906,57 @@ else:
         self.assertEqual(value["expected_provenance"], value["observed_provenance"])
         self.assertNotEqual(value["input_digest"], value["stale_digest"])
 
+    def test_migration_rejects_unrelated_mutation_and_bool_or_float_schema_three(self) -> None:
+        script = '''#!/usr/bin/python3
+import hashlib, json, os, pathlib, shutil, sys
+mode = %r
+schema = %s
+manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"])
+state_path = manager / "state.json"
+operation = sys.argv[1]
+body = state_path.read_bytes()
+digest = "sha256:" + hashlib.sha256(body).hexdigest()
+guidance = "agentplugins migrate-state --dry-run\\nagentplugins migrate-state --expected-digest " + digest
+if operation == "info":
+    print(json.dumps({"schema_version": 2, "read_only": True}))
+elif operation == "add":
+    if mode == "hidden-mutation": (manager / "unrelated.json").write_text("changed")
+    print(guidance, file=sys.stderr); raise SystemExit(2)
+elif "--dry-run" in sys.argv:
+    if mode == "dry-mutation": (manager / "unrelated.json").write_text("changed")
+    print(json.dumps({"state_digest": digest, "mutated": False}))
+else:
+    supplied = sys.argv[sys.argv.index("--expected-digest") + 1]
+    if supplied != digest:
+        print("stale expected digest refused\\n" + guidance, file=sys.stderr); raise SystemExit(3)
+    state = json.loads(body)
+    shutil.copyfile(state_path, manager / "state.backup.json")
+    if mode == "apply-mutation": (manager / "unrelated.json").write_text("changed")
+    state["schema_version"] = schema
+    for installation in state["installations"]:
+        installation["origin_mode"] = "directory" if installation["source"]["kind"] == "catalog" else "direct"
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    print(json.dumps({"mutated": True, "schema_version": schema}))
+'''
+        cases = (("hidden-mutation", "3"), ("dry-mutation", "3"), ("apply-mutation", "3"), ("schema-bool", "True"), ("schema-float", "3.0"))
+        for mode, schema in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                binary = parent / "agentplugins"
+                binary.write_text(script % (mode, schema))
+                binary.chmod(0o700)
+                workspace = parent / "workspace"
+                workspace.mkdir()
+                with mock.patch.dict(os.environ, {"HOME": str(parent / "home"), "AGENTPLUGINS_HOME": str(parent / "manager")}, clear=False):
+                    passed, value = observer.migration_scenario(binary, workspace, "challenge")
+                self.assertFalse(passed, value)
+                if mode == "hidden-mutation":
+                    self.assertFalse(value["proof"]["mutation_refused_with_guidance"])
+                elif mode == "dry-mutation":
+                    self.assertFalse(value["proof"]["dry_run_bound_exact_digest"])
+                else:
+                    self.assertFalse(value["proof"]["migration_applied"])
+
     def test_migration_provenance_fails_closed_on_missing_or_changed_identity(self) -> None:
         state = json.loads((ROOT / "tests/e2e/fixtures/state-schema-2.json").read_text())
         record = observer.installation_record(state, "context7")
@@ -877,6 +976,7 @@ else:
     def test_plugin_data_update_requires_changed_package_and_preserves_exact_receipt(self) -> None:
         fake_binary = '''#!/usr/bin/python3
 import hashlib, json, os, pathlib, shutil, sys
+from build_registry import directory_tree_digest
 operation = sys.argv[1]
 workspace = pathlib.Path.cwd()
 home = pathlib.Path(os.environ["HOME"])
@@ -885,10 +985,9 @@ state_path = manager / "state.json"
 native = home / ".cursor" / "e2e-external-package.json"
 data = manager / "data" / "e2e-external-package"
 def digest(package):
-    framed = bytearray()
-    for path in sorted(item for item in package.rglob("*") if item.is_file()):
-        framed.extend(path.relative_to(package).as_posix().encode() + b"\\0" + path.read_bytes())
-    return "sha256:" + hashlib.sha256(framed).hexdigest()
+    return directory_tree_digest(package)
+def manifest(package):
+    return "sha256:" + hashlib.sha256((package / "plugin.json").read_bytes()).hexdigest()
 def load():
     return json.loads(state_path.read_text()) if state_path.exists() else {"schema_version": 3, "installations": []}
 def save(state):
@@ -903,13 +1002,14 @@ if operation == "add":
     state = {"schema_version": 3, "installations": [{
         "declared_name": "e2e-external-package", "product_id": "e2e-external-package",
         "source": {"canonical_source": str(package)},
-        "package": {"tree_digest": digest(package), "manifest_digest": "sha256:" + "b" * 64},
+        "package": {"tree_digest": digest(package), "manifest_digest": manifest(package)},
         "data_receipt": {"locator": str(data), "ownership_digest": "sha256:" + "e" * 64, "backend": "cursor", "scope": "user"},
     }]}
     save(state); materialize()
 elif operation == "update":
     state = load(); package = workspace / "package-plugin-data"
     state["installations"][0]["package"]["tree_digest"] = digest(package)
+    state["installations"][0]["package"]["manifest_digest"] = manifest(package)
     save(state); materialize()
 elif operation == "repair":
     materialize()
@@ -931,7 +1031,7 @@ print(json.dumps({"mutated": True}))
             binary.chmod(0o700)
             home, manager, workspace = root / "home", root / "manager", root / "workspace"
             workspace.mkdir()
-            with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}, clear=False):
+            with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager), "PYTHONPATH": str(ROOT / "scripts")}, clear=False):
                 passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
         self.assertTrue(passed, value)
         self.assertTrue(value["proof"]["update_changed_package_digest"])
@@ -939,16 +1039,175 @@ print(json.dumps({"mutated": True}))
         self.assertEqual(value["initial_data_receipt"], value["updated_data_receipt"])
 
     def test_plugin_data_update_proof_fails_closed_for_no_change_or_receipt_replacement(self) -> None:
-        first = {"tree_digest": "sha256:" + "a" * 64}
-        second = {"tree_digest": "sha256:" + "b" * 64}
+        first = {"tree_digest": "sha256:" + "a" * 64, "manifest_digest": "sha256:" + "e" * 64}
+        second = {"tree_digest": "sha256:" + "b" * 64, "manifest_digest": "sha256:" + "f" * 64}
         receipt = {"locator": "/disposable/data", "ownership_digest": "sha256:" + "c" * 64}
-        self.assertEqual(observer.plugin_data_update_proof(first, first, receipt, receipt), (False, True))
+        self.assertEqual(observer.plugin_data_update_proof(first, first, receipt, receipt, first, first), (False, True))
         self.assertEqual(
             observer.plugin_data_update_proof(
-                first, second, receipt, {**receipt, "ownership_digest": "sha256:" + "d" * 64},
+                first, second, receipt, {**receipt, "ownership_digest": "sha256:" + "d" * 64}, first, second,
             ),
             (True, False),
         )
+        for field in ("tree_digest", "manifest_digest"):
+            forged = {**second, field: "sha256:" + "9" * 64}
+            self.assertEqual(
+                observer.plugin_data_update_proof(first, forged, receipt, receipt, first, second),
+                (False, True),
+            )
+
+    def test_receipts_are_scoped_to_one_installation_and_exact_command_targets(self) -> None:
+        selected = {
+            "declared_name": "demo", "product_id": "demo",
+            "receipts": [{"phase": "committed", "operation": "add", "targets": ["codex", "cursor"]}],
+            "data_receipt": {"locator": "/tmp/demo", "ownership_digest": "sha256:" + "a" * 64},
+        }
+        unrelated = {
+            "declared_name": "other", "product_id": "other",
+            "receipts": [{"phase": "committed", "operation": "repair", "targets": ["kiro"]}],
+            "data_receipt": {"locator": "/tmp/other", "ownership_digest": "sha256:" + "b" * 64},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp)
+            (manager / "state.json").write_text(json.dumps({"installations": [selected, unrelated]}))
+            receipts = observer.installation_receipts(manager, "demo")
+            self.assertEqual(len(receipts or []), 1)
+            self.assertTrue(observer.receipts_bind_command([], receipts or [], "add", ("codex", "cursor")))
+            self.assertFalse(observer.receipts_bind_command([], receipts or [], "repair", ("codex", "cursor")))
+            self.assertFalse(observer.receipts_bind_command([], receipts or [], "add", ("codex", "kiro")))
+            self.assertEqual(observer.data_receipt(manager, "demo")["locator"], "/tmp/demo")
+            duplicated = json.loads(json.dumps(selected))
+            duplicated["data_receipts"] = [selected["data_receipt"], selected["data_receipt"]]
+            duplicated.pop("data_receipt")
+            (manager / "state.json").write_text(json.dumps({"installations": [duplicated, unrelated]}))
+            self.assertIsNone(observer.data_receipt(manager, "demo"))
+            (manager / "state.json").write_text(json.dumps({"installations": [selected, selected]}))
+            self.assertIsNone(observer.data_receipt(manager, "demo"))
+            self.assertIsNone(observer.installation_receipts(manager, "demo"))
+
+    def test_canonical_data_locator_rejects_traversal_and_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            allowed = base / "allowed"
+            outside = base / "outside"
+            allowed.mkdir()
+            outside.mkdir()
+            owned = allowed / "owned"
+            owned.mkdir()
+            (allowed / "escape").mkdir()
+            self.assertEqual(observer.canonical_allowed_locator(owned, (allowed,)), owned.resolve())
+            self.assertIsNone(observer.canonical_allowed_locator(allowed / "owned" / ".." / "escape", (allowed,)))
+            (allowed / "link").symlink_to(outside, target_is_directory=True)
+            self.assertIsNone(observer.canonical_allowed_locator(allowed / "link", (allowed,)))
+
+    def test_full_sha_identity_and_refetch_signal_require_exact_complete_fields(self) -> None:
+        revision = "1" * 40
+        tree = "sha256:" + "a" * 64
+        manifest = "sha256:" + "b" * 64
+        identity = {
+            "product_id": "e2e-external-package", "resolved_revision": revision,
+            "canonical_source": f"owner/repo@{revision}//plugins/demo",
+            "source_repository": "owner/repo", "source_revision": revision,
+            "source_path": "plugins/demo", "tree_digest": tree, "manifest_digest": manifest,
+        }
+        self.assertTrue(observer.direct_package_identity_matches(
+            identity, repository="owner/repo", revision=revision, package_path="plugins/demo",
+        ))
+        for field in identity:
+            with self.subTest(field=field):
+                incomplete = {key: child for key, child in identity.items() if key != field}
+                self.assertFalse(observer.direct_package_identity_matches(
+                    incomplete, repository="owner/repo", revision=revision, package_path="plugins/demo",
+                ))
+        substring = {**identity, "canonical_source": f"attacker/repo@{revision}//plugins/demo-owner/repo"}
+        self.assertFalse(observer.direct_package_identity_matches(
+            substring, repository="owner/repo", revision=revision, package_path="plugins/demo",
+        ))
+        event = {
+            "acquisition_id": "fetch-1", "acquisition_count": 1,
+            "tree_digest": tree, "manifest_digest": manifest,
+            "closure_digest": "sha256:" + "c" * 64, "source_kind": "github",
+            "fetched": True, "validated": True,
+        }
+        target = {"outcome": "passed", "acquisition_id": "fetch-1", "tree_digest": tree, "manifest_digest": manifest, "closure_digest": event["closure_digest"]}
+        output = {"schema_version": 1, "command": "update", "result": "success", "data": {"acquisition": event, "target_outcomes": {"cursor": target}}}
+        self.assertIsNotNone(observer.command_acquisition_proof(output, ("cursor",), command="update"))
+        self.assertIsNone(observer.command_acquisition_proof({**output, "data": {}}, ("cursor",), command="update"))
+        self.assertIsNone(observer.command_acquisition_proof({**output, "data": {**output["data"], "acquisition": {**event, "fetched": False}}}, ("cursor",), command="update"))
+
+    def test_direct_full_sha_scenario_fails_without_explicit_update_refetch(self) -> None:
+        revision = "1" * 40
+        tree = "sha256:" + "a" * 64
+        manifest = "sha256:" + "b" * 64
+        identity = {
+            "product_id": "e2e-external-package", "resolved_revision": revision,
+            "canonical_source": f"owner/repo@{revision}//tests/e2e/fixtures/external-package",
+            "source_repository": "owner/repo", "source_revision": revision,
+            "source_path": "tests/e2e/fixtures/external-package",
+            "tree_digest": tree, "manifest_digest": manifest,
+        }
+
+        def output(command: str, include_acquisition: bool = True) -> str:
+            event = {
+                "acquisition_id": "fetch-" + command, "acquisition_count": 1,
+                "tree_digest": tree, "manifest_digest": manifest,
+                "closure_digest": "sha256:" + "c" * 64,
+                "source_kind": "github", "fetched": True, "validated": True,
+            }
+            binding = {
+                "outcome": "passed", "acquisition_id": event["acquisition_id"],
+                "tree_digest": tree, "manifest_digest": manifest,
+                "closure_digest": event["closure_digest"],
+            }
+            data = {"acquisition": event, "target_outcomes": {"cursor": binding}} if include_acquisition else {}
+            return json.dumps({"schema_version": 1, "command": command, "result": "success", "data": data})
+
+        def run_case(update_stdout: str) -> tuple[bool, dict]:
+            completed = [
+                subprocess.CompletedProcess(["add"], 0, output("add"), ""),
+                subprocess.CompletedProcess(["update"], 0, update_stdout, ""),
+                subprocess.CompletedProcess(["remove"], 0, "{}", ""),
+            ]
+            traces = [(item, {"argv": item.args}) for item in completed]
+            with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+                os.environ, {"HOME": str(Path(tmp) / "home"), "AGENTPLUGINS_HOME": str(Path(tmp) / "manager")}, clear=False,
+            ), mock.patch.object(observer, "traced", side_effect=traces), mock.patch.object(
+                observer, "manager_identity", side_effect=[identity, identity],
+            ):
+                return observer.direct_full_sha_scenario(
+                    Path("/agentplugins"), Path(tmp), "challenge",
+                    {"github_sha": revision, "catalog_repository": "owner/repo"},
+                )
+
+        passed, value = run_case(output("update"))
+        self.assertTrue(passed, value)
+        passed, value = run_case(output("update", include_acquisition=False))
+        self.assertFalse(passed, value)
+        self.assertFalse(value["proof"]["network_refetch_unchanged"])
+
+    def test_evidence_boundary_rejects_incomplete_or_forged_acquisition(self) -> None:
+        targets = ("codex", "cursor", "kiro")
+        tree = "sha256:" + "a" * 64
+        manifest = "sha256:" + "b" * 64
+        proof = {
+            "acquisition_id": "fetch-1", "acquisition_count": 1,
+            "tree_digest": tree, "manifest_digest": manifest,
+            "closure_digest": "sha256:" + "c" * 64,
+            "source_kind": "github", "fetched": True, "validated": True,
+        }
+        proof["target_outcomes"] = {
+            client: {"outcome": "passed", "acquisition_id": "fetch-1", "tree_digest": tree, "manifest_digest": manifest, "closure_digest": proof["closure_digest"]}
+            for client in targets
+        }
+        self.assertEqual(e2e.complete_acquisition_proof(proof, targets, tree_digest=tree, manifest_digest=manifest), proof)
+        for field in ("acquisition_id", "acquisition_count", "source_kind", "fetched", "validated", "tree_digest", "manifest_digest", "closure_digest", "target_outcomes"):
+            with self.subTest(field=field):
+                incomplete = {key: child for key, child in proof.items() if key != field}
+                self.assertIsNone(e2e.complete_acquisition_proof(incomplete, targets, tree_digest=tree, manifest_digest=manifest))
+        self.assertIsNone(e2e.complete_acquisition_proof({**proof, "acquisition_count": True}, targets, tree_digest=tree, manifest_digest=manifest))
+        forged = json.loads(json.dumps(proof))
+        forged["target_outcomes"]["kiro"]["tree_digest"] = "sha256:" + "d" * 64
+        self.assertIsNone(e2e.complete_acquisition_proof(forged, targets, tree_digest=tree, manifest_digest=manifest))
 
     def test_policy_conformance_directory_is_test_signed_and_never_the_production_root(self) -> None:
         snapshot = json.loads((PUBLICATION / "snapshot.json").read_text())
