@@ -1,3 +1,4 @@
+import json
 import re
 import unittest
 from pathlib import Path
@@ -29,6 +30,40 @@ def commands(job):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_stable_launch_versions_equal_trusted_contract(self) -> None:
+        version = (ROOT / "tests/e2e/stable-launch-version.txt").read_text().strip()
+        self.assertEqual(version, "0.1.14")
+        tag = f"agentplugins-v{version}"
+        asset_prefix = f"agentplugins_{version}_"
+        production = json.loads((ROOT / "tests/e2e/production-launch.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
+        adapter_schema = json.loads((ROOT / "deploy/uap-observer-adapter-config.schema.json").read_text())
+        observer = json.loads((ROOT / "deploy/uap-observer.json").read_text())
+        workflow = load(LAUNCH)
+        assets = {slot["asset"] for slot in workflow["jobs"]["native-release"]["strategy"]["matrix"]["include"]}
+        npm = schema["properties"]["npm_package"]["properties"]
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], version)
+        self.assertEqual(production["cli_release_tag"], tag)
+        self.assertEqual(observer["cli_release_tag"], tag)
+        self.assertEqual(adapter_schema["properties"]["request_policy"]["properties"]["cli_release_tag"]["const"], tag)
+        self.assertEqual(schema["properties"]["cli_release_tag"]["const"], tag)
+        self.assertEqual(schema["properties"]["github_release_identity"]["properties"]["tag"]["const"], tag)
+        self.assertEqual(schema["properties"]["github_asset_attestation"]["properties"]["tag"]["const"], tag)
+        self.assertTrue(assets)
+        self.assertTrue(all(asset.startswith(asset_prefix) for asset in assets))
+        self.assertEqual(npm["version"]["const"], version)
+        self.assertEqual(npm["tarball"]["const"], f"https://registry.npmjs.org/universal-agent-plugins/-/universal-agent-plugins-{version}.tgz")
+        self.assertEqual(npm["provenance_url"]["const"], f"https://registry.npmjs.org/-/npm/v1/attestations/universal-agent-plugins@{version}")
+        self.assertEqual(npm["native_asset_name"]["const"], f"{asset_prefix}linux_amd64")
+        stable_files = (
+            LAUNCH, ROOT / "scripts/run_launch_evidence_e2e.py", ROOT / "tests/e2e/production-launch.json",
+            ROOT / "tests/e2e/schemas/native-release-observation.schema.json", ROOT / "deploy/uap-observer.json",
+            ROOT / "deploy/uap-observer-adapter-config.schema.json", ROOT / "observer/config.py",
+        )
+        for path in stable_files:
+            with self.subTest(path=path.name):
+                self.assertNotRegex(path.read_text(), r"(?:agentplugins[-_v@]|universal-agent-plugins[-@])0\.1\.(?:12|13)")
+
     def test_directory_publication_prepare_installs_bridge_runtime_dependencies(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
         prepare_commands = commands(workflow["jobs"]["prepare"])
@@ -67,17 +102,17 @@ class WorkflowContractTests(unittest.TestCase):
             ("linux", "amd64"), ("windows", "amd64"), ("windows", "arm64"),
         })
         self.assertEqual({slot["asset"] for slot in slots}, {
-            "agentplugins_0.1.12_darwin_arm64", "agentplugins_0.1.12_darwin_amd64",
-            "agentplugins_0.1.12_linux_arm64", "agentplugins_0.1.12_linux_amd64",
-            "agentplugins_0.1.12_windows_amd64.exe", "agentplugins_0.1.12_windows_arm64.exe",
+            "agentplugins_0.1.14_darwin_arm64", "agentplugins_0.1.14_darwin_amd64",
+            "agentplugins_0.1.14_linux_arm64", "agentplugins_0.1.14_linux_amd64",
+            "agentplugins_0.1.14_windows_amd64.exe", "agentplugins_0.1.14_windows_arm64.exe",
         })
         self.assertIn("prepare_launch_evidence.py", commands(native))
         self.assertIn("node-version: '22'", yaml.safe_dump(npm))
         self.assertIn("npm install --global", commands(npm))
         self.assertIn("npm audit signatures", commands(npm))
         self.assertIn("--npm-facade", commands(npm))
-        self.assertIn("universal-agent-plugins-0.1.12.tgz", commands(npm))
-        self.assertIn("--asset-name agentplugins_0.1.12_linux_amd64", commands(npm))
+        self.assertIn("universal-agent-plugins-0.1.14.tgz", commands(npm))
+        self.assertIn("--asset-name agentplugins_0.1.14_linux_amd64", commands(npm))
         self.assertNotIn("universal-agent-plugins.tgz", commands(npm))
         self.assertNotRegex(commands(npm), r"github\.com/.*\.tgz")
         self.assertIn("inputs.consent", aggregate["if"])
@@ -108,7 +143,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--release-tag", body)
         production = (ROOT / "tests/e2e/production-launch.json").read_text()
         self.assertIn('"cli_release_repository": "777genius/plugin-kit-ai"', production)
-        self.assertIn('"cli_release_tag": "agentplugins-v0.1.13"', production)
+        self.assertIn('"cli_release_tag": "agentplugins-v0.1.14"', production)
         prepare = (ROOT / "scripts/prepare_launch_evidence.py").read_text()
         self.assertNotIn('os.environ.get("GITHUB_TOKEN")', prepare)
         self.assertIn("token=None", prepare)
@@ -134,7 +169,7 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("SHA256SUMS", text)
                 self.assertIn("overwrite: false", text)
                 if path == LAUNCH:
-                    self.assertIn("agentplugins_0.1.12_linux_amd64", text)
+                    self.assertIn("agentplugins_0.1.14_linux_amd64", text)
                 self.assertNotIn("AGENTPLUGINS_VERSION: \"0.1.6\"", text)
 
     def test_live_workflow_is_read_only_and_does_not_publish(self) -> None:

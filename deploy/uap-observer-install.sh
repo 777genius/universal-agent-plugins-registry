@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 3fc1cc44553ea0ff83fdd448d684119d640ec2c3a378b8789e6010847009e97a
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 57e9e9a6e54579ef6484c581c30a8fac23905d06f3f2b125fb927f9bbe234d93
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -21,7 +21,8 @@ untrusted_caddy_archive=${6:?$usage}
 untrusted_caddy_config=${7:?$usage}
 caddy_config_digest=${8:?$usage}
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=f36815a90c69cfe1064cc054460290975facee77fe9180a675e77288082e1cbc
+runtime_manifest_digest=34eb7fd8c71ef6d0bc78734610f0da013c3882d88b9e2136166c80b43ccecc5c
+caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
 closure_final=
@@ -32,6 +33,29 @@ closure_published=0
 install -d -o root -g root -m 0755 /run/lock
 exec 9>/run/lock/uap-observer-install.lock
 flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
+install_identity=$(observer_install_input_identity \
+  "$untrusted_source_root" "$runtime_manifest_digest" \
+  "$untrusted_adapter_config" "$adapter_config_digest" \
+  "$untrusted_observer_config" "$observer_config_digest" \
+  "$untrusted_caddy_archive" "$caddy_archive_digest" \
+  "$untrusted_caddy_config" "$caddy_config_digest")
+if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
+  for partial in /opt/uap-observer-source.new /opt/uap-observer-venv.new /opt/uap-observer-runtime.new \
+    /opt/uap-observer-current.new /usr/local/libexec/uap-observer-runner.new \
+    /usr/local/libexec/uap-observer-fixed-adapter.new /usr/local/bin/caddy.new \
+    /etc/uap-observer.json.new /etc/uap-observer-adapter-config.json.new \
+    /etc/uap-observer-adapters.json.new /etc/caddy/Caddyfile.new; do
+    test ! -e "$partial"
+    test ! -L "$partial"
+  done
+  for partial in /opt/uap-observer-closures/.new-* /usr/local/libexec/uap-observer-adapter-*.new; do
+    test ! -e "$partial"
+    test ! -L "$partial"
+  done
+  observer_validate_completed_closure /opt/uap-observer-closures /opt/uap-observer-current "$install_identity"
+  echo "observer files already installed; verified identical immutable closure"
+  exit 0
+fi
 if [ -d "$stage_root" ]; then
   if [ -f "$stage_root/rollback-required" ] && [ -f "$stage_root/systemd-backup/manifest" ]; then
     recovered_digest=$(cat "$stage_root/closure-digest")
@@ -124,7 +148,6 @@ adapter_source="$source_root/observer/fixed_adapters.py"
 runner_digest=46c161d23bdf457a9cd08be7a088e9ed8431dae2a84a2d5e84765b0aa6d6360b
 adapter_digest=977e59a8c2d8b7df845d136aaf514a52243529cb7ca22602d1fd2af4d0a77ddf
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
-caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 
 test -f "$runner_source"
 test "$(sha256sum "$runner_source" | cut -d' ' -f1)" = "$runner_digest"
@@ -355,6 +378,13 @@ closure_stage="/opt/uap-observer-closures/.new-$$"
 test ! -e "$closure_stage"
 test ! -e "$closure_final"
 install -d -o root -g root -m 0755 "$closure_stage/libexec" "$closure_stage/bin" "$closure_stage/etc"
+install -d -o root -g root -m 0755 "$closure_stage/systemd/uap-observer.service.d" "$closure_stage/systemd/uap-observer-runner.service.d"
+for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
+  install -o root -g root -m 0644 "$systemd_stage/$unit" "$closure_stage/systemd/$unit"
+done
+for service in uap-observer uap-observer-runner; do
+  install -o root -g root -m 0644 "$systemd_stage/$service.service.d/egress.conf" "$closure_stage/systemd/$service.service.d/egress.conf"
+done
 mv /opt/uap-observer-venv.new "$closure_stage/venv"
 mv /opt/uap-observer-runtime.new "$closure_stage/runtime"
 mv /usr/local/libexec/uap-observer-runner.new "$closure_stage/libexec/uap-observer-runner"
@@ -372,6 +402,7 @@ mv /etc/uap-observer-adapters.json.new "$closure_stage/etc/uap-observer-adapters
 mv /etc/caddy/Caddyfile.new "$closure_stage/etc/Caddyfile"
 mv "$stage_root/hosts" "$closure_stage/etc/hosts"
 printf '%s\n' 'complete-v1' > "$closure_stage/.complete"
+printf '%s\n' "$install_identity" > "$closure_stage/.install-identity"
 apply_observer_closure_modes "$closure_stage"
 observer_sync_tree "$closure_stage"
 closure_digest=$(observer_closure_identity "$closure_stage")

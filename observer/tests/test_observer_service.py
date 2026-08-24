@@ -72,7 +72,7 @@ class Fixture:
             github_api_url="https://api.github.com", audience="stable-launch-observer",
             issuer="https://token.actions.githubusercontent.com", key_id="fixture-ed25519",
             public_key_base64=base64.b64encode(public_bytes).decode(),
-            cli_release_repository="777genius/plugin-kit-ai", cli_release_tag="agentplugins-v0.1.13",
+            cli_release_repository="777genius/plugin-kit-ai", cli_release_tag="agentplugins-v0.1.14",
             signer_socket=root / "sign.sock", runner_socket=root / "runner.sock",
             runner_source_path=runner_source,
             runner_source_digest="sha256:" + hashlib.sha256(runner_source.read_bytes()).hexdigest(),
@@ -99,7 +99,7 @@ class Fixture:
         value = {
             "schema_version": 1, "purpose": "stable-launch-e2e",
             "catalog_repository": self.policy.repository,
-            "cli_release_repository": "777genius/plugin-kit-ai", "cli_release_tag": "agentplugins-v0.1.13",
+            "cli_release_repository": "777genius/plugin-kit-ai", "cli_release_tag": "agentplugins-v0.1.14",
             "release_manifest_digest": release, "release_checksums_digest": "sha256:" + "f" * 64,
             "directory_digest": directory, "scenario_contract_digest": scenario,
             "github": {"sha": sha, "run_id": "1001", "run_attempt": "2"},
@@ -234,7 +234,7 @@ def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
             "catalog_repository": "777genius/universal-agent-plugins", "catalog_sha": "a" * 40,
             "directory_snapshot_digest": "sha256:" + "c" * 64, "directory_sequence": 1,
             "directory_publication_id": "fixture-publication", "directory_source_commit": "4" * 40,
-            "release_repository": "777genius/plugin-kit-ai", "release_tag": "agentplugins-v0.1.13",
+            "release_repository": "777genius/plugin-kit-ai", "release_tag": "agentplugins-v0.1.14",
             "release_commit": "5" * 40, "release_manifest_digest": "sha256:" + "b" * 64,
         },
     }
@@ -860,6 +860,156 @@ def _capture_error(call, failures: list[Exception]) -> None:  # type: ignore[no-
 
 
 class FixedRunnerFixtureTests(unittest.TestCase):
+    def _completed_closure_fixture(self, root: Path) -> tuple[Path, Path, str, str]:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        closures = root / "uap-observer-closures"
+        staged = closures / ".new"
+        staged.mkdir(parents=True)
+        (staged / ".complete").write_text("complete-v1\n")
+        install_identity = "a" * 64
+        (staged / ".install-identity").write_text(install_identity + "\n")
+        (staged / "payload").write_text("reviewed closure\n")
+        reviewed_systemd = staged / "systemd"
+        reviewed_systemd.mkdir()
+        for unit in ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
+                     "uap-observer-runner.socket", "uap-observer-caddy.service"):
+            (reviewed_systemd / unit).write_text(f"reviewed {unit}\n")
+        for service in ("uap-observer", "uap-observer-runner"):
+            dropin = reviewed_systemd / f"{service}.service.d"
+            dropin.mkdir()
+            (dropin / "egress.conf").write_text(f"reviewed {service} egress\n")
+        for path in (staged / ".complete", staged / ".install-identity", staged / "payload"):
+            path.chmod(0o644)
+        identity = subprocess.check_output(
+            ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"', "sh", str(helper), str(staged)],
+            text=True,
+        ).strip()
+        closure = closures / identity
+        staged.rename(closure)
+        systemd = root / "systemd"
+        systemd.mkdir()
+        for unit in ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
+                     "uap-observer-runner.socket", "uap-observer-caddy.service"):
+            (systemd / unit).write_bytes((closure / "systemd" / unit).read_bytes())
+        for service in ("uap-observer", "uap-observer-runner"):
+            dropin = systemd / f"{service}.service.d"
+            dropin.mkdir()
+            (dropin / "egress.conf").write_bytes((closure / "systemd" / f"{service}.service.d/egress.conf").read_bytes())
+        current = root / "uap-observer-current"
+        current.symlink_to(f"uap-observer-closures/{identity}")
+        return closure, current, install_identity, f"{os.getuid()}:{os.getgid()}"
+
+    def _validate_completed_closure(self, root: Path, identity: str, owner: str) -> subprocess.CompletedProcess[str]:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        script = 'set -eu; . "$1"; observer_validate_completed_closure "$2" "$3" "$4" "$5" "$6"'
+        return subprocess.run(
+            ["/bin/sh", "-c", script, "sh", str(helper), str(root / "uap-observer-closures"),
+             str(root / "uap-observer-current"), identity, owner, str(root / "systemd")],
+            text=True, capture_output=True,
+        )
+
+    def test_identical_second_install_validation_is_an_exact_no_op(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, _, install_identity, owner = self._completed_closure_fixture(root)
+            before = subprocess.check_output(
+                ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"', "sh",
+                 str(Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"), str(root)],
+                text=True,
+            ).strip()
+            for _ in range(2):
+                result = self._validate_completed_closure(root, install_identity, owner)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            after = subprocess.check_output(
+                ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"', "sh",
+                 str(Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"), str(root)],
+                text=True,
+            ).strip()
+            self.assertEqual(after, before)
+
+    def test_second_install_validation_fails_closed_on_every_identity_boundary(self) -> None:
+        mutations = {
+            "content drift": lambda closure, current: (closure / "payload").write_text("drift\n"),
+            "partial closure": lambda closure, current: (closure / ".complete").unlink(),
+            "unsafe mode": lambda closure, current: (closure / "payload").chmod(0o666),
+            "unexpected path": lambda closure, current: (closure / "unexpected").write_text("surprise\n"),
+            "symlink": lambda closure, current: ((closure / "payload").unlink(), (closure / "payload").symlink_to(".complete")),
+            "wrong pointer": lambda closure, current: (current.unlink(), current.symlink_to("uap-observer-closures/" + "0" * 64)),
+            "input identity mismatch": lambda closure, current: None,
+            "systemd content drift": lambda closure, current: (current.parent / "systemd/uap-observer.service").write_text("drift\n"),
+            "systemd unexpected path": lambda closure, current: (current.parent / "systemd/uap-observer.service.d/unexpected.conf").write_text("drift\n"),
+            "systemd symlink": lambda closure, current: ((current.parent / "systemd/uap-observer-runner.socket").unlink(), (current.parent / "systemd/uap-observer-runner.socket").symlink_to("uap-observer.service")),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                closure, current, install_identity, owner = self._completed_closure_fixture(root)
+                mutate(closure, current)
+                if name == "input identity mismatch":
+                    install_identity = "b" * 64
+                result = self._validate_completed_closure(root, install_identity, owner)
+                self.assertNotEqual(result.returncode, 0)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, _, install_identity, owner = self._completed_closure_fixture(root)
+            wrong_owner = f"{os.getuid() + 1}:{os.getgid()}"
+            result = self._validate_completed_closure(root, install_identity, wrong_owner)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_production_installer_checks_idempotence_before_staging(self) -> None:
+        installer = (Path(__file__).parents[2] / "deploy/uap-observer-install.sh").read_text()
+        validation = installer.index("observer_validate_completed_closure")
+        staging = installer.index('install -d -o root -g root -m 0700 "$stage_root"')
+        self.assertLess(validation, staging)
+        self.assertIn('printf \'%s\\n\' "$install_identity" > "$closure_stage/.install-identity"', installer)
+
+    def test_second_install_revalidates_every_supplied_input_and_checksum(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            (source / "deploy").mkdir(parents=True)
+            runtime = source / "runtime.txt"
+            runtime.write_text("runtime\n")
+            runtime_digest = hashlib.sha256(runtime.read_bytes()).hexdigest()
+            manifest = source / "deploy/uap-observer-runtime.sha256"
+            manifest.write_text(f"{runtime_digest}  runtime.txt\n")
+            inputs = []
+            for name in ("adapter.json", "observer.json", "caddy.tar.gz", "Caddyfile"):
+                path = root / name
+                path.write_text(name + "\n")
+                inputs.append(path)
+            manifest_digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+            digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]
+            args = [str(source), manifest_digest, str(inputs[0]), f"sha256:{digests[0]}",
+                    str(inputs[1]), f"sha256:{digests[1]}", str(inputs[2]), digests[2],
+                    str(inputs[3]), f"sha256:{digests[3]}"]
+            def run_identity() -> subprocess.CompletedProcess[str]:
+                command = ["/bin/sh", "-c", 'set -eu; . "$1"; shift; observer_install_input_identity "$@"',
+                           "sh", str(helper), *args]
+                return subprocess.run(command, text=True, capture_output=True)
+            first = run_identity()
+            second = run_identity()
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(first.stdout, second.stdout)
+            for name, mutate in (
+                ("runtime content", lambda: runtime.write_text("drift\n")),
+                ("adapter content", lambda: inputs[0].write_text("drift\n")),
+                ("checksum argument", lambda: args.__setitem__(3, "sha256:" + "0" * 64)),
+                ("symlink input", lambda: (inputs[3].unlink(), inputs[3].symlink_to(inputs[1]))),
+            ):
+                with self.subTest(name=name):
+                    runtime.write_text("runtime\n")
+                    inputs[0].write_text("adapter.json\n")
+                    if inputs[3].is_symlink():
+                        inputs[3].unlink()
+                        inputs[3].write_text("Caddyfile\n")
+                    args[3] = f"sha256:{digests[0]}"
+                    mutate()
+                    result = run_identity()
+                    self.assertNotEqual(result.returncode, 0)
+
     def test_real_closure_mode_helper_matches_runtime_startup_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             closure = Path(temporary) / "closure"

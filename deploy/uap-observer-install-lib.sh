@@ -22,6 +22,111 @@ print(identity.hexdigest())
 PY
 }
 
+observer_install_input_identity() {
+  source_root=$1
+  runtime_manifest_digest=$2
+  adapter_config=$3
+  adapter_config_digest=$4
+  observer_config=$5
+  observer_config_digest=$6
+  caddy_archive=$7
+  caddy_archive_digest=$8
+  caddy_config=$9
+  shift 9
+  caddy_config_digest=$1
+  manifest="$source_root/deploy/uap-observer-runtime.sha256"
+  test -d "$source_root"
+  test ! -L "$source_root"
+  test -f "$manifest"
+  test ! -L "$manifest"
+  test "$(sha256sum "$manifest" | cut -d' ' -f1)" = "$runtime_manifest_digest"
+  while read -r expected relative extra; do
+    test -z "${extra:-}"
+    case "$expected:$relative" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*:[A-Za-z0-9._-]*) ;;
+      *) echo "invalid runtime closure entry" >&2; return 1 ;;
+    esac
+    case "/$relative/" in */../*|*/./*|//* ) echo "unsafe runtime closure path" >&2; return 1 ;; esac
+    test -f "$source_root/$relative"
+    test ! -L "$source_root/$relative"
+  done < "$manifest"
+  (cd "$source_root" && sha256sum -c deploy/uap-observer-runtime.sha256 >/dev/null)
+  for input in "$adapter_config" "$observer_config" "$caddy_archive" "$caddy_config"; do
+    test -f "$input"
+    test ! -L "$input"
+  done
+  actual_adapter="sha256:$(sha256sum "$adapter_config" | cut -d' ' -f1)"
+  actual_observer="sha256:$(sha256sum "$observer_config" | cut -d' ' -f1)"
+  actual_archive="sha256:$(sha256sum "$caddy_archive" | cut -d' ' -f1)"
+  actual_caddy="sha256:$(sha256sum "$caddy_config" | cut -d' ' -f1)"
+  test "$actual_adapter" = "$adapter_config_digest"
+  test "$actual_observer" = "$observer_config_digest"
+  test "$actual_archive" = "sha256:$caddy_archive_digest"
+  test "$actual_caddy" = "$caddy_config_digest"
+  printf '%s\n' \
+    "runtime-manifest sha256:$runtime_manifest_digest" \
+    "adapter-config $actual_adapter" \
+    "observer-config $actual_observer" \
+    "caddy-archive $actual_archive" \
+    "caddy-config $actual_caddy" | sha256sum | cut -d' ' -f1
+}
+
+observer_validate_completed_closure() {
+  closures_root=$1
+  current_pointer=$2
+  expected_install_identity=$3
+  expected_owner=${4:-0:0}
+  systemd_root=${5:-/etc/systemd/system}
+  test -d "$closures_root"
+  test ! -L "$closures_root"
+  test "$(stat -c '%u:%g:%a' "$closures_root")" = "$expected_owner:755"
+  test -L "$current_pointer"
+  test "$(stat -c '%u:%g:%a' "$current_pointer")" = "$expected_owner:777"
+  target=$(readlink "$current_pointer")
+  digest=${target#uap-observer-closures/}
+  printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || {
+    echo "observer current pointer is invalid" >&2
+    return 1
+  }
+  test "$target" = "uap-observer-closures/$digest"
+  closure="$closures_root/$digest"
+  test -d "$closure"
+  test ! -L "$closure"
+  test "$(stat -c '%u:%g:%a' "$closure")" = "$expected_owner:755"
+  for marker in .complete .install-identity; do
+    test -f "$closure/$marker"
+    test ! -L "$closure/$marker"
+    test "$(stat -c '%u:%g:%a' "$closure/$marker")" = "$expected_owner:644"
+  done
+  test "$(cat "$closure/.complete")" = complete-v1
+  test "$(cat "$closure/.install-identity")" = "$expected_install_identity"
+  actual_identity=$(observer_closure_identity "$closure")
+  test "$actual_identity" = "$digest"
+  test -d "$systemd_root"
+  test ! -L "$systemd_root"
+  test "$(stat -c '%u:%g:%a' "$systemd_root")" = "$expected_owner:755"
+  for unit in $observer_units; do
+    installed="$systemd_root/$unit"
+    reviewed="$closure/systemd/$unit"
+    test -f "$installed"
+    test ! -L "$installed"
+    test "$(stat -c '%u:%g:%a' "$installed")" = "$expected_owner:644"
+    cmp "$reviewed" "$installed"
+  done
+  for service in uap-observer uap-observer-runner; do
+    installed="$systemd_root/$service.service.d"
+    reviewed="$closure/systemd/$service.service.d/egress.conf"
+    test -d "$installed"
+    test ! -L "$installed"
+    test "$(stat -c '%u:%g:%a' "$installed")" = "$expected_owner:755"
+    test "$(find "$installed" -mindepth 1 -maxdepth 1 -printf '%f\n')" = egress.conf
+    test -f "$installed/egress.conf"
+    test ! -L "$installed/egress.conf"
+    test "$(stat -c '%u:%g:%a' "$installed/egress.conf")" = "$expected_owner:644"
+    cmp "$reviewed" "$installed/egress.conf"
+  done
+}
+
 observer_sync_tree() {
   python3 - "$1" <<'PY'
 import os,stat,sys
