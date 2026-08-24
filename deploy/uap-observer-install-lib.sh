@@ -406,20 +406,35 @@ apply_observer_closure_modes() {
 observer_validate_systemd_topology() {
   python3 - "$1" <<'PY'
 import os,stat,sys
-from pathlib import Path
-root=Path(sys.argv[1])
-info=root.lstat()
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+rootfd=os.open(sys.argv[1],flags)
+info=os.fstat(rootfd)
 if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
         or info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022):
     raise SystemExit("systemd root is unsafe")
 units=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service")
 dropins=("uap-observer.service.d","uap-observer-runner.service.d")
 allowed=set(units+dropins)
-actual={item.name for item in root.iterdir() if item.name.startswith("uap-observer")}
+actual={name for name in os.listdir(rootfd) if name.startswith("uap-observer")}
 if actual - allowed: raise SystemExit("systemd observer inventory contains an unexpected target")
+
+def validate_dropin(parentfd: int, name: str) -> None:
+    directory=os.open(name,flags,dir_fd=parentfd)
+    try:
+        for child_name in os.listdir(directory):
+            child_info=os.stat(child_name,dir_fd=directory,follow_symlinks=False)
+            if child_info.st_uid != 0 or child_info.st_gid != 0 or child_info.st_mode & 0o022:
+                raise SystemExit("systemd drop-in is not root-controlled")
+            if stat.S_ISDIR(child_info.st_mode):
+                validate_dropin(directory,child_name)
+            elif stat.S_ISREG(child_info.st_mode):
+                if child_info.st_nlink != 1: raise SystemExit("systemd drop-in regular file has unsafe link count")
+            else:
+                raise SystemExit("systemd drop-in contains unsafe topology")
+    finally: os.close(directory)
+
 for name in units+dropins:
-    path=root/name
-    try: item=path.lstat()
+    try: item=os.stat(name,dir_fd=rootfd,follow_symlinks=False)
     except FileNotFoundError: continue
     if (item.st_uid != 0 or item.st_gid != 0
             or (not stat.S_ISLNK(item.st_mode) and item.st_mode & 0o022)):
@@ -432,15 +447,8 @@ for name in units+dropins:
         continue
     if not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode):
         raise SystemExit("systemd drop-in directory is unsafe")
-    for current,dirs,files in os.walk(path,followlinks=False):
-        for child_name in dirs+files:
-            child_info=(Path(current)/child_name).lstat()
-            if child_info.st_uid != 0 or child_info.st_gid != 0 or child_info.st_mode & 0o022:
-                raise SystemExit("systemd drop-in is not root-controlled")
-            if stat.S_ISLNK(child_info.st_mode) or not (stat.S_ISDIR(child_info.st_mode) or stat.S_ISREG(child_info.st_mode)):
-                raise SystemExit("systemd drop-in contains unsafe topology")
-            if stat.S_ISREG(child_info.st_mode) and child_info.st_nlink != 1:
-                raise SystemExit("systemd drop-in regular file has unsafe link count")
+    validate_dropin(rootfd,name)
+os.close(rootfd)
 PY
 }
 
@@ -456,7 +464,7 @@ journal_observer_systemd() {
   index=0
   for relative in $observer_units uap-observer.service.d uap-observer-runner.service.d; do
     target="$systemd_root/$relative"
-    if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ -L "$target" ] || [ -e "$target" ]; then
       cp -a "$target" "$backup/items/$index"
       printf 'present %s %s\n' "$index" "$relative" >> "$backup/manifest"
     else
@@ -487,7 +495,7 @@ validate_observer_systemd_journal() {
     test "$relative" = "$expected_relative" || return 1
     case "$state" in
       present)
-        test -e "$backup/items/$index" || test -L "$backup/items/$index" || return 1
+        test -L "$backup/items/$index" || test -e "$backup/items/$index" || return 1
         seen_items="$seen_items $index"
         ;;
       missing)
@@ -500,7 +508,7 @@ validate_observer_systemd_journal() {
   done < "$backup/manifest"
   test "$expected_index" -eq 7 || return 1
   for item in "$backup"/items/*; do
-    if [ -e "$item" ] || [ -L "$item" ]; then
+    if [ -L "$item" ] || [ -e "$item" ]; then
       index=${item##*/}
       case " $seen_items " in *" $index "*) ;; *) echo "installer recovery journal is invalid" >&2; return 1;; esac
     fi
@@ -540,7 +548,7 @@ observer_replace_systemd_entries() {
   systemd_root=$1
   shift
   python3 - "$systemd_root" "$@" <<'PY'
-import ctypes,os,secrets,stat,sys
+import ctypes,errno,os,secrets,stat,sys
 from pathlib import Path
 
 root_path=sys.argv[1]
@@ -554,6 +562,89 @@ if renameat2 is None:
     raise SystemExit("renameat2 is required for safe systemd replacement")
 renameat2.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint)
 renameat2.restype=ctypes.c_int
+
+# Use descriptor xattr operations for files/directories.  Linux has no fd for
+# an unopened symlink, so its l*xattr operations use a stable /proc/self/fd
+# parent and are bracketed by no-follow identity checks.  ENOTSUP while listing
+# means that filesystem cannot store xattrs, and therefore has none to copy;
+# any failure after a source xattr is observed is fatal.
+flistxattr=libc.flistxattr; fgetxattr=libc.fgetxattr
+fsetxattr=libc.fsetxattr; fremovexattr=libc.fremovexattr
+llistxattr=libc.llistxattr; lgetxattr=libc.lgetxattr
+lsetxattr=libc.lsetxattr; lremovexattr=libc.lremovexattr
+flistxattr.argtypes=(ctypes.c_int,ctypes.c_void_p,ctypes.c_size_t)
+fgetxattr.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+fsetxattr.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int)
+fremovexattr.argtypes=(ctypes.c_int,ctypes.c_char_p)
+llistxattr.argtypes=(ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+lgetxattr.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+lsetxattr.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int)
+lremovexattr.argtypes=(ctypes.c_char_p,ctypes.c_char_p)
+for function in (flistxattr,fgetxattr,llistxattr,lgetxattr): function.restype=ctypes.c_ssize_t
+for function in (fsetxattr,fremovexattr,lsetxattr,lremovexattr): function.restype=ctypes.c_int
+
+unsupported_xattr_errors={errno.ENOTSUP,errno.EOPNOTSUPP,errno.ENOSYS}
+
+def xattr_names(function, target) -> list[bytes]:
+    while True:
+        size=function(target,None,0)
+        if size < 0:
+            value=ctypes.get_errno()
+            if value in unsupported_xattr_errors: return []
+            raise OSError(value,os.strerror(value))
+        if size == 0: return []
+        buffer=ctypes.create_string_buffer(size)
+        result=function(target,buffer,size)
+        if result >= 0: return buffer.raw[:result].split(b"\0")[:-1]
+        value=ctypes.get_errno()
+        if value != errno.ERANGE: raise OSError(value,os.strerror(value))
+
+def xattr_value(function, target, name: bytes) -> bytes:
+    while True:
+        size=function(target,name,None,0)
+        if size < 0:
+            value=ctypes.get_errno(); raise OSError(value,os.strerror(value),os.fsdecode(name))
+        buffer=ctypes.create_string_buffer(max(1,size))
+        result=function(target,name,buffer,size)
+        if result >= 0: return buffer.raw[:result]
+        value=ctypes.get_errno()
+        if value != errno.ERANGE: raise OSError(value,os.strerror(value),os.fsdecode(name))
+
+def set_xattr(function, target, name: bytes, value: bytes) -> None:
+    buffer=ctypes.create_string_buffer(value,max(1,len(value)))
+    if function(target,name,buffer,len(value),0) != 0:
+        error=ctypes.get_errno(); raise OSError(error,os.strerror(error),os.fsdecode(name))
+
+def sync_xattrs(src_names,src_get,src_target,dst_names,dst_get,dst_set,dst_remove,dst_target) -> None:
+    source={name:xattr_value(src_get,src_target,name) for name in xattr_names(src_names,src_target)}
+    destination=set(xattr_names(dst_names,dst_target))
+    for name in destination-source.keys():
+        if dst_remove(dst_target,name) != 0:
+            error=ctypes.get_errno(); raise OSError(error,os.strerror(error),os.fsdecode(name))
+    for name,value in source.items(): set_xattr(dst_set,dst_target,name,value)
+    copied={name:xattr_value(dst_get,dst_target,name) for name in xattr_names(dst_names,dst_target)}
+    if copied != source: raise OSError("systemd metadata xattrs differ after copy")
+
+def sync_xattrs_fd(srcfd: int, dstfd: int) -> None:
+    sync_xattrs(flistxattr,fgetxattr,srcfd,flistxattr,fgetxattr,fsetxattr,fremovexattr,dstfd)
+
+def link_path(parentfd: int, name: str) -> bytes:
+    return b"/proc/self/fd/"+str(parentfd).encode("ascii")+b"/"+os.fsencode(name)
+
+def same_entry(first: os.stat_result, second: os.stat_result) -> bool:
+    return first.st_dev == second.st_dev and first.st_ino == second.st_ino and stat.S_IFMT(first.st_mode) == stat.S_IFMT(second.st_mode)
+
+def exact_metadata(info: os.stat_result, copied: os.stat_result) -> bool:
+    return (stat.S_IMODE(info.st_mode),info.st_uid,info.st_gid,info.st_atime_ns,info.st_mtime_ns) == (stat.S_IMODE(copied.st_mode),copied.st_uid,copied.st_gid,copied.st_atime_ns,copied.st_mtime_ns)
+
+def sync_xattrs_link(srcfd: int, srcname: str, dstfd: int, dstname: str, info: os.stat_result) -> None:
+    source=link_path(srcfd,srcname); destination=link_path(dstfd,dstname)
+    before=os.stat(dstname,dir_fd=dstfd,follow_symlinks=False)
+    if not same_entry(info,os.stat(srcname,dir_fd=srcfd,follow_symlinks=False)):
+        raise PermissionError("systemd symlink source changed while copying")
+    sync_xattrs(llistxattr,lgetxattr,source,llistxattr,lgetxattr,lsetxattr,lremovexattr,destination)
+    if not same_entry(info,os.stat(srcname,dir_fd=srcfd,follow_symlinks=False)) or not same_entry(before,os.stat(dstname,dir_fd=dstfd,follow_symlinks=False)):
+        raise PermissionError("systemd symlink changed while copying metadata")
 
 def trusted(info: os.stat_result, *, link: bool = False) -> None:
     if info.st_uid != 0 or info.st_gid != 0 or (not link and info.st_mode & 0o022):
@@ -584,7 +675,10 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
                 while view: view=view[os.write(outfd,view):]
             os.fchown(outfd,info.st_uid,info.st_gid)
             os.fchmod(outfd,stat.S_IMODE(mode))
+            sync_xattrs_fd(infd,outfd)
+            os.utime(outfd,ns=(info.st_atime_ns,info.st_mtime_ns))
             os.fsync(outfd)
+            if not exact_metadata(info,os.fstat(outfd)): raise OSError("systemd file metadata differs after copy")
         finally:
             os.close(outfd); os.close(infd)
     elif stat.S_ISDIR(mode):
@@ -597,13 +691,20 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
             for child in os.listdir(infd): copy_entry(infd,child,outfd,child)
             os.fchown(outfd,info.st_uid,info.st_gid)
             os.fchmod(outfd,stat.S_IMODE(mode))
+            sync_xattrs_fd(infd,outfd)
+            os.utime(outfd,ns=(info.st_atime_ns,info.st_mtime_ns))
             os.fsync(outfd)
+            if not exact_metadata(info,os.fstat(outfd)): raise OSError("systemd directory metadata differs after copy")
         finally:
             os.close(outfd); os.close(infd)
     elif stat.S_ISLNK(mode):
         trusted(info,link=True)
         os.symlink(os.readlink(srcname,dir_fd=srcfd),dstname,dir_fd=dstfd)
         os.chown(dstname,info.st_uid,info.st_gid,dir_fd=dstfd,follow_symlinks=False)
+        sync_xattrs_link(srcfd,srcname,dstfd,dstname,info)
+        os.utime(dstname,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=dstfd,follow_symlinks=False)
+        if not exact_metadata(info,os.stat(dstname,dir_fd=dstfd,follow_symlinks=False)):
+            raise OSError("systemd symlink metadata differs after copy")
     else:
         raise PermissionError("systemd source has unsafe type")
 
@@ -682,12 +783,9 @@ restore_observer_systemd() {
     fi
   done < "$backup/manifest"
   observer_replace_systemd_entries "$@" || return 1
-  observer_validate_systemd_topology "$systemd_root" || return 1
   while read -r state index relative; do
     target="$systemd_root/$relative"
-    if [ "$state" = present ]; then
-      diff -r --no-dereference "$backup/items/$index" "$target" >/dev/null || return 1
-    else
+    if [ "$state" != present ]; then
       test ! -e "$target" && test ! -L "$target" || return 1
     fi
   done < "$backup/manifest"

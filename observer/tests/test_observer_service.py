@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import http.client
 import importlib.util
 import json
 import os
 import re
+import shutil
 import socket
 import stat
 import subprocess
@@ -1310,12 +1312,30 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
     def test_systemd_bootstrap_rollback_is_exact_at_every_mutation_and_reload_boundary(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
         units = ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service", "uap-observer-runner.socket", "uap-observer-caddy.service")
-        def snapshot(root: Path) -> list[tuple[str, int, int, int, int, bytes | str]]:
+        def xattrs(path: Path) -> tuple[tuple[bytes, bytes], ...]:
+            names = os.listxattr(path, follow_symlinks=False)
+            return tuple(sorted(
+                (os.fsencode(name), os.getxattr(path, name, follow_symlinks=False))
+                for name in names
+            ))
+        def snapshot(root: Path) -> list[tuple[str, int, int, int, int, int, int, tuple[tuple[bytes, bytes], ...], bytes | str]]:
             values = []
-            for path in sorted(root.rglob("*")):
-                info = path.lstat()
-                payload: bytes | str = os.readlink(path) if path.is_symlink() else (path.read_bytes() if path.is_file() else b"")
-                values.append((str(path.relative_to(root)), stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, payload))
+            def visit(directory: Path) -> None:
+                for entry in sorted(os.scandir(directory), key=lambda item: item.name):
+                    path = Path(entry.path)
+                    info = path.lstat()
+                    metadata = xattrs(path)
+                    if stat.S_ISLNK(info.st_mode):
+                        payload: bytes | str = os.readlink(path)
+                    elif stat.S_ISREG(info.st_mode):
+                        payload = path.read_bytes()
+                    else:
+                        payload = b""
+                    values.append((str(path.relative_to(root)), stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, info.st_atime_ns, info.st_mtime_ns, metadata, payload))
+                    if stat.S_ISDIR(info.st_mode):
+                        visit(path)
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
+            visit(root)
             return values
         for failure in range(1, 9):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
@@ -1327,6 +1347,47 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                 (systemd_root / "uap-observer-signer.service").symlink_to("legacy-signer.service")
                 old_dropin = systemd_root / "uap-observer.service.d"; old_dropin.mkdir()
                 (old_dropin / "existing.conf").write_text("old-dropin\n")
+                metadata_paths = (
+                    systemd_root / "uap-observer.service",
+                    old_dropin,
+                    old_dropin / "existing.conf",
+                    systemd_root / "uap-observer-signer.service",
+                )
+                try:
+                    for index, path in enumerate(metadata_paths[:3]):
+                        os.setxattr(path, "user.uap_observer_test", f"metadata-{index}".encode(), follow_symlinks=False)
+                except OSError as error:
+                    if error.errno in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM):
+                        self.skipTest("fixture filesystem does not expose required no-follow user xattrs")
+                    raise
+                try:
+                    os.setxattr(metadata_paths[3], "user.uap_observer_test", b"metadata-3", follow_symlinks=False)
+                except OSError as error:
+                    if error.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM, errno.EACCES):
+                        raise
+                setfacl = shutil.which("setfacl")
+                if setfacl:
+                    for path in (old_dropin, old_dropin / "existing.conf"):
+                        result = subprocess.run(
+                            [setfacl, "-m", "u:12345:r--", str(path)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        )
+                        if result.returncode == 0:
+                            self.assertIn("system.posix_acl_access", os.listxattr(path, follow_symlinks=False))
+                for path in metadata_paths:
+                    try:
+                        os.setxattr(path, "security.uap_observer_test", b"label", follow_symlinks=False)
+                    except OSError as error:
+                        if error.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM, errno.EACCES, errno.EINVAL):
+                            raise
+                    else:
+                        self.assertEqual(
+                            os.getxattr(path, "security.uap_observer_test", follow_symlinks=False),
+                            b"label",
+                        )
+                timestamp = 1_700_000_000_123_456_789
+                for offset, path in enumerate(metadata_paths):
+                    os.utime(path, ns=(timestamp + offset, timestamp + 100 + offset), follow_symlinks=False)
                 for unit in units:
                     (staged / unit).write_text(f"new-{unit}\n")
                 for service in ("uap-observer", "uap-observer-runner"):
