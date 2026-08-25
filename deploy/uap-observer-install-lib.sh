@@ -3,7 +3,7 @@
 # Shared, testable installer primitives. The caller supplies only disposable
 # roots in tests; production calls use the fixed system paths.
 
-observer_units='uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service'
+observer_units='uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service uap-observer-egress-proxy.service uap-observer-egress-proxy.socket'
 
 # Control data is never consumed through a pathname-opening utility.  The
 # parent and object are pinned without following links and O_NOATIME keeps
@@ -228,12 +228,14 @@ observer_partial_paths() {
     /opt/uap-observer-runtime.new \
     /opt/uap-observer-current.new \
     /usr/local/libexec/uap-observer-runner.new \
+    /usr/local/libexec/uap-observer-egress-proxy.new \
     /usr/local/libexec/uap-observer-fixed-adapter.new \
     /usr/local/libexec/uap-observer-attest-chatgpt.new \
     /usr/local/libexec/uap-observer-attest-consent.new \
     /usr/local/libexec/uap-observer-provision-profile.new \
     /usr/local/bin/caddy.new \
     /etc/uap-observer.json.new \
+    /etc/uap-observer-egress-allowlist.json.new \
     /etc/uap-observer-adapter-config.json.new \
     /etc/uap-observer-adapters.json.new \
     /etc/caddy/Caddyfile.new \
@@ -529,6 +531,8 @@ observer_install_input_identity() {
   caddy_config=$9
   shift 9
   caddy_config_digest=$1
+  egress_allowlist=$2
+  egress_allowlist_digest=$3
   manifest="$source_root/deploy/uap-observer-runtime.sha256"
   test -d "$source_root"
   test ! -L "$source_root"
@@ -546,7 +550,7 @@ observer_install_input_identity() {
     test ! -L "$source_root/$relative"
   done < "$manifest"
   (cd "$source_root" && sha256sum -c deploy/uap-observer-runtime.sha256 >/dev/null)
-  for input in "$adapter_config" "$observer_config" "$caddy_archive" "$caddy_config"; do
+  for input in "$adapter_config" "$observer_config" "$caddy_archive" "$caddy_config" "$egress_allowlist"; do
     test -f "$input"
     test ! -L "$input"
   done
@@ -554,16 +558,19 @@ observer_install_input_identity() {
   actual_observer="sha256:$(sha256sum "$observer_config" | cut -d' ' -f1)"
   actual_archive="sha256:$(sha256sum "$caddy_archive" | cut -d' ' -f1)"
   actual_caddy="sha256:$(sha256sum "$caddy_config" | cut -d' ' -f1)"
+  actual_egress="sha256:$(sha256sum "$egress_allowlist" | cut -d' ' -f1)"
   test "$actual_adapter" = "$adapter_config_digest"
   test "$actual_observer" = "$observer_config_digest"
   test "$actual_archive" = "sha256:$caddy_archive_digest"
   test "$actual_caddy" = "$caddy_config_digest"
+  test "$actual_egress" = "$egress_allowlist_digest"
   printf '%s\n' \
     "runtime-manifest sha256:$runtime_manifest_digest" \
     "adapter-config $actual_adapter" \
     "observer-config $actual_observer" \
     "caddy-archive $actual_archive" \
-    "caddy-config $actual_caddy" | sha256sum | cut -d' ' -f1
+    "caddy-config $actual_caddy" \
+    "egress-allowlist $actual_egress" | sha256sum | cut -d' ' -f1
 }
 
 observer_validate_completed_closure() {
@@ -604,6 +611,8 @@ observer_validate_completed_closure() {
   test "$actual_identity" = "$digest"
   test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$config_gid:640:1"
   test "$(stat -c '%u:%g:%a:%h' "$closure/etc/Caddyfile")" = "0:$caddy_gid:640:1"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-egress-allowlist.json")" = "0:0:644:1"
+  test "$(stat -c '%u:%g:%a:%h' "$closure/libexec/uap-observer-egress-proxy")" = "0:0:755:1"
   test -d "$systemd_root"
   test ! -L "$systemd_root"
   test "$(stat -c '%u:%g:%a' "$systemd_root")" = "$expected_owner:755"
@@ -647,6 +656,8 @@ services=reviewed_service_identities()
 identities=[services[name][:2] for name in ("codex","cursor","kiro","control")]
 observer_uid,observer_gid,_=services["observer"]
 caddy_uid,caddy_gid,_=services["caddy"]
+egress_uid,egress_gid,_=services["egress"]
+if egress_uid == 0 or egress_gid == 0: raise SystemExit("egress gateway is privileged")
 
 def directory(path,uid,gid,mode):
     info=os.lstat(path)
@@ -692,14 +703,17 @@ observer_validate_installed_closure_sources() {
   adapter_config=$3
   observer_config=$4
   caddy_config=$5
-  runner_digest=$6
-  adapter_digest=$7
-  caddy_digest=$8
+  egress_allowlist=$6
+  runner_digest=$7
+  adapter_digest=$8
+  caddy_digest=$9
   observer_compare_regular_files_neutral "$observer_config" "$closure/etc/uap-observer.json"
   observer_compare_regular_files_neutral "$adapter_config" "$closure/etc/uap-observer-adapter-config.json"
   observer_compare_regular_files_neutral "$caddy_config" "$closure/etc/Caddyfile"
+  observer_compare_regular_files_neutral "$egress_allowlist" "$closure/etc/uap-observer-egress-allowlist.json"
   test "$(observer_sha256_regular_neutral "$closure/libexec/uap-observer-runner")" = "$runner_digest"
   test "$(observer_sha256_regular_neutral "$closure/libexec/uap-observer-fixed-adapter")" = "$adapter_digest"
+  observer_compare_regular_files_neutral "$source_root/deploy/uap-observer-egress-proxy.py" "$closure/libexec/uap-observer-egress-proxy"
   test "$(observer_sha256_regular_neutral "$closure/bin/caddy")" = "$caddy_digest"
   for name in $(observer_directory_inventory_neutral "$source_root/observer"); do
     case "$name" in *.py) ;; *) continue ;; esac
@@ -840,6 +854,7 @@ apply_observer_closure_modes() {
   chown "root:$config_group" "$closure/etc/uap-observer-adapter-config.json"
   chown "root:$caddy_group" "$closure/etc/Caddyfile"
   chmod 0755 "$closure/libexec/uap-observer-runner" "$closure/libexec/uap-observer-fixed-adapter"
+  chmod 0755 "$closure/libexec/uap-observer-egress-proxy"
   for name in runtime notion chatgpt consent; do
     chmod 0755 "$closure/libexec/uap-observer-adapter-$name"
   done
@@ -847,6 +862,8 @@ apply_observer_closure_modes() {
   test "$(stat -c '%u:%g:%a:%h' "$closure/etc/uap-observer-adapter-config.json")" = "0:$(getent group "$config_group" | cut -d: -f3):640:1"
   test "$(stat -c '%u:%g:%a:%h' "$closure/etc/Caddyfile")" = "0:$(getent group "$caddy_group" | cut -d: -f3):640:1"
   test "$(stat -c '%u:%g:%a' "$closure/etc/uap-observer-adapters.json")" = '0:0:644'
+  test "$(stat -c '%u:%g:%a' "$closure/etc/uap-observer-egress-allowlist.json")" = '0:0:644'
+  test "$(stat -c '%u:%g:%a' "$closure/libexec/uap-observer-egress-proxy")" = '0:0:755'
   test "$(stat -c '%u:%g:%a' "$closure/libexec/uap-observer-runner")" = '0:0:755'
   test -z "$(find "$closure" \( -type d -o -type f \) -perm /0022 -print -quit)"
 }
@@ -862,7 +879,7 @@ if info!=root_before: raise PermissionError("systemd root changed while opening"
 if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
         or info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022):
     raise SystemExit("systemd root is unsafe")
-units=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service")
+units=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer-egress-proxy.service","uap-observer-egress-proxy.socket")
 dropins=("uap-observer.service.d","uap-observer-runner.service.d")
 allowed=set(units+dropins)
 actual={name for name in os.listdir(rootfd) if name.startswith("uap-observer")}
@@ -914,7 +931,7 @@ observer_systemd_archive() {
 import base64,ctypes,hashlib,json,os,secrets,stat,sys,tempfile
 
 operation,backup_path,live_path=sys.argv[1:]
-names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
+names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer-egress-proxy.service","uap-observer-egress-proxy.socket","uap-observer.service.d","uap-observer-runner.service.d")
 dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 libc=ctypes.CDLL(None,use_errno=True)
@@ -1500,7 +1517,7 @@ expected_present=None
 expected_inventory=None
 expected_fingerprints={}
 restore_mode=bool(os.environ.get("UAP_OBSERVER_RESTORE_BACKUP"))
-journal_names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
+journal_names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer-egress-proxy.service","uap-observer-egress-proxy.socket","uap-observer.service.d","uap-observer-runner.service.d")
 
 def observer_inventory() -> set[str]:
     return {name for name in os.listdir(rootfd) if name.startswith("uap-observer")}
@@ -2176,7 +2193,7 @@ validate_observer_systemd_inventory() {
 observer_compare_systemd_trees() {
   PYTHONDONTWRITEBYTECODE=1 python3 -B - "$1" "$2" <<'PY'
 import ctypes,os,signal,stat,sys,tempfile
-names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
+names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer-egress-proxy.service","uap-observer-egress-proxy.socket","uap-observer.service.d","uap-observer-runner.service.d")
 dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 libc=ctypes.CDLL(None,use_errno=True)

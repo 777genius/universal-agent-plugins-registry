@@ -3278,6 +3278,31 @@ class FixedAdapterContractTests(unittest.TestCase):
         self.assertTrue(fixed_adapters.native_discovery_present({"servers": [{"name": "context7"}]}, "context7"))
         self.assertTrue(fixed_adapters.manager_receipt_present({"products": ["context7"]}, "context7"))
 
+    def test_current_client_command_and_discovery_contracts_are_exact(self) -> None:
+        self.assertEqual(
+            fixed_adapters.CLIENT_ARGUMENTS["codex"],
+            ("exec", "--skip-git-repo-check", "--json", "--ephemeral", "--sandbox", "read-only"),
+        )
+        self.assertEqual(
+            fixed_adapters.CLIENT_ARGUMENTS["cursor"],
+            ("--print", "--mode", "ask", "--force", "--sandbox", "enabled", "--trust", "--approve-mcps"),
+        )
+        self.assertEqual(
+            fixed_adapters.CLIENT_ARGUMENTS["kiro"],
+            ("chat", "--no-interactive", "--trust-all-tools", "--require-mcp-startup"),
+        )
+        self.assertEqual(fixed_adapters.CLIENT_DISCOVERY_ARGUMENTS["codex"], ("mcp", "list", "--json"))
+        self.assertEqual(fixed_adapters.CLIENT_DISCOVERY_ARGUMENTS["cursor"], ("mcp", "list"))
+        self.assertEqual(fixed_adapters.CLIENT_DISCOVERY_ARGUMENTS["kiro"], ("mcp", "list"))
+
+    def test_plain_native_discovery_parses_only_leading_healthy_identity(self) -> None:
+        cursor = fixed_adapters.parsed_native_discovery("cursor", b"context7: connected\nother: connected\n")
+        self.assertTrue(fixed_adapters.native_discovery_output_present("cursor", cursor, "context7"))
+        self.assertFalse(fixed_adapters.native_discovery_output_present("cursor", ["missing context7"], "context7"))
+        self.assertFalse(fixed_adapters.native_discovery_output_present("kiro", ["context7: failed"], "context7"))
+        colored = fixed_adapters.parsed_native_discovery("kiro", b"\x1b[32m\xe2\x9c\x93 context7 connected\x1b[0m\n")
+        self.assertTrue(fixed_adapters.native_discovery_output_present("kiro", colored, "context7"))
+
     def test_receipt_and_native_identity_require_the_exact_approved_tuple(self) -> None:
         approved = {"product_id": "context7", "package_version": "1.0.0", "client_version": None, "observed_at": None}
         correct = {"name": "context7", "tuple": dict(approved)}

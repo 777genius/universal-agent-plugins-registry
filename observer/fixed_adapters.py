@@ -56,19 +56,20 @@ MAX_STDOUT = 1 << 20
 KILL_WAIT_SECONDS = 2.0
 COMMAND_SECONDS = 45
 HUMAN_WAIT_SECONDS = 300
+FIXED_HTTPS_PROXY = "http://127.0.0.2:8766"
 MCP_ENDPOINT = "https://docs.mcp.cloudflare.com/mcp"
 MCP_MARKER = "cloudflare-docs-read-only-v1"
 MCP_READ_TOOL = "search_cloudflare_documentation"
 MCP_READ_ARGUMENTS = {"query": "Cloudflare Durable Objects SQLite storage API marker cloudflare-docs-read-only-v1"}
 CLIENT_ARGUMENTS = {
-    "codex": ("exec", "--skip-git-repo-check", "--json"),
-    "cursor": ("agent", "--print", "--output-format", "json"),
-    "kiro": ("chat", "--no-interactive"),
+    "codex": ("exec", "--skip-git-repo-check", "--json", "--ephemeral", "--sandbox", "read-only"),
+    "cursor": ("--print", "--mode", "ask", "--force", "--sandbox", "enabled", "--trust", "--approve-mcps"),
+    "kiro": ("chat", "--no-interactive", "--trust-all-tools", "--require-mcp-startup"),
 }
 CLIENT_DISCOVERY_ARGUMENTS = {
     "codex": ("mcp", "list", "--json"),
-    "cursor": ("agent", "mcp", "list", "--json"),
-    "kiro": ("mcp", "list", "--json"),
+    "cursor": ("mcp", "list"),
+    "kiro": ("mcp", "list"),
 }
 PROBE_TOOLS = {
     "agent-code-navigator": "search_code",
@@ -456,6 +457,34 @@ def native_discovery_present(value: Any, plugin: str, approved_tuple: dict[str, 
     )
 
 
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def parsed_native_discovery(client: str, encoded: bytes) -> Any:
+    if client == "codex":
+        return parsed_json_stream(encoded)
+    text = encoded.decode("utf-8", "strict")
+    if "\x00" in text:
+        raise ValueError("fixed client emitted invalid discovery text")
+    lines = [ANSI_ESCAPE.sub("", line).strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("fixed client emitted no discovery evidence")
+    return lines
+
+
+def native_discovery_output_present(client: str, value: Any, plugin: str, approved_tuple: dict[str, Any] | None = None) -> bool:
+    if client == "codex":
+        return native_discovery_present(value, plugin, approved_tuple)
+    # Cursor and Kiro expose only a text table. Accept the server only as the
+    # leading table identity, not as incidental prose elsewhere in a line.
+    identity = re.compile(rf"^(?:[-*+✓✔●]\s*)?{re.escape(plugin)}(?:\s|:|$)")
+    negative = re.compile(r"\b(?:disabled|failed|error|unavailable)\b", re.IGNORECASE)
+    return isinstance(value, list) and any(
+        isinstance(line, str) and identity.search(line) is not None and negative.search(line) is None
+        for line in value
+    )
+
+
 def successful_tool_event(value: Any, tool: str, plugin: str) -> bool:
     if isinstance(value, list):
         return any(successful_tool_event(item, tool, plugin) for item in value)
@@ -562,6 +591,9 @@ def invoke(
         "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
         "HOME": str(profile), "XDG_CONFIG_HOME": str(profile / ".config"),
         "XDG_CACHE_HOME": str(profile / ".cache"), "CODEX_HOME": str(profile / ".codex"),
+        "HTTPS_PROXY": FIXED_HTTPS_PROXY, "https_proxy": FIXED_HTTPS_PROXY,
+        "HTTP_PROXY": FIXED_HTTPS_PROXY, "http_proxy": FIXED_HTTPS_PROXY,
+        "NO_PROXY": "", "no_proxy": "",
     }
     manager_inventory = profile / ".agentplugins" / "receipts.json"
     profile_uid = os.geteuid()
@@ -576,16 +608,21 @@ def invoke(
         raise ValueError("fixed client version marker is invalid")
     discovery_argv = [str(binary), *CLIENT_DISCOVERY_ARGUMENTS[client]]
     native_before_bytes, _, _ = run_client(discovery_argv, workspace=workspace, environment=environment, timeout=10)
-    native_before = parsed_json_stream(native_before_bytes)
-    if not native_discovery_present(native_before, plugin, approved_tuple):
+    native_before = parsed_native_discovery(client, native_before_bytes)
+    if not native_discovery_output_present(client, native_before, plugin, approved_tuple):
         raise ValueError("native discovery did not contain the exact approved release identity")
     stdout, started, ended = run_client(argv, workspace=workspace, environment=environment)
-    invocation = parsed_json_stream(stdout)
-    if not successful_marker_event(invocation, expected_marker) or not successful_tool_event(invocation, tool, plugin):
+    if client == "codex":
+        invocation = parsed_json_stream(stdout)
+        succeeded = successful_marker_event(invocation, expected_marker) and successful_tool_event(invocation, tool, plugin)
+    else:
+        output = stdout.decode("utf-8", "strict")
+        succeeded = expected_marker in {line.strip() for line in output.splitlines()}
+    if not succeeded:
         raise ValueError("fixed client did not emit a successful exact tool invocation")
     native_after_bytes, _, _ = run_client(discovery_argv, workspace=workspace, environment=environment, timeout=10)
-    native_after = parsed_json_stream(native_after_bytes)
-    if not native_discovery_present(native_after, plugin, approved_tuple):
+    native_after = parsed_native_discovery(client, native_after_bytes)
+    if not native_discovery_output_present(client, native_after, plugin, approved_tuple):
         raise ValueError("native discovery disappeared after invocation")
     manager_after_bytes = read_regular(manager_inventory, None, owner_uid=profile_uid, mode=0o600)
     manager_after = json.loads(manager_after_bytes)
@@ -760,7 +797,7 @@ def mcp_call(endpoint: str, request_id: int, method: str, params: dict[str, Any]
     if session:
         headers["Mcp-Session-Id"] = session
     request = urllib.request.Request(endpoint, data=payload, headers=headers, method="POST")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": FIXED_HTTPS_PROXY}), NoRedirect())
     with opener.open(request, timeout=15) as response:
         if response.status != 200 or response.geturl() != endpoint:
             raise ValueError("Cloudflare MCP response identity differs")
@@ -784,7 +821,7 @@ def mcp_initialized(endpoint: str, session: str) -> None:
         endpoint, data=payload, method="POST",
         headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18", "Mcp-Session-Id": session},
     )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": FIXED_HTTPS_PROXY}), NoRedirect())
     with opener.open(request, timeout=15) as response:
         if response.status not in {200, 202, 204} or response.geturl() != endpoint or len(response.read(4097)) > 4096:
             raise ValueError("Cloudflare MCP initialized notification failed")

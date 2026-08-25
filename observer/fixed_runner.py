@@ -54,6 +54,7 @@ FIXED_ENTRYPOINTS = {
 
 SERVICE_ROLES = {
     "caddy": ("caddy", "caddy", "/var/lib/caddy", ()),
+    "egress": ("uap-observer-egress", "uap-observer-egress", "/nonexistent", ()),
     "observer": (
         "uap-observer", "uap-observer", "/nonexistent",
         ("uap-observer-signer-ipc", "uap-observer-runner-ipc"),
