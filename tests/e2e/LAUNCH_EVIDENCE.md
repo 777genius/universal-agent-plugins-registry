@@ -14,11 +14,11 @@ Live runs take neither repository nor release-tag identity from the caller.
 `777genius/plugin-kit-ai` / `agentplugins-v0.1.14`. This makes the immutable
 upstream CLI manifest an explicit prerequisite for evidence at the exact catalog
 commit (`GITHUB_SHA`); the challenge binds both sides of that release sequence.
-`scripts/prepare_launch_evidence.py`
-resolves that published GitHub release without using the catalog repository's
-token,
-dereferences the tag to a commit, downloads `release-manifest.json`,
-`checksums.txt`, and a manifest-listed asset through the GitHub API, then
+`scripts/prepare_launch_evidence.py` uses the catalog workflow token only for
+exact, non-redirecting GitHub API release and tag metadata requests. It
+dereferences the tag to a commit and downloads `release-manifest.json`,
+`checksums.txt`, and a manifest-listed asset from exact, credential-free GitHub
+release URLs, then
 requires GitHub's `immutable: true`, the exact eight-file release set, and the
 fixed release-workflow artifact attestation for every native asset. The
 trusted signer workflow is exactly
