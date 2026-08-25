@@ -65,14 +65,14 @@ binding is required.
 
 ## Dependency pins
 
-Verified against registry releases on 2026-08-22. The HubSpot pin is an
+Verified against registry releases on 2026-08-25. The HubSpot pin is an
 explicit preview prerelease; the other rows are stable releases:
 
 | Runtime dependency | Pin |
 | --- | --- |
 | `chrome-devtools-mcp` | `1.7.0` |
 | `@upstash/context7-mcp` | `4.0.3` |
-| `firebase-tools` | `15.26.0` |
+| `firebase-tools` | `15.28.1` |
 | `@hubspot/cli` | `8.14.0-beta.0` preview prerelease |
 | `mcp/dockerhub` | OCI digest `sha256:76454af…d4248` |
 
