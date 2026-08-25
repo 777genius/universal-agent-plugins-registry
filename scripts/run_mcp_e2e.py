@@ -20,6 +20,53 @@ INSPECTOR = "@modelcontextprotocol/inspector@2.1.0"
 RESULTS_DIR = ROOT / "tests" / "e2e" / "results"
 
 
+def credential_free_environment(
+    sandbox: Path, plugin_root: Path, plugin_data: Path,
+) -> dict[str, str]:
+    """Return the minimum host-independent environment needed by npx and Node."""
+    directories = {
+        "HOME": sandbox / "home",
+        "USERPROFILE": sandbox / "home",
+        "XDG_CACHE_HOME": sandbox / "xdg-cache",
+        "XDG_CONFIG_HOME": sandbox / "xdg-config",
+        "XDG_DATA_HOME": sandbox / "xdg-data",
+        "APPDATA": sandbox / "app-data",
+        "LOCALAPPDATA": sandbox / "local-app-data",
+        "TMPDIR": sandbox / "tmp",
+        "TMP": sandbox / "tmp",
+        "TEMP": sandbox / "tmp",
+        "COREPACK_HOME": sandbox / "corepack",
+    }
+    for directory in set(directories.values()):
+        directory.mkdir(mode=0o700)
+
+    environment = {
+        key: value
+        for key in (
+            "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC",
+            "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+        )
+        if (value := os.environ.get(key))
+    }
+    environment.update({key: str(value) for key, value in directories.items()})
+    environment.update(
+        {
+            "CI": "true",
+            "NO_COLOR": "1",
+            "NODE_REPL_HISTORY": str(sandbox / "node-repl-history"),
+            "npm_config_audit": "false",
+            "npm_config_cache": str(sandbox / "npm-cache"),
+            "npm_config_fund": "false",
+            "npm_config_globalconfig": str(sandbox / "global.npmrc"),
+            "npm_config_update_notifier": "false",
+            "npm_config_userconfig": str(sandbox / "user.npmrc"),
+            "PLUGIN_ROOT": str(plugin_root),
+            "PLUGIN_DATA": str(plugin_data),
+        }
+    )
+    return environment
+
+
 def materialize_inspector_config(plugin: str, sandbox: Path) -> tuple[Path, dict[str, str]]:
     """Bind client-provided plugin paths to one disposable Inspector sandbox."""
     plugin_root = (ROOT / "plugins" / plugin).resolve()
@@ -52,9 +99,7 @@ def materialize_inspector_config(plugin: str, sandbox: Path) -> tuple[Path, dict
 
     destination = sandbox / "mcp.json"
     destination.write_text(json.dumps(materialized) + "\n")
-    environment = os.environ.copy()
-    environment["PLUGIN_ROOT"] = str(plugin_root)
-    environment["PLUGIN_DATA"] = str(plugin_data)
+    environment = credential_free_environment(sandbox, plugin_root, plugin_data)
     return destination, environment
 
 
