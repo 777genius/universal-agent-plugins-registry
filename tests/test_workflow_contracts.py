@@ -94,6 +94,22 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(job["permissions"], {"contents": "read"})
         self.assertLessEqual(int(job["timeout-minutes"]), 10)
 
+    def test_launch_evidence_jobs_fetch_parent_for_patch_binding(self) -> None:
+        launch = load(LAUNCH)
+        live = load(LIVE)
+        jobs = (
+            (launch["jobs"]["fixture-only-non-runtime"], "fixture-only-non-runtime"),
+            (launch["jobs"]["enforced-stable-gate"], "enforced-stable-gate"),
+            (live["jobs"]["scheduled-fixture-contract"], "scheduled-fixture-contract"),
+        )
+        for job, name in jobs:
+            with self.subTest(job=name):
+                checkout = next(
+                    step for step in job["steps"]
+                    if step.get("uses", "").startswith("actions/checkout")
+                )
+                self.assertEqual(checkout["with"]["fetch-depth"], "2")
+
     def test_enforced_jobs_are_not_disabled_by_impossible_capture_lineage(self) -> None:
         workflow = load(LAUNCH)
         self.assertNotIn("CAPTURE_TRUST_READY", workflow["env"])
