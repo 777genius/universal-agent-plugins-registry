@@ -21,6 +21,7 @@ import platform
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -51,6 +52,15 @@ CONFORMANCE_KEY_ID = "launch-conformance-only"
 CONFORMANCE_SEED = hashlib.sha256(b"UAP launch evidence conformance key; never production").digest()
 RELEASED_AGENTPLUGINS_0_1_14_SIZE = 11_190_456
 RELEASED_AGENTPLUGINS_0_1_14_SHA256 = "7313ad045fa2fa5621f9b9d75914d111f5101c4d3e758515022603fcfb57d31e"
+EXACT_PLUGIN_DATA_LIFECYCLE_ARGV = (
+    ("add", "./package-plugin-data", "--target", "cursor", "--format", "json"),
+    ("info", "e2e-external-package", "--target", "cursor", "--format", "json"),
+    ("update", "e2e-external-package", "--target", "cursor", "--format", "json"),
+    ("repair", "e2e-external-package", "--target", "cursor", "--format", "json"),
+    ("switch", "e2e-external-package", "--to", "./package-plugin-data-alternate", "--format", "json"),
+    ("remove", "e2e-external-package", "--target", "cursor", "--format", "json"),
+    ("remove", "e2e-external-package", "--purge-data", "--format", "json"),
+)
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_REPOSITORY = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
@@ -2205,8 +2215,23 @@ def _install_path_authority_guard(allowed_write_roots: tuple[int, ...]) -> None:
 def traced(
     binary: Path, argv: list[str], cwd: Path, challenge: str,
     *, write_authority: tuple[int, ...] | None = None, deny_process_creation: bool = False,
+    binary_session: AuthenticatedBinaryExecutionSession | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     started = now()
+    if binary_session is not None:
+        completed, execution_binding = binary_session.execute(
+            binary, argv, cwd=cwd, write_authority=write_authority,
+        )
+        ended = now()
+        trace = {
+            "challenge": challenge, "argv": argv, "started_at": started, "ended_at": ended,
+            "exit_code": completed.returncode,
+            "stdout_digest": "sha256:" + hashlib.sha256(completed.stdout.encode()).hexdigest(),
+            "stderr_digest": "sha256:" + hashlib.sha256(completed.stderr.encode()).hexdigest(),
+            "process_creation_denied": True, "write_guarded": write_authority is not None,
+            "binary_execution": execution_binding,
+        }
+        return completed, trace
     environment = os.environ.copy()
     if write_authority is not None:
         # The released remover needs scratch space for ownership snapshots.
@@ -2307,6 +2332,281 @@ class LifecycleEvidenceSession:
         self._consumed = False
 
 
+def _stable_file_identity(value: os.stat_result) -> dict[str, int]:
+    return {
+        "device": value.st_dev, "inode": value.st_ino, "mode": value.st_mode,
+        "uid": value.st_uid, "gid": value.st_gid, "links": value.st_nlink,
+        "size": value.st_size, "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+
+def _stable_directory_identity(value: os.stat_result) -> dict[str, int]:
+    """Identity fields unaffected by unrelated children in a shared parent."""
+    return {
+        "device": value.st_dev, "inode": value.st_ino, "mode": value.st_mode,
+        "uid": value.st_uid, "gid": value.st_gid,
+    }
+
+
+class AuthenticatedBinaryExecutionSession:
+    """One-use, descriptor-bound execution of the exact public lifecycle.
+
+    Linux inotify supplies the epoch property that stat/hash observations alone
+    cannot: even a modify/restore or rename/out-and-back attempt invalidates the
+    session.  The executable descriptor itself is non-inheritable in this
+    process and is admitted only to each direct, process-creation-denied child.
+    """
+
+    _IN_MODIFY = 0x00000002
+    _IN_ATTRIB = 0x00000004
+    _IN_CLOSE_WRITE = 0x00000008
+    _IN_MOVED_FROM = 0x00000040
+    _IN_MOVED_TO = 0x00000080
+    _IN_CREATE = 0x00000100
+    _IN_DELETE = 0x00000200
+    _IN_DELETE_SELF = 0x00000400
+    _IN_MOVE_SELF = 0x00000800
+    _IN_Q_OVERFLOW = 0x00004000
+    _EVENT = struct.Struct("iIII")
+
+    def __init__(self, binary: Path, *, cwd: Path):
+        if platform.system() != "Linux" or not Path("/proc/self/fd").is_dir():
+            raise OSError(errno.ENOTSUP, "authenticated descriptor execution requires Linux procfs")
+        binary = Path(binary)
+        if not binary.is_absolute() or binary.name in {"", ".", ".."}:
+            raise ValueError("authenticated binary path must be absolute and lexical")
+        if binary.parent.resolve(strict=True) != binary.parent:
+            raise ValueError("authenticated binary parent path must not traverse links")
+        self.path = binary
+        self.parent_path = binary.parent
+        self._fd = -1
+        self._parent_fd = -1
+        self._inotify_fd = -1
+        self._closed = False
+        self._finalized = False
+        self._compromised = False
+        self._next_command = 0
+        self.command_observations: list[dict[str, Any]] = []
+        try:
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            self._parent_fd = os.open(self.parent_path, directory_flags)
+            self._parent_identity = _stable_directory_identity(os.fstat(self._parent_fd))
+            self._inotify_fd = self._open_monitor()
+            file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            self._fd = os.open(binary.name, file_flags, dir_fd=self._parent_fd)
+            os.set_inheritable(self._fd, False)
+            self._descriptor_identity = _stable_file_identity(os.fstat(self._fd))
+            if not stat.S_ISREG(self._descriptor_identity["mode"]):
+                raise ValueError("evidence binary is not a regular file")
+            self._binary_watch = self._add_watch(
+                f"/proc/self/fd/{self._fd}",
+                self._IN_MODIFY | self._IN_ATTRIB | self._IN_CLOSE_WRITE
+                | self._IN_DELETE_SELF | self._IN_MOVE_SELF,
+            )
+            self._body = self._read_authenticated_body()
+            if (
+                len(self._body) != RELEASED_AGENTPLUGINS_0_1_14_SIZE
+                or hashlib.sha256(self._body).hexdigest() != RELEASED_AGENTPLUGINS_0_1_14_SHA256
+            ):
+                raise ValueError("evidence binary is not the authenticated public agentplugins 0.1.14 asset")
+            self.pre_authentication = self._observe("pre_version_authentication")
+            self.version = self._run_descriptor(["version"], cwd=cwd, write_authority=None)
+            self.post_authentication = self._observe("post_version_authentication")
+            if self.version.returncode != 0 or self.version.stdout.rstrip("\n") != "agentplugins 0.1.14":
+                raise ValueError("evidence binary is not exact released agentplugins 0.1.14")
+        except BaseException:
+            self._close_descriptors()
+            raise
+
+    def _open_monitor(self) -> int:
+        initialize = getattr(_LIBC, "inotify_init1", None)
+        add = getattr(_LIBC, "inotify_add_watch", None)
+        if initialize is None or add is None:
+            raise OSError(errno.ENOSYS, "inotify is required for binary epoch authentication")
+        descriptor = initialize(os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+        if descriptor < 0:
+            raise OSError(ctypes.get_errno(), "could not initialize binary epoch monitor")
+        self._inotify_fd = descriptor
+        self._parent_watch = self._add_watch(
+            f"/proc/self/fd/{self._parent_fd}",
+            self._IN_ATTRIB | self._IN_MOVED_FROM | self._IN_MOVED_TO | self._IN_CREATE
+            | self._IN_DELETE | self._IN_DELETE_SELF | self._IN_MOVE_SELF,
+        )
+        return descriptor
+
+    def _add_watch(self, path: str, mask: int) -> int:
+        watch = _LIBC.inotify_add_watch(self._inotify_fd, os.fsencode(path), mask)
+        if watch < 0:
+            raise OSError(ctypes.get_errno(), "could not monitor authenticated binary identity")
+        return int(watch)
+
+    def _read_authenticated_body(self) -> bytes:
+        size = os.fstat(self._fd).st_size
+        chunks: list[bytes] = []
+        offset = 0
+        while offset < size:
+            chunk = os.pread(self._fd, min(1 << 20, size - offset), offset)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            offset += len(chunk)
+        body = b"".join(chunks)
+        if len(body) != size:
+            raise ValueError("authenticated binary became unreadable")
+        return body
+
+    def _drain_events(self) -> None:
+        while True:
+            try:
+                raw = os.read(self._inotify_fd, 1 << 16)
+            except BlockingIOError:
+                break
+            if not raw:
+                self._compromised = True
+                break
+            offset = 0
+            while offset < len(raw):
+                if len(raw) - offset < self._EVENT.size:
+                    self._compromised = True
+                    break
+                watch, mask, _cookie, name_length = self._EVENT.unpack_from(raw, offset)
+                offset += self._EVENT.size
+                if offset + name_length > len(raw):
+                    self._compromised = True
+                    break
+                name = raw[offset:offset + name_length].split(b"\0", 1)[0]
+                offset += name_length
+                if (
+                    mask & self._IN_Q_OVERFLOW
+                    or watch == self._binary_watch
+                    or watch == self._parent_watch and (not name or name == os.fsencode(self.path.name))
+                ):
+                    self._compromised = True
+            if self._compromised:
+                break
+        if self._compromised:
+            raise ValueError("authenticated binary identity epoch changed")
+
+    def _observe(self, stage: str) -> dict[str, Any]:
+        if self._closed or self._fd < 0 or self._parent_fd < 0 or self._inotify_fd < 0:
+            raise ValueError("authenticated binary session closed early")
+        self._drain_events()
+        try:
+            descriptor = _stable_file_identity(os.fstat(self._fd))
+            parent_descriptor = _stable_directory_identity(os.fstat(self._parent_fd))
+            path = _stable_file_identity(os.stat(self.path.name, dir_fd=self._parent_fd, follow_symlinks=False))
+            parent_path = _stable_directory_identity(os.stat(self.parent_path, follow_symlinks=False))
+            body = self._read_authenticated_body()
+        except OSError as error:
+            self._compromised = True
+            raise ValueError("authenticated binary path or descriptor disappeared") from error
+        self._drain_events()
+        if (
+            descriptor != self._descriptor_identity or path != self._descriptor_identity
+            or parent_descriptor != self._parent_identity or parent_path != self._parent_identity
+            or body != self._body
+        ):
+            self._compromised = True
+            raise ValueError("authenticated binary descriptor or path identity changed")
+        return {
+            "stage": stage, "path": str(self.path),
+            "descriptor_identity": copy.deepcopy(descriptor),
+            "path_identity": copy.deepcopy(path),
+            "parent_identity": copy.deepcopy(parent_descriptor),
+            "sha256": "sha256:" + hashlib.sha256(body).hexdigest(), "size": len(body),
+        }
+
+    def _run_descriptor(
+        self, argv: list[str], *, cwd: Path, write_authority: tuple[int, ...] | None,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        if write_authority is not None:
+            manager_root = Path(os.environ["AGENTPLUGINS_HOME"])
+            environment["TMPDIR"] = str((manager_root if manager_root.exists() else cwd).resolve(strict=True))
+        inherited = (self._fd, *(write_authority or ()))
+        return subprocess.run(
+            [f"/proc/self/fd/{self._fd}", *argv], cwd=cwd, env=environment, text=True,
+            capture_output=True, check=False, timeout=180, pass_fds=inherited,
+            preexec_fn=(lambda: _install_path_authority_guard(write_authority))
+            if write_authority is not None else _install_path_authority_seccomp,
+        )
+
+    def execute(
+        self, binary: Path, argv: list[str], *, cwd: Path,
+        write_authority: tuple[int, ...] | None,
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+        if Path(binary) != self.path:
+            raise ValueError("authenticated binary session used with the wrong path")
+        if self._finalized or self._next_command >= len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
+            raise ValueError("authenticated binary session cannot be reused")
+        if tuple(argv) != EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[self._next_command]:
+            raise ValueError("authenticated binary session received an incomplete or out-of-order command set")
+        pre = self._observe(f"command_{self._next_command + 1}_pre")
+        try:
+            completed = self._run_descriptor(argv, cwd=cwd, write_authority=write_authority)
+        except BaseException:
+            self._compromised = True
+            self._close_descriptors()
+            raise
+        finally:
+            for descriptor in write_authority or ():
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        try:
+            post = self._observe(f"command_{self._next_command + 1}_post")
+        except BaseException:
+            self._compromised = True
+            self._close_descriptors()
+            raise
+        binding = {
+            "mechanism": "linux-procfs-inherited-authenticated-fd",
+            "authenticated_fd_direct_child_only": True,
+            "descriptor_inheritable_in_observer": os.get_inheritable(self._fd),
+            "pre": pre, "post": post,
+        }
+        self.command_observations.append(copy.deepcopy(binding))
+        self._next_command += 1
+        return completed, binding
+
+    def finalize(self) -> dict[str, Any]:
+        if self._finalized or self._closed:
+            raise ValueError("authenticated binary session cannot be reused")
+        if self._next_command != len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
+            raise ValueError("authenticated binary session has an incomplete command set")
+        final = self._observe("final_barrier")
+        self._finalized = True
+        result = {
+            "mechanism": "linux-procfs-inherited-authenticated-fd",
+            "path": str(self.path), "parent_path": str(self.parent_path),
+            "pre_authentication": copy.deepcopy(self.pre_authentication),
+            "post_authentication": copy.deepcopy(self.post_authentication),
+            "version_argv": [f"/proc/self/fd/{self._fd}", "version"],
+            "version_exit": self.version.returncode,
+            "version_stdout": self.version.stdout.rstrip("\n"),
+            "version_stderr_digest": "sha256:" + hashlib.sha256(self.version.stderr.encode()).hexdigest(),
+            "commands": copy.deepcopy(self.command_observations), "final_barrier": final,
+        }
+        self._close_descriptors()
+        return result
+
+    def abort(self) -> None:
+        self._close_descriptors()
+
+    def _close_descriptors(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for descriptor in (self._fd, self._parent_fd, self._inotify_fd):
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+
 class TestExecutionSession:
     """A test result populated only by executing and parsing one exact command."""
 
@@ -2386,6 +2686,7 @@ def _authenticated_public_binary(
 def bound_lifecycle_evidence(
     binary: Path, command_traces: list[dict[str, Any]], proof: dict[str, Any],
     *, session: LifecycleEvidenceSession, test_execution: TestExecutionSession,
+    binary_execution: dict[str, Any],
 ) -> dict[str, Any]:
     """Produce a credential-free, independently replayable lifecycle record."""
     repository = Path(__file__).resolve().parents[1]
@@ -2417,19 +2718,45 @@ def bound_lifecycle_evidence(
         raise ValueError("every lifecycle command must deny descendant process creation")
     if [trace.get("write_guarded") for trace in command_traces] != [False, True, True, True, True, True, True]:
         raise ValueError("lifecycle command write guards do not match the exact authority plan")
-    expected_argv = [
-        ["add", "./package-plugin-data", "--target", "cursor", "--format", "json"],
-        ["info", "e2e-external-package", "--target", "cursor", "--format", "json"],
-        ["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
-        ["repair", "e2e-external-package", "--target", "cursor", "--format", "json"],
-        ["switch", "e2e-external-package", "--to", "./package-plugin-data-alternate", "--format", "json"],
-        ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"],
-        ["remove", "e2e-external-package", "--purge-data", "--format", "json"],
-    ]
+    expected_argv = [list(argv) for argv in EXACT_PLUGIN_DATA_LIFECYCLE_ARGV]
     if [trace["argv"] for trace in command_traces] != expected_argv:
         raise ValueError("lifecycle evidence command argv is not the exact seven-command plan")
     if any(trace["exit_code"] != 0 for trace in command_traces):
         raise ValueError("successful lifecycle evidence cannot contain a failed command")
+    if not (
+        isinstance(binary_execution, dict)
+        and binary_execution.get("mechanism") == "linux-procfs-inherited-authenticated-fd"
+        and binary_execution.get("path") == str(binary)
+        and binary_execution.get("version_exit") == 0
+        and binary_execution.get("version_stdout") == "agentplugins 0.1.14"
+        and isinstance(binary_execution.get("commands"), list)
+        and len(binary_execution["commands"]) == 7
+        and all(
+            trace.get("binary_execution") == binding
+            for trace, binding in zip(command_traces, binary_execution["commands"], strict=True)
+        )
+        and isinstance(binary_execution.get("final_barrier"), dict)
+    ):
+        raise ValueError("successful lifecycle evidence requires one finalized authenticated binary session")
+    authentication_observations = [
+        binary_execution.get("pre_authentication"), binary_execution.get("post_authentication"),
+        *(item[phase] for item in binary_execution["commands"] for phase in ("pre", "post")),
+        binary_execution["final_barrier"],
+    ]
+    expected_digest = "sha256:" + RELEASED_AGENTPLUGINS_0_1_14_SHA256
+    if not all(isinstance(observation, dict) for observation in authentication_observations):
+        raise ValueError("authenticated binary observations do not bind one exact identity")
+    first_authentication = authentication_observations[0]
+    if any(
+        observation.get("path") != str(binary)
+        or observation.get("sha256") != expected_digest
+        or observation.get("size") != RELEASED_AGENTPLUGINS_0_1_14_SIZE
+        or observation.get("descriptor_identity") != observation.get("path_identity")
+        or observation.get("parent_identity") != first_authentication.get("parent_identity")
+        or observation.get("descriptor_identity") != first_authentication.get("descriptor_identity")
+        for observation in authentication_observations
+    ):
+        raise ValueError("authenticated binary observations do not bind one exact identity")
     required_proofs = {
         "info_preserved", "update_changed_package_digest", "update_preserved",
         "update_preserved_data_receipt", "repair_preserved", "switch_preserved",
@@ -2450,7 +2777,6 @@ def bound_lifecycle_evidence(
     source_hash_after = lifecycle_source_hash()
     if session._source_hash_before != source_hash_after:
         raise ValueError("owned lifecycle sources changed during evidence production")
-    binary_body, _, version = _authenticated_public_binary(binary, cwd=repository)
     script_body = Path(__file__).read_bytes()
     return {
         "schema_version": 1,
@@ -2461,17 +2787,19 @@ def bound_lifecycle_evidence(
         },
         "observer": {"sha256": "sha256:" + hashlib.sha256(script_body).hexdigest(), "size": len(script_body)},
         "binary": {
-            "sha256": "sha256:" + hashlib.sha256(binary_body).hexdigest(), "size": len(binary_body),
-            "version_argv": [str(binary), "version"], "version_exit": version.returncode,
-            "version_stdout": version.stdout.rstrip("\n"),
-            "version_stderr_digest": "sha256:" + hashlib.sha256(version.stderr.encode()).hexdigest(),
+            "sha256": expected_digest, "size": RELEASED_AGENTPLUGINS_0_1_14_SIZE,
+            "version_argv": copy.deepcopy(binary_execution["version_argv"]),
+            "version_exit": binary_execution["version_exit"],
+            "version_stdout": binary_execution["version_stdout"],
+            "version_stderr_digest": binary_execution["version_stderr_digest"],
+            "execution_session": copy.deepcopy(binary_execution),
         },
         "host": {
             "uid": os.getuid(), "gid": os.getgid(), "platform": platform.system(),
             "architecture": platform.machine(), "landlock_abi": _landlock_abi(),
         },
         "commands": [
-            {**copy.deepcopy(trace), "exec_argv": [str(binary), *trace["argv"]]}
+            {**copy.deepcopy(trace), "exec_argv": [binary_execution["version_argv"][0], *trace["argv"]]}
             for trace in command_traces
         ],
         "proof": copy.deepcopy(proof),
@@ -4846,7 +5174,10 @@ def plugin_data_update_proof(
     return changed_package, preserved_receipt
 
 
-def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def plugin_data_scenario(
+    binary: Path, root: Path, challenge: str,
+    *, binary_session: AuthenticatedBinaryExecutionSession | None = None,
+) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     package = root / "package-plugin-data"
@@ -4876,7 +5207,7 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     ) -> subprocess.CompletedProcess[str]:
         completed, trace = traced(
             binary, argv, root, challenge, write_authority=write_authority,
-            deny_process_creation=True,
+            deny_process_creation=True, binary_session=binary_session,
         )
         traces.append(trace)
         return completed
@@ -5068,7 +5399,10 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
 def run_bound_plugin_data_evidence(binary: Path, root: Path, challenge: str) -> dict[str, Any]:
     """Run tests and the lifecycle in fresh, credential-free disposable roots."""
     repository = Path(__file__).resolve().parents[1]
-    binary = binary.resolve(strict=True)
+    binary = Path(binary)
+    if not binary.is_absolute():
+        binary = Path.cwd() / binary
+    binary = binary.parent.resolve(strict=True) / binary.name
     if root.exists() or not root.name or root.name in {".", ".."}:
         raise ValueError("bound lifecycle evidence requires a fresh disposable root")
     parent = root.parent.resolve(strict=True)
@@ -5093,29 +5427,32 @@ def run_bound_plugin_data_evidence(binary: Path, root: Path, challenge: str) -> 
         key: inherited[key] for key in ("PATH", "LANG", "LC_ALL", "TZ") if key in inherited
     }
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    binary_session: AuthenticatedBinaryExecutionSession | None = None
     try:
         os.environ.clear()
         os.environ.update({
             **environment, "HOME": str(test_home),
             "AGENTPLUGINS_HOME": str(test_manager), "TMPDIR": str(test_tmp),
         })
-        binary_body, binary_identity, _ = _authenticated_public_binary(binary, cwd=repository)
         test_execution = TestExecutionSession.run_phase6(cwd=repository)
         os.environ.update({
             "HOME": str(lifecycle_home), "AGENTPLUGINS_HOME": str(lifecycle_manager),
             "TMPDIR": str(lifecycle_tmp),
         })
-        passed, lifecycle = plugin_data_scenario(binary, workspace, challenge)
+        binary_session = AuthenticatedBinaryExecutionSession(binary, cwd=repository)
+        passed, lifecycle = plugin_data_scenario(
+            binary, workspace, challenge, binary_session=binary_session,
+        )
         if not passed:
             raise ValueError("exact public seven-command lifecycle did not pass")
-        final_body, final_identity, _ = _authenticated_public_binary(binary, cwd=repository)
-        if final_identity != binary_identity or final_body != binary_body:
-            raise ValueError("public binary changed during bound lifecycle evidence")
+        binary_execution = binary_session.finalize()
         return bound_lifecycle_evidence(
             binary, lifecycle["command_traces"], lifecycle["proof"],
-            session=session, test_execution=test_execution,
+            session=session, test_execution=test_execution, binary_execution=binary_execution,
         )
     finally:
+        if binary_session is not None:
+            binary_session.abort()
         os.environ.clear()
         os.environ.update(inherited)
 
