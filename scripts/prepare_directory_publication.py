@@ -65,6 +65,12 @@ MAX_PLUGIN_TREE_BYTES = 64 << 20
 MAX_EVIDENCE_BYTES = 4 << 20
 
 
+def repository_override(overrides: dict[str, Path], repository: str) -> Path | None:
+    """Resolve GitHub repository identities without case-sensitive bypasses."""
+    identity = repository.casefold()
+    return next((path for name, path in overrides.items() if name.casefold() == identity), None)
+
+
 def load_config(path: Path) -> dict[str, Any]:
     value = read_json(path, max_bytes=64 << 10)
     require(
@@ -115,10 +121,11 @@ def load_config(path: Path) -> dict[str, Any]:
 def validate_local_evidence_anchor(
     config: dict[str, Any], repository_root: Path, evidence: list[dict[str, Any]],
 ) -> None:
+    local_repository = config["repository"].casefold()
     artifacts = [
         item["artifact"] for item in evidence
-        if item["trust"]["kind"] == "reviewed_external"
-        and item["artifact"]["repository"] == config["repository"]
+        if item.get("trust", {}).get("kind") == "reviewed_external"
+        and item["artifact"]["repository"].casefold() == local_repository
     ]
     if not artifacts:
         return
@@ -459,7 +466,9 @@ def verified_evidence(
 ) -> dict[str, Any]:
     require("trust" in pointer, f"{pointer['id']}: evidence has no trusted workflow or external-attestation path")
     artifact = pointer["artifact"]
-    temporary, body = acquire_evidence_bytes(artifact, overrides.get(artifact["repository"]))
+    temporary, body = acquire_evidence_bytes(
+        artifact, repository_override(overrides, artifact["repository"]),
+    )
     chained: list[tempfile.TemporaryDirectory[str]] = []
     try:
         require("sha256:" + hashlib.sha256(body).hexdigest() == artifact["digest"], f"{pointer['id']}: evidence artifact digest mismatch")
@@ -480,7 +489,7 @@ def verified_evidence(
                 ("observer_artifact", "observer"), ("evidence_index", "index"),
             ):
                 chained_temporary, chained_body = acquire_evidence_bytes(
-                    trust[name], overrides.get(trust[name]["repository"]),
+                    trust[name], repository_override(overrides, trust[name]["repository"]),
                 )
                 chained.append(chained_temporary)
                 require(
@@ -904,10 +913,15 @@ def build_candidate(
         candidate_source, previous, repository_root, config["repository"], overrides,
     )
     evidence_overrides = dict(overrides)
-    evidence_overrides.setdefault(config["repository"], repository_root)
-    validate_local_evidence_anchor(config, repository_root, candidate_source["evidence"])
+    if repository_override(evidence_overrides, config["repository"]) is None:
+        evidence_overrides[config["repository"]] = repository_root
     evidence = selected_evidence(
         candidate_source, set(distributions_by_id), config, evidence_overrides,
+    )
+    selected_ids = {item["id"] for item in evidence}
+    validate_local_evidence_anchor(
+        config, repository_root,
+        [item for item in candidate_source["evidence"] if item["id"] in selected_ids],
     )
     validate_upstream_default_evidence(products, output_distributions, evidence)
     revocations = [
@@ -933,7 +947,10 @@ def parse_overrides(values: list[str]) -> dict[str, Path]:
     for value in values:
         repository, separator, raw_path = value.partition("=")
         require(bool(separator and repository and raw_path), "--external-repository must be REPOSITORY=LOCAL_GIT_REPOSITORY")
-        require(repository not in result, f"duplicate external repository override {repository}")
+        require(
+            repository_override(result, repository) is None,
+            f"duplicate external repository override {repository}",
+        )
         result[repository] = Path(raw_path).resolve()
     return result
 

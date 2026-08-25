@@ -234,6 +234,23 @@ class PublicationLifecycleTests(unittest.TestCase):
         without_anchor.pop("local_evidence_main_anchor")
         with self.assertRaisesRegex(publication.PublicationError, "requires a durable main anchor"):
             prepare.validate_local_evidence_anchor(without_anchor, ROOT, directory["evidence"])
+        mixed_case = copy.deepcopy(directory["evidence"])
+        for item in mixed_case:
+            if item.get("trust", {}).get("kind") == "reviewed_external":
+                item["artifact"]["repository"] = config["repository"].upper()
+        with self.assertRaisesRegex(publication.PublicationError, "requires a durable main anchor"):
+            prepare.validate_local_evidence_anchor(without_anchor, ROOT, mixed_case)
+        prepare.validate_local_evidence_anchor(
+            without_anchor,
+            ROOT,
+            [{"id": "unused", "artifact": {"repository": config["repository"]}}],
+        )
+        self.assertEqual(
+            prepare.repository_override({config["repository"].upper(): ROOT}, config["repository"]),
+            ROOT,
+        )
+        with self.assertRaisesRegex(publication.PublicationError, "duplicate external repository override"):
+            prepare.parse_overrides([f"{config['repository']}={ROOT}", f"{config['repository'].upper()}={ROOT}"])
         missing_anchor = copy.deepcopy(config)
         missing_anchor["local_evidence_main_anchor"] = "0" * 40
         with self.assertRaisesRegex(
@@ -850,6 +867,17 @@ class PublicationLifecycleTests(unittest.TestCase):
                 evidenced["distributions"][0]["releases"][0]["package_source"]["revision"],
                 evidenced["evidence"][0]["source_revision"],
             )
+
+            unused = copy.deepcopy(source["evidence"][0])
+            unused["id"] = "unused-local-evidence"
+            unused.pop("trust")
+            source["evidence"].append(unused)
+            with mock.patch.object(prepare, "verified_evidence", return_value=evidence):
+                unaffected = prepare.build_candidate(
+                    source, config, source_commit, "prepare-unused-evidence", None,
+                    repository_root=Path(tmp),
+                )
+            self.assertEqual(unaffected["evidence"], [evidence])
 
             source["evidence"] = []
             source["distributions"][0]["release_policies"][0]["current_evidence"] = []
