@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 07f66cf022d4a980b1e68711b1d78feaec102063546a604ea811f94316fbf4dc
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 5443ad8519eb8903fab36536c5f27052f210d6f3ea344a2761f5cbcaa96a854d
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256 EGRESS_ALLOWLIST EGRESS_ALLOWLIST_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=ea69fe68105649a795660861d97b43e2b75b80b068cd3c8deb68a18ccc6a874d
+runtime_manifest_digest=8a155804cccd882a344a0434e4f7e6bd36b717a5e120d1a29c201cf7d5db1d0b
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -51,8 +51,8 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" "$untrusted_egress_allowlist" \
-    84047e65bd98291eec5cb18777e51d209e5b1767808ab42529a4af7bed8754bb \
-    9486a0e40b7052ebc1f839d6ec67563b336059d8e6a277f9fab8289003a6ee94 \
+    8a791b21d3c13cbb858e8a043a3fefe0c593dba0d6c0522fe5e9df1aa55a815a \
+    a3710e41c8b0482df46d394243d1124f79371ba00e21abf2ce62ef3b927691ed \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state "$installed_closure"
   observer_validate_protected_inputs "$installed_closure"
@@ -113,8 +113,8 @@ caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
 egress_proxy_source="$source_root/deploy/uap-observer-egress-proxy.py"
-runner_digest=84047e65bd98291eec5cb18777e51d209e5b1767808ab42529a4af7bed8754bb
-adapter_digest=9486a0e40b7052ebc1f839d6ec67563b336059d8e6a277f9fab8289003a6ee94
+runner_digest=8a791b21d3c13cbb858e8a043a3fefe0c593dba0d6c0522fe5e9df1aa55a815a
+adapter_digest=a3710e41c8b0482df46d394243d1124f79371ba00e21abf2ce62ef3b927691ed
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
 test -f "$runner_source"

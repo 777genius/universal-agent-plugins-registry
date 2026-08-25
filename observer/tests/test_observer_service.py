@@ -889,6 +889,7 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         for name in (
             "uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
             "uap-observer-runner.socket", "uap-observer-caddy.service",
+            "uap-observer-egress-proxy.service", "uap-observer-egress-proxy.socket",
         ):
             (systemd / name).write_text("installed\n")
         for name in ("uap-observer.service.d", "uap-observer-runner.service.d"):
@@ -967,7 +968,8 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         reviewed_systemd = staged / "systemd"
         reviewed_systemd.mkdir()
         for unit in ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
-                     "uap-observer-runner.socket", "uap-observer-caddy.service"):
+                     "uap-observer-runner.socket", "uap-observer-caddy.service",
+                     "uap-observer-egress-proxy.service", "uap-observer-egress-proxy.socket"):
             (reviewed_systemd / unit).write_text(f"reviewed {unit}\n")
         for service in ("uap-observer", "uap-observer-runner"):
             dropin = reviewed_systemd / f"{service}.service.d"
@@ -1190,6 +1192,32 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         self.assertIn('observer_validate_installed_accounts_and_state', installer[:staging])
         self.assertIn('observer_validate_protected_inputs', installer[:staging])
 
+    def test_proxy_runtime_sources_are_closed_and_installed_at_service_paths(self) -> None:
+        repository = Path(__file__).parents[2]
+        manifest_paths = {
+            line.split("  ", 1)[1]
+            for line in (repository / "deploy/uap-observer-runtime.sha256").read_text().splitlines()
+        }
+        proxy_sources = {
+            "deploy/uap-observer-egress-proxy.py",
+            "deploy/uap-observer-egress-proxy.service",
+            "deploy/uap-observer-egress-proxy.socket",
+        }
+        self.assertLessEqual(proxy_sources, manifest_paths)
+        installer = (repository / "deploy/uap-observer-install.sh").read_text()
+        self.assertIn(
+            'mv /usr/local/libexec/uap-observer-egress-proxy.new "$closure_stage/libexec/uap-observer-egress-proxy"',
+            installer,
+        )
+        service = (repository / "deploy/uap-observer-egress-proxy.service").read_text()
+        self.assertIn(
+            "ExecStart=/usr/bin/python3 -B /opt/uap-observer-current/libexec/uap-observer-egress-proxy "
+            "--config /opt/uap-observer-current/etc/uap-observer-egress-allowlist.json --socket-fd 3",
+            service,
+        )
+        socket = (repository / "deploy/uap-observer-egress-proxy.socket").read_text()
+        self.assertIn("ListenStream=127.0.0.2:8766", socket)
+
     def test_production_pins_match_exact_bytes_and_fixture_reaches_beyond_both_checks(self) -> None:
         repository = Path(__file__).parents[2]
         manifest = repository / "deploy/uap-observer-runtime.sha256"
@@ -1230,13 +1258,14 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             fixture_installer = fixture_installer.replace(needle, needle + f"printf reached > '{marker}'\nexit 93\n", 1)
             installer = root / "uap-observer-install.sh"; installer.write_text(fixture_installer); installer.chmod(0o755)
             inputs = []
-            for name in ("adapter.json", "observer.json", "Caddyfile"):
+            for name in ("adapter.json", "observer.json", "Caddyfile", "egress-allowlist.json"):
                 path = root / name; path.write_text("{}\n"); inputs.append(path)
             digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]
             (root / "opt").mkdir(); (root / "etc/systemd/system").mkdir(parents=True)
             result = subprocess.run(
                 [str(installer), str(repository), str(inputs[0]), f"sha256:{digests[0]}",
-                 str(inputs[1]), f"sha256:{digests[1]}", str(archive), str(inputs[2]), f"sha256:{digests[2]}"],
+                 str(inputs[1]), f"sha256:{digests[1]}", str(archive), str(inputs[2]), f"sha256:{digests[2]}",
+                 str(inputs[3]), f"sha256:{digests[3]}"],
                 env={**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
                 text=True, capture_output=True,
             )
@@ -1471,7 +1500,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             manifest = source / "deploy/uap-observer-runtime.sha256"
             manifest.write_text(f"{runtime_digest}  runtime.txt\n")
             inputs = []
-            for name in ("adapter.json", "observer.json", "caddy.tar.gz", "Caddyfile"):
+            for name in ("adapter.json", "observer.json", "caddy.tar.gz", "Caddyfile", "egress-allowlist.json"):
                 path = root / name
                 path.write_text(name + "\n")
                 inputs.append(path)
@@ -1479,7 +1508,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]
             args = [str(source), manifest_digest, str(inputs[0]), f"sha256:{digests[0]}",
                     str(inputs[1]), f"sha256:{digests[1]}", str(inputs[2]), digests[2],
-                    str(inputs[3]), f"sha256:{digests[3]}"]
+                    str(inputs[3]), f"sha256:{digests[3]}", str(inputs[4]), f"sha256:{digests[4]}"]
             def run_identity() -> subprocess.CompletedProcess[str]:
                 command = ["/bin/sh", "-c", 'set -eu; . "$1"; shift; observer_install_input_identity "$@"',
                            "sh", str(helper), *args]
@@ -1492,12 +1521,14 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             for name, mutate in (
                 ("runtime content", lambda: runtime.write_text("drift\n")),
                 ("adapter content", lambda: inputs[0].write_text("drift\n")),
+                ("egress content", lambda: inputs[4].write_text("drift\n")),
                 ("checksum argument", lambda: args.__setitem__(3, "sha256:" + "0" * 64)),
                 ("symlink input", lambda: (inputs[3].unlink(), inputs[3].symlink_to(inputs[1]))),
             ):
                 with self.subTest(name=name):
                     runtime.write_text("runtime\n")
                     inputs[0].write_text("adapter.json\n")
+                    inputs[4].write_text("egress-allowlist.json\n")
                     if inputs[3].is_symlink():
                         inputs[3].unlink()
                         inputs[3].write_text("Caddyfile\n")
@@ -1519,7 +1550,9 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             fixed.chmod(0o700)
             for name in ("runtime", "notion", "chatgpt", "consent"):
                 os.link(fixed, closure / f"libexec/uap-observer-adapter-{name}")
-            for name in ("uap-observer.json", "uap-observer-adapter-config.json", "uap-observer-adapters.json", "Caddyfile"):
+            proxy = closure / "libexec/uap-observer-egress-proxy"
+            proxy.write_text("#!/bin/sh\nexit 1\n")
+            for name in ("uap-observer.json", "uap-observer-adapter-config.json", "uap-observer-adapters.json", "Caddyfile", "uap-observer-egress-allowlist.json"):
                 (closure / "etc" / name).write_text("{}")
             helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
             subprocess.run(["/bin/sh", "-c", '. "$1"; apply_observer_closure_modes "$2" "$3" "$3"', "sh", str(helper), str(closure), str(os.getgid())], check=True)
@@ -1549,7 +1582,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             if capability.returncode != 0 and "mount" in capability.stderr.lower():
                 self.skipTest("private read-only no-atime bind remount is denied by the provider sandbox")
             self.assertEqual(capability.returncode, 0, capability.stderr)
-        units = ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service", "uap-observer-runner.socket", "uap-observer-caddy.service")
+        units = ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service", "uap-observer-runner.socket", "uap-observer-caddy.service", "uap-observer-egress-proxy.service", "uap-observer-egress-proxy.socket")
         def xattrs(path: Path) -> tuple[tuple[bytes, bytes], ...]:
             names = os.listxattr(path, follow_symlinks=False)
             return tuple(sorted(
@@ -1774,6 +1807,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             units = (
                 "uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
                 "uap-observer-runner.socket", "uap-observer-caddy.service",
+                "uap-observer-egress-proxy.service", "uap-observer-egress-proxy.socket",
             )
             for unit in units:
                 (staged / unit).write_text(f"reviewed {unit}\n")
@@ -1798,6 +1832,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
         units = (
             "uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
             "uap-observer-runner.socket", "uap-observer-caddy.service",
+            "uap-observer-egress-proxy.service", "uap-observer-egress-proxy.socket",
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); systemd = root / "systemd"; staged = root / "staged"; backup = root / "backup"
