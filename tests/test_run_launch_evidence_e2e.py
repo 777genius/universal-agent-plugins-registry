@@ -279,7 +279,14 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                     )
                     self.assertEqual(completed.returncode, 0)
                     traces[index]["binary_execution"] = binding
+                execution_descriptors = (
+                    execution_session._fd, execution_session._parent_fd,
+                    execution_session._inotify_fd,
+                )
                 binary_execution = execution_session.finalize()
+                for descriptor in execution_descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
                 with self.assertRaisesRegex(ValueError, "cannot be reused"):
                     execution_session.execute(
                         binary.resolve(), commands[0], cwd=ROOT, write_authority=None,
@@ -296,10 +303,10 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         self.assertEqual(record["source_hash_before"], record["source_hash_after"])
         self.assertEqual(len(record["commands"]), 7)
         self.assertEqual(record["binary"]["version_stdout"], "agentplugins 0.1.14")
-        self.assertEqual(record["binary"]["version_argv"][1], "version")
-        self.assertTrue(record["binary"]["version_argv"][0].startswith("/proc/self/fd/"))
+        self.assertEqual(record["binary"]["version_argv"], ["<authenticated-binary-fd>", "version"])
         self.assertEqual(record["binary"]["version_exit"], 0)
-        self.assertEqual(record["binary"]["execution_session"]["mechanism"], "linux-procfs-inherited-authenticated-fd")
+        self.assertEqual(record["binary"]["execution_session"]["mechanism"], "linux-fd-execve-authenticated-descriptor")
+        self.assertNotIn("/proc/self/fd", json.dumps(record))
         self.assertEqual(record["tests"]["skips"], 0)
         self.assertEqual(record["host"]["uid"], os.getuid())
         self.assertEqual(record["host"]["gid"], os.getgid())
@@ -436,14 +443,32 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 incomplete = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                descriptors = (incomplete._fd, incomplete._parent_fd, incomplete._inotify_fd)
                 with self.assertRaisesRegex(ValueError, "incomplete command set"):
                     incomplete.finalize()
-                incomplete.abort()
-                with self.assertRaisesRegex(ValueError, "closed early"):
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+                with self.assertRaisesRegex(ValueError, "cannot be reused"):
                     incomplete.execute(
                         binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
                         cwd=root, write_authority=None,
                     )
+
+                observation_failure = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                observation_descriptors = (
+                    observation_failure._fd, observation_failure._parent_fd,
+                    observation_failure._inotify_fd,
+                )
+                observation_failure._next_command = len(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV)
+                with (
+                    mock.patch.object(observation_failure, "_observe", side_effect=ValueError("final observation failed")),
+                    self.assertRaisesRegex(ValueError, "final observation failed"),
+                ):
+                    observation_failure.finalize()
+                for descriptor in observation_descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
 
     def test_authenticated_binary_session_rejects_links_wrong_bytes_version_and_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -478,7 +503,242 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                         root / "different", list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
                         cwd=root, write_authority=None,
                     )
+                self.assertTrue(session._closed)
+
+    def test_authenticated_binary_execution_uses_only_an_integer_fd_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / "agentplugins"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+            binary.write_bytes(body); binary.chmod(0o700)
+            marker = root / "exec-authority"
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                real_execve = os.execve
+
+                def audited_execve(authority, argv, environment):
+                    marker.write_text(f"{type(authority).__name__}:{authority}\n")
+                    return real_execve(authority, argv, environment)
+
+                # A fabricated pathname bearing the old predictable spelling
+                # exists, but descriptor execution never consults it.
+                fabricated = root / "proc" / "self" / "fd"
+                fabricated.mkdir(parents=True)
+                (fabricated / str(session._fd)).write_text("malicious pathname")
+                with mock.patch.object(observer.os, "execve", side_effect=audited_execve):
+                    completed, binding = session.execute(
+                        binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                        cwd=root, write_authority=None,
+                    )
+                self.assertEqual(completed.returncode, 0)
+                self.assertRegex(marker.read_text(), r"^int:[0-9]+\n$")
+                self.assertEqual(binding["mechanism"], "linux-fd-execve-authenticated-descriptor")
+                self.assertFalse(binding["descriptor_inheritable_in_observer"])
+                source = Path(observer.__file__).read_text()
+                session_source = source[source.index("class AuthenticatedBinaryExecutionSession"):source.index("class TestExecutionSession")]
+                self.assertNotIn("/proc/self/fd", session_source)
                 session.abort()
+
+    def test_authenticated_binary_fd_exec_unavailable_fails_enotsup_without_path_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / "agentplugins"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+            binary.write_bytes(body); binary.chmod(0o700)
+            with mock.patch.object(observer.os, "supports_fd", set()):
+                with self.assertRaises(OSError) as unavailable:
+                    observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+            self.assertEqual(unavailable.exception.errno, errno.ENOTSUP)
+
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                with mock.patch.object(observer.os, "execve", side_effect=OSError(errno.ENOSYS, "missing")):
+                    with self.assertRaises(OSError) as runtime_unavailable:
+                        session.execute(
+                            binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                            cwd=root, write_authority=None,
+                        )
+                self.assertEqual(runtime_unavailable.exception.errno, errno.ENOTSUP)
+                self.assertTrue(session._closed)
+                self.assertIsNone(session._child_pid)
+
+    def test_authenticated_binary_modify_restore_and_replacement_epochs_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / "agentplugins"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+            binary.write_bytes(body); binary.chmod(0o700)
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                modified = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                binary.write_bytes(body + b"# changed\n"); binary.write_bytes(body); binary.chmod(0o700)
+                with self.assertRaisesRegex(ValueError, "identity epoch changed"):
+                    modified.execute(
+                        binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                        cwd=root, write_authority=None,
+                    )
+                self.assertTrue(modified._closed)
+
+                replaced = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                saved = root / "saved-agentplugins"
+                replacement = root / "replacement"
+                replacement.write_bytes(body); replacement.chmod(0o700)
+                binary.rename(saved); replacement.rename(binary)
+                with self.assertRaisesRegex(ValueError, "identity epoch changed|identity changed"):
+                    replaced.execute(
+                        binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                        cwd=root, write_authority=None,
+                    )
+                self.assertTrue(replaced._closed)
+
+                binary.unlink(); saved.rename(binary)
+                symlink_swap = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                saved_again = root / "saved-again"
+                binary.rename(saved_again); binary.symlink_to(saved_again.name)
+                with self.assertRaisesRegex(ValueError, "identity epoch changed|disappeared|identity changed"):
+                    symlink_swap.execute(
+                        binary.absolute(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                        cwd=root, write_authority=None,
+                    )
+                self.assertTrue(symlink_swap._closed)
+
+    def test_authenticated_binary_all_execute_failures_close_authority_and_session(self) -> None:
+        def make_session(root: Path) -> tuple[observer.AuthenticatedBinaryExecutionSession, Path, bytes]:
+            binary = root / "agentplugins"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+            binary.write_bytes(body); binary.chmod(0o700)
+            return observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root), binary, body
+
+        def authority(root: Path) -> int:
+            return os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+
+        def assert_closed(session, supplied: int) -> None:
+            self.assertTrue(session._closed)
+            self.assertIsNone(session._child_pid)
+            for descriptor in (supplied, session._fd, session._parent_fd, session._inotify_fd):
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                for name, operation, pattern in (
+                    ("wrong-path", lambda s, b, fd: s.execute(base / "other", list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]), cwd=base, write_authority=(fd,)), "wrong path"),
+                    ("out-of-order", lambda s, b, fd: s.execute(b, list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[1]), cwd=base, write_authority=(fd,)), "out-of-order"),
+                ):
+                    root = base / name; root.mkdir()
+                    session, binary, _ = make_session(root); supplied = authority(root)
+                    with self.assertRaisesRegex(ValueError, pattern):
+                        operation(session, binary.resolve(), supplied)
+                    assert_closed(session, supplied)
+
+                root = base / "pre"; root.mkdir()
+                session, binary, _ = make_session(root); supplied = authority(root)
+                with mock.patch.object(session, "_observe", side_effect=ValueError("pre observation failed")):
+                    with self.assertRaisesRegex(ValueError, "pre observation failed"):
+                        session.execute(binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]), cwd=root, write_authority=(supplied,))
+                assert_closed(session, supplied)
+
+                root = base / "execution"; root.mkdir()
+                session, binary, _ = make_session(root); supplied = authority(root)
+                with mock.patch.object(session, "_run_descriptor", side_effect=OSError(errno.EIO, "execution failed")):
+                    with self.assertRaisesRegex(OSError, "execution failed"):
+                        session.execute(binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]), cwd=root, write_authority=(supplied,))
+                assert_closed(session, supplied)
+
+                root = base / "post"; root.mkdir()
+                session, binary, _ = make_session(root); supplied = authority(root)
+                real_observe = session._observe
+                observations = 0
+
+                def fail_post(stage):
+                    nonlocal observations
+                    observations += 1
+                    if observations == 2:
+                        raise ValueError("post observation failed")
+                    return real_observe(stage)
+
+                with (
+                    mock.patch.dict(os.environ, {"AGENTPLUGINS_HOME": str(root)}),
+                    mock.patch.object(session, "_observe", side_effect=fail_post),
+                    self.assertRaisesRegex(ValueError, "post observation failed"),
+                ):
+                    session.execute(binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]), cwd=root, write_authority=(supplied,))
+                assert_closed(session, supplied)
+
+    def test_authenticated_binary_timeout_reaps_child_and_closes_every_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / "agentplugins"
+            body = (
+                "#!/usr/bin/python3\n"
+                "import sys, time\n"
+                "print('agentplugins 0.1.14') if sys.argv[1:] == ['version'] else time.sleep(60)\n"
+            ).encode()
+            binary.write_bytes(body); binary.chmod(0o700)
+            supplied = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                descriptors = (session._fd, session._parent_fd, session._inotify_fd)
+                with (
+                    mock.patch.dict(os.environ, {"AGENTPLUGINS_HOME": str(root)}),
+                    mock.patch.object(session, "_EXECUTION_TIMEOUT_SECONDS", 0.05),
+                    self.assertRaises(subprocess.TimeoutExpired),
+                ):
+                    session.execute(binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]), cwd=root, write_authority=(supplied,))
+                child = session._last_child_pid
+                self.assertIsNotNone(child)
+                self.assertIsNone(session._child_pid)
+                with self.assertRaises(ChildProcessError):
+                    os.waitpid(child, os.WNOHANG)
+                for descriptor in (supplied, *descriptors):
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_authenticated_binary_fd_exec_preserves_output_status_cwd_and_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); cwd = root / "cwd"; cwd.mkdir()
+            binary = root / "agentplugins"
+            body = (
+                "#!/usr/bin/python3\n"
+                "import os, sys\n"
+                "if sys.argv[1:] == ['version']:\n"
+                " print('agentplugins 0.1.14')\n"
+                "else:\n"
+                " os.write(1, (os.getcwd() + '\\n' + os.environ['PHASE6_FD_ENV'] + '\\n').encode() + b'o' * 200000)\n"
+                " os.write(2, b'e' * 200000)\n"
+                " raise SystemExit(23)\n"
+            ).encode()
+            binary.write_bytes(body); binary.chmod(0o700)
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.dict(os.environ, {"PHASE6_FD_ENV": "exact-environment"}),
+            ):
+                session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                completed, _binding = session.execute(
+                    binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                    cwd=cwd, write_authority=None,
+                )
+                self.assertEqual(completed.returncode, 23)
+                self.assertEqual(completed.stdout, f"{cwd}\nexact-environment\n" + "o" * 200000)
+                self.assertEqual(completed.stderr, "e" * 200000)
+                self.assertIsNone(session._child_pid)
+                self.assertTrue(session._closed)
+                child = session._last_child_pid
+                with self.assertRaises(ChildProcessError):
+                    os.waitpid(child, os.WNOHANG)
 
     def test_challenge_binds_github_release_directory_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e.secrets, "token_hex", return_value="ab" * 32):

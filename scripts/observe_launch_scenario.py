@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import re
+import selectors
 import shutil
 import stat
 import struct
@@ -2355,7 +2356,8 @@ class AuthenticatedBinaryExecutionSession:
     Linux inotify supplies the epoch property that stat/hash observations alone
     cannot: even a modify/restore or rename/out-and-back attempt invalidates the
     session.  The executable descriptor itself is non-inheritable in this
-    process and is admitted only to each direct, process-creation-denied child.
+    process.  A forked direct child uses it only as the authority argument to
+    ``execve``; no pathname participates in executable selection.
     """
 
     _IN_MODIFY = 0x00000002
@@ -2369,10 +2371,11 @@ class AuthenticatedBinaryExecutionSession:
     _IN_MOVE_SELF = 0x00000800
     _IN_Q_OVERFLOW = 0x00004000
     _EVENT = struct.Struct("iIII")
+    _EXECUTION_TIMEOUT_SECONDS = 180
 
     def __init__(self, binary: Path, *, cwd: Path):
-        if platform.system() != "Linux" or not Path("/proc/self/fd").is_dir():
-            raise OSError(errno.ENOTSUP, "authenticated descriptor execution requires Linux procfs")
+        if platform.system() != "Linux" or os.execve not in os.supports_fd:
+            raise OSError(errno.ENOTSUP, "authenticated descriptor execution is unavailable")
         binary = Path(binary)
         if not binary.is_absolute() or binary.name in {"", ".", ".."}:
             raise ValueError("authenticated binary path must be absolute and lexical")
@@ -2387,12 +2390,19 @@ class AuthenticatedBinaryExecutionSession:
         self._finalized = False
         self._compromised = False
         self._next_command = 0
+        self._child_pid: int | None = None
+        self._last_child_pid: int | None = None
         self.command_observations: list[dict[str, Any]] = []
         try:
+            self._inotify_fd = self._open_monitor()
+            self._parent_watch = self._add_watch(
+                str(self.parent_path),
+                self._IN_ATTRIB | self._IN_MOVED_FROM | self._IN_MOVED_TO | self._IN_CREATE
+                | self._IN_DELETE | self._IN_DELETE_SELF | self._IN_MOVE_SELF,
+            )
             directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
             self._parent_fd = os.open(self.parent_path, directory_flags)
             self._parent_identity = _stable_directory_identity(os.fstat(self._parent_fd))
-            self._inotify_fd = self._open_monitor()
             file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
             self._fd = os.open(binary.name, file_flags, dir_fd=self._parent_fd)
             os.set_inheritable(self._fd, False)
@@ -2400,7 +2410,7 @@ class AuthenticatedBinaryExecutionSession:
             if not stat.S_ISREG(self._descriptor_identity["mode"]):
                 raise ValueError("evidence binary is not a regular file")
             self._binary_watch = self._add_watch(
-                f"/proc/self/fd/{self._fd}",
+                str(self.path),
                 self._IN_MODIFY | self._IN_ATTRIB | self._IN_CLOSE_WRITE
                 | self._IN_DELETE_SELF | self._IN_MOVE_SELF,
             )
@@ -2427,13 +2437,7 @@ class AuthenticatedBinaryExecutionSession:
         descriptor = initialize(os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
         if descriptor < 0:
             raise OSError(ctypes.get_errno(), "could not initialize binary epoch monitor")
-        self._inotify_fd = descriptor
-        self._parent_watch = self._add_watch(
-            f"/proc/self/fd/{self._parent_fd}",
-            self._IN_ATTRIB | self._IN_MOVED_FROM | self._IN_MOVED_TO | self._IN_CREATE
-            | self._IN_DELETE | self._IN_DELETE_SELF | self._IN_MOVE_SELF,
-        )
-        return descriptor
+        return int(descriptor)
 
     def _add_watch(self, path: str, mask: int) -> int:
         watch = _LIBC.inotify_add_watch(self._inotify_fd, os.fsencode(path), mask)
@@ -2524,27 +2528,187 @@ class AuthenticatedBinaryExecutionSession:
         if write_authority is not None:
             manager_root = Path(os.environ["AGENTPLUGINS_HOME"])
             environment["TMPDIR"] = str((manager_root if manager_root.exists() else cwd).resolve(strict=True))
-        inherited = (self._fd, *(write_authority or ()))
-        return subprocess.run(
-            [f"/proc/self/fd/{self._fd}", *argv], cwd=cwd, env=environment, text=True,
-            capture_output=True, check=False, timeout=180, pass_fds=inherited,
-            preexec_fn=(lambda: _install_path_authority_guard(write_authority))
-            if write_authority is not None else _install_path_authority_seccomp,
-        )
+        if set(write_authority or ()) & {self._fd, self._parent_fd, self._inotify_fd}:
+            raise ValueError("write authority aliases an authenticated session descriptor")
+        display_argv = ["<authenticated-binary-fd>", *argv]
+        pipes: list[tuple[int, int]] = []
+        try:
+            for _index in range(3):
+                pipes.append(os.pipe2(getattr(os, "O_CLOEXEC", 0)))
+        except BaseException:
+            for pair in pipes:
+                for descriptor in pair:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            raise
+        stdout_r, stdout_w = pipes[0]
+        stderr_r, stderr_w = pipes[1]
+        error_r, error_w = pipes[2]
+        pid: int | None = None
+        try:
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    for descriptor in (stdout_r, stderr_r, error_r):
+                        os.close(descriptor)
+                    os.dup2(stdout_w, 1)
+                    os.dup2(stderr_w, 2)
+                    os.close(stdout_w)
+                    os.close(stderr_w)
+                    os.chdir(cwd)
+                    if write_authority is not None:
+                        _install_path_authority_guard(write_authority)
+                    else:
+                        _install_path_authority_seccomp()
+                    exec_fd = self._fd
+                    if not self._body.startswith(b"\x7fELF"):
+                        # A child-local inheritable duplicate is required for
+                        # descriptor execution of an interpreter script:
+                        # Linux must keep it while resolving the shebang.  The
+                        # observer's descriptor remains CLOEXEC throughout.
+                        exec_fd = os.dup(self._fd)
+                        os.set_inheritable(exec_fd, True)
+                    try:
+                        os.execve(exec_fd, display_argv, environment)
+                    except OSError as error:
+                        if error.errno == errno.ENOSYS:
+                            raise OSError(errno.ENOTSUP, "descriptor execution is unavailable") from error
+                        raise
+                except BaseException as error:
+                    code = (
+                        errno.ENOTSUP if isinstance(error, (NotImplementedError, TypeError))
+                        else error.errno if isinstance(error, OSError) and error.errno
+                        else errno.EIO
+                    )
+                    message = f"{code}\0{type(error).__name__}: {error}".encode(errors="backslashreplace")
+                    try:
+                        os.write(error_w, message[:4096])
+                    except OSError:
+                        pass
+                finally:
+                    os._exit(127)
+            self._child_pid = pid
+            self._last_child_pid = pid
+            for descriptor in (stdout_w, stderr_w, error_w):
+                os.close(descriptor)
+            stdout_w = stderr_w = error_w = -1
+            # The forked child has its own copies.  The observer relinquishes
+            # every supplied write-authority descriptor before the guard is
+            # installed and long before the authenticated image runs.
+            for descriptor in set(write_authority or ()):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            return self._capture_direct_child(
+                pid, display_argv, stdout_r=stdout_r, stderr_r=stderr_r, error_r=error_r,
+            )
+        except BaseException:
+            if pid not in (None, 0):
+                self._terminate_child(pid)
+            raise
+        finally:
+            for descriptor in (stdout_r, stdout_w, stderr_r, stderr_w, error_r, error_w):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+    def _capture_direct_child(
+        self, pid: int, argv: list[str], *, stdout_r: int, stderr_r: int, error_r: int,
+    ) -> subprocess.CompletedProcess[str]:
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        error_buffer = bytearray()
+        buffers = {stdout_r: stdout_buffer, stderr_r: stderr_buffer, error_r: error_buffer}
+        active = set(buffers)
+        selector = selectors.DefaultSelector()
+        status: int | None = None
+        deadline = time.monotonic() + self._EXECUTION_TIMEOUT_SECONDS
+        try:
+            for descriptor in active:
+                os.set_blocking(descriptor, False)
+                selector.register(descriptor, selectors.EVENT_READ)
+            while active or status is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._terminate_child(pid)
+                    status = None
+                    raise subprocess.TimeoutExpired(
+                        argv, self._EXECUTION_TIMEOUT_SECONDS,
+                        output=bytes(stdout_buffer).decode(errors="strict"),
+                        stderr=bytes(stderr_buffer).decode(errors="strict"),
+                    )
+                for key, _events in selector.select(min(remaining, 0.05)):
+                    descriptor = key.fd
+                    try:
+                        chunk = os.read(descriptor, 1 << 16)
+                    except BlockingIOError:
+                        continue
+                    if chunk:
+                        buffers[descriptor].extend(chunk)
+                    else:
+                        selector.unregister(descriptor)
+                        os.close(descriptor)
+                        active.remove(descriptor)
+                if status is None:
+                    waited, child_status = os.waitpid(pid, os.WNOHANG)
+                    if waited == pid:
+                        status = child_status
+                        self._child_pid = None
+        finally:
+            selector.close()
+
+        stdout_text = bytes(stdout_buffer).decode(errors="strict")
+        stderr_text = bytes(stderr_buffer).decode(errors="strict")
+        if error_buffer:
+            encoded_code, _, encoded_message = bytes(error_buffer).partition(b"\0")
+            try:
+                code = int(encoded_code)
+            except ValueError:
+                code = errno.EIO
+            raise OSError(code, encoded_message.decode(errors="replace"))
+        if status is None:
+            raise OSError(errno.ECHILD, "authenticated descriptor child was not reaped")
+        returncode = os.waitstatus_to_exitcode(status)
+        return subprocess.CompletedProcess(argv, returncode, stdout_text, stderr_text)
+
+    def _terminate_child(self, pid: int) -> None:
+        if self._child_pid != pid:
+            return
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+        while True:
+            try:
+                waited, _status = os.waitpid(pid, 0)
+                if waited == pid:
+                    break
+            except InterruptedError:
+                continue
+            except ChildProcessError:
+                break
+        if self._child_pid == pid:
+            self._child_pid = None
 
     def execute(
         self, binary: Path, argv: list[str], *, cwd: Path,
         write_authority: tuple[int, ...] | None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-        if Path(binary) != self.path:
-            raise ValueError("authenticated binary session used with the wrong path")
-        if self._finalized or self._next_command >= len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
-            raise ValueError("authenticated binary session cannot be reused")
-        if tuple(argv) != EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[self._next_command]:
-            raise ValueError("authenticated binary session received an incomplete or out-of-order command set")
-        pre = self._observe(f"command_{self._next_command + 1}_pre")
         try:
+            if Path(binary) != self.path:
+                raise ValueError("authenticated binary session used with the wrong path")
+            if self._finalized or self._closed or self._next_command >= len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
+                raise ValueError("authenticated binary session cannot be reused")
+            if tuple(argv) != EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[self._next_command]:
+                raise ValueError("authenticated binary session received an incomplete or out-of-order command set")
+            pre = self._observe(f"command_{self._next_command + 1}_pre")
             completed = self._run_descriptor(argv, cwd=cwd, write_authority=write_authority)
+            post = self._observe(f"command_{self._next_command + 1}_post")
         except BaseException:
             self._compromised = True
             self._close_descriptors()
@@ -2555,42 +2719,40 @@ class AuthenticatedBinaryExecutionSession:
                     os.close(descriptor)
                 except OSError:
                     pass
-        try:
-            post = self._observe(f"command_{self._next_command + 1}_post")
-        except BaseException:
-            self._compromised = True
-            self._close_descriptors()
-            raise
         binding = {
-            "mechanism": "linux-procfs-inherited-authenticated-fd",
+            "mechanism": "linux-fd-execve-authenticated-descriptor",
             "authenticated_fd_direct_child_only": True,
             "descriptor_inheritable_in_observer": os.get_inheritable(self._fd),
             "pre": pre, "post": post,
         }
         self.command_observations.append(copy.deepcopy(binding))
         self._next_command += 1
+        if completed.returncode != 0:
+            self._compromised = True
+            self._close_descriptors()
         return completed, binding
 
     def finalize(self) -> dict[str, Any]:
-        if self._finalized or self._closed:
-            raise ValueError("authenticated binary session cannot be reused")
-        if self._next_command != len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
-            raise ValueError("authenticated binary session has an incomplete command set")
-        final = self._observe("final_barrier")
-        self._finalized = True
-        result = {
-            "mechanism": "linux-procfs-inherited-authenticated-fd",
-            "path": str(self.path), "parent_path": str(self.parent_path),
-            "pre_authentication": copy.deepcopy(self.pre_authentication),
-            "post_authentication": copy.deepcopy(self.post_authentication),
-            "version_argv": [f"/proc/self/fd/{self._fd}", "version"],
-            "version_exit": self.version.returncode,
-            "version_stdout": self.version.stdout.rstrip("\n"),
-            "version_stderr_digest": "sha256:" + hashlib.sha256(self.version.stderr.encode()).hexdigest(),
-            "commands": copy.deepcopy(self.command_observations), "final_barrier": final,
-        }
-        self._close_descriptors()
-        return result
+        try:
+            if self._finalized or self._closed:
+                raise ValueError("authenticated binary session cannot be reused")
+            if self._next_command != len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
+                raise ValueError("authenticated binary session has an incomplete command set")
+            final = self._observe("final_barrier")
+            self._finalized = True
+            return {
+                "mechanism": "linux-fd-execve-authenticated-descriptor",
+                "path": str(self.path), "parent_path": str(self.parent_path),
+                "pre_authentication": copy.deepcopy(self.pre_authentication),
+                "post_authentication": copy.deepcopy(self.post_authentication),
+                "version_argv": ["<authenticated-binary-fd>", "version"],
+                "version_exit": self.version.returncode,
+                "version_stdout": self.version.stdout.rstrip("\n"),
+                "version_stderr_digest": "sha256:" + hashlib.sha256(self.version.stderr.encode()).hexdigest(),
+                "commands": copy.deepcopy(self.command_observations), "final_barrier": final,
+            }
+        finally:
+            self._close_descriptors()
 
     def abort(self) -> None:
         self._close_descriptors()
@@ -2599,6 +2761,8 @@ class AuthenticatedBinaryExecutionSession:
         if self._closed:
             return
         self._closed = True
+        if self._child_pid is not None:
+            self._terminate_child(self._child_pid)
         for descriptor in (self._fd, self._parent_fd, self._inotify_fd):
             if descriptor >= 0:
                 try:
@@ -2638,49 +2802,6 @@ class TestExecutionSession:
         value.stdout_digest = "sha256:" + hashlib.sha256(completed.stdout.encode()).hexdigest()
         value.stderr_digest = "sha256:" + hashlib.sha256(completed.stderr.encode()).hexdigest()
         return value
-
-
-def _authenticated_public_binary(
-    binary: Path, *, cwd: Path,
-) -> tuple[bytes, tuple[int, int, int, int, int, int, int, int, int], subprocess.CompletedProcess[str]]:
-    """Authenticate stable release bytes and one path identity before use."""
-    descriptor = os.open(binary, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError("evidence binary is not a regular file")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1 << 20)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    stable = lambda value: (
-        value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
-        value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns,
-    )
-    identity = stable(before)
-    body = b"".join(chunks)
-    rebound = os.stat(binary, follow_symlinks=False)
-    if stable(after) != identity or stable(rebound) != identity:
-        raise ValueError("evidence binary changed while it was authenticated")
-    if (
-        len(body) != RELEASED_AGENTPLUGINS_0_1_14_SIZE
-        or hashlib.sha256(body).hexdigest() != RELEASED_AGENTPLUGINS_0_1_14_SHA256
-    ):
-        raise ValueError("evidence binary is not the authenticated public agentplugins 0.1.14 asset")
-    version = subprocess.run(
-        [str(binary), "version"], cwd=cwd, text=True, capture_output=True,
-        check=False, timeout=30,
-    )
-    if version.returncode != 0 or version.stdout.rstrip("\n") != "agentplugins 0.1.14":
-        raise ValueError("evidence binary is not exact released agentplugins 0.1.14")
-    if stable(os.stat(binary, follow_symlinks=False)) != identity:
-        raise ValueError("evidence binary changed while its version was checked")
-    return body, identity, version
 
 
 def bound_lifecycle_evidence(
@@ -2725,14 +2846,18 @@ def bound_lifecycle_evidence(
         raise ValueError("successful lifecycle evidence cannot contain a failed command")
     if not (
         isinstance(binary_execution, dict)
-        and binary_execution.get("mechanism") == "linux-procfs-inherited-authenticated-fd"
+        and binary_execution.get("mechanism") == "linux-fd-execve-authenticated-descriptor"
         and binary_execution.get("path") == str(binary)
+        and binary_execution.get("version_argv") == ["<authenticated-binary-fd>", "version"]
         and binary_execution.get("version_exit") == 0
         and binary_execution.get("version_stdout") == "agentplugins 0.1.14"
         and isinstance(binary_execution.get("commands"), list)
         and len(binary_execution["commands"]) == 7
         and all(
             trace.get("binary_execution") == binding
+            and binding.get("mechanism") == "linux-fd-execve-authenticated-descriptor"
+            and binding.get("authenticated_fd_direct_child_only") is True
+            and binding.get("descriptor_inheritable_in_observer") is False
             for trace, binding in zip(command_traces, binary_execution["commands"], strict=True)
         )
         and isinstance(binary_execution.get("final_barrier"), dict)
@@ -2799,7 +2924,7 @@ def bound_lifecycle_evidence(
             "architecture": platform.machine(), "landlock_abi": _landlock_abi(),
         },
         "commands": [
-            {**copy.deepcopy(trace), "exec_argv": [binary_execution["version_argv"][0], *trace["argv"]]}
+            {**copy.deepcopy(trace), "exec_argv": ["<authenticated-binary-fd>", *trace["argv"]]}
             for trace in command_traces
         ],
         "proof": copy.deepcopy(proof),
@@ -4170,10 +4295,14 @@ class _LinuxAncestryLifetimeProof:
             raise OSError(errno.EPERM, "ancestry interest is immutable after initialization")
         self._roots.append((root_fd, _statx_mount_id(root_fd)))
 
-    def watch_parent(self, parent_fd: int, name: str | None, outcome: str | None = None, *, wildcard: bool = False) -> int:
+    def watch_parent(
+        self, parent_fd: int, parent_path: Path, name: str | None,
+        outcome: str | None = None, *, wildcard: bool = False,
+    ) -> int:
         if self._initialized:
             raise OSError(errno.EPERM, "ancestry interest is immutable after initialization")
-        path = os.fsencode(f"/proc/self/fd/{parent_fd}")
+        before = os.fstat(parent_fd)
+        path = os.fsencode(parent_path)
         requested = _INOTIFY_WATCH_MASK if name is not None or wildcard else _INOTIFY_SELF_MASK
         # IN_MASK_ADD also creates a new watch when none exists, and prevents a
         # final-leaf self-only watch from weakening another path's name watch.
@@ -4181,6 +4310,12 @@ class _LinuxAncestryLifetimeProof:
         if wd < 0:
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code))
+        rebound = os.stat(parent_path, follow_symlinks=False)
+        after = os.fstat(parent_fd)
+        if not stat.S_ISDIR(rebound.st_mode) or (
+            before.st_dev, before.st_ino, after.st_dev, after.st_ino
+        ) != (rebound.st_dev, rebound.st_ino, rebound.st_dev, rebound.st_ino):
+            raise OSError(errno.ESTALE, "lexical inotify parent changed while binding")
         interests = self._names.setdefault(wd, set())
         self._masks[wd] = self._masks.get(wd, 0) | requested
         if name is not None:
@@ -4192,11 +4327,11 @@ class _LinuxAncestryLifetimeProof:
                     raise OSError(errno.EINVAL, "one final name has conflicting outcomes")
         return wd
 
-    def watch_retained_tree(self, directory_fd: int) -> None:
+    def watch_retained_tree(self, directory_fd: int, directory_path: Path) -> None:
         """Install recursive immutable-tree interest before the command barrier."""
         if self._initialized:
             raise OSError(errno.EPERM, "tree interest is immutable after initialization")
-        wd = self.watch_parent(directory_fd, None, wildcard=True)
+        wd = self.watch_parent(directory_fd, directory_path, None, wildcard=True)
         self._tree_wds.add(wd)
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOATIME", 0)
         for name in sorted(os.listdir(directory_fd)):
@@ -4207,7 +4342,7 @@ class _LinuxAncestryLifetimeProof:
                     opened = os.fstat(child)
                     if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
                         raise OSError(errno.ESTALE, "retained directory changed while watching")
-                    self.watch_retained_tree(child)
+                    self.watch_retained_tree(child, directory_path / name)
                     rebound = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                     if (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino):
                         raise OSError(errno.ESTALE, "retained directory binding changed while watching")
@@ -4756,6 +4891,7 @@ def freeze_path_authority(
             root_metadata = os.fstat(root_fd)
             ancestry = [(root_fd, None, None, (root_metadata.st_dev, root_metadata.st_ino))]
             parent_fd = root_fd
+            parent_path = Path("/")
             parts = path.parts[1:]
             if not parts:
                 raise ValueError("filesystem root cannot be purge authority")
@@ -4770,7 +4906,8 @@ def freeze_path_authority(
                 outcome = intended.get(value)
                 if not final:
                     edge_wd = lifetime.watch_parent(
-                        parent_fd, name, "bind" if allow_ancestor_attrib else "retain",
+                        parent_fd, parent_path, name,
+                        "bind" if allow_ancestor_attrib else "retain",
                     )
                 else:
                     if outcome is None:
@@ -4781,7 +4918,7 @@ def freeze_path_authority(
                         intended[value] = outcome
                     if (outcome in {"retain", "delete", "replace"}) != (initial_metadata is not None):
                         raise ValueError("authority outcome disagrees with initial existence")
-                    final_wd = lifetime.watch_parent(parent_fd, name, outcome)
+                    final_wd = lifetime.watch_parent(parent_fd, parent_path, name, outcome)
                 try:
                     metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
@@ -4818,7 +4955,7 @@ def freeze_path_authority(
                         if not stat.S_ISDIR(opened.st_mode):
                             raise ValueError("retained data authority must be a directory tree")
                         retained_roots[value] = descriptor
-                        lifetime.watch_retained_tree(descriptor)
+                        lifetime.watch_retained_tree(descriptor, path)
                     elif outcome == "replace":
                         parent_interest = descriptor_interests.get(parent_fd)
                         if parent_interest is None:
@@ -4833,6 +4970,7 @@ def freeze_path_authority(
                     ancestry.append((descriptor, parent_fd, name, identity))
                     descriptor_interests[descriptor] = (edge_wd, os.fsencode(name))
                     parent_fd = descriptor
+                    parent_path = parent_path / name
             else:
                 if value not in records:
                     raise ValueError("authority path was not frozen")
