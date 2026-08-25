@@ -30,21 +30,114 @@ finally: os.close(parent)
 PY
 }
 
+# Compare regular files without changing either file's access time.  This is
+# used on the already-installed fast path, where validation must be a literal
+# metadata no-op rather than relying on cmp(1)'s ordinary read opens.
+observer_compare_regular_files_neutral() {
+  python3 - "$1" "$2" <<'PY'
+import os,stat,sys
+flags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+descriptors=[]
+try:
+    before=[]
+    for path in sys.argv[1:]:
+        info=os.stat(path,follow_symlinks=False)
+        if not stat.S_ISREG(info.st_mode): raise PermissionError("comparison target is not a regular file")
+        descriptor=os.open(path,flags); descriptors.append(descriptor)
+        if os.fstat(descriptor)!=info: raise PermissionError("comparison target changed while opening")
+        before.append(info)
+    while True:
+        left=os.read(descriptors[0],1<<20); right=os.read(descriptors[1],1<<20)
+        if left!=right: raise SystemExit(1)
+        if not left: break
+    if any(os.fstat(descriptor)!=info for descriptor,info in zip(descriptors,before)):
+        raise PermissionError("comparison target changed while reading")
+finally:
+    for descriptor in reversed(descriptors): os.close(descriptor)
+PY
+}
+
+observer_directory_inventory_neutral() {
+  python3 - "$1" "${2:-}" <<'PY'
+import os,stat,sys
+path=os.path.abspath(sys.argv[1]); prefix=sys.argv[2]
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+before=os.stat(path,follow_symlinks=False)
+if not stat.S_ISDIR(before.st_mode): raise PermissionError("inventory root is unsafe")
+root=os.open(path,flags)
+try:
+    if os.fstat(root)!=before: raise PermissionError("inventory root changed while opening")
+    for name in sorted(name for name in os.listdir(root) if name.startswith(prefix)):
+        os.write(1,os.fsencode(name)+b"\n")
+    if os.fstat(root)!=before: raise PermissionError("inventory root changed while reading")
+finally:
+    os.close(root)
+PY
+}
+
 observer_read_symlink_neutral() {
   python3 - "$1" <<'PY'
-import os,stat,sys
+import ctypes,os,signal,stat,sys,tempfile
 path=os.path.abspath(sys.argv[1]); parent_path=os.path.dirname(path); name=os.path.basename(path)
 flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+libc=ctypes.CDLL(None,use_errno=True)
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+libc.umount2.argtypes=(ctypes.c_char_p,ctypes.c_int)
+libc.readlinkat.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+CLONE_NEWNS=0x00020000; MS_RDONLY=1; MS_NOSUID=2; MS_NODEV=4; MS_NOEXEC=8
+MS_REMOUNT=32; MS_BIND=4096; MS_REC=16384; MS_PRIVATE=1<<18
+MS_NOATIME=1024; MS_NODIRATIME=2048; MNT_DETACH=2
+def call(result,label):
+    if result != 0:
+        error=ctypes.get_errno(); raise OSError(error,f"{label}: {os.strerror(error)}")
+if os.environ.get("UAP_OBSERVER_TEST_NOATIME_UNSUPPORTED")=="1": raise OSError("private no-atime view unavailable")
+call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
 parent_info=os.stat(parent_path,follow_symlinks=False); parent=os.open(parent_path,flags)
+def metadata(value):
+    return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),
+            value.st_uid,value.st_gid,value.st_nlink,value.st_atime_ns,value.st_mtime_ns,value.st_ctime_ns)
+def neutral_readlink(parentfd,name,before):
+    # O_PATH ignores O_NOATIME.  Pin the parent first, then expose that exact
+    # directory only through a private, read-only no-atime bind mount.
+    view=tempfile.mkdtemp(prefix="uap-observer-noatime-")
+    encoded=os.fsencode(view); mounted=False
+    try:
+        source=b"/proc/self/fd/"+str(parentfd).encode("ascii")
+        call(libc.mount(source,encoded,None,MS_BIND,None),"bind pinned symlink parent")
+        mounted=True
+        call(libc.mount(None,encoded,None,MS_REMOUNT|MS_BIND|MS_RDONLY|MS_NOATIME|MS_NODIRATIME,None),"remount pinned symlink parent noatime")
+        viewfd=os.open(view,flags)
+        try:
+            linkfd=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=viewfd)
+            try:
+                if metadata(os.fstat(linkfd))!=metadata(before): raise PermissionError("control symlink changed while pinning")
+                ready_fd=os.environ.get("UAP_OBSERVER_TEST_SYMLINK_PIN_READY_FD")
+                if ready_fd:
+                    os.write(int(ready_fd),b"1")
+                    os.kill(os.getpid(),signal.SIGSTOP)
+                size=max(256,before.st_size+1)
+                while True:
+                    buffer=ctypes.create_string_buffer(size)
+                    length=libc.readlinkat(linkfd,b"",buffer,size)
+                    if length < 0:
+                        error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+                    if length < size: break
+                    size*=2
+                if metadata(os.fstat(linkfd))!=metadata(before): raise PermissionError("control symlink changed while reading")
+                return os.fsdecode(buffer.raw[:length])
+            finally: os.close(linkfd)
+        finally: os.close(viewfd)
+    finally:
+        if mounted: call(libc.umount2(encoded,MNT_DETACH),"unmount noatime view")
+        os.rmdir(view)
 try:
     if os.fstat(parent)!=parent_info: raise PermissionError("symlink parent changed while opening")
     before=os.stat(name,dir_fd=parent,follow_symlinks=False)
     if not stat.S_ISLNK(before.st_mode): raise PermissionError("control symlink is unsafe")
-    value=os.readlink(name,dir_fd=parent)
-    os.utime(name,ns=(before.st_atime_ns,before.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
+    value=neutral_readlink(parent,name,before)
     after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-    fields=lambda value:(value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),value.st_uid,value.st_gid,value.st_atime_ns,value.st_mtime_ns,value.st_nlink)
-    if fields(after)!=fields(before): raise PermissionError("control symlink changed while reading")
+    if metadata(after)!=metadata(before): raise PermissionError("control symlink changed while reading")
     os.write(1,os.fsencode(value))
 finally: os.close(parent)
 PY
@@ -116,21 +209,100 @@ observer_validate_first_install_closures_root() {
 
 observer_closure_identity() {
   python3 - "$1" <<'PY'
-import hashlib,os,stat,sys
-from pathlib import Path
-root=Path(sys.argv[1])
+import ctypes,hashlib,os,stat,sys,tempfile
+root_path=os.path.abspath(sys.argv[1])
+dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+libc=ctypes.CDLL(None,use_errno=True)
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+libc.umount2.argtypes=(ctypes.c_char_p,ctypes.c_int)
+libc.readlinkat.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+CLONE_NEWNS=0x00020000; MS_RDONLY=1; MS_NOSUID=2; MS_NODEV=4; MS_NOEXEC=8
+MS_REMOUNT=32; MS_BIND=4096; MS_REC=16384; MS_PRIVATE=1<<18
+MS_NOATIME=1024; MS_NODIRATIME=2048; MNT_DETACH=2
+namespace_ready=False
+def call(result,label):
+    if result != 0:
+        error=ctypes.get_errno(); raise OSError(error,f"{label}: {os.strerror(error)}")
+call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+namespace_ready=True
+root_before=os.stat(root_path,follow_symlinks=False); root=os.open(root_path,dirflags)
+if os.fstat(root)!=root_before: raise PermissionError("closure root changed while opening")
+def metadata(value):
+    return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),
+            value.st_uid,value.st_gid,value.st_nlink,value.st_atime_ns,value.st_mtime_ns,value.st_ctime_ns)
+def neutral_readlink(parent,name,before):
+    global namespace_ready
+    if not namespace_ready:
+        call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+        call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+        namespace_ready=True
+    view=tempfile.mkdtemp(prefix="uap-observer-noatime-"); encoded=os.fsencode(view); mounted=False
+    try:
+        call(libc.mount(b"/proc/self/fd/"+str(parent).encode(),encoded,None,MS_BIND,None),"bind pinned closure directory"); mounted=True
+        call(libc.mount(None,encoded,None,MS_REMOUNT|MS_BIND|MS_RDONLY|MS_NOATIME|MS_NODIRATIME,None),"remount closure directory noatime")
+        viewfd=os.open(view,dirflags)
+        try:
+            linkfd=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=viewfd)
+            try:
+                if metadata(os.fstat(linkfd))!=metadata(before): raise PermissionError("closure symlink changed while pinning")
+                size=max(256,before.st_size+1)
+                while True:
+                    buffer=ctypes.create_string_buffer(size); length=libc.readlinkat(linkfd,b"",buffer,size)
+                    if length < 0:
+                        error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+                    if length < size: break
+                    size*=2
+                if metadata(os.fstat(linkfd))!=metadata(before): raise PermissionError("closure symlink changed while reading")
+                return buffer.raw[:length]
+            finally: os.close(linkfd)
+        finally: os.close(viewfd)
+    finally:
+        if mounted: call(libc.umount2(encoded,MNT_DETACH),"unmount closure noatime view")
+        os.rmdir(view)
+entries={}
+def walk(directory,prefix=""):
+    before=os.fstat(directory)
+    for name in sorted(os.listdir(directory)):
+        relative=name if not prefix else prefix+"/"+name
+        info=os.stat(name,dir_fd=directory,follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            child=os.open(name,dirflags,dir_fd=directory)
+            try:
+                if os.fstat(child)!=info: raise PermissionError("closure directory changed while opening")
+                entries[relative]=(info,b"d",None)
+                walk(child,relative)
+                if os.fstat(child)!=info: raise PermissionError("closure directory changed while traversing")
+            finally: os.close(child)
+        elif stat.S_ISREG(info.st_mode):
+            descriptor=os.open(name,fileflags,dir_fd=directory)
+            try:
+                if os.fstat(descriptor)!=info: raise PermissionError("closure file changed while opening")
+                digest=hashlib.sha256()
+                while True:
+                    block=os.read(descriptor,1<<20)
+                    if not block: break
+                    digest.update(block)
+                if os.fstat(descriptor)!=info: raise PermissionError("closure file changed while reading")
+                entries[relative]=(info,b"f",digest.digest())
+            finally: os.close(descriptor)
+        elif stat.S_ISLNK(info.st_mode):
+            target=neutral_readlink(directory,name,info)
+            if metadata(os.stat(name,dir_fd=directory,follow_symlinks=False))!=metadata(info): raise PermissionError("closure symlink changed while reading")
+            entries[relative]=(info,b"l",target)
+        else: entries[relative]=(info,b"?",None)
+    if os.fstat(directory)!=before: raise PermissionError("closure directory changed during traversal")
+walk(root)
 identity=hashlib.sha256()
-paths=sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
 regular={}
-for path in paths:
-    info=path.lstat()
-    if stat.S_ISREG(info.st_mode):
-        regular.setdefault((info.st_dev,info.st_ino),[]).append(path.relative_to(root).as_posix())
+for relative,(info,kind,payload) in entries.items():
+    if kind==b"f": regular.setdefault((info.st_dev,info.st_ino),[]).append(relative)
 adapter_paths={f"libexec/uap-observer-adapter-{name}" for name in ("runtime","notion","chatgpt","consent")}
 adapter_paths.add("libexec/uap-observer-fixed-adapter")
 for inode,members in regular.items():
     members.sort()
-    info=(root/members[0]).lstat()
+    info=entries[members[0]][0]
     actual=set(members)
     if actual == adapter_paths:
         if info.st_nlink != 5: raise SystemExit("adapter hardlink set has an external link")
@@ -138,17 +310,18 @@ for inode,members in regular.items():
         raise SystemExit("closure regular file has unexpected hardlink topology")
 groups=[set(members) for members in regular.values() if adapter_paths & set(members)]
 if groups != [adapter_paths]: raise SystemExit("adapter paths are not one exact hardlink set")
-for path in paths:
-    info=path.lstat(); relative=path.relative_to(root).as_posix().encode()
-    kind=b"d" if stat.S_ISDIR(info.st_mode) else b"f" if stat.S_ISREG(info.st_mode) else b"l" if stat.S_ISLNK(info.st_mode) else b"?"
+for name in sorted(entries):
+    info,kind,payload=entries[name]; relative=name.encode()
     identity.update(b"\0".join((relative,kind,str(stat.S_IMODE(info.st_mode)).encode(),str(info.st_uid).encode(),str(info.st_gid).encode()))+b"\0")
     if kind == b"f":
         # Canonical path equivalence classes bind topology without hashing raw,
         # filesystem-specific inode numbers.
         topology="=".join(regular[(info.st_dev,info.st_ino)]).encode()
-        identity.update(b"links\0"+topology+b"\0"+hashlib.sha256(path.read_bytes()).digest())
-    elif kind == b"l": identity.update(os.readlink(path).encode())
+        identity.update(b"links\0"+topology+b"\0"+payload)
+    elif kind == b"l": identity.update(payload)
     elif kind == b"?": raise SystemExit("closure contains a special file")
+if os.fstat(root)!=root_before: raise PermissionError("closure root changed during identity traversal")
+os.close(root)
 print(identity.hexdigest())
 PY
 }
@@ -225,7 +398,7 @@ observer_validate_completed_closure() {
   }
   test "$target" = "uap-observer-closures/$digest"
   closure="$closures_root/$digest"
-  test "$(find "$closures_root" -mindepth 1 -maxdepth 1 -printf '%f\n')" = "$digest"
+  test "$(observer_directory_inventory_neutral "$closures_root")" = "$digest"
   test -d "$closure"
   test ! -L "$closure"
   test "$(stat -c '%u:%g:%a' "$closure")" = "$expected_owner:755"
@@ -250,7 +423,7 @@ observer_validate_completed_closure() {
     test ! -L "$installed"
     test "$(stat -c '%h' "$installed")" = 1
     test "$(stat -c '%u:%g:%a' "$installed")" = "$expected_owner:644"
-    cmp "$reviewed" "$installed"
+    observer_compare_regular_files_neutral "$reviewed" "$installed"
   done
   for service in uap-observer uap-observer-runner; do
     installed="$systemd_root/$service.service.d"
@@ -258,15 +431,15 @@ observer_validate_completed_closure() {
     test -d "$installed"
     test ! -L "$installed"
     test "$(stat -c '%u:%g:%a' "$installed")" = "$expected_owner:755"
-    test "$(find "$installed" -mindepth 1 -maxdepth 1 -printf '%f\n')" = egress.conf
+    test "$(observer_directory_inventory_neutral "$installed")" = egress.conf
     test -f "$installed/egress.conf"
     test ! -L "$installed/egress.conf"
     test "$(stat -c '%h' "$installed/egress.conf")" = 1
     test "$(stat -c '%u:%g:%a' "$installed/egress.conf")" = "$expected_owner:644"
-    cmp "$reviewed" "$installed/egress.conf"
+    observer_compare_regular_files_neutral "$reviewed" "$installed/egress.conf"
   done
-  expected_observer_paths=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | sort)
-  actual_observer_paths=$(find "$systemd_root" -mindepth 1 -maxdepth 1 -name 'uap-observer*' -printf '%f\n' | sort)
+  expected_observer_paths=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | LC_ALL=C sort)
+  actual_observer_paths=$(observer_directory_inventory_neutral "$systemd_root" uap-observer)
   test "$actual_observer_paths" = "$expected_observer_paths"
 }
 
@@ -518,12 +691,27 @@ observer_systemd_archive() {
   backup=$2
   live=${3:-}
   python3 - "$operation" "$backup" "$live" <<'PY'
-import base64,hashlib,json,os,secrets,stat,sys
+import base64,ctypes,hashlib,json,os,secrets,stat,sys,tempfile
 
 operation,backup_path,live_path=sys.argv[1:]
 names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
 dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+libc=ctypes.CDLL(None,use_errno=True)
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+libc.umount2.argtypes=(ctypes.c_char_p,ctypes.c_int)
+libc.readlinkat.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+CLONE_NEWNS=0x00020000; MS_RDONLY=1; MS_NOSUID=2; MS_NODEV=4; MS_NOEXEC=8
+MS_REMOUNT=32; MS_BIND=4096; MS_REC=16384; MS_PRIVATE=1<<18; MS_NOATIME=1024; MS_NODIRATIME=2048; MNT_DETACH=2
+namespace_ready=False
+def call(result,label):
+    if result!=0:
+        error=ctypes.get_errno(); raise OSError(error,f"{label}: {os.strerror(error)}")
+call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+namespace_ready=True
+def exact_link_metadata(value):
+    return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),value.st_uid,value.st_gid,value.st_nlink,value.st_atime_ns,value.st_mtime_ns,value.st_ctime_ns)
 
 def open_directory(name,*,dir_fd=None):
     before=os.stat(name,dir_fd=dir_fd,follow_symlinks=False)
@@ -544,12 +732,34 @@ def set_xattrs(parent,name,info,values,descriptor=None):
         key=os.fsdecode(base64.b64decode(encoded)); data=base64.b64decode(value)
         os.setxattr(target,key,data,follow_symlinks=not stat.S_ISLNK(info.st_mode))
 def stable_link(parent,name,info):
-    target=os.readlink(name,dir_fd=parent)
-    os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
-    after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-    if metadata(after)!=metadata(info) or (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino):
-        raise PermissionError("systemd symlink changed while reading")
-    return target
+    global namespace_ready
+    if not namespace_ready:
+        call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+        call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+        namespace_ready=True
+    view=tempfile.mkdtemp(prefix="uap-observer-noatime-"); encoded=os.fsencode(view); mounted=False
+    try:
+        call(libc.mount(b"/proc/self/fd/"+str(parent).encode(),encoded,None,MS_BIND,None),"bind pinned systemd directory"); mounted=True
+        call(libc.mount(None,encoded,None,MS_REMOUNT|MS_BIND|MS_RDONLY|MS_NOATIME|MS_NODIRATIME,None),"remount systemd directory noatime")
+        viewfd=os.open(view,dirflags)
+        try:
+            linkfd=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=viewfd)
+            try:
+                if exact_link_metadata(os.fstat(linkfd))!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while pinning")
+                size=max(256,info.st_size+1)
+                while True:
+                    buffer=ctypes.create_string_buffer(size); length=libc.readlinkat(linkfd,b"",buffer,size)
+                    if length<0:
+                        error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+                    if length<size: break
+                    size*=2
+                if exact_link_metadata(os.fstat(linkfd))!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while reading")
+                return os.fsdecode(buffer.raw[:length]),os.dup(linkfd)
+            finally: os.close(linkfd)
+        finally: os.close(viewfd)
+    finally:
+        if mounted: call(libc.umount2(encoded,MNT_DETACH),"unmount systemd noatime view")
+        os.rmdir(view)
 def trusted(info,link=False):
     if info.st_uid!=0 or info.st_gid!=0 or (not link and info.st_mode&0o022): raise PermissionError("systemd target is not root-controlled")
 
@@ -584,10 +794,12 @@ def scan(parent,name,prefix,*,allow_link=True):
         if not allow_link: raise PermissionError("systemd drop-in contains a symlink")
         trusted(info,True)
         record=metadata(info); record["path"]=prefix
-        record["payload"]=stable_link(parent,name,info)
-        record["xattrs"]=xattrs(parent,name,info)
-        after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-        if metadata(after)!=metadata(info) or (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino): raise PermissionError("systemd symlink changed while reading")
+        record["payload"],pinned=stable_link(parent,name,info)
+        try:
+            record["xattrs"]=xattrs(parent,name,info)
+            after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            if exact_link_metadata(os.fstat(pinned))!=exact_link_metadata(info) or exact_link_metadata(after)!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while reading")
+        finally: os.close(pinned)
     else: raise PermissionError("systemd target has unsafe type")
     if stat.S_ISREG(mode) and info.st_nlink!=1: raise PermissionError("systemd regular target has unsafe link count")
     return [record]
@@ -620,9 +832,12 @@ def copy(parent,name,destination,dstname,prefix,allow_link=True):
         finally: os.close(target); os.close(source)
     elif stat.S_ISLNK(mode):
         if not allow_link: raise PermissionError("systemd drop-in contains a symlink")
-        trusted(info,True); target_text=stable_link(parent,name,info); attributes=xattrs(parent,name,info)
-        after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-        if metadata(after)!=metadata(info) or (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino): raise PermissionError("systemd symlink changed while snapshotting")
+        trusted(info,True); target_text,pinned=stable_link(parent,name,info)
+        try:
+            attributes=xattrs(parent,name,info)
+            after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            if exact_link_metadata(os.fstat(pinned))!=exact_link_metadata(info) or exact_link_metadata(after)!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while snapshotting")
+        finally: os.close(pinned)
         os.symlink(target_text,dstname,dir_fd=destination)
         os.chown(dstname,info.st_uid,info.st_gid,dir_fd=destination,follow_symlinks=False); set_xattrs(destination,dstname,info,attributes)
         os.utime(dstname,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=destination,follow_symlinks=False)
@@ -710,6 +925,9 @@ elif operation in ("validate","compare"):
         if operation=="compare":
             live,live_info=open_directory(live_path)
             try:
+                expected_inventory=set(identity["present"])
+                actual_inventory={name for name in os.listdir(live) if name.startswith("uap-observer")}
+                if actual_inventory!=expected_inventory: raise PermissionError("systemd observer inventory differs from journal")
                 current=[]
                 for name in names:
                     try: os.stat(name,dir_fd=live,follow_symlinks=False)
@@ -719,6 +937,8 @@ elif operation in ("validate","compare"):
                         if name not in identity["present"]: raise PermissionError("systemd target appeared after journaling")
                         current.extend(scan(live,name,name,allow_link=names.index(name)<5))
                 if current!=identity["records"]: raise PermissionError("systemd target drifted after journaling")
+                if {name for name in os.listdir(live) if name.startswith("uap-observer")}!=expected_inventory:
+                    raise PermissionError("systemd observer inventory changed while comparing journal")
                 if os.fstat(live)!=live_info: raise PermissionError("systemd root changed while comparing")
             finally: os.close(live)
         if os.fstat(backup)!=backup_info or os.fstat(items)!=item_info: raise PermissionError("journal directory changed while validating")
@@ -734,6 +954,23 @@ journal_observer_systemd() { observer_systemd_archive create "$1" "$2"; }
 validate_observer_systemd_journal() { observer_systemd_archive validate "$1"; }
 observer_compare_systemd_journal() { observer_systemd_archive compare "$1" "$2"; }
 
+observer_require_complete_systemd_inventory() {
+  root=$1
+  shift
+  python3 - "$root" "$@" <<'PY'
+import os,stat,sys
+path=sys.argv[1]; expected=set(sys.argv[2:])
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+before=os.stat(path,follow_symlinks=False); root=os.open(path,flags)
+try:
+    if os.fstat(root)!=before or not stat.S_ISDIR(before.st_mode): raise PermissionError("systemd root changed while binding inventory")
+    actual={name for name in os.listdir(root) if name.startswith("uap-observer")}
+    if actual!=expected: raise PermissionError("systemd observer inventory is not the exact expected set")
+    if os.fstat(root)!=before: raise PermissionError("systemd root changed while binding inventory")
+finally: os.close(root)
+PY
+}
+
 # Install one reviewed systemd entry without ever opening the destination.
 # The only names created are exclusive entries in the destination directory;
 # renameat2 protects the displaced name and rename atomically replaces any
@@ -742,16 +979,13 @@ observer_replace_systemd_entries() {
   systemd_root=$1
   shift
   python3 - "$systemd_root" "$@" <<'PY'
-import base64,ctypes,errno,hashlib,json,os,secrets,stat,sys
+import base64,ctypes,errno,hashlib,json,os,secrets,signal,stat,sys,tempfile
 from pathlib import Path
 
 root_path=sys.argv[1]
 pairs=sys.argv[2:]
 if not pairs or len(pairs) % 2: raise SystemExit("invalid systemd replacement arguments")
 flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
-root_lstat=os.stat(root_path,follow_symlinks=False)
-rootfd=os.open(root_path,flags)
-if os.fstat(rootfd)!=root_lstat: raise PermissionError("systemd root changed while opening")
 source_parents={}
 libc=ctypes.CDLL(None,use_errno=True)
 renameat2=getattr(libc,"renameat2",None)
@@ -759,6 +993,12 @@ if renameat2 is None:
     raise SystemExit("renameat2 is required for safe systemd replacement")
 renameat2.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint)
 renameat2.restype=ctypes.c_int
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+libc.umount2.argtypes=(ctypes.c_char_p,ctypes.c_int)
+libc.readlinkat.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+CLONE_NEWNS=0x00020000; MS_RDONLY=1; MS_NOSUID=2; MS_NODEV=4; MS_NOEXEC=8
+MS_REMOUNT=32; MS_BIND=4096; MS_REC=16384; MS_PRIVATE=1<<18; MS_NOATIME=1024; MS_NODIRATIME=2048; MNT_DETACH=2
+namespace_ready=False
 
 # Use descriptor xattr operations for files/directories.  Linux has no fd for
 # an unopened symlink, so its l*xattr operations use a stable /proc/self/fd
@@ -834,13 +1074,48 @@ def same_entry(first: os.stat_result, second: os.stat_result) -> bool:
 def exact_metadata(info: os.stat_result, copied: os.stat_result) -> bool:
     return (stat.S_IFMT(info.st_mode),stat.S_IMODE(info.st_mode),info.st_uid,info.st_gid,info.st_atime_ns,info.st_mtime_ns,info.st_nlink) == (stat.S_IFMT(copied.st_mode),stat.S_IMODE(copied.st_mode),copied.st_uid,copied.st_gid,copied.st_atime_ns,copied.st_mtime_ns,copied.st_nlink)
 
+def exact_link_metadata(value: os.stat_result):
+    return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),value.st_uid,value.st_gid,value.st_nlink,value.st_atime_ns,value.st_mtime_ns,value.st_ctime_ns)
+
+def mount_call(result,label):
+    if result!=0:
+        error=ctypes.get_errno(); raise OSError(error,f"{label}: {os.strerror(error)}")
+mount_call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+mount_call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+namespace_ready=True
+root_lstat=os.stat(root_path,follow_symlinks=False)
+rootfd=os.open(root_path,flags)
+if os.fstat(rootfd)!=root_lstat: raise PermissionError("systemd root changed while opening")
+
 def neutral_readlink(parentfd: int, name: str, info: os.stat_result) -> str:
-    value=os.readlink(name,dir_fd=parentfd)
-    os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parentfd,follow_symlinks=False)
-    after=os.stat(name,dir_fd=parentfd,follow_symlinks=False)
-    if not same_entry(info,after) or not exact_metadata(info,after):
-        raise PermissionError("systemd symlink changed while reading")
-    return value
+    global namespace_ready
+    if not namespace_ready:
+        mount_call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+        mount_call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+        namespace_ready=True
+    view=tempfile.mkdtemp(prefix="uap-observer-noatime-"); encoded=os.fsencode(view); mounted=False
+    try:
+        mount_call(libc.mount(b"/proc/self/fd/"+str(parentfd).encode(),encoded,None,MS_BIND,None),"bind pinned systemd directory"); mounted=True
+        mount_call(libc.mount(None,encoded,None,MS_REMOUNT|MS_BIND|MS_RDONLY|MS_NOATIME|MS_NODIRATIME,None),"remount systemd directory noatime")
+        viewfd=os.open(view,flags)
+        try:
+            linkfd=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=viewfd)
+            try:
+                if exact_link_metadata(os.fstat(linkfd))!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while pinning")
+                size=max(256,info.st_size+1)
+                while True:
+                    buffer=ctypes.create_string_buffer(size); length=libc.readlinkat(linkfd,b"",buffer,size)
+                    if length<0:
+                        error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+                    if length<size: break
+                    size*=2
+                if exact_link_metadata(os.fstat(linkfd))!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while reading")
+                return os.fsdecode(buffer.raw[:length]),os.dup(linkfd)
+            finally: os.close(linkfd)
+        finally: os.close(viewfd)
+    finally:
+        if mounted: mount_call(libc.umount2(encoded,MNT_DETACH),"unmount systemd noatime view")
+        os.rmdir(view)
 
 def open_directory(name, *, dir_fd=None):
     before=os.stat(name,dir_fd=dir_fd,follow_symlinks=False)
@@ -866,9 +1141,11 @@ def exclusive_name(prefix: str) -> str:
     return f".{prefix}-{os.getpid()}-{secrets.token_hex(16)}"
 
 def rename_noreplace(oldfd: int, old: str, newfd: int, new: str) -> None:
+    mutation_boundary("before-rename")
     if renameat2(oldfd,os.fsencode(old),newfd,os.fsencode(new),1) != 0:
         value=ctypes.get_errno()
         raise OSError(value,os.strerror(value),old)
+    mutation_boundary("after-rename")
 
 def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
     info=os.stat(srcname,dir_fd=srcfd,follow_symlinks=False)
@@ -877,7 +1154,9 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
         trusted(info)
         if info.st_nlink != 1: raise PermissionError("systemd source has unsafe link count")
         infd=os.open(srcname,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=srcfd)
+        mutation_boundary("before-tree-file-create")
         outfd=os.open(dstname,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|os.O_NOFOLLOW,0o600,dir_fd=dstfd)
+        mutation_boundary("after-tree-file-create")
         try:
             if os.fstat(infd) != info: raise PermissionError("systemd source changed while copying")
             while True:
@@ -889,13 +1168,13 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
             os.fchmod(outfd,stat.S_IMODE(mode))
             sync_xattrs_fd(infd,outfd)
             os.utime(outfd,ns=(info.st_atime_ns,info.st_mtime_ns))
-            os.fsync(outfd)
+            mutation_boundary("before-tree-fsync"); os.fsync(outfd); mutation_boundary("after-tree-fsync")
             if not exact_metadata(info,os.fstat(outfd)): raise OSError("systemd file metadata differs after copy")
         finally:
             os.close(outfd); os.close(infd)
     elif stat.S_ISDIR(mode):
         trusted(info)
-        os.mkdir(dstname,0o700,dir_fd=dstfd)
+        mutation_boundary("before-tree-mkdir"); os.mkdir(dstname,0o700,dir_fd=dstfd); mutation_boundary("after-tree-mkdir")
         infd,opened=open_directory(srcname,dir_fd=srcfd)
         outfd,_=open_directory(dstname,dir_fd=dstfd)
         try:
@@ -906,16 +1185,20 @@ def copy_entry(srcfd: int, srcname: str, dstfd: int, dstname: str) -> None:
             os.fchmod(outfd,stat.S_IMODE(mode))
             sync_xattrs_fd(infd,outfd)
             os.utime(outfd,ns=(info.st_atime_ns,info.st_mtime_ns))
-            os.fsync(outfd)
+            mutation_boundary("before-tree-fsync"); os.fsync(outfd); mutation_boundary("after-tree-fsync")
             if not exact_metadata(info,os.fstat(outfd)): raise OSError("systemd directory metadata differs after copy")
             if os.fstat(infd) != info: raise PermissionError("systemd source changed while copying")
         finally:
             os.close(outfd); os.close(infd)
     elif stat.S_ISLNK(mode):
         trusted(info,link=True)
-        os.symlink(neutral_readlink(srcfd,srcname,info),dstname,dir_fd=dstfd)
-        os.chown(dstname,info.st_uid,info.st_gid,dir_fd=dstfd,follow_symlinks=False)
-        sync_xattrs_link(srcfd,srcname,dstfd,dstname,info)
+        target_text,pinned=neutral_readlink(srcfd,srcname,info)
+        try:
+            mutation_boundary("before-tree-symlink"); os.symlink(target_text,dstname,dir_fd=dstfd); mutation_boundary("after-tree-symlink")
+            os.chown(dstname,info.st_uid,info.st_gid,dir_fd=dstfd,follow_symlinks=False)
+            sync_xattrs_link(srcfd,srcname,dstfd,dstname,info)
+            if exact_link_metadata(os.fstat(pinned))!=exact_link_metadata(info): raise PermissionError("systemd symlink source changed while copying")
+        finally: os.close(pinned)
         os.utime(dstname,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=dstfd,follow_symlinks=False)
         if not exact_metadata(info,os.stat(dstname,dir_fd=dstfd,follow_symlinks=False)):
             raise OSError("systemd symlink metadata differs after copy")
@@ -932,9 +1215,13 @@ def remove_entry(parentfd: int, child: str) -> None:
             for nested in os.listdir(childfd): remove_entry(childfd,nested)
             if not same_entry(info,os.fstat(childfd)): raise PermissionError("systemd directory changed while removing")
         finally: os.close(childfd)
+        mutation_boundary("before-tree-rmdir")
         os.rmdir(child,dir_fd=parentfd)
+        mutation_boundary("after-tree-rmdir")
     else:
+        mutation_boundary("before-tree-unlink")
         os.unlink(child,dir_fd=parentfd)
+        mutation_boundary("after-tree-unlink")
 
 def fingerprint(parentfd: int, name: str, *, allow_link=True):
     info=os.stat(name,dir_fd=parentfd,follow_symlinks=False)
@@ -963,20 +1250,42 @@ def fingerprint(parentfd: int, name: str, *, allow_link=True):
         finally: os.close(descriptor)
     if stat.S_ISLNK(info.st_mode) and allow_link:
         target=link_path(parentfd,name)
-        attrs=tuple((key,xattr_value(lgetxattr,target,key)) for key in sorted(xattr_names(llistxattr,target)))
-        return common,neutral_readlink(parentfd,name,info),attrs
+        payload,pinned=neutral_readlink(parentfd,name,info)
+        try:
+            attrs=tuple((key,xattr_value(lgetxattr,target,key)) for key in sorted(xattr_names(llistxattr,target)))
+            if exact_link_metadata(os.fstat(pinned))!=exact_link_metadata(info) or exact_link_metadata(os.stat(name,dir_fd=parentfd,follow_symlinks=False))!=exact_link_metadata(info): raise PermissionError("systemd symlink changed while fingerprinting")
+            return common,payload,attrs
+        finally: os.close(pinned)
     raise PermissionError("systemd topology changed while binding")
 
 expected_records={}
 expected_present=None
 expected_inventory=None
+expected_fingerprints={}
+restore_mode=bool(os.environ.get("UAP_OBSERVER_RESTORE_BACKUP"))
+journal_names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
 
 def observer_inventory() -> set[str]:
     return {name for name in os.listdir(rootfd) if name.startswith("uap-observer")}
 
+mutation_step=0
+def mutation_boundary(name: str) -> None:
+    global mutation_step
+    mutation_step+=1
+    if os.environ.get("UAP_OBSERVER_REPLACE_TRACE") == "1":
+        print(f"uap-observer-replace-boundary {mutation_step} {name}",file=sys.stderr,flush=True)
+    requested={item for item in os.environ.get("UAP_OBSERVER_REPLACE_FAILPOINT","").split(",") if item}
+    fail_at=int(os.environ.get("UAP_OBSERVER_REPLACE_FAIL_AT") or 0)
+    if name in requested or (fail_at and mutation_step==fail_at):
+        raise SystemExit(f"observer replacement failpoint: {name}")
+
+def require_inventory(expected: set[str], boundary: str) -> None:
+    if observer_inventory()!=expected:
+        raise PermissionError(f"systemd observer inventory changed before {boundary}")
+
 def journal_precondition() -> None:
-    global expected_records,expected_present,expected_inventory
-    backup_path=os.environ.get("UAP_OBSERVER_COMPARE_BACKUP")
+    global expected_records,expected_present,expected_inventory,expected_fingerprints
+    backup_path=os.environ.get("UAP_OBSERVER_COMPARE_BACKUP") or os.environ.get("UAP_OBSERVER_RESTORE_BACKUP")
     if not backup_path: return
     backup,_=open_directory(backup_path)
     try:
@@ -992,8 +1301,26 @@ def journal_precondition() -> None:
     finally: os.close(backup)
     expected=identity["records"]
     present=set(identity["present"])
+    if restore_mode:
+        known=set(journal_names)
+        actual=observer_inventory()
+        if actual-known:
+            raise PermissionError("systemd observer inventory contains an unexpected target before journal-backed restore")
+        # Restore is also the recovery operation for a process killed at any
+        # replacement boundary.  At entry, a journal name may therefore hold
+        # the pre-install value, the reviewed value, a previously restored
+        # value, or be absent after a durable displacement.  Bind the exact
+        # current fingerprint now and require it at every following mutation;
+        # the complete journal remains the sole authority for the end state.
+        for index,name in enumerate(journal_names):
+            if name in actual:
+                expected_fingerprints[name]=fingerprint(rootfd,name,allow_link=index<5)
+        expected_present=set(actual)
+        expected_inventory=set(actual)
+        require_inventory(expected_inventory,"journal-backed restore")
+        return
     records=[]
-    names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
+    names=journal_names
     def attrs(parent,name,info,descriptor=None):
         if stat.S_ISLNK(info.st_mode):
             target=link_path(parent,name); names_=xattr_names(llistxattr,target); getter=lgetxattr
@@ -1029,10 +1356,12 @@ def journal_precondition() -> None:
             return
         elif stat.S_ISLNK(mode) and allow_link:
             record={"path":path,"type":stat.S_IFMT(mode),"mode":stat.S_IMODE(mode),"uid":info.st_uid,"gid":info.st_gid,"atime":info.st_atime_ns,"mtime":info.st_mtime_ns,"nlink":info.st_nlink}
-            record["payload"]=neutral_readlink(parent,name,info)
-            record["xattrs"]=attrs(parent,name,info)
-            after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-            if not same_entry(info,after) or not exact_metadata(info,after): raise PermissionError("systemd symlink changed before replacement")
+            record["payload"],pinned=neutral_readlink(parent,name,info)
+            try:
+                record["xattrs"]=attrs(parent,name,info)
+                after=os.stat(name,dir_fd=parent,follow_symlinks=False)
+                if exact_link_metadata(os.fstat(pinned))!=exact_link_metadata(info) or exact_link_metadata(after)!=exact_link_metadata(info): raise PermissionError("systemd symlink changed before replacement")
+            finally: os.close(pinned)
         else: raise PermissionError("systemd topology changed before replacement")
         output.append(record)
     for index,name in enumerate(names):
@@ -1052,7 +1381,7 @@ def journal_precondition() -> None:
 
 def validate_capture(name: str, displaced: str) -> None:
     captured=[]
-    capture_visit(rootfd,displaced,name,names.index(name)<5,captured)
+    capture_visit(rootfd,displaced,name,journal_names.index(name)<5,captured)
     if captured!=expected_records[name]:
         raise PermissionError("systemd destination raced after validation")
 
@@ -1064,8 +1393,12 @@ def replace(source_arg: str, name: str) -> None:
     created=False
     moved=False
     installed=False
+    deletion_started=False
+    displaced_destroyed=False
     baseline_missing=False
     baseline=None
+    staged_fingerprint=None
+    displaced_fingerprint=None
     try:
         if expected_present is None:
             try: baseline=fingerprint(rootfd,name)
@@ -1077,54 +1410,130 @@ def replace(source_arg: str, name: str) -> None:
             if source_parent is None:
                 source_parent,_=open_directory(parent)
                 source_parents[parent]=source_parent
-            copy_entry(source_parent,source.name,rootfd,temporary)
-            created=True
+            try:
+                copy_entry(source_parent,source.name,rootfd,temporary)
+                created=True
+                staged_fingerprint=fingerprint(rootfd,temporary)
+            except BaseException:
+                # copy_entry can fail immediately after its exclusive create.
+                # Record that private name so the ordinary safe rollback path
+                # removes it instead of leaking an unjournaled partial tree.
+                try:
+                    staged_fingerprint=fingerprint(rootfd,temporary)
+                    created=True
+                except FileNotFoundError:
+                    pass
+                raise
         global precondition_done
         if not precondition_done:
             journal_precondition()
             precondition_done=True
-        if expected_inventory is not None and observer_inventory()!=expected_inventory:
-            raise PermissionError("systemd observer inventory changed before replacement")
+        if expected_inventory is not None: require_inventory(expected_inventory,"displacement")
+        mutation_boundary("before-displacement")
         if expected_present is not None and name in expected_present:
+            displaced_fingerprint=expected_fingerprints.get(name)
+            if displaced_fingerprint is None:
+                displaced_fingerprint=fingerprint(rootfd,name)
+            elif fingerprint(rootfd,name)!=displaced_fingerprint:
+                raise PermissionError("systemd destination raced after validation")
             rename_noreplace(rootfd,name,rootfd,displaced)
             moved=True
-            if observer_inventory()!=expected_inventory-{name}:
-                raise PermissionError("systemd observer inventory changed before replacement")
-            validate_capture(name,displaced)
+            expected_inventory.discard(name)
+            mutation_boundary("after-displacement")
+            if os.environ.get("UAP_OBSERVER_TEST_STOP_AFTER_DISPLACEMENT")=="1": os.kill(os.getpid(),signal.SIGSTOP)
+            require_inventory(expected_inventory,"captured-entry validation")
+            if restore_mode:
+                if fingerprint(rootfd,displaced)!=displaced_fingerprint:
+                    raise PermissionError("systemd destination drifted before journal-backed restore")
+            else: validate_capture(name,displaced)
+            require_inventory(expected_inventory,"installation")
         elif expected_present is not None and name not in expected_present:
             if os.path.lexists(link_path(rootfd,name)):
                 raise PermissionError("systemd missing destination raced after validation")
+            require_inventory(expected_inventory,"installation")
         else:
             if baseline_missing:
-                pass
+                if os.path.lexists(link_path(rootfd,name)):
+                    raise PermissionError("systemd missing destination raced after validation")
             else:
+                if fingerprint(rootfd,name)!=baseline:
+                    raise PermissionError("systemd destination raced after validation")
                 rename_noreplace(rootfd,name,rootfd,displaced)
                 moved=True
-                if observer_inventory()!=expected_inventory-{name}:
-                    raise PermissionError("systemd observer inventory changed before replacement")
+                displaced_fingerprint=baseline
+                expected_inventory.discard(name)
+                mutation_boundary("after-displacement")
+                if os.environ.get("UAP_OBSERVER_TEST_STOP_AFTER_DISPLACEMENT")=="1": os.kill(os.getpid(),signal.SIGSTOP)
+                require_inventory(expected_inventory,"captured-entry validation")
                 if fingerprint(rootfd,displaced)!=baseline:
                     raise PermissionError("systemd destination raced after validation")
+                require_inventory(expected_inventory,"installation")
         if created:
+            if expected_inventory is not None: require_inventory(expected_inventory,"installation")
             rename_noreplace(rootfd,temporary,rootfd,name)
             created=False
             installed=True
-            if expected_inventory is not None: expected_inventory.add(name)
+            if expected_inventory is not None:
+                expected_inventory.add(name)
+                expected_fingerprints[name]=staged_fingerprint
+                require_inventory(expected_inventory,"post-install durability")
+            mutation_boundary("after-installation")
+        mutation_boundary("before-install-directory-fsync")
         os.fsync(rootfd)
+        mutation_boundary("after-install-directory-fsync")
         if moved:
+            if expected_inventory is not None: require_inventory(expected_inventory,"displaced-tree deletion")
+            mutation_boundary("before-displaced-tree-deletion")
+            deletion_started=True
             remove_entry(rootfd,displaced)
+            deletion_started=False
+            displaced_destroyed=True
             moved=False
             if expected_inventory is not None and source_arg == "-": expected_inventory.discard(name)
+            if expected_inventory is not None: require_inventory(expected_inventory,"deletion durability")
+            mutation_boundary("after-displaced-tree-deletion")
+            mutation_boundary("before-delete-directory-fsync")
             os.fsync(rootfd)
-    except BaseException:
-        if installed:
-            try: remove_entry(rootfd,name); installed=False
-            except OSError: pass
-        if moved:
-            try: rename_noreplace(rootfd,displaced,rootfd,name); moved=False
-            except OSError: pass
-        if created:
-            try: remove_entry(rootfd,temporary)
-            except OSError: pass
+            mutation_boundary("after-delete-directory-fsync")
+    except BaseException as original:
+        # Once deletion of the displaced baseline has begun, rollback can no
+        # longer be proven complete.  Preserve every remaining entry and let
+        # the durable journal drive a later fail-closed recovery attempt.
+        if deletion_started or displaced_destroyed:
+            raise
+        try:
+            if installed:
+                require_inventory(expected_inventory,"rollback installed-entry removal")
+                if staged_fingerprint is None or fingerprint(rootfd,name)!=staged_fingerprint:
+                    raise PermissionError("installed systemd entry drifted before rollback removal")
+                mutation_boundary("before-rollback-installed-removal")
+                require_inventory(expected_inventory,"rollback installed-entry removal")
+                remove_entry(rootfd,name); installed=False
+                expected_inventory.discard(name); expected_fingerprints.pop(name,None)
+                require_inventory(expected_inventory,"rollback displaced-entry restore")
+                mutation_boundary("after-rollback-installed-removal")
+            if moved:
+                require_inventory(expected_inventory,"rollback displaced-entry restore")
+                if displaced_fingerprint is None or fingerprint(rootfd,displaced)!=displaced_fingerprint:
+                    raise PermissionError("displaced systemd entry drifted before rollback restore")
+                if not restore_mode and expected_records:
+                    validate_capture(name,displaced)
+                if os.path.lexists(link_path(rootfd,name)):
+                    raise PermissionError("systemd destination reappeared before rollback restore")
+                mutation_boundary("before-rollback-displaced-restore")
+                require_inventory(expected_inventory,"rollback displaced-entry restore")
+                rename_noreplace(rootfd,displaced,rootfd,name); moved=False
+                expected_inventory.add(name); expected_fingerprints[name]=displaced_fingerprint
+                require_inventory(expected_inventory,"completed rollback restore")
+                mutation_boundary("after-rollback-displaced-restore")
+            if created:
+                if staged_fingerprint is None or fingerprint(rootfd,temporary)!=staged_fingerprint:
+                    raise PermissionError("staged systemd entry drifted before rollback cleanup")
+                mutation_boundary("before-rollback-staging-removal")
+                remove_entry(rootfd,temporary)
+                mutation_boundary("after-rollback-staging-removal")
+        except BaseException as rollback_error:
+            raise rollback_error from original
         raise
 
 try:
@@ -1133,14 +1542,17 @@ try:
     if not stat.S_ISDIR(root_info.st_mode): raise PermissionError("systemd root is unsafe")
     stale=[name for name in os.listdir(rootfd) if name.startswith((".uap-observer-new-",".uap-observer-old-"))]
     for name in stale: remove_entry(rootfd,name)
-    if stale: os.fsync(rootfd)
-    fail_at=int(os.environ.get("UAP_OBSERVER_REPLACE_FAIL_AT") or 0)
+    if stale:
+        mutation_boundary("before-stale-directory-fsync")
+        os.fsync(rootfd)
+        mutation_boundary("after-stale-directory-fsync")
     precondition_done=False
-    if not os.environ.get("UAP_OBSERVER_COMPARE_BACKUP"):
+    if not os.environ.get("UAP_OBSERVER_COMPARE_BACKUP") and not os.environ.get("UAP_OBSERVER_RESTORE_BACKUP"):
         expected_inventory=observer_inventory()
     for index in range(0,len(pairs),2):
         replace(pairs[index],pairs[index+1])
-        if fail_at == index // 2 + 1: raise SystemExit(1)
+        if int(os.environ.get("UAP_OBSERVER_REPLACE_ENTRY_FAIL_AT") or 0)==index//2+1:
+            raise SystemExit(1)
 finally:
     for source_parent in source_parents.values(): os.close(source_parent)
     os.close(rootfd)
@@ -1150,6 +1562,10 @@ PY
 restore_observer_systemd() {
   backup=$1
   systemd_root=$2
+  installed_source=${3:-}
+  if [ -n "$installed_source" ] && { [ ! -d "$installed_source" ] || [ -L "$installed_source" ]; }; then
+    installed_source=
+  fi
   validate_observer_systemd_journal "$backup" || return 1
   journal_manifest=$(observer_systemd_archive manifest "$backup") || return 1
   set -- "$systemd_root"
@@ -1162,8 +1578,15 @@ restore_observer_systemd() {
   done <<EOF
 $journal_manifest
 EOF
-  observer_replace_systemd_entries "$@" || return 1
+  UAP_OBSERVER_RESTORE_BACKUP=$backup \
+    UAP_OBSERVER_INSTALLED_SOURCE=$installed_source \
+    UAP_OBSERVER_REPLACE_FAILPOINT= \
+    observer_replace_systemd_entries "$@" || return 1
   observer_compare_systemd_journal "$backup" "$systemd_root"
+}
+
+observer_recovery_failpoint() {
+  case ",${UAP_OBSERVER_RECOVERY_FAILPOINT:-}," in *,$1,*) return 1 ;; esac
 }
 
 recover_observer_install() {
@@ -1175,10 +1598,13 @@ recover_observer_install() {
   cleanup_partials=${6:-observer_cleanup_recovery_partials}
   journal_committed=0
   journal_resolved=0
+  recovering_current=0
   if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then
     # Retried even when a prior attempt removed the name but its parent fsync
     # failed.  This makes the removal durability step independently retryable.
-    observer_sync_directory "$(dirname "$stage")"
+    observer_recovery_failpoint before-removed-journal-parent-fsync || return 1
+    observer_sync_directory "$(dirname "$stage")" || return 1
+    observer_recovery_failpoint after-removed-journal-parent-fsync || return 1
     return
   fi
   if [ ! -d "$stage" ] || [ -L "$stage" ]; then
@@ -1230,28 +1656,63 @@ PY
     # A current pointer means activation crossed its commit point.  Recovery is
     # only permitted to accept the exact journaled closure in that case.
     if [ -e "$current_pointer" ] || [ -L "$current_pointer" ]; then
+      recovering_current=1
       test -L "$current_pointer" || return 1
       test "$(observer_read_symlink_neutral "$current_pointer")" = "uap-observer-closures/$recovered_digest" || return 1
       test -d "$closures_root/$recovered_digest" || return 1
       test ! -L "$closures_root/$recovered_digest" || return 1
+      test "$(observer_closure_identity "$closures_root/$recovered_digest")" = "$recovered_digest" || return 1
       observer_sync_directory "$(dirname "$current_pointer")" || return 1
+      validate_observer_systemd_inventory \
+        "$stage/systemd" "$systemd_root" || return 1
     else
-      restore_observer_systemd "$stage/systemd-backup" "$systemd_root" || return 1
+      restore_observer_systemd "$stage/systemd-backup" "$systemd_root" "$stage/systemd" || return 1
       observer_sync_tree "$systemd_root" || return 1
+      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_recovery_failpoint before-rollback-daemon-reload || return 1
       "$manager" daemon-reload || return 1
+      observer_recovery_failpoint after-rollback-daemon-reload || return 1
+      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
       candidate="$closures_root/$recovered_digest"
-      if [ -e "$candidate" ] || [ -L "$candidate" ]; then rm -rf -- "$candidate" || return 1; fi
+      if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+        observer_recovery_failpoint before-rollback-closure-deletion || return 1
+        rm -rf -- "$candidate" || return 1
+        observer_recovery_failpoint after-rollback-closure-deletion || return 1
+      fi
       observer_sync_tree "$closures_root" || return 1
+      observer_recovery_failpoint after-rollback-closure-fsync || return 1
+      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
     fi
+    if [ "$recovering_current" -eq 1 ]; then
+      test -L "$current_pointer" || return 1
+      test "$(observer_read_symlink_neutral "$current_pointer")" = "uap-observer-closures/$recovered_digest" || return 1
+      test -d "$closures_root/$recovered_digest" || return 1
+      test ! -L "$closures_root/$recovered_digest" || return 1
+      test "$(observer_closure_identity "$closures_root/$recovered_digest")" = "$recovered_digest" || return 1
+      validate_observer_systemd_inventory \
+        "$stage/systemd" "$systemd_root" || return 1
+    else
+      test ! -e "$current_pointer" && test ! -L "$current_pointer" || return 1
+      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
+    fi
+    observer_recovery_failpoint before-journal-resolution || return 1
     observer_mark_recovery_resolved "$stage" || return 1
+    observer_recovery_failpoint after-journal-resolution || return 1
     journal_resolved=1
   fi
+  observer_recovery_failpoint before-partial-cleanup || return 1
   "$cleanup_partials" || return 1
+  observer_recovery_failpoint after-partial-cleanup || return 1
   if [ "$journal_resolved" -eq 1 ]; then
+    observer_recovery_failpoint before-rollback-data-deletion || return 1
     observer_cleanup_committed_stage_payload "$stage" || return 1
+    observer_recovery_failpoint after-rollback-data-deletion || return 1
   fi
+  observer_recovery_failpoint before-journal-directory-deletion || return 1
   rm -rf -- "$stage" || return 1
+  observer_recovery_failpoint after-journal-directory-deletion || return 1
   observer_sync_directory "$(dirname "$stage")" || return 1
+  observer_recovery_failpoint after-journal-parent-fsync || return 1
 }
 
 observer_install_failpoint() {
@@ -1277,7 +1738,7 @@ activate_observer_systemd() {
   # the replacement process, after all validation that could consume atime.
   if [ -n "$backup" ]; then observer_compare_systemd_journal "$backup" "$systemd_root" || return 1; fi
   UAP_OBSERVER_COMPARE_BACKUP=$backup \
-    UAP_OBSERVER_REPLACE_FAIL_AT=${UAP_OBSERVER_INSTALL_FAIL_AT:-} \
+    UAP_OBSERVER_REPLACE_ENTRY_FAIL_AT=${UAP_OBSERVER_INSTALL_FAIL_AT:-} \
     observer_replace_systemd_entries "$@" || return 1
   observer_install_step=7
   validate_observer_systemd_inventory "$staged" "$systemd_root"
@@ -1287,29 +1748,63 @@ validate_observer_systemd_inventory() {
   reviewed=$1
   systemd_root=$2
   observer_validate_systemd_topology "$systemd_root" || return 1
-  expected=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | sort)
-  actual=$(find "$systemd_root" -mindepth 1 -maxdepth 1 -name 'uap-observer*' -printf '%f\n' | sort)
+  expected=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | LC_ALL=C sort)
+  actual=$(observer_directory_inventory_neutral "$systemd_root" uap-observer)
   test "$actual" = "$expected" || return 1
   observer_compare_systemd_trees "$reviewed" "$systemd_root"
 }
 
 observer_compare_systemd_trees() {
   python3 - "$1" "$2" <<'PY'
-import os,stat,sys
+import ctypes,os,stat,sys,tempfile
 names=("uap-observer.service","uap-observer-signer.service","uap-observer-runner.service","uap-observer-runner.socket","uap-observer-caddy.service","uap-observer.service.d","uap-observer-runner.service.d")
 dirflags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
 fileflags=os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+libc=ctypes.CDLL(None,use_errno=True)
+libc.mount.argtypes=(ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p)
+libc.umount2.argtypes=(ctypes.c_char_p,ctypes.c_int)
+libc.readlinkat.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t)
+CLONE_NEWNS=0x00020000; MS_RDONLY=1; MS_NOSUID=2; MS_NODEV=4; MS_NOEXEC=8
+MS_REMOUNT=32; MS_BIND=4096; MS_REC=16384; MS_PRIVATE=1<<18; MS_NOATIME=1024; MS_NODIRATIME=2048; MNT_DETACH=2
+namespace_ready=False
 def metadata(info): return (stat.S_IFMT(info.st_mode),stat.S_IMODE(info.st_mode),info.st_uid,info.st_gid,info.st_atime_ns,info.st_mtime_ns,info.st_nlink)
+def link_metadata(value): return (value.st_dev,value.st_ino)+metadata(value)+(value.st_ctime_ns,)
+def call(result,label):
+    if result!=0:
+        error=ctypes.get_errno(); raise OSError(error,f"{label}: {os.strerror(error)}")
 def attributes(parent,name,info,descriptor=None):
     target=f"/proc/self/fd/{parent}/{name}" if stat.S_ISLNK(info.st_mode) else descriptor
     follow=not stat.S_ISLNK(info.st_mode)
     return {key:os.getxattr(target,key,follow_symlinks=follow) for key in os.listxattr(target,follow_symlinks=follow)}
 def link(parent,name,info):
-    value=os.readlink(name,dir_fd=parent)
-    os.utime(name,ns=(info.st_atime_ns,info.st_mtime_ns),dir_fd=parent,follow_symlinks=False)
-    after=os.stat(name,dir_fd=parent,follow_symlinks=False)
-    if (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino) or metadata(after)!=metadata(info): raise PermissionError("systemd symlink changed during comparison")
-    return value
+    global namespace_ready
+    if not namespace_ready:
+        call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+        call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+        namespace_ready=True
+    view=tempfile.mkdtemp(prefix="uap-observer-noatime-"); encoded=os.fsencode(view); mounted=False
+    try:
+        call(libc.mount(b"/proc/self/fd/"+str(parent).encode(),encoded,None,MS_BIND,None),"bind pinned comparison directory"); mounted=True
+        call(libc.mount(None,encoded,None,MS_REMOUNT|MS_BIND|MS_RDONLY|MS_NOATIME|MS_NODIRATIME,None),"remount comparison directory noatime")
+        viewfd=os.open(view,dirflags)
+        try:
+            descriptor=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=viewfd)
+            try:
+                if link_metadata(os.fstat(descriptor))!=link_metadata(info): raise PermissionError("systemd symlink changed while pinning comparison")
+                size=max(256,info.st_size+1)
+                while True:
+                    buffer=ctypes.create_string_buffer(size); length=libc.readlinkat(descriptor,b"",buffer,size)
+                    if length<0:
+                        error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+                    if length<size: break
+                    size*=2
+                if link_metadata(os.fstat(descriptor))!=link_metadata(info): raise PermissionError("systemd symlink changed during comparison")
+                return os.fsdecode(buffer.raw[:length]),os.dup(descriptor)
+            finally: os.close(descriptor)
+        finally: os.close(viewfd)
+    finally:
+        if mounted: call(libc.umount2(encoded,MNT_DETACH),"unmount comparison noatime view")
+        os.rmdir(view)
 def compare(first,name,second):
     left=os.stat(name,dir_fd=first,follow_symlinks=False); right=os.stat(name,dir_fd=second,follow_symlinks=False)
     if metadata(left)!=metadata(right): raise SystemExit("systemd metadata differs")
@@ -1335,8 +1830,16 @@ def compare(first,name,second):
             if os.fstat(a)!=left or os.fstat(b)!=right: raise PermissionError("systemd directory changed during comparison")
         finally: os.close(b); os.close(a)
     elif stat.S_ISLNK(left.st_mode):
-        if link(first,name,left)!=link(second,name,right) or attributes(first,name,left)!=attributes(second,name,right): raise SystemExit("systemd symlink differs")
+        left_target,left_pin=link(first,name,left); right_target,right_pin=link(second,name,right)
+        try:
+            if left_target!=right_target or attributes(first,name,left)!=attributes(second,name,right): raise SystemExit("systemd symlink differs")
+            if link_metadata(os.fstat(left_pin))!=link_metadata(left) or link_metadata(os.fstat(right_pin))!=link_metadata(right): raise PermissionError("systemd symlink changed during comparison")
+            if link_metadata(os.stat(name,dir_fd=first,follow_symlinks=False))!=link_metadata(left) or link_metadata(os.stat(name,dir_fd=second,follow_symlinks=False))!=link_metadata(right): raise PermissionError("systemd symlink name changed during comparison")
+        finally: os.close(right_pin); os.close(left_pin)
     else: raise SystemExit("systemd type differs")
+call(libc.unshare(CLONE_NEWNS),"private mount namespace unavailable")
+call(libc.mount(None,b"/",None,MS_REC|MS_PRIVATE,None),"make mounts private")
+namespace_ready=True
 first_before=os.stat(sys.argv[1],follow_symlinks=False); second_before=os.stat(sys.argv[2],follow_symlinks=False)
 first=os.open(sys.argv[1],dirflags); second=os.open(sys.argv[2],dirflags)
 try:
@@ -1349,6 +1852,8 @@ PY
 
 reload_observer_systemd() {
   manager=$1
+  case ",${UAP_OBSERVER_INSTALL_FAILPOINT:-}," in *,before-daemon-reload,*) return 1 ;; esac
   "$manager" daemon-reload
+  case ",${UAP_OBSERVER_INSTALL_FAILPOINT:-}," in *,after-daemon-reload,*) return 1 ;; esac
   observer_install_failpoint || return 1
 }
