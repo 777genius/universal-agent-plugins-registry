@@ -28,24 +28,27 @@ digests below. Do not record the signing key or profile contents.
 sha256sum "$SOURCE_ROOT/deploy/uap-observer-runtime.sha256" \
   /root/uap-observer-adapter-config.json /root/uap-observer.json \
   /root/Caddyfile /root/caddy_2.11.4_linux_amd64.tar.gz \
-  /root/uap-observer-egress-fqdns.txt \
-  /root/uap-observer-egress-proxy.socket \
-  /root/uap-observer-egress-proxy.service
+  /root/uap-observer-egress-allowlist.json
 ```
 
 The Caddy archive must be the official Linux amd64 v2.11.4 archive with SHA-256
 `527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9`.
 The adapter config must validate against
-`deploy/uap-observer-adapter-config.schema.json` and must name exactly these
-root-controlled inputs:
+`deploy/uap-observer-adapter-config.schema.json`. The protected input tree and
+installer-managed deployment files are:
 
-| Input | Installed path | Mode |
+| Artifact | Installed path | Mode |
 | --- | --- | --- |
 | Git, Codex, Cursor, Kiro native executables | `/opt/uap-observer-inputs/bin/{git,codex,cursor,kiro}` | root-owned `0755` regular files |
 | ChatGPT app binding and projection receipt | `/opt/uap-observer-inputs/chatgpt/{app-binding.json,projection-receipt.json}` | `root:uap-observer-adapter-config`, `0640` |
 | independently captured external-PR evidence | `/opt/uap-observer-inputs/external-pr-evidence.json` | `root:uap-observer-adapter-config`, `0640` |
-| operator-approved proxy FQDN allowlist | `/etc/uap-observer-egress-fqdns.txt` | `root:root`, `0644` regular file |
-| reviewed proxy socket and service units | `/etc/systemd/system/uap-observer-egress-proxy.{socket,service}` | `root:root`, `0644` regular files |
+| operator-approved proxy FQDN allowlist | `/opt/uap-observer-current/etc/uap-observer-egress-allowlist.json` | `root:root`, `0644`, one-link regular file |
+| repository proxy executable | `/opt/uap-observer-current/libexec/uap-observer-egress-proxy` | `root:root`, `0755`, one-link regular file |
+| repository proxy units | `/opt/uap-observer-current/systemd/` and `/etc/systemd/system/uap-observer-egress-proxy.{socket,service}` | `root:root`, `0644`, one-link regular files |
+
+The proxy executable and units are repository source/runtime-closure files, not
+separate operator inputs. The installer copies and verifies them. Do not stage
+or copy units into `/etc/systemd/system` manually.
 
 There may be no other entries under `/opt/uap-observer-inputs`; directories
 must be root-owned and not group/other-writable. Every file must have one hard
@@ -97,8 +100,8 @@ binary SHA-256 and exit result. A successful version-only command is not a
 proxy test. Stop if any client bypasses or ignores the proxy.
 
 Use only the clients' supported fresh-host login paths: Codex supports
-`codex login --device-auth`; Cursor supports `NO_OPEN_BROWSER=1 agent login`
-(invoke the pinned Cursor executable's `agent login` command) and API-key
+`codex login --device-auth`; Cursor supports `NO_OPEN_BROWSER=1 login`
+(invoke the pinned Cursor executable's `login` command) and API-key
 automation; Kiro supports its remote device flow and `KIRO_API_KEY` headless
 mode. API keys may be supplied only transiently to the login/preflight process:
 never put them in a script, image, adapter config, service environment, or
@@ -114,54 +117,50 @@ destination. Do not use any seed exported from a Mac or normal workstation,
 and never bake credentials into the source checkout or protected input tree.
 
 The operator must provide the proxy allowlist as an immutable deployment input,
-not derive it during installation. Its format is exactly one lowercase ASCII
-FQDN per LF-terminated line, sorted bytewise and unique, with no blank lines,
-comments, ports, URLs, IP literals, leading dots, or wildcards. It must include
-the GitHub OIDC/JWKS and API hosts and every hostname reached by the exact pinned
-clients during login or an observed scenario. Review the current provider-owned
-host list for Codex, Cursor, Kiro, GitHub, and the configured ChatGPT MCP before
-approving it; redirects and CDN hosts are separate entries and are never
-implicitly trusted. Record this exact tuple in the change ticket:
+not derive it during installation. It is canonical JSON with exactly
+`schema_version` set to `1` and a non-empty `hosts` array of bytewise-sorted,
+unique, exact lowercase ASCII FQDNs. The JSON has no extra keys or insignificant
+whitespace and ends with one LF. Hosts have no ports, URLs, IP literals, leading
+dots, or wildcards. The set must equal the HTTPS hosts in the final adapter and
+observer configs; the installer checks that equality. Review the current
+provider-owned host list for Codex, Cursor, Kiro, GitHub, and the configured
+ChatGPT MCP before approving it; redirects and CDN hosts are separate exact
+entries and are never implicitly trusted. Record this exact tuple in the change
+ticket:
 
 ```text
-UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST=/etc/uap-observer-egress-fqdns.txt
-UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_SHA256=sha256:<64-lowercase-hex>
-UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_MODE=0:0:644:1
+EGRESS_ALLOWLIST=/root/uap-observer-egress-allowlist.json
+EGRESS_SHA256=sha256:<64-lowercase-hex>
+EGRESS_ALLOWLIST_MODE=0:0:644:1
 ```
 
-Install it only after checking the recorded digest and canonical form. The
-socket unit must listen only on `127.0.0.2:8766`; the service must read that
-exact file, fail closed on malformed or unlisted CONNECT/SNI targets, resolve
-names itself, and provide no transparent or direct-fallback mode.
+Validate it only after checking its recorded digest, ownership, mode, link
+count, and canonical form. The repository socket listens only on
+`127.0.0.2:8766`; the repository service reads the closure copy of that exact
+input, fails closed on malformed or unlisted CONNECT targets, resolves names
+itself, and provides no transparent or direct-fallback mode.
 
 ```sh
-test "sha256:$(sha256sum /root/uap-observer-egress-fqdns.txt | cut -d' ' -f1)" = \
-  "$UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_SHA256"
-test -s /root/uap-observer-egress-fqdns.txt
-LC_ALL=C sort -c -u /root/uap-observer-egress-fqdns.txt
-! grep -Ev '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$' \
-  /root/uap-observer-egress-fqdns.txt
-test "$(grep -c . /root/uap-observer-egress-fqdns.txt)" = \
-  "$(wc -l </root/uap-observer-egress-fqdns.txt)"
-install -o root -g root -m 0644 /root/uap-observer-egress-fqdns.txt \
-  /etc/uap-observer-egress-fqdns.txt
-install -o root -g root -m 0644 /root/uap-observer-egress-proxy.socket \
-  /root/uap-observer-egress-proxy.service /etc/systemd/system/
-test "$(stat -c '%u:%g:%a:%h' /etc/uap-observer-egress-fqdns.txt)" = "0:0:644:1"
-test "sha256:$(sha256sum /etc/uap-observer-egress-fqdns.txt | cut -d' ' -f1)" = \
-  "$UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_SHA256"
+test "$(stat -c '%u:%g:%a:%h' "$EGRESS_ALLOWLIST")" = \
+  "$EGRESS_ALLOWLIST_MODE"
+test "sha256:$(sha256sum "$EGRESS_ALLOWLIST" | cut -d' ' -f1)" = \
+  "$EGRESS_SHA256"
+PYTHONDONTWRITEBYTECODE=1 python3 -B \
+  "$SOURCE_ROOT/deploy/uap-observer-egress-proxy.py" \
+  --config "$EGRESS_ALLOWLIST" --validate-config
 ```
 
 For each exact pinned client, perform the earlier real-request proxy preflight
 with `HTTP_PROXY=http://127.0.0.2:8766`,
 `HTTPS_PROXY=http://127.0.0.2:8766`, `ALL_PROXY=http://127.0.0.2:8766`, and
-an explicitly empty `NO_PROXY`. Repeat once with the proxy stopped while host
-firewall rules reject direct egress from the observer/runner client identities;
-the request must fail. A client passes only if the running-proxy request appears
+an explicitly empty `NO_PROXY`. Repeat once with the proxy stopped while the
+operator-managed host firewall rejects the process's direct egress; the request
+must fail. A client passes only if the running-proxy request appears
 in sanitized proxy connection metadata and the stopped-proxy request cannot use
-a direct path. Review and approve any newly observed provider hostname, update
-and re-digest the immutable allowlist, then repeat all pinned-client preflights;
-never enable a direct fallback to make a preflight pass.
+a direct path. Every observed provider hostname must already be an exact host in
+the final configured set. On any discrepancy, stop, revise and re-review the
+configs and allowlist together, re-digest them, and repeat every preflight;
+never add an allowlist-only exception or direct fallback to make it pass.
 
 ## 2. Identity, network, and GitHub
 
@@ -216,12 +215,18 @@ workflow identity.
 
 Replace `observer.example.invalid` in a copy of `deploy/Caddyfile` with the
 public observer FQDN. Create public A (and AAAA only when IPv6 is actually
-routed) DNS records before starting Caddy. Permit inbound TCP 80/443, restrict
-SSH to the administration source, and permit outbound DNS/HTTPS only for the
-reviewed proxy service identity. Reject direct Internet egress from the
-observer, runner, and per-client identities. Do not expose port 8765 or 8766.
-Cloud images with `manage_etc_hosts: true` overwrite
-`/etc/hosts`, so do not use a local hosts entry as persistent DNS configuration.
+routed) DNS records before starting Caddy. In the operator-managed host
+firewall, permit inbound TCP 80/443, restrict SSH to the administration source,
+permit the proxy's required outbound DNS/HTTPS, and reject every direct Internet
+path from observer and client processes. Do not expose port 8765 or 8766. The
+repository does not install UID-, cgroup-, or service-identity firewall rules,
+so do not claim that a service account alone provides this isolation: select,
+document, and test concrete firewall mechanics for the host. Separately,
+installer-created systemd drop-ins apply `IPAddressDeny=any` with only the
+required loopback allowances to the observer and runner services; those unit
+controls do not replace the host firewall. Cloud images with
+`manage_etc_hosts: true` overwrite `/etc/hosts`, so do not use a local hosts
+entry as persistent DNS configuration.
 
 ## 3. Install and start
 
@@ -236,7 +241,8 @@ CADDY_SHA256="sha256:$(sha256sum /root/Caddyfile | cut -d' ' -f1)"
   /root/uap-observer-adapter-config.json "$ADAPTER_SHA256" \
   /root/uap-observer.json "$OBSERVER_SHA256" \
   /root/caddy_2.11.4_linux_amd64.tar.gz \
-  /root/Caddyfile "$CADDY_SHA256"
+  /root/Caddyfile "$CADDY_SHA256" \
+  "$EGRESS_ALLOWLIST" "$EGRESS_SHA256"
 ```
 
 The installer does not enable or start anything. After it succeeds, provision
@@ -263,7 +269,7 @@ systemctl enable --now uap-observer-egress-proxy.socket
 systemctl is-active uap-observer-egress-proxy.socket
 ss -lntp | grep -E '127\.0\.0\.2:8766([[:space:]]|$)'
 ! ss -lntp | grep -E '(0\.0\.0\.0|\[::\]|:::):8766([[:space:]]|$)'
-curl --fail --silent --show-error --output /dev/null \
+curl --silent --show-error --output /dev/null --connect-timeout 10 --max-time 30 \
   --proxy http://127.0.0.2:8766 "https://<reviewed-allowlisted-health-fqdn>/"
 systemctl is-active uap-observer-egress-proxy.service
 systemctl enable --now uap-observer-runner.socket \
@@ -278,12 +284,14 @@ ss -lnt | grep -E '127\.0\.0\.1:8765|127\.0\.0\.2:8766|:80 |:443 '
 ! ss -lnt | grep -E '(0\.0\.0\.0|\[::\]|:::):876(5|6)([[:space:]]|$)'
 ```
 
-The unauthenticated HTTP probe is expected to be rejected; it proves only TLS
-and routing. Health is complete only when the proxy socket/service and all four
-repository units are active, `127.0.0.1:8765` and `127.0.0.2:8766` are the only
-8765/8766 listeners, Caddy owns the public listener, direct client egress is
-rejected, and a protected workflow gets a signed bundle whose public key and
-key ID match the repository variables.
+The proxy probe accepts any origin HTTP status; it deterministically checks the
+CONNECT tunnel and TLS without requiring an arbitrary root path to return 2xx.
+The unauthenticated observer probe is expected to be rejected; it proves only
+TLS and routing. Health is complete only when the proxy socket/service and all
+four repository units are active, `127.0.0.1:8765` and `127.0.0.2:8766` are the
+only 8765/8766 listeners, Caddy owns the public listener, direct client egress
+is rejected, and a protected workflow gets a signed bundle whose public key
+and key ID match the repository variables.
 
 ## 4. Operate one evidence run
 
@@ -346,11 +354,11 @@ systemctl stop uap-observer-egress-proxy.socket \
 ```
 
 Do not bypass OIDC, reuse consent/attestations, edit the installed closure or
-proxy allowlist in place, relax the no-direct-egress firewall rule, or
+proxy allowlist in place, relax the no-direct-egress firewall policy, or
 substitute fixture evidence. Proxy rollback means restore the last independently
-reviewed unit/allowlist input tuple (including its recorded digest and mode) on
-a new disposable host; do not keep this host serving while changing those
-inputs.
+reviewed source commit and allowlist tuple (including its recorded digest and
+mode) on a new disposable host; do not keep this host serving while changing
+those inputs.
 
 The current installer supports a fresh host only. If
 `/opt/uap-observer-current` exists, it accepts only byte-identical inputs and

@@ -109,9 +109,17 @@ class WorkflowContractTests(unittest.TestCase):
     def test_observer_runbook_binds_fail_closed_loopback_proxy_operations(self) -> None:
         runbook = OBSERVER_RUNBOOK.read_text()
         required = (
-            "UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST=/etc/uap-observer-egress-fqdns.txt",
-            "UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_SHA256=sha256:<64-lowercase-hex>",
-            "UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_MODE=0:0:644:1",
+            "EGRESS_ALLOWLIST=/root/uap-observer-egress-allowlist.json",
+            "EGRESS_SHA256=sha256:<64-lowercase-hex>",
+            "EGRESS_ALLOWLIST_MODE=0:0:644:1",
+            '"$EGRESS_ALLOWLIST" "$EGRESS_SHA256"',
+            "--config \"$EGRESS_ALLOWLIST\" --validate-config",
+            "The proxy executable and units are repository source/runtime-closure files",
+            "`schema_version` set to `1` and a non-empty `hosts` array",
+            "bytewise-sorted,\nunique, exact lowercase ASCII FQDNs",
+            "The set must equal the HTTPS hosts in the final adapter and\nobserver configs",
+            "Do not stage\nor copy units into `/etc/systemd/system` manually",
+            "NO_OPEN_BROWSER=1 login",
             "systemctl enable --now uap-observer-egress-proxy.socket",
             "systemctl is-active uap-observer-egress-proxy.service",
             "systemctl stop uap-observer-egress-proxy.socket",
@@ -122,8 +130,10 @@ class WorkflowContractTests(unittest.TestCase):
             "HTTPS_PROXY=http://127.0.0.2:8766",
             "ALL_PROXY=http://127.0.0.2:8766",
             "explicitly empty `NO_PROXY`",
-            "current provider-owned\nhost list for Codex, Cursor, Kiro, GitHub",
+            "current\nprovider-owned host list for Codex, Cursor, Kiro, GitHub",
             "current installer supports a fresh host only",
+            "repository does not install UID-, cgroup-, or service-identity firewall rules",
+            "`IPAddressDeny=any`",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
@@ -131,6 +141,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Do not bypass OIDC", runbook)
         self.assertIn("five minutes before", runbook)
         self.assertIn("genuinely\nexternal unmerged PR", runbook)
+        self.assertNotIn("uap-observer-egress-fqdns.txt", runbook)
+        self.assertNotIn("NO_OPEN_BROWSER=1 agent login", runbook)
+        self.assertNotIn("/root/uap-observer-egress-proxy.socket", runbook)
+        self.assertNotIn("/root/uap-observer-egress-proxy.service", runbook)
+        proxy_probe = runbook.split(
+            '"https://<reviewed-allowlisted-health-fqdn>/"', 1,
+        )[0].rsplit("curl ", 1)[-1]
+        self.assertNotIn("--fail", proxy_probe)
 
     def test_launch_evidence_jobs_fetch_parent_for_patch_binding(self) -> None:
         launch = load(LAUNCH)
