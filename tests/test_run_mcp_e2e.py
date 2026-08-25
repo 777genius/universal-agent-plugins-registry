@@ -27,6 +27,7 @@ class InspectorOutputTests(unittest.TestCase):
                 str((e2e.ROOT / "plugins/context7/io.github.777genius.agentplugins/runtime/launcher.mjs").resolve()),
             )
             plugin_data = str((sandbox / "plugin-data").resolve())
+            self.assertTrue(Path(plugin_data).is_dir())
             self.assertEqual(environment["PLUGIN_DATA"], plugin_data)
             self.assertEqual(server["env"]["PLUGIN_DATA"], plugin_data)
             self.assertEqual(server["env"]["PLUGIN_ROOT"], str((e2e.ROOT / "plugins/context7").resolve()))

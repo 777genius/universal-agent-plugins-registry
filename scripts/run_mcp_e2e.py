@@ -24,6 +24,7 @@ def materialize_inspector_config(plugin: str, sandbox: Path) -> tuple[Path, dict
     """Bind client-provided plugin paths to one disposable Inspector sandbox."""
     plugin_root = (ROOT / "plugins" / plugin).resolve()
     plugin_data = (sandbox / "plugin-data").resolve()
+    plugin_data.mkdir(mode=0o700)
 
     def expand(value: Any) -> Any:
         if isinstance(value, dict):
