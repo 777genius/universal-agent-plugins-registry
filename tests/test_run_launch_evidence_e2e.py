@@ -1506,6 +1506,8 @@ print((fixtures / name).read_text(), end="")
             ("manifest", {**arguments, "release_manifest_digest": "invalid"}),
             ("checksums", {**arguments, "release_checksums_digest": "invalid"}),
             ("attestation", {**arguments, "asset_attestation": {**attestation, "verified": False}}),
+            ("subject-name", {**arguments, "asset_attestation": {**attestation, "subject_name": "other-asset"}}),
+            ("subject-digest", {**arguments, "asset_attestation": {**attestation, "subject_digest": "sha256:" + "e" * 64}}),
         ):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "not bound"):
                 e2e.validate_capture_release_binding(**mutation)
@@ -1659,12 +1661,29 @@ print((fixtures / name).read_text(), end="")
             spaced = json.loads(json.dumps(fixture))
             spaced["installations"][0]["installation_id"] = f"{whitespace}portable-id{whitespace}"
             self.assertTrue(observer.validate_released_state_v4(spaced), repr(whitespace))
-        control_separator = json.loads(json.dumps(fixture))
-        control_separator["installations"][0]["installation_id"] = "\u001cportable-id\u001c"
-        self.assertFalse(
-            observer.validate_released_state_v4(control_separator),
-            "Go strings.TrimSpace does not trim U+001C even though Python str.strip does",
-        )
+        for control in ("\u001c", "\u001d", "\u001e", "\u001f"):
+            control_separator = json.loads(json.dumps(fixture))
+            installation = control_separator["installations"][0]
+            installation["declared_name"] = control
+            installation["package"]["declared_name"] = control
+            self.assertTrue(
+                observer.validate_released_state_v4(control_separator),
+                f"Go strings.TrimSpace does not trim U+{ord(control):04X}",
+            )
+        for whitespace in ("\t", "\u0085", "\u00a0", "\u1680", "\u2007", "\u202f", "\u3000"):
+            blank = json.loads(json.dumps(fixture))
+            installation = blank["installations"][0]
+            installation["declared_name"] = whitespace
+            installation["package"]["declared_name"] = whitespace
+            self.assertFalse(observer.validate_released_state_v4(blank), repr(whitespace))
+        for control in ("\u001c", "\u001d", "\u001e", "\u001f"):
+            self.assertTrue(observer._released_directory_snapshot_coherent({
+                "snapshot_schema": 1, "snapshot_sequence": 1, "snapshot_digest": control,
+            }))
+        for whitespace in ("\t", "\u0085", "\u00a0", "\u1680", "\u2007", "\u202f", "\u3000"):
+            self.assertFalse(observer._released_directory_snapshot_coherent({
+                "snapshot_schema": 1, "snapshot_sequence": 1, "snapshot_digest": whitespace,
+            }))
 
         for field, replacement in (
             ("physical_artifact_id", "../artifact"),
@@ -2032,6 +2051,8 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             frozen_result = observer.freeze_complete_authority(
                 installation, (root,), public, [{"backup_path": str(historical)}],
             )
+            if frozen_result is None:
+                self.skipTest("kernel ancestry lifetime primitives unavailable (authority failed closed)")
             self.assertIsNotNone(frozen_result)
             frozen, data_paths = frozen_result
             self.assertEqual(set(frozen.records), {str(target), str(data), str(staging), str(backup), str(historical)})
@@ -2040,7 +2061,10 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             self.assertFalse(frozen.absent_and_unlinked(), "an already-absent authorized name must stay absent")
             staging.rmdir()
             target.rmdir(); data.rmdir()
-            self.assertTrue(frozen.absent_and_unlinked())
+            self.assertFalse(
+                frozen.absent_and_unlinked(),
+                "create/delete churn must remain latched through final verification",
+            )
             frozen.close()
 
     def test_absent_purge_authority_rejects_lexical_ancestor_replacement(self) -> None:
@@ -2049,6 +2073,8 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             root = parent / "root"; root.mkdir()
             path = root / ".old" / "nested"
             frozen = observer.freeze_path_authority({str(path)}, (root,))
+            if frozen is None:
+                self.skipTest("kernel ancestry lifetime primitives unavailable (authority failed closed)")
             self.assertIsNotNone(frozen)
             original = parent / "original-root"
             root.rename(original)
@@ -2058,6 +2084,69 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
                 frozen.absent_and_unlinked(),
                 "a held ancestor descriptor cannot authenticate a replacement lexical root",
             )
+            frozen.close()
+
+    def test_absent_purge_authority_rejects_rename_use_delete_and_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "root"; root.mkdir()
+            path = root / ".old" / "nested"
+            frozen = observer.freeze_path_authority({str(path)}, (root,))
+            if frozen is None:
+                self.skipTest("kernel ancestry lifetime primitives unavailable (authority failed closed)")
+            original = parent / "original-root"
+            root.rename(original)
+            replacement = parent / "root"; replacement.mkdir()
+            (replacement / ".old").mkdir()
+            shutil.rmtree(replacement)
+            original.rename(root)
+            self.assertFalse(frozen.absent_and_unlinked(), "restoring the original inode must not erase entry churn")
+            frozen.close()
+
+    def test_absent_purge_authority_fails_closed_on_overflow_and_capability_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"; root.mkdir()
+            path = root / "missing" / "nested"
+            with mock.patch.object(observer._LinuxAncestryLifetimeProof, "__init__", side_effect=OSError("unavailable")):
+                self.assertIsNone(observer.freeze_path_authority({str(path)}, (root,)))
+            proof = object.__new__(observer._LinuxAncestryLifetimeProof)
+            proof._failed = False
+            proof._names = {}
+            proof._record_event(-1, observer._IN_Q_OVERFLOW, b"")
+            self.assertTrue(proof._failed, "queue overflow must be permanently latched")
+
+    def test_absent_purge_authority_binds_linux_mount_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"; root.mkdir()
+            mountpoint = root / "mountpoint"; mountpoint.mkdir()
+            path = mountpoint / "missing"
+            frozen = observer.freeze_path_authority({str(path)}, (root,))
+            if frozen is None:
+                with mock.patch.object(observer, "_statx_mount_id", side_effect=OSError("mount identity unavailable")):
+                    self.assertIsNone(observer.freeze_path_authority({str(path)}, (root,)))
+                return
+            mount = getattr(observer._LIBC, "mount", None)
+            umount2 = getattr(observer._LIBC, "umount2", None)
+            mounted = bool(
+                mount is not None and umount2 is not None
+                and mount(os.fsencode(mountpoint), os.fsencode(mountpoint), None, 4096, None) == 0
+            )
+            if mounted:
+                try:
+                    opened = os.fstat(frozen.records[str(path)][4][-1][0])
+                    replacement = mountpoint.stat()
+                    self.assertEqual((opened.st_dev, opened.st_ino), (replacement.st_dev, replacement.st_ino))
+                    self.assertFalse(frozen.absent_and_unlinked(), "same-inode bind mount must have a distinct mount identity")
+                finally:
+                    unmounted = umount2(os.fsencode(mountpoint), 0)
+                    if unmounted != 0:
+                        unmounted = umount2(os.fsencode(mountpoint), 2)
+                    self.assertEqual(unmounted, 0, "disposable bind mount must be removed")
+            else:
+                frozen.close()
+                with mock.patch.object(observer, "_statx_mount_id", side_effect=OSError("mount identity unavailable")):
+                    self.assertIsNone(observer.freeze_path_authority({str(path)}, (root,)))
+                return
             frozen.close()
 
     def test_state_migration_observes_stale_refusal_backup_and_exact_provenance(self) -> None:

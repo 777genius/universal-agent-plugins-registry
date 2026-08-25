@@ -193,22 +193,6 @@ def validate_capture_release_binding(
         (item for item in release_manifest.get("assets", {}).values() if item.get("file") == asset_name),
         None,
     )
-    expected_attestation = {
-        "repository": TRUSTED_CLI_RELEASE_REPOSITORY,
-        "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
-        "tag": TRUSTED_CLI_RELEASE_TAG,
-        "tag_commit": TRUSTED_CLI_RELEASE_COMMIT,
-        "issuer": "https://token.actions.githubusercontent.com",
-        "source_ref": f"refs/tags/{TRUSTED_CLI_RELEASE_TAG}",
-        "source_digest": TRUSTED_CLI_RELEASE_COMMIT,
-        "predicate_type": "https://slsa.dev/provenance/v1",
-        "subject_name": asset_name,
-        "subject_digest": asset_digest,
-        "runner_environment": "github-hosted",
-        "asset_name": asset_name,
-        "asset_digest": asset_digest,
-        "verified": True,
-    }
     if not (
         set(release_identity) == {"repository", "tag", "tag_commit", "release_id", "immutable"}
         and release_identity == {
@@ -224,7 +208,11 @@ def validate_capture_release_binding(
         and isinstance(declared.get("sha256"), str)
         and asset_digest == "sha256:" + declared["sha256"] and DIGEST.fullmatch(asset_digest)
         and DIGEST.fullmatch(release_manifest_digest) and DIGEST.fullmatch(release_checksums_digest)
-        and asset_attestation == expected_attestation
+        and strict_asset_attestation_matches(
+            asset_attestation, repository=TRUSTED_CLI_RELEASE_REPOSITORY,
+            workflow=TRUSTED_CLI_RELEASE_WORKFLOW, tag=TRUSTED_CLI_RELEASE_TAG,
+            commit=TRUSTED_CLI_RELEASE_COMMIT, asset_name=asset_name, asset_digest=asset_digest,
+        )
     ):
         raise ValueError("enforced binary is not bound to the authenticated immutable release")
     validate_release_manifest(
@@ -243,6 +231,24 @@ def validate_capture_release_binding(
         "release_checksums_digest": release_checksums_digest,
         "attestation": copy.deepcopy(asset_attestation),
     }
+
+
+def strict_asset_attestation_matches(
+    value: Any, *, repository: str, workflow: str, tag: str, commit: str,
+    asset_name: str, asset_digest: str,
+) -> bool:
+    """Bind strict SLSA subject identity to the authenticated legacy asset fields."""
+    return value == {
+        "repository": repository, "workflow": workflow, "tag": tag, "tag_commit": commit,
+        "issuer": "https://token.actions.githubusercontent.com",
+        "source_ref": f"refs/tags/{tag}", "source_digest": commit,
+        "predicate_type": "https://slsa.dev/provenance/v1",
+        "subject_name": asset_name, "subject_digest": asset_digest,
+        "runner_environment": "github-hosted",
+        "asset_name": asset_name, "asset_digest": asset_digest, "verified": True,
+    }
+
+
 DIRECTORY_INPUT_ENVIRONMENT_KEYS = frozenset({
     "AGENTPLUGINS_DIRECTORY_ORIGIN",
     "AGENTPLUGINS_DIRECTORY_SNAPSHOT",
@@ -2328,14 +2334,11 @@ class LaunchHarness:
             )
             attested_asset = value.get("github_asset_attestation", {})
             release_identity_valid = value.get("github_release_identity") == self.release_identity
-            attestation_valid = (
-                attested_asset.get("verified") is True
-                and attested_asset.get("repository") == TRUSTED_CLI_RELEASE_REPOSITORY
-                and attested_asset.get("workflow") == TRUSTED_CLI_RELEASE_WORKFLOW
-                and attested_asset.get("tag") == self.release_tag
-                and attested_asset.get("tag_commit") == self.release_manifest.get("commit")
-                and attested_asset.get("asset_name") == value.get("asset_name")
-                and attested_asset.get("asset_digest") == value.get("asset_digest")
+            attestation_valid = strict_asset_attestation_matches(
+                attested_asset, repository=TRUSTED_CLI_RELEASE_REPOSITORY,
+                workflow=TRUSTED_CLI_RELEASE_WORKFLOW, tag=self.release_tag,
+                commit=self.release_manifest.get("commit"), asset_name=value.get("asset_name"),
+                asset_digest=value.get("asset_digest"),
             )
             valid = (
                 value.get("catalog_repository") == read_production_config()["catalog_repository"]

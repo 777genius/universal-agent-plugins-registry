@@ -127,6 +127,10 @@ class WorkflowContractTests(unittest.TestCase):
             "agentplugins_0.1.14_linux_arm64", "agentplugins_0.1.14_linux_amd64",
             "agentplugins_0.1.14_windows_amd64.exe", "agentplugins_0.1.14_windows_arm64.exe",
         })
+        aggregate_commands = commands(aggregate)
+        self.assertIn("['subject_name'] == x['asset_name']", aggregate_commands)
+        self.assertIn("['subject_digest'] == x['asset_digest']", aggregate_commands)
+        self.assertIn("set(x) == expected_attestation_keys", aggregate_commands)
         self.assertIn("prepare_launch_evidence.py", commands(native))
         self.assertIn("node-version: '22'", yaml.safe_dump(npm))
         self.assertIn("npm install --global", commands(npm))

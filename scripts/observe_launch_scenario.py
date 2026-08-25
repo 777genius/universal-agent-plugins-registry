@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -117,6 +119,11 @@ def _go_trim_space(value: str) -> str:
     return value[start:end]
 
 
+def _go_nonempty(value: Any) -> bool:
+    """The released Go State-v4 validator's strings.TrimSpace check."""
+    return isinstance(value, str) and bool(_go_trim_space(value))
+
+
 def _valid_leaf_id(value: Any) -> bool:
     """Exact portable leaf-ID rule used by released agentplugins 0.1.14."""
     if not isinstance(value, str):
@@ -147,7 +154,7 @@ def _released_directory_snapshot_coherent(value: dict[str, Any]) -> bool:
     if type(schema) is not int or type(sequence) is not int or not isinstance(digest, str) or sequence < 0:
         return False
     present = sequence > 0 or schema > 0 or digest != ""
-    return not present or (sequence >= 1 and schema >= 1 and bool(digest.strip()))
+    return not present or (sequence >= 1 and schema >= 1 and _go_nonempty(digest))
 
 
 def validate_released_state_v4(value: Any) -> bool:
@@ -182,7 +189,7 @@ def validate_released_state_v4(value: Any) -> bool:
             not _valid_leaf_id(installation_id) or installation_id in installation_ids
             or not isinstance(package, dict) or not isinstance(source, dict)
             or not isinstance(clients, dict) or not isinstance(receipts, dict)
-            or not _nonempty(installation.get("declared_name"))
+            or not _go_nonempty(installation.get("declared_name"))
             or installation.get("declared_name") != package.get("declared_name")
         ):
             return False
@@ -197,7 +204,7 @@ def validate_released_state_v4(value: Any) -> bool:
                 return False
         elif origin == "directory":
             if not isinstance(directory, dict) or not (
-                _nonempty(directory.get("product_id")) and _nonempty(directory.get("distribution_id"))
+                _go_nonempty(directory.get("product_id")) and _go_nonempty(directory.get("distribution_id"))
                 and type(directory.get("desired_release_sequence")) is int
                 and directory["desired_release_sequence"] >= 1
                 and directory.get("distribution_kind") in {"upstream", "community_bridge", "community"}
@@ -214,17 +221,17 @@ def validate_released_state_v4(value: Any) -> bool:
             if not isinstance(receipt, dict) or receipt_key == "" or receipt_key != receipt.get("data_receipt_id"):
                 return False
             if not _valid_leaf_id(receipt.get("data_receipt_id")) or not all(
-                _nonempty(receipt.get(field)) for field in ("physical_backend_id", "scope", "locator", "ownership_digest")
+                _go_nonempty(receipt.get(field)) for field in ("physical_backend_id", "scope", "locator", "ownership_digest")
             ) or receipt.get("state") not in {"owned", "unknown", "stale"}:
                 return False
         source_id = source.get("source_binding_id")
-        if not _nonempty(source_id) or source_id in source_ids:
+        if not _go_nonempty(source_id) or source_id in source_ids:
             return False
         source_ids.add(source_id)
         if package.get("loader_kind") == "agent_plugins" and not (
-            _nonempty(package.get("format_id")) and _nonempty(source.get("tree_digest"))
-            and _nonempty(package.get("manifest_digest"))
-            and (package.get("format_id") != "agent-plugins/1.0.0" or _nonempty(package.get("schema_uri")))
+            _go_nonempty(package.get("format_id")) and _go_nonempty(source.get("tree_digest"))
+            and _go_nonempty(package.get("manifest_digest"))
+            and (package.get("format_id") != "agent-plugins/1.0.0" or _go_nonempty(package.get("schema_uri")))
         ):
             return False
         for map_key, client in clients.items():
@@ -234,7 +241,7 @@ def validate_released_state_v4(value: Any) -> bool:
             if not _valid_leaf_id(binding_id) or binding_id in client_ids:
                 return False
             client_ids.add(binding_id)
-            if not _nonempty(client.get("client_id")) or not _nonempty(client.get("target_locator")) or not _valid_leaf_id(client.get("physical_artifact_id")):
+            if not _go_nonempty(client.get("client_id")) or not _go_nonempty(client.get("target_locator")) or not _valid_leaf_id(client.get("physical_artifact_id")):
                 return False
             if (
                 client.get("materialization") not in {"absent", "staged", "materialized", "degraded"}
@@ -245,7 +252,7 @@ def validate_released_state_v4(value: Any) -> bool:
             ):
                 return False
             revision = client.get("package_revision")
-            if revision is not None and (not isinstance(revision, dict) or not _nonempty(revision.get("tree_digest")) or not _nonempty(revision.get("manifest_digest"))):
+            if revision is not None and (not isinstance(revision, dict) or not _go_nonempty(revision.get("tree_digest")) or not _go_nonempty(revision.get("manifest_digest"))):
                 return False
             if origin == "directory" and not (
                 isinstance(revision, dict) and revision.get("distribution_id") == directory.get("distribution_id")
@@ -263,7 +270,7 @@ def validate_released_state_v4(value: Any) -> bool:
             if not isinstance(native_objects, list):
                 return False
             for native_object in native_objects:
-                if not isinstance(native_object, dict) or not _nonempty(native_object.get("object_id")) or not _nonempty(native_object.get("kind")) or native_object["object_id"] in object_ids:
+                if not isinstance(native_object, dict) or not _go_nonempty(native_object.get("object_id")) or not _go_nonempty(native_object.get("kind")) or native_object["object_id"] in object_ids:
                     return False
                 object_ids.add(native_object["object_id"])
             mutations = client.get("receipts", [])
@@ -3114,15 +3121,151 @@ class RetainedMarker:
                 pass
 
 
+class _StatxTimestamp(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_int64), ("tv_nsec", ctypes.c_uint32), ("reserved", ctypes.c_int32)]
+
+
+class _Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint32), ("blksize", ctypes.c_uint32),
+        ("attributes", ctypes.c_uint64), ("nlink", ctypes.c_uint32),
+        ("uid", ctypes.c_uint32), ("gid", ctypes.c_uint32),
+        ("mode", ctypes.c_uint16), ("spare0", ctypes.c_uint16),
+        ("ino", ctypes.c_uint64), ("size", ctypes.c_uint64),
+        ("blocks", ctypes.c_uint64), ("attributes_mask", ctypes.c_uint64),
+        ("atime", _StatxTimestamp), ("btime", _StatxTimestamp),
+        ("ctime", _StatxTimestamp), ("mtime", _StatxTimestamp),
+        ("rdev_major", ctypes.c_uint32), ("rdev_minor", ctypes.c_uint32),
+        ("dev_major", ctypes.c_uint32), ("dev_minor", ctypes.c_uint32),
+        ("mnt_id", ctypes.c_uint64), ("dio_mem_align", ctypes.c_uint32),
+        ("dio_offset_align", ctypes.c_uint32), ("spare3", ctypes.c_uint64 * 12),
+    ]
+
+
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_STATX_MNT_ID = 0x1000
+_AT_EMPTY_PATH = 0x1000
+_AT_SYMLINK_NOFOLLOW = 0x100
+_INOTIFY_EVENT_MASK = 0x00000004 | 0x00000008 | 0x00000100 | 0x00000200 | 0x00000040 | 0x00000080
+_INOTIFY_SELF_MASK = 0x00000400 | 0x00000800 | 0x00002000 | 0x00008000
+_IN_Q_OVERFLOW = 0x00004000
+
+
+def _statx_mount_id(directory_fd: int, name: str = "") -> int:
+    """Return Linux's mount ID, failing if statx cannot make that binding."""
+    statx = getattr(_LIBC, "statx", None)
+    if statx is None:
+        raise OSError(errno.ENOSYS, "statx is unavailable")
+    result = _Statx()
+    flags = _AT_EMPTY_PATH if not name else _AT_SYMLINK_NOFOLLOW
+    if statx(directory_fd, os.fsencode(name), flags, _STATX_MNT_ID, ctypes.byref(result)) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+    if result.mask & _STATX_MNT_ID == 0 or result.mnt_id == 0:
+        raise OSError(errno.ENOTSUP, "statx mount identity is unavailable")
+    return int(result.mnt_id)
+
+
+class _LinuxAncestryLifetimeProof:
+    """One fail-closed inotify stream plus statx mount bindings for ancestry edges."""
+
+    def __init__(self):
+        init = getattr(_LIBC, "inotify_init1", None)
+        add = getattr(_LIBC, "inotify_add_watch", None)
+        if init is None or add is None:
+            raise OSError(errno.ENOSYS, "inotify is unavailable")
+        self.fd = init(os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+        if self.fd < 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+        self._add = add
+        self._names: dict[int, set[bytes]] = {}
+        self._edges: list[tuple[int, str, int, int]] = []
+        self._failed = False
+        self._roots: list[tuple[int, int]] = []
+
+    def bind_root(self, root_fd: int) -> None:
+        self._roots.append((root_fd, _statx_mount_id(root_fd)))
+
+    def watch_parent(self, parent_fd: int, name: str) -> int:
+        path = os.fsencode(f"/proc/self/fd/{parent_fd}")
+        wd = self._add(self.fd, path, _INOTIFY_EVENT_MASK | _INOTIFY_SELF_MASK)
+        if wd < 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+        self._names.setdefault(wd, set()).add(os.fsencode(name))
+        return wd
+
+    def ignore_name(self, wd: int, name: str) -> None:
+        """Stop treating an existing final authority leaf as an ancestry edge."""
+        wanted = os.fsencode(name)
+        self._names.get(wd, set()).discard(wanted)
+
+    def bind_existing_edge(self, parent_fd: int, name: str, child_fd: int) -> None:
+        child_mount = _statx_mount_id(child_fd)
+        if _statx_mount_id(parent_fd, name) != child_mount:
+            raise OSError(errno.ESTALE, "ancestry mount changed while freezing")
+        self._edges.append((parent_fd, name, child_fd, child_mount))
+
+    def _record_event(self, wd: int, mask: int, raw_name: bytes) -> None:
+        """Latch relevant churn and overflow; a later clean state cannot erase it."""
+        if mask & _IN_Q_OVERFLOW or mask & _INOTIFY_SELF_MASK:
+            self._failed = True
+        if mask & _INOTIFY_EVENT_MASK and raw_name in self._names.get(wd, set()):
+            self._failed = True
+
+    def verify(self) -> bool:
+        if self._failed:
+            return False
+        try:
+            while True:
+                try:
+                    body = os.read(self.fd, 65536)
+                except BlockingIOError:
+                    break
+                if not body:
+                    self._failed = True
+                    break
+                offset = 0
+                while offset + 16 <= len(body):
+                    wd = int.from_bytes(body[offset:offset + 4], sys.byteorder, signed=True)
+                    mask = int.from_bytes(body[offset + 4:offset + 8], sys.byteorder)
+                    length = int.from_bytes(body[offset + 12:offset + 16], sys.byteorder)
+                    raw_name = body[offset + 16:offset + 16 + length].split(b"\0", 1)[0]
+                    offset += 16 + length
+                    self._record_event(wd, mask, raw_name)
+                if offset != len(body):
+                    self._failed = True
+            for root_fd, root_mount in self._roots:
+                fresh_root = os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    if _statx_mount_id(root_fd) != root_mount or _statx_mount_id(fresh_root) != root_mount:
+                        self._failed = True
+                finally:
+                    os.close(fresh_root)
+            for parent_fd, name, child_fd, mount_id in self._edges:
+                if _statx_mount_id(child_fd) != mount_id or _statx_mount_id(parent_fd, name) != mount_id:
+                    self._failed = True
+        except OSError:
+            self._failed = True
+        return not self._failed
+
+    def close(self) -> None:
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
 class FrozenAuthoritySet:
     """Descriptor-bound path authority with every lexical component pinned."""
 
-    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]]):
+    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]], lifetime: _LinuxAncestryLifetimeProof):
         self.records = records
+        self.lifetime = lifetime
 
-    @staticmethod
-    def _ancestry_bound(ancestry: list[tuple[int, int | None, str | None, tuple[int, int]]]) -> bool:
-        if not ancestry:
+    def _ancestry_bound(self, ancestry: list[tuple[int, int | None, str | None, tuple[int, int]]]) -> bool:
+        if not ancestry or not self.lifetime.verify():
             return False
         try:
             fresh_root = os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
@@ -3212,6 +3355,7 @@ class FrozenAuthoritySet:
             return False
 
     def close(self) -> None:
+        self.lifetime.close()
         closed: set[int] = set()
         for _, descriptor, _, _, ancestry in self.records.values():
             for child in [descriptor, *(item[0] for item in ancestry)]:
@@ -3227,8 +3371,10 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
     """Open an absolute path component-by-component and retain its lexical binding."""
     records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]] = {}
     opened_descriptors: list[int] = []
+    lifetime: _LinuxAncestryLifetimeProof | None = None
     try:
         roots = tuple(root.resolve(strict=True) for root in allowed_roots)
+        lifetime = _LinuxAncestryLifetimeProof()
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         for value in sorted(paths):
             path = Path(value)
@@ -3238,6 +3384,7 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
                 raise ValueError("authority path is outside the allowed roots")
             root_fd = os.open("/", directory_flags)
             opened_descriptors.append(root_fd)
+            lifetime.bind_root(root_fd)
             root_metadata = os.fstat(root_fd)
             ancestry = [(root_fd, None, None, (root_metadata.st_dev, root_metadata.st_ino))]
             parent_fd = root_fd
@@ -3246,6 +3393,7 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
                 raise ValueError("filesystem root cannot be purge authority")
             for index, name in enumerate(parts):
                 final = index == len(parts) - 1
+                watch = lifetime.watch_parent(parent_fd, name)
                 try:
                     metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
@@ -3267,18 +3415,22 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
                     os.close(descriptor)
                     raise ValueError("authority component changed while freezing")
                 if final:
+                    lifetime.ignore_name(watch, name)
                     records[value] = ("existing", descriptor, identity, name, ancestry)
                 else:
+                    lifetime.bind_existing_edge(parent_fd, name, descriptor)
                     ancestry.append((descriptor, parent_fd, name, identity))
                     parent_fd = descriptor
             else:
                 if value not in records:
                     raise ValueError("authority path was not frozen")
-        frozen = FrozenAuthoritySet(records)
+        frozen = FrozenAuthoritySet(records, lifetime)
         if set(records) != paths:
             raise ValueError("authority set is incomplete")
         return frozen
     except (OSError, ValueError):
+        if lifetime is not None:
+            lifetime.close()
         for descriptor in set(opened_descriptors):
             try:
                 os.close(descriptor)
@@ -3289,7 +3441,7 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
 
 def freeze_complete_authority(
     installation: Any, allowed_roots: tuple[Path, ...], public_receipts: Any,
-    transaction_receipts: Any = (),
+    transaction_receipts: Any = (), *, extra_paths: frozenset[str] = frozenset(),
 ) -> tuple[FrozenAuthoritySet, set[str]] | None:
     """Freeze every state/public-receipt authorized locator exactly once."""
     data = frozen_data_receipt_map(installation)
@@ -3297,6 +3449,7 @@ def freeze_complete_authority(
         return None
     data_paths = {receipt["locator"] for receipt in data.values()}
     paths = set(data_paths)
+    paths.update(extra_paths)
     clients = installation.get("clients") if isinstance(installation, dict) else None
     if not isinstance(clients, dict):
         return None
@@ -3544,13 +3697,17 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         ),
     }
     remove_preserved = all(remove_checks.values())
+    if removal_authority is not None:
+        removal_authority.close()
+        removal_authority = None
     purge_public_receipts = remove_value.get("data", {}).get("retained_data") if isinstance(remove_value, dict) else None
+    purge_state_path = str(manager / "state-v2.json")
     purge_frozen_result = freeze_complete_authority(
         retained_installation, (root, manager), purge_public_receipts,
         retained_state.get("transaction_receipts", []) if retained_state else None,
+        extra_paths=frozenset({purge_state_path}),
     )
     purge_authority, purge_data_paths = purge_frozen_result if purge_frozen_result is not None else (None, set())
-    purge_state_authority = freeze_path_authority({str(manager / "state-v2.json")}, (manager,))
     purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
     purge_state = manager_state(manager)
     remaining = [
@@ -3558,15 +3715,16 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         if isinstance(item, dict) and item.get("installation_id") == (initial_installation or {}).get("installation_id")
     ] if purge_state else []
     valid_absent_state = purge_state is not None and not remaining
-    state_file_authoritatively_absent = bool(
-        purge_state is None and purge_state_authority is not None
-        and purge_state_authority.absent_and_unlinked()
+    purge_authority_valid = bool(
+        purge_authority is not None and (
+            (valid_absent_state and purge_authority.partitioned({purge_state_path}))
+            or (purge_state is None and purge_authority.absent_and_unlinked())
+        )
     )
-    authority_consumed = bool(valid_absent_state or state_file_authoritatively_absent)
+    authority_consumed = purge_authority_valid
     purge_deleted = bool(
         marker is not None and marker.purged((root, manager)) and authority_consumed
         and purge_authority is not None and purge_data_paths == frozen_data_paths
-        and purge_authority.absent_and_unlinked()
     )
     after = observe(home, manager)
     proof = {
@@ -3584,8 +3742,6 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         removal_authority.close()
     if purge_authority is not None:
         purge_authority.close()
-    if purge_state_authority is not None:
-        purge_state_authority.close()
     return safe_locator and all(item.returncode == 0 for item in exits) and all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof,
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,
