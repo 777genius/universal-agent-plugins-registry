@@ -3415,6 +3415,7 @@ class ProfileProvisioningTests(unittest.TestCase):
         cls.helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.helper)
 
+    @requires_disposable_observer_host
     def test_copy_tree_uses_descriptors_and_preserves_exact_private_modes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -3436,6 +3437,7 @@ class ProfileProvisioningTests(unittest.TestCase):
             self.assertEqual(copied.read_text(), "fixture")
             self.assertEqual(stat.S_IMODE(copied.stat().st_mode), 0o600)
 
+    @requires_disposable_observer_host
     def test_copy_tree_rejects_links_and_mutable_seed_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

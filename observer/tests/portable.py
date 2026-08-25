@@ -12,5 +12,5 @@ def load_tests(
     tests: unittest.TestSuite,
     pattern: str | None,
 ) -> unittest.TestSuite:
-    del loader, tests, pattern
-    return load_partition(privileged=False)
+    del tests, pattern
+    return load_partition(privileged=False, loader=loader)

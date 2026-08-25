@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Callable, Iterator
+from importlib import import_module
+from pathlib import Path
 from typing import TypeVar
 
 
@@ -34,11 +36,31 @@ def _requires_disposable_host(test: unittest.TestCase) -> bool:
     )
 
 
-def load_partition(*, privileged: bool) -> unittest.TestSuite:
-    """Load exactly one side of the portable/disposable-host partition."""
-    from observer.tests import test_observer_service
+def observer_test_module_names() -> tuple[str, ...]:
+    """Return every concrete observer test module in deterministic order."""
+    tests_directory = Path(__file__).parent
+    return tuple(
+        f"observer.tests.{path.stem}"
+        for path in sorted(tests_directory.glob("test_*.py"))
+        if path.is_file()
+    )
 
-    discovered = unittest.defaultTestLoader.loadTestsFromModule(test_observer_service)
+
+def _load_all_tests(loader: unittest.TestLoader) -> unittest.TestSuite:
+    suites = (
+        loader.loadTestsFromModule(import_module(module_name))
+        for module_name in observer_test_module_names()
+    )
+    return unittest.TestSuite(suites)
+
+
+def load_partition(
+    *,
+    privileged: bool,
+    loader: unittest.TestLoader | None = None,
+) -> unittest.TestSuite:
+    """Load exactly one side of the portable/disposable-host partition."""
+    discovered = _load_all_tests(loader or unittest.TestLoader())
     selected = (
         test for test in _test_cases(discovered)
         if _requires_disposable_host(test) is privileged
