@@ -1703,6 +1703,54 @@ print((fixtures / name).read_text(), end="")
             })
         self.assertTrue(observer.validate_released_state_v4(absent_snapshot_nulls))
 
+        uint_fixture = json.loads(json.dumps(absent_snapshot_nulls))
+        directory = uint_fixture["installations"][0]["directory"]
+        client = next(iter(uint_fixture["installations"][0]["clients"].values()))
+        directory["desired_release_sequence"] = (1 << 64) - 1
+        directory["snapshot_sequence"] = (1 << 64) - 1
+        directory["snapshot_schema"] = 1
+        directory["snapshot_digest"] = "snapshot"
+        client["package_revision"]["release_sequence"] = (1 << 64) - 1
+        self.assertTrue(observer.validate_released_state_v4(uint_fixture), "uint64 max is representable")
+        for field, value in (
+            ("desired_release_sequence", 1 << 64),
+            ("desired_release_sequence", -1),
+            ("desired_release_sequence", True),
+            ("snapshot_sequence", 1 << 64),
+        ):
+            invalid = json.loads(json.dumps(uint_fixture)); invalid["installations"][0]["directory"][field] = value
+            self.assertFalse(observer.validate_released_state_v4(invalid), (field, value))
+        overflow_revision = json.loads(json.dumps(uint_fixture))
+        next(iter(overflow_revision["installations"][0]["clients"].values()))["package_revision"]["release_sequence"] = 1 << 64
+        self.assertFalse(observer.validate_released_state_v4(overflow_revision))
+        catalog_uint = json.loads(json.dumps(fixture))
+        catalog_revision = next(iter(catalog_uint["installations"][0]["clients"].values()))["package_revision"]
+        catalog_revision["catalog_evidence"] = {
+            "current_evidence": [{"release_sequence": (1 << 64) - 1}],
+            "compatibility": {"cursor": {"evidence": [{"release_sequence": (1 << 64) - 1}]}},
+        }
+        self.assertTrue(observer.validate_released_state_v4(catalog_uint))
+        catalog_revision["catalog_evidence"]["compatibility"]["cursor"]["evidence"][0]["release_sequence"] = 1 << 64
+        self.assertFalse(observer.validate_released_state_v4(catalog_uint))
+        numeric_phase = json.loads(json.dumps(fixture))
+        next(iter(numeric_phase["installations"][0]["clients"].values()))["receipts"][0]["phase"] = 123
+        self.assertFalse(observer.validate_released_state_v4(numeric_phase), "Go cannot decode a number into a string field")
+        for mutate in (
+            lambda value: value["installations"][0]["source"].__setitem__("requested_source", 123),
+            lambda value: value["installations"][0].__setitem__("created_at", 123),
+            lambda value: next(iter(value["installations"][0]["clients"].values()))["receipts"][0].__setitem__("mutation_type", 123),
+            lambda value: value.__setitem__("unknown_state_field", True),
+        ):
+            invalid = json.loads(json.dumps(fixture)); mutate(invalid)
+            self.assertFalse(observer.validate_released_state_v4(invalid), "strict Go decoding must reject wrong or unknown fields")
+        null_zero_string = json.loads(json.dumps(fixture))
+        null_zero_string["installations"][0]["source"]["requested_source"] = None
+        null_zero_string["installations"][0]["package"]["inventory"] = None
+        self.assertTrue(observer.validate_released_state_v4(null_zero_string), "JSON null leaves non-pointer Go fields at zero values")
+        oversized_go_int = json.loads(json.dumps(absent_snapshot_nulls))
+        oversized_go_int["installations"][0]["directory"]["snapshot_schema"] = 1 << 80
+        self.assertFalse(observer.validate_released_state_v4(oversized_go_int))
+
         trimmed = json.loads(json.dumps(fixture))
         installation = trimmed["installations"][0]
         installation["installation_id"] = f"  {installation['installation_id']}  "
@@ -2121,6 +2169,191 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             )
             frozen.close()
 
+    def test_retained_tree_rejects_all_nested_modify_restore_epochs(self) -> None:
+        mutators = {
+            "bytes": lambda root: (root / "nested/file").write_bytes(b"changed"),
+            "add_delete": lambda root: (root / "transient").write_text("transient"),
+            "chmod": lambda root: (root / "nested/file").chmod(0o600),
+            "symlink": lambda root: ((root / "link").unlink(), (root / "link").symlink_to("other")),
+        }
+        for name, mutate in mutators.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp); retained = parent / "retained"; (retained / "nested").mkdir(parents=True)
+                file = retained / "nested/file"; file.write_bytes(b"original"); file.chmod(0o640)
+                (retained / "link").symlink_to("nested/file")
+                frozen = observer.freeze_path_authority(
+                    {str(retained)}, (parent,), outcomes={str(retained): "retain"},
+                )
+                if frozen is None:
+                    self.skipTest("kernel retained-tree lifetime primitives unavailable")
+                mutate(retained)
+                if name == "bytes": file.write_bytes(b"original")
+                elif name == "add_delete": (retained / "transient").unlink()
+                elif name == "chmod": file.chmod(0o640)
+                elif name == "symlink":
+                    (retained / "link").unlink(); (retained / "link").symlink_to("nested/file")
+                self.assertFalse(frozen.expected(), f"{name} restore must not erase the mutation epoch")
+                frozen.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp); retained = parent / "retained"; retained.mkdir(); file = retained / "file"; file.write_text("x")
+            try:
+                os.setxattr(file, "user.launch-proof", b"before")
+            except OSError as error:
+                if error.errno in {errno.ENOTSUP, errno.EPERM, errno.EACCES}:
+                    self.skipTest("user xattrs unavailable")
+                raise
+            frozen = observer.freeze_path_authority({str(retained)}, (parent,), outcomes={str(retained): "retain"})
+            if frozen is None:
+                self.skipTest("kernel retained-tree lifetime primitives unavailable")
+            os.setxattr(file, "user.launch-proof", b"after"); os.setxattr(file, "user.launch-proof", b"before")
+            self.assertFalse(frozen.expected(), "xattr restore must not erase the mutation epoch")
+            frozen.close()
+
+    def test_expected_deletion_does_not_weaken_retained_sibling_watch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp); retained = parent / "retained"; retained.mkdir(); (retained / "file").write_text("safe")
+            deleted = parent / "deleted"; deleted.mkdir()
+            outcomes = {str(retained): "retain", str(deleted): "delete"}
+            frozen = observer.freeze_path_authority(set(outcomes), (parent,), outcomes=outcomes)
+            if frozen is None:
+                self.skipTest("kernel authority lifetime primitives unavailable")
+            deleted.rmdir()
+            self.assertTrue(frozen.expected(), "one sibling's exact deletion is legitimate")
+            frozen.close()
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp); retained = parent / "retained"; retained.mkdir(); file = retained / "file"; file.write_text("safe")
+            deleted = parent / "deleted"; deleted.mkdir()
+            outcomes = {str(retained): "retain", str(deleted): "delete"}
+            frozen = observer.freeze_path_authority(set(outcomes), (parent,), outcomes=outcomes)
+            if frozen is None:
+                self.skipTest("kernel authority lifetime primitives unavailable")
+            deleted.rmdir(); file.write_text("changed"); file.write_text("safe")
+            self.assertFalse(frozen.expected(), "shared wd masks must preserve retained sibling interest")
+            frozen.close()
+
+    def test_released_style_state_save_is_an_expected_new_inode_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = Path(tmp) / "manager"; manager.mkdir(mode=0o700)
+            state = manager / "state-v2.json"; state.write_text('{"schema_version":4,"installations":[{}]}')
+            original_inode = state.stat().st_ino
+            frozen = observer.freeze_path_authority(
+                {str(state)}, (manager,), outcomes={str(state): "replace"},
+            )
+            if frozen is None:
+                self.skipTest("kernel authority lifetime primitives unavailable")
+            os.chmod(manager, 0o700)
+            temp = manager / "state-v2.json.tmp-fixed"
+            descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(descriptor, b'{"schema_version":4,"installations":[]}')
+                os.fchmod(descriptor, 0o600); os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            temp.replace(state)
+            self.assertNotEqual(state.stat().st_ino, original_inode)
+            self.assertEqual(frozen.replacement_json(str(state)), {"schema_version": 4, "installations": []})
+            self.assertTrue(frozen.expected())
+            frozen.close()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Landlock/inotify proof is Linux-only")
+    def test_retained_rename_symlink_outside_delete_restore_is_denied_and_fails_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); workspace = base / "workspace"; workspace.mkdir()
+            manager = base / "manager"; manager.mkdir(); retained = manager / "retained"; retained.mkdir()
+            home = base / "home"; home.mkdir(); outside = base / "outside"; outside.mkdir(); victim = outside / "victim"; victim.write_text("survives")
+            frozen = observer.freeze_path_authority({str(retained)}, (manager,), outcomes={str(retained): "retain"})
+            if frozen is None:
+                self.skipTest("kernel authority lifetime primitives unavailable")
+            attack = workspace / "attack"
+            attack.write_text('''#!/usr/bin/python3
+import os, pathlib
+retained = pathlib.Path(os.environ["RETAINED"]); saved = retained.with_name("saved-retained")
+retained.rename(saved); retained.symlink_to(os.environ["OUTSIDE"], target_is_directory=True)
+try: (retained / "victim").unlink()
+except PermissionError: pass
+retained.unlink(); saved.rename(retained)
+''')
+            attack.chmod(0o700)
+            environment = {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager), "RETAINED": str(retained), "OUTSIDE": str(outside)}
+            write_authority = frozen.write_root_descriptors({str(retained)})
+            self.assertIsNotNone(write_authority)
+            with mock.patch.dict(os.environ, environment, clear=False):
+                completed, _ = observer.traced(
+                    attack, [], workspace, "challenge", write_authority=write_authority,
+                )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(victim.read_text(), "survives", "Landlock must deny the outside unlink")
+            self.assertFalse(frozen.expected(), "restoring the original retained name cannot erase churn")
+            frozen.close()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Landlock/inotify proof is Linux-only")
+    def test_released_style_binding_backup_rename_allows_exact_parent_and_denies_sibling_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); workspace = base / "workspace"; workspace.mkdir()
+            home = base / "home"; home.mkdir(); cursor_plugins = home / ".cursor" / "plugins"
+            binding_parent = cursor_plugins / "local"; binding_parent.mkdir(parents=True)
+            sibling_root = cursor_plugins / "sibling"; sibling_root.mkdir()
+            outside = base / "outside"; outside.mkdir()
+            manager = base / "manager"; manager.mkdir()
+            data = manager / "plugin-data" / "owned-data"; data.mkdir(parents=True)
+            active = binding_parent / "e2e-external-package-412e6dee0097"; active.mkdir()
+            (active / "payload").write_text("managed")
+            frozen = observer.freeze_path_authority(
+                {str(active)}, (binding_parent,), outcomes={str(active): "delete"},
+            )
+            if frozen is None:
+                self.skipTest("kernel authority lifetime primitives unavailable")
+            write_authority = frozen.write_root_descriptors({str(active)})
+            self.assertIsNotNone(write_authority)
+            helper = workspace / "released-remove"
+            helper.write_text('''#!/usr/bin/python3
+import json, os, pathlib, shutil
+active = pathlib.Path(os.environ["ACTIVE"])
+backup = active.with_name(".agentplugins-backup-e6b2f87e0447d70f")
+active.rename(backup)
+shutil.rmtree(backup)
+denied = []
+for name in ("SIBLING", "OUTSIDE"):
+    try:
+        (pathlib.Path(os.environ[name]) / "forbidden").write_text("no")
+        denied.append(False)
+    except PermissionError:
+        denied.append(True)
+print(json.dumps(denied))
+''')
+            helper.chmod(0o700)
+            environment = {
+                "HOME": str(home), "AGENTPLUGINS_HOME": str(manager), "ACTIVE": str(active),
+                "SIBLING": str(sibling_root), "OUTSIDE": str(outside),
+            }
+            with mock.patch.dict(os.environ, environment, clear=False):
+                installation = {
+                    "data_receipts": {"receipt": {"locator": str(data)}},
+                    "clients": {"binding": {
+                        "client_id": "cursor", "target_locator": str(active),
+                    }},
+                }
+                self.assertEqual(
+                    observer.released_operation_authority_roots(installation, manager),
+                    (manager.resolve(), binding_parent.resolve()),
+                )
+                escaped = json.loads(json.dumps(installation))
+                escaped["clients"]["binding"]["target_locator"] = str(sibling_root / active.name)
+                self.assertIsNone(observer.released_operation_authority_roots(escaped, manager))
+                escaped = json.loads(json.dumps(installation))
+                escaped["data_receipts"]["receipt"]["locator"] = str(outside / "owned-data")
+                self.assertIsNone(observer.released_operation_authority_roots(escaped, manager))
+                completed, _ = observer.traced(
+                    helper, [], workspace, "challenge", write_authority=write_authority,
+                )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout), [True, True])
+            self.assertFalse((sibling_root / "forbidden").exists())
+            self.assertFalse((outside / "forbidden").exists())
+            self.assertTrue(frozen.expected(), "the exact released backup rename/delete must be admitted")
+            frozen.close()
+
     def test_absent_purge_authority_rejects_lexical_ancestor_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
@@ -2188,18 +2421,18 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
                     "setup churn queued after immutable interest must fail the freeze barrier",
                 )
 
-    def test_existing_final_leaf_is_not_retroactively_an_ancestry_name(self) -> None:
+    def test_existing_final_leaf_has_explicit_delete_outcome_interest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "root"; root.mkdir()
             leaf = root / "delete-me"; leaf.mkdir()
             frozen = observer.freeze_path_authority({str(leaf)}, (root,))
             if frozen is None:
                 self.skipTest("kernel ancestry lifetime primitives unavailable (authority failed closed)")
-            self.assertNotIn(os.fsencode(leaf.name), set().union(*frozen.lifetime._names.values()))
+            self.assertIn(os.fsencode(leaf.name), set().union(*frozen.lifetime._names.values()))
             leaf.rmdir()
             self.assertTrue(
                 frozen.absent_and_unlinked(),
-                "an initially existing final deletion is a postcondition, not ancestry churn",
+                "one exact unlink is the admitted deletion transition",
             )
             frozen.close()
 
@@ -2218,6 +2451,9 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             proof = object.__new__(observer._LinuxAncestryLifetimeProof)
             proof._failed = False
             proof._names = names if names is not None else {7: {b"watched"}}
+            proof._tree_wds = set()
+            proof._journal = []
+            proof._outcomes = {(7, b"watched"): "retain"}
             proof._masks = {
                 wd: observer._INOTIFY_WATCH_MASK if interested else observer._INOTIFY_SELF_MASK
                 for wd, interested in proof._names.items()
@@ -2232,10 +2468,12 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             parses(canonical_irrelevant, {7: set()}),
             "a self-only final-leaf watch must reject an event it did not install",
         )
-        self.assertFalse(
-            parses(event(7, 0x00000100, name_buffer=name(b"watched"))),
-            "an event queued before the initialization barrier must use immutable interest",
-        )
+        proof = object.__new__(observer._LinuxAncestryLifetimeProof)
+        proof._failed = False; proof._names = {7: {b"watched"}}; proof._tree_wds = set()
+        proof._journal = []; proof._outcomes = {(7, b"watched"): "retain"}
+        proof._masks = {7: observer._INOTIFY_WATCH_MASK}
+        proof._parse_stream(event(7, observer._IN_CREATE, name_buffer=name(b"watched")))
+        self.assertFalse(proof.validate_journal(), "retained-name churn is latched for final evaluation")
         malformed = (
             event(99, 0x00000100, name_buffer=name(b"name")),
             event(7, 0x10000000, name_buffer=name(b"name")),
@@ -2412,13 +2650,24 @@ print(json.dumps({{"no_new_privs": "NoNewPrivs:\\t1" in status, "seccomp": "Secc
 import json, os, pathlib, shutil, sys
 manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"]); manager.mkdir(parents=True, exist_ok=True)
 state_path = manager / "state-v2.json"; command = sys.argv[1]
+def atomic_state(state):
+    os.chmod(manager, 0o700)
+    atomic_state.epoch += 1
+    temp = state_path.with_name(state_path.name + ".tmp-" + str(atomic_state.epoch))
+    descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, json.dumps(state, sort_keys=True).encode()); os.fchmod(descriptor, 0o600); os.fsync(descriptor)
+    finally: os.close(descriptor)
+    temp.replace(state_path)
+atomic_state.epoch = 0
 def write_state(package):
     manifest = json.loads((package / "plugin.json").read_text())
     identity = ({{"tree_digest": "sha256:c350f133f09cbf95f3ddb05ffad6d1064d8478f9046d19caaaefe60d8a2707bb", "manifest_digest": "sha256:5e07ebffdfc936c72db176327fa360d9dc825fcbe239259f1b3ca92d1ac9ff5e"}}
       if manifest.get("version") == "1.0.0" else
       {{"tree_digest": "sha256:342346b9df16ce5649862255326ac8c7ed56fe578c2f9d7b41d7d3f0e25c2bf9", "manifest_digest": "sha256:82224daacc9b4af90c77494728efbd632363d1501ac31c40da56e5e9edd51356"}})
     data = manager / "plugin-data/e2e-external-package-owned"; data.mkdir(parents=True, exist_ok=True)
-    target = manager / "managed/cursor/e2e-external-package"; target.mkdir(parents=True, exist_ok=True)
+    target = pathlib.Path(os.environ["HOME"]) / ".cursor/plugins/local/e2e-external-package-released"
+    target.mkdir(parents=True, exist_ok=True)
     receipt_id = "plugin-data-receipt"; binding_id = "plugin-data-cursor"
     state = {{"schema_version": 4, "installations": [{{"installation_id": "plugin-data-installation",
       "declared_name": "e2e-external-package", "origin_mode": "direct", "source": {{"source_binding_id": "local-source",
@@ -2435,17 +2684,25 @@ def write_state(package):
       "policy": "allowed", "verification": "package_validated", "package_revision": {{"version": manifest.get("version", "1.0.0"),
       "tree_digest": identity["tree_digest"], "manifest_digest": identity["manifest_digest"]}},
       "updated_at": "2026-08-24T00:00:00Z"}}}}, "created_at": "2026-08-24T00:00:00Z", "updated_at": "2026-08-24T00:00:00Z"}}]}}
-    state_path.write_text(json.dumps(state, sort_keys=True))
+    atomic_state(state)
 if command == "add": write_state(pathlib.Path.cwd() / sys.argv[2].removeprefix("./"))
 elif command == "update":
     state = json.loads(state_path.read_text()); write_state(pathlib.Path.cwd() / state["installations"][0]["source"]["requested_source"].removeprefix("./"))
-elif command in ("info", "repair", "switch"): pass
+elif command == "repair":
+    state = json.loads(state_path.read_text())
+    for binding in state["installations"][0]["clients"].values(): pathlib.Path(binding["target_locator"]).mkdir(parents=True, exist_ok=True)
+elif command in ("info", "switch"): pass
 elif command == "remove" and "--purge-data" not in sys.argv:
     state = json.loads(state_path.read_text()); installation = state["installations"][0]
-    for binding in installation["clients"].values(): shutil.rmtree(binding["target_locator"], ignore_errors=True)
+    for binding in installation["clients"].values():
+        active = pathlib.Path(binding["target_locator"])
+        backup = active.with_name(".agentplugins-backup-e6b2f87e0447d70f")
+        active.rename(backup); shutil.rmtree(backup)
     receipt = next(iter(installation["data_receipts"].values()))
     installation["clients"] = {{}}; installation["data_retained"] = True
-    state_path.write_text(json.dumps(state, sort_keys=True))
+    os.chmod(manager, 0o700)
+    atomic_state(state)
+    atomic_state(state)
     print(json.dumps({{"schema_version": 1, "command": "remove", "result": "success", "data": {{
       "retained_data": [{{key: receipt[key] for key in ("data_receipt_id", "physical_backend_id", "scope", "state")}}]
     }}}}))
@@ -2454,22 +2711,30 @@ elif command == "remove":
     state = json.loads(state_path.read_text()); locator = pathlib.Path(next(iter(state["installations"][0]["data_receipts"].values()))["locator"])
     if os.environ.get("RENAME_INSTEAD_OF_UNLINK"):
         locator.joinpath("launch-marker.txt").rename(manager / "renamed-launch-marker.txt")
-    shutil.rmtree(locator, ignore_errors=True); state_path.unlink(missing_ok=True)
-    if os.environ.get("CORRUPT_PURGE_STATE"):
-        state_path.write_text("{{")
+    shutil.rmtree(locator, ignore_errors=True)
+    empty = {{"schema_version": 4, "installations": []}}
+    os.chmod(manager, 0o700)
+    atomic_state(empty)
+    atomic_state(empty)
+    if os.environ.get("EXTRA_REPLACEMENT_EPOCH"):
+        atomic_state(empty)
+    if os.environ.get("SYMLINK_STATE_EXCURSION"):
+        saved = state_path.with_name("saved-state"); state_path.rename(saved)
+        state_path.symlink_to(manager / "outside-state"); state_path.unlink(); saved.rename(state_path)
 else: raise SystemExit(2)
 print("{{}}")
 '''
-        for mode in ("absent-state", "renamed-marker", "corrupt-state"):
+        for mode in ("atomic-state", "renamed-marker", "extra-replacement", "symlink-excursion"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
                 workspace = root / "workspace"; workspace.mkdir()
                 environment = {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"), "PYTHONDONTWRITEBYTECODE": "1"}
                 if mode == "renamed-marker": environment["RENAME_INSTEAD_OF_UNLINK"] = "1"
-                if mode == "corrupt-state": environment["CORRUPT_PURGE_STATE"] = "1"
+                if mode == "extra-replacement": environment["EXTRA_REPLACEMENT_EPOCH"] = "1"
+                if mode == "symlink-excursion": environment["SYMLINK_STATE_EXCURSION"] = "1"
                 with mock.patch.dict(os.environ, environment, clear=False):
                     passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
-                expected = mode == "absent-state"
+                expected = mode == "atomic-state"
                 self.assertEqual(passed, expected, value)
                 self.assertEqual(value["proof"]["explicit_owned_purge_deleted"], expected)
     def test_plugin_data_update_proof_fails_closed_for_no_change_or_receipt_replacement(self) -> None:
