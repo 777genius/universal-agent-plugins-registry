@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +15,23 @@ SPEC.loader.exec_module(e2e)
 
 
 class InspectorOutputTests(unittest.TestCase):
+    def test_materializes_client_paths_inside_a_disposable_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = Path(tmp)
+            config, environment = e2e.materialize_inspector_config("context7", sandbox)
+            value = json.loads(config.read_text())
+            server = value["mcpServers"]["context7"]
+            launcher = server["args"][0]
+            self.assertEqual(
+                launcher,
+                str((e2e.ROOT / "plugins/context7/io.github.777genius.agentplugins/runtime/launcher.mjs").resolve()),
+            )
+            plugin_data = str((sandbox / "plugin-data").resolve())
+            self.assertEqual(environment["PLUGIN_DATA"], plugin_data)
+            self.assertEqual(server["env"]["PLUGIN_DATA"], plugin_data)
+            self.assertEqual(server["env"]["PLUGIN_ROOT"], str((e2e.ROOT / "plugins/context7").resolve()))
+            self.assertIn("${PLUGIN_ROOT}", (e2e.ROOT / "plugins/context7/mcp.json").read_text())
+
     def test_ignores_server_logs(self) -> None:
         payload = e2e.parse_inspector_json(
             'server started\n{"result":{"tools":[{"name":"z"},{"name":"a"}]}}\n'

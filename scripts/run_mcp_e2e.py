@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import re
 import subprocess
@@ -17,6 +18,43 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 INSPECTOR = "@modelcontextprotocol/inspector@2.1.0"
 RESULTS_DIR = ROOT / "tests" / "e2e" / "results"
+
+
+def materialize_inspector_config(plugin: str, sandbox: Path) -> tuple[Path, dict[str, str]]:
+    """Bind client-provided plugin paths to one disposable Inspector sandbox."""
+    plugin_root = (ROOT / "plugins" / plugin).resolve()
+    plugin_data = (sandbox / "plugin-data").resolve()
+
+    def expand(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: expand(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if isinstance(value, str):
+            return value.replace("${PLUGIN_ROOT}", str(plugin_root))
+        return value
+
+    source = plugin_root / "mcp.json"
+    materialized = expand(json.loads(source.read_text()))
+    server = materialized.get("mcpServers", {}).get(plugin)
+    if not isinstance(server, dict):
+        raise ValueError(f"{plugin} does not define its expected MCP server")
+    server_environment = server.setdefault("env", {})
+    if not isinstance(server_environment, dict):
+        raise ValueError(f"{plugin} MCP server env must be an object")
+    server_environment.update(
+        {
+            "PLUGIN_ROOT": str(plugin_root),
+            "PLUGIN_DATA": str(plugin_data),
+        }
+    )
+
+    destination = sandbox / "mcp.json"
+    destination.write_text(json.dumps(materialized) + "\n")
+    environment = os.environ.copy()
+    environment["PLUGIN_ROOT"] = str(plugin_root)
+    environment["PLUGIN_DATA"] = str(plugin_data)
+    return destination, environment
 
 
 def parse_inspector_json(output: str) -> dict[str, Any]:
@@ -99,8 +137,8 @@ def inspector_check(
     timeout: int = 90,
 ) -> dict[str, Any]:
     """Run one MCP Inspector check in a disposable client directory."""
-    config = ROOT / "plugins" / plugin / "mcp.json"
     with tempfile.TemporaryDirectory(prefix=f"uap-{plugin}-") as sandbox:
+        config, environment = materialize_inspector_config(plugin, Path(sandbox))
         command = [
             "npx",
             "-y",
@@ -132,6 +170,7 @@ def inspector_check(
                 text=True,
                 timeout=timeout,
                 check=False,
+                env=environment,
             )
             combined = "\n".join((completed.stdout, completed.stderr))
             payload = parse_inspector_json(combined)
