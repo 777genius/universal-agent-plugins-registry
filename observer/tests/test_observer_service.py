@@ -43,6 +43,7 @@ from observer.secure_files import read_owned_regular
 from observer.service import CHALLENGE_DOMAIN, ObserverService, WorkBusyError
 from observer.signer import SocketSigner
 from observer.signer import CacheExpiredError
+from observer.tests.classification import requires_disposable_observer_host
 
 
 def b64url(value: bytes) -> str:
@@ -737,6 +738,7 @@ class HttpBoundaryTests(unittest.TestCase):
 
 
 class ExternalSignerTests(unittest.TestCase):
+    @requires_disposable_observer_host
     def test_socket_helper_signs_only_canonical_bundle(self) -> None:
         helper_path = Path(__file__).parents[2] / "deploy" / "uap-observer-signer.py"
         spec = importlib.util.spec_from_file_location("uap_observer_signer", helper_path)
@@ -870,6 +872,7 @@ def _capture_error(call, failures: list[Exception]) -> None:  # type: ignore[no-
         failures.append(error)
 
 
+@requires_disposable_observer_host
 class FixedRunnerFixtureTests(unittest.TestCase):
     @staticmethod
     def _reap_process(process: subprocess.Popen[str]) -> None:

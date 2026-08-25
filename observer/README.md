@@ -90,8 +90,16 @@ runtime pairs, three Notion pairs, and one ChatGPT UI pair, all uniquely and
 cross-bound to the consent, challenge, run, directory/release identities, and
 pseudonyms.
 
-Run focused tests with:
+Run the portable unit, contract, and security suite (the same command as normal
+CI) with:
 
 ```sh
-timeout 120s python -m unittest discover -s observer/tests -v
+python3 -m unittest observer.tests.portable
+```
+
+The disposable observer host gate retains the tests which require deployment
+ownership, mount namespaces, peer credentials, or privileged race fixtures:
+
+```sh
+timeout 600s python3 -m unittest observer.tests.privileged -v
 ```
