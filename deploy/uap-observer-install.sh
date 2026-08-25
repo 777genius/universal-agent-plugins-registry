@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 61255e512db52ab4b43043bdee6b9829a4fbd1fd37ace01635f099d363bac5d9
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 07f66cf022d4a980b1e68711b1d78feaec102063546a604ea811f94316fbf4dc
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=56ee75ff9447c8710d72ce5f50868486738fd6eaffe2f903e17795bcf881dbad
+runtime_manifest_digest=c21b0355db78a685ce08ad1078f10db0001db97534c7f6ed485d15b45937a15a
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -191,10 +191,11 @@ observer_validate_installed_accounts_and_state "$source_root"
 
 test ! -e /opt/uap-observer-venv.new
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m venv /opt/uap-observer-venv.new
-PYTHONDONTWRITEBYTECODE=1 /opt/uap-observer-venv.new/bin/python -B -m pip install --require-hashes --no-deps -r "$source_root/observer/requirements.lock"
+PYTHONDONTWRITEBYTECODE=1 /opt/uap-observer-venv.new/bin/python -B -m pip install --no-compile --require-hashes --no-deps -r "$source_root/observer/requirements.lock"
 PYTHONDONTWRITEBYTECODE=1 /opt/uap-observer-venv.new/bin/python -B -m jsonschema -i "$adapter_config" "$source_root/deploy/uap-observer-adapter-config.schema.json"
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -B -c 'import json,sys; from observer.fixed_adapters import validate_config; validate_config(json.load(open(sys.argv[1], encoding="utf-8")))' "$adapter_config"
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -B -c 'import sys; from pathlib import Path; from observer.config import Config; Config.load(Path(sys.argv[1]))' "$observer_config"
+observer_remove_python_bytecode /opt/uap-observer-venv.new
 
 # Resolve only the reviewed service hosts at install time. The resulting hosts
 # file and cgroup-BPF allowlist remove runtime DNS and arbitrary IP egress from
@@ -269,7 +270,7 @@ chmod 0644 /etc/uap-observer-adapters.json.new
 
 install -o root -g caddy -m 0640 "$caddy_config" /etc/caddy/Caddyfile.new
 systemd_stage="$stage_root/systemd"
-install -d -o root -g root -m 0700 "$systemd_stage/uap-observer.service.d" "$systemd_stage/uap-observer-runner.service.d"
+install -d -o root -g root -m 0755 "$systemd_stage/uap-observer.service.d" "$systemd_stage/uap-observer-runner.service.d"
 for unit in uap-observer.service uap-observer-signer.service uap-observer-runner.service uap-observer-runner.socket uap-observer-caddy.service; do
   install -o root -g root -m 0644 "$source_root/deploy/$unit" "$systemd_stage/$unit"
 done
@@ -291,6 +292,7 @@ PY
   chown root:root "$systemd_stage/$service.service.d/egress.conf"
   chmod 0644 "$systemd_stage/$service.service.d/egress.conf"
 done
+observer_normalize_tree_mtime "$systemd_stage"
 
 (cd /opt/uap-observer-runtime.new && PYTHONDONTWRITEBYTECODE=1 /opt/uap-observer-venv.new/bin/python -B -c 'import cryptography,jsonschema; import observer.http_server')
 test "$(sha256sum /usr/local/libexec/uap-observer-runner.new | cut -d' ' -f1)" = "$runner_digest"
@@ -336,6 +338,7 @@ mv "$stage_root/hosts" "$closure_stage/etc/hosts"
 printf '%s\n' 'complete-v1' > "$closure_stage/.complete"
 printf '%s\n' "$install_identity" > "$closure_stage/.install-identity"
 apply_observer_closure_modes "$closure_stage"
+observer_normalize_tree_mtime "$closure_stage"
 observer_sync_tree "$closure_stage"
 closure_digest=$(observer_closure_identity "$closure_stage")
 closure_final="/opt/uap-observer-closures/$closure_digest"

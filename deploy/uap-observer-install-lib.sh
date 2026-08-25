@@ -282,6 +282,98 @@ observer_validate_first_install_closures_root() {
   test -z "$(find "$closures_root" -mindepth 1 -maxdepth 1 -print -quit)"
 }
 
+# venv creates its own pip/setuptools cache before pip's --no-compile policy
+# can take effect.  Remove only bytecode/cache names through pinned directory
+# descriptors, with hard traversal bounds and without ever following a link.
+observer_remove_python_bytecode() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$1" <<'PY'
+import os,stat,sys
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+root_before=os.stat(sys.argv[1],follow_symlinks=False); root=os.open(sys.argv[1],flags)
+count=0
+def consume():
+    global count
+    count+=1
+    if count>200000: raise RuntimeError("bytecode cleanup entry bound exceeded")
+def remove_tree(parent,name,depth):
+    if depth>128: raise RuntimeError("bytecode cleanup depth bound exceeded")
+    before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    if stat.S_ISDIR(before.st_mode):
+        child=os.open(name,flags,dir_fd=parent)
+        try:
+            if os.fstat(child)!=before: raise PermissionError("bytecode cache raced while opening")
+            for entry in os.listdir(child): consume(); remove_tree(child,entry,depth+1)
+            stable=lambda x:(x.st_dev,x.st_ino,stat.S_IFMT(x.st_mode),stat.S_IMODE(x.st_mode),x.st_uid,x.st_gid)
+            if stable(os.fstat(child))!=stable(before) or stable(os.stat(name,dir_fd=parent,follow_symlinks=False))!=stable(before):
+                raise PermissionError("bytecode cache raced while deleting")
+        finally: os.close(child)
+        os.rmdir(name,dir_fd=parent)
+    else:
+        os.unlink(name,dir_fd=parent)
+def walk(directory,depth=0):
+    if depth>128: raise RuntimeError("venv traversal depth bound exceeded")
+    before=os.fstat(directory)
+    for name in os.listdir(directory):
+        consume(); info=os.stat(name,dir_fd=directory,follow_symlinks=False)
+        if name=="__pycache__": remove_tree(directory,name,depth+1)
+        elif stat.S_ISREG(info.st_mode) and name.endswith((".pyc",".pyo")):
+            os.unlink(name,dir_fd=directory)
+        elif stat.S_ISDIR(info.st_mode):
+            child=os.open(name,flags,dir_fd=directory)
+            try:
+                if os.fstat(child)!=info: raise PermissionError("venv directory raced while opening")
+                walk(child,depth+1)
+            finally: os.close(child)
+    # Directory mtime changes are expected only when this call removed one of
+    # its direct cache children; identity/type/owner/mode still may not race.
+    after=os.fstat(directory)
+    stable=lambda x:(x.st_dev,x.st_ino,stat.S_IFMT(x.st_mode),stat.S_IMODE(x.st_mode),x.st_uid,x.st_gid)
+    if stable(after)!=stable(before): raise PermissionError("venv directory raced during cleanup")
+try:
+    if os.fstat(root)!=root_before: raise PermissionError("venv root raced while opening")
+    walk(root)
+finally: os.close(root)
+PY
+}
+
+# Published closure mtimes are stable authority, not build-clock noise.  Use
+# one nanosecond-exact value and descriptor-relative operations for files,
+# directories and links.  This helper is also applied to the production
+# systemd stage before it is copied to the closure or activated.
+observer_normalize_tree_mtime() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$1" <<'PY'
+import os,stat,sys
+STAMP=1700000000123456789
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+root=os.open(sys.argv[1],flags); count=0
+def walk(directory,depth=0):
+    global count
+    if depth>128: raise RuntimeError("mtime normalization depth bound exceeded")
+    for name in os.listdir(directory):
+        count+=1
+        if count>200000: raise RuntimeError("mtime normalization entry bound exceeded")
+        info=os.stat(name,dir_fd=directory,follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            child=os.open(name,flags,dir_fd=directory)
+            try:
+                if os.fstat(child)!=info: raise PermissionError("tree raced during mtime normalization")
+                walk(child,depth+1); os.utime(child,ns=(STAMP,STAMP))
+            finally: os.close(child)
+        elif stat.S_ISREG(info.st_mode):
+            descriptor=os.open(name,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=directory)
+            try:
+                if os.fstat(descriptor)!=info: raise PermissionError("file raced during mtime normalization")
+                os.utime(descriptor,ns=(STAMP,STAMP))
+            finally: os.close(descriptor)
+        elif stat.S_ISLNK(info.st_mode):
+            os.utime(name,ns=(STAMP,STAMP),dir_fd=directory,follow_symlinks=False)
+        else: raise PermissionError("tree contains unsafe object during mtime normalization")
+try:
+    walk(root); os.utime(root,ns=(STAMP,STAMP))
+finally: os.close(root)
+PY
+}
+
 observer_closure_identity() {
   PYTHONDONTWRITEBYTECODE=1 python3 -B - "$1" <<'PY'
 import ctypes,hashlib,os,stat,sys,tempfile
@@ -405,11 +497,11 @@ for inode,members in regular.items():
 groups=[set(members) for members in regular.values() if adapter_paths & set(members)]
 if groups != [adapter_paths]: raise SystemExit("adapter paths are not one exact hardlink set")
 def framed(value): return len(value).to_bytes(8,"big")+value
-identity.update(b"root\0"+str(stat.S_IMODE(root_before.st_mode)).encode()+b"\0"+str(root_before.st_uid).encode()+b"\0"+str(root_before.st_gid).encode()+b"\0xattrs"+len(root_attrs).to_bytes(8,"big"))
+identity.update(b"root\0"+str(stat.S_IMODE(root_before.st_mode)).encode()+b"\0"+str(root_before.st_uid).encode()+b"\0"+str(root_before.st_gid).encode()+b"\0mtime-ns\0"+str(root_before.st_mtime_ns).encode()+b"\0xattrs"+len(root_attrs).to_bytes(8,"big"))
 for key,value in root_attrs: identity.update(framed(key)+framed(value))
 for name in sorted(entries):
     info,kind,payload,attrs=entries[name]; relative=name.encode()
-    identity.update(b"\0".join((relative,kind,str(stat.S_IMODE(info.st_mode)).encode(),str(info.st_uid).encode(),str(info.st_gid).encode()))+b"\0")
+    identity.update(b"\0".join((relative,kind,str(stat.S_IMODE(info.st_mode)).encode(),str(info.st_uid).encode(),str(info.st_gid).encode(),b"mtime-ns",str(info.st_mtime_ns).encode()))+b"\0")
     identity.update(b"xattrs"+len(attrs).to_bytes(8,"big"))
     for key,value in attrs: identity.update(framed(key)+framed(value))
     if kind == b"f":
@@ -540,6 +632,7 @@ observer_validate_completed_closure() {
   expected_observer_paths=$(printf '%s\n' $observer_units uap-observer.service.d uap-observer-runner.service.d | LC_ALL=C sort)
   actual_observer_paths=$(observer_directory_inventory_neutral "$systemd_root" uap-observer)
   test "$actual_observer_paths" = "$expected_observer_paths"
+  observer_compare_systemd_trees "$closure/systemd" "$systemd_root"
 }
 
 observer_validate_installed_accounts_and_state() {
@@ -1047,7 +1140,7 @@ elif operation=="manifest":
         os.write(1,read_file(backup,"manifest"))
         if os.fstat(backup)!=backup_info or os.fstat(items)!=item_info: raise PermissionError("journal directory changed while reading")
     finally: os.close(items); os.close(backup)
-elif operation in ("validate","compare"):
+elif operation in ("validate","compare","compare-stable"):
     backup,items,identity,backup_info,item_info=load_archive()
     try:
         actual=[]
@@ -1055,7 +1148,7 @@ elif operation in ("validate","compare"):
         for index,name in enumerate(names):
             if name in identity["present"]: actual.extend(scan(items,str(index),name,allow_link=index<5))
         if actual!=identity["records"]: raise PermissionError("journal payload differs")
-        if operation=="compare":
+        if operation in ("compare","compare-stable"):
             live,live_info=open_directory(live_path)
             try:
                 expected_inventory=set(identity["present"])
@@ -1069,7 +1162,17 @@ elif operation in ("validate","compare"):
                     else:
                         if name not in identity["present"]: raise PermissionError("systemd target appeared after journaling")
                         current.extend(scan(live,name,name,allow_link=names.index(name)<5))
-                if current!=identity["records"]: raise PermissionError("systemd target drifted after journaling")
+                if operation=="compare":
+                    if current!=identity["records"]: raise PermissionError("systemd target drifted after journaling")
+                else:
+                    if len(current)!=len(identity["records"]): raise PermissionError("systemd target topology differs from journal")
+                    for expected,observed in zip(identity["records"],current):
+                        if expected.keys()!=observed.keys(): raise PermissionError("systemd target fields differ from journal")
+                        for field,value in expected.items():
+                            if field=="atime":
+                                if observed[field] < value: raise PermissionError("systemd target atime moved backwards after reload")
+                            elif observed[field]!=value:
+                                raise PermissionError("systemd stable target field drifted after reload")
                 if {name for name in os.listdir(live) if name.startswith("uap-observer")}!=expected_inventory:
                     raise PermissionError("systemd observer inventory changed while comparing journal")
                 if os.fstat(live)!=live_info: raise PermissionError("systemd root changed while comparing")
@@ -1086,6 +1189,7 @@ PY
 journal_observer_systemd() { observer_systemd_archive create "$1" "$2"; }
 validate_observer_systemd_journal() { observer_systemd_archive validate "$1"; }
 observer_compare_systemd_journal() { observer_systemd_archive compare "$1" "$2"; }
+observer_compare_systemd_journal_stable() { observer_systemd_archive compare-stable "$1" "$2"; }
 
 observer_require_complete_systemd_inventory() {
   root=$1
@@ -1762,10 +1866,114 @@ observer_validate_resolved_recovery() {
     rollback-v1)
       test ! -e "$current_pointer" && test ! -L "$current_pointer" || return 1
       test -z "$(observer_directory_inventory_neutral "$closures_root")" || return 1
-      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_compare_systemd_journal_stable "$stage/systemd-backup" "$systemd_root" || return 1
       ;;
     *) return 1 ;;
   esac
+}
+
+# Convert the authoritative resolved journal into a fixed, authenticated
+# sibling tombstone.  The directory rename is the commit point: after its
+# parent is fsynced, a new installation may safely own the original stage
+# name while cleanup of the old non-authoritative tree is retried.
+observer_tombstone_resolved_journal() {
+  stage=$1
+  tombstone=${stage}.resolved-tombstone
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$stage" "$tombstone" <<'PY'
+import ctypes,os,stat,sys
+stage,tombstone=map(os.path.abspath,sys.argv[1:])
+if os.path.dirname(stage)!=os.path.dirname(tombstone): raise ValueError("journal tombstone parent differs")
+parent_path=os.path.dirname(stage); source=os.path.basename(stage); target=os.path.basename(tombstone)
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+libc=ctypes.CDLL(None,use_errno=True); libc.renameat2.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint)
+parent=os.open(parent_path,flags)
+try:
+    directory=os.open(source,flags,dir_fd=parent)
+    try:
+        info=os.fstat(directory)
+        if info.st_uid or info.st_gid or stat.S_IMODE(info.st_mode)!=0o700: raise PermissionError("resolved journal is unsafe")
+        try:
+            marker=os.open("journal-tombstone",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|os.O_NOFOLLOW,0o600,dir_fd=directory)
+        except FileExistsError:
+            # A rename that was not durable across a crash can leave the
+            # prepared marker under the original authoritative name.  Accept
+            # only the exact marker and retry the same no-replace rename.
+            marker=os.open("journal-tombstone",os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=directory)
+            try:
+                mark=os.fstat(marker)
+                if (not stat.S_ISREG(mark.st_mode) or mark.st_uid or mark.st_gid or stat.S_IMODE(mark.st_mode)!=0o600
+                        or mark.st_nlink!=1 or os.read(marker,128)!=b"resolved-tombstone-v1\n"):
+                    raise PermissionError("prepared journal tombstone marker is invalid")
+            finally: os.close(marker)
+        else:
+            try:
+                os.write(marker,b"resolved-tombstone-v1\n"); os.fchown(marker,0,0); os.fchmod(marker,0o600); os.fsync(marker)
+            finally: os.close(marker)
+            os.fsync(directory)
+    finally: os.close(directory)
+    if libc.renameat2(parent,os.fsencode(source),parent,os.fsencode(target),1)!=0:
+        error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+finally: os.close(parent)
+PY
+}
+
+observer_cleanup_resolved_tombstone() {
+  stage=$1
+  tombstone=${stage}.resolved-tombstone
+  if [ ! -e "$tombstone" ] && [ ! -L "$tombstone" ]; then return 0; fi
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$tombstone" <<'PY'
+import os,stat,sys
+path=os.path.abspath(sys.argv[1]); parent_path=os.path.dirname(path); leaf=os.path.basename(path)
+flags=os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME
+parent=os.open(parent_path,flags); directory=os.open(leaf,flags,dir_fd=parent); deleted=0; visited=0
+def safe(info):
+    if info.st_uid or info.st_gid or (not stat.S_ISLNK(info.st_mode) and info.st_mode&0o022):
+        raise PermissionError("journal tombstone child is unsafe")
+def boundary():
+    global deleted
+    deleted+=1
+    selected=os.environ.get("UAP_OBSERVER_TOMBSTONE_DELETE_FAIL_AT")
+    if selected and int(selected)==deleted: raise RuntimeError("tombstone child deletion failpoint")
+def remove_tree(parentfd,name,depth=0):
+    global visited
+    if depth>128: raise RuntimeError("journal tombstone depth bound exceeded")
+    visited+=1
+    if visited>200000: raise RuntimeError("journal tombstone entry bound exceeded")
+    info=os.stat(name,dir_fd=parentfd,follow_symlinks=False); safe(info)
+    if stat.S_ISDIR(info.st_mode):
+        child=os.open(name,flags,dir_fd=parentfd)
+        try:
+            if os.fstat(child)!=info: raise PermissionError("journal tombstone raced while opening")
+            children=os.listdir(child)
+            if len(children)>200000-visited: raise RuntimeError("journal tombstone entry bound exceeded")
+            for entry in sorted(children): remove_tree(child,entry,depth+1)
+            os.fsync(child)
+        finally: os.close(child)
+        os.rmdir(name,dir_fd=parentfd); os.fsync(parentfd); boundary()
+    elif stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        os.unlink(name,dir_fd=parentfd); os.fsync(parentfd); boundary()
+    else: raise PermissionError("journal tombstone contains a special object")
+try:
+    info=os.fstat(directory)
+    if info.st_uid or info.st_gid or stat.S_IMODE(info.st_mode)!=0o700: raise PermissionError("journal tombstone is unsafe")
+    root_entries=os.listdir(directory)
+    if len(root_entries)>200000: raise RuntimeError("journal tombstone entry bound exceeded")
+    entries=set(root_entries)
+    if entries:
+        marker=os.open("journal-tombstone",os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NOATIME,dir_fd=directory)
+        try:
+            mark=os.fstat(marker)
+            if (not stat.S_ISREG(mark.st_mode) or mark.st_uid or mark.st_gid or stat.S_IMODE(mark.st_mode)!=0o600
+                    or mark.st_nlink!=1 or os.read(marker,128)!=b"resolved-tombstone-v1\n"):
+                raise PermissionError("journal tombstone marker is invalid")
+        finally: os.close(marker)
+        for name in sorted(entries-{"journal-tombstone"}): remove_tree(directory,name)
+        os.unlink("journal-tombstone",dir_fd=directory); os.fsync(directory); boundary()
+    # An empty directory is the sole valid state after durable marker removal.
+    if os.listdir(directory): raise PermissionError("journal tombstone cleanup raced")
+finally: os.close(directory)
+os.rmdir(leaf,dir_fd=parent); os.fsync(parent); os.close(parent)
+PY
 }
 
 recover_observer_install() {
@@ -1778,6 +1986,10 @@ recover_observer_install() {
   journal_committed=0
   journal_resolved=0
   recovering_current=0
+  # Finish an older resolved cleanup first.  This fixed sibling never owns the
+  # active stage name and therefore cannot conceal or block a legitimate new
+  # journal at $stage.
+  observer_cleanup_resolved_tombstone "$stage" || return 1
   if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then
     # Retried even when a prior attempt removed the name but its parent fsync
     # failed.  This makes the removal durability step independently retryable.
@@ -1846,11 +2058,13 @@ PY
     else
       restore_observer_systemd "$stage/systemd-backup" "$systemd_root" "$stage/systemd" || return 1
       observer_sync_tree "$systemd_root" || return 1
+      # Exact journal authority, including archived atime, is required before
+      # the service manager is allowed to inspect the restored units.
       observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
       observer_recovery_failpoint before-rollback-daemon-reload || return 1
       "$manager" daemon-reload || return 1
       observer_recovery_failpoint after-rollback-daemon-reload || return 1
-      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_compare_systemd_journal_stable "$stage/systemd-backup" "$systemd_root" || return 1
       candidate="$closures_root/$recovered_digest"
       if [ -e "$candidate" ] || [ -L "$candidate" ]; then
         observer_recovery_failpoint before-rollback-closure-deletion || return 1
@@ -1859,7 +2073,7 @@ PY
       fi
       observer_sync_tree "$closures_root" || return 1
       observer_recovery_failpoint after-rollback-closure-fsync || return 1
-      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_compare_systemd_journal_stable "$stage/systemd-backup" "$systemd_root" || return 1
     fi
     if [ "$recovering_current" -eq 1 ]; then
       test -L "$current_pointer" || return 1
@@ -1874,7 +2088,7 @@ PY
     else
       test ! -e "$current_pointer" && test ! -L "$current_pointer" || return 1
       test -z "$(observer_directory_inventory_neutral "$closures_root")" || return 1
-      observer_compare_systemd_journal "$stage/systemd-backup" "$systemd_root" || return 1
+      observer_compare_systemd_journal_stable "$stage/systemd-backup" "$systemd_root" || return 1
     fi
     observer_recovery_failpoint before-journal-resolution || return 1
     if [ "$recovering_current" -eq 1 ]; then outcome=current-v1; else outcome=rollback-v1; fi
@@ -1890,10 +2104,20 @@ PY
     observer_recovery_failpoint after-rollback-data-deletion || return 1
   fi
   observer_recovery_failpoint before-journal-directory-deletion || return 1
-  if [ "$journal_resolved" -eq 1 ]; then observer_sync_directory "$stage" || return 1; fi
-  rm -rf -- "$stage" || return 1
+  if [ "$journal_resolved" -eq 1 ]; then
+    observer_sync_directory "$stage" || return 1
+    # Revalidate immediately before changing which name is authoritative.
+    observer_validate_resolved_recovery "$stage" "$closures_root" "$current_pointer" "$systemd_root" || return 1
+    observer_tombstone_resolved_journal "$stage" || return 1
+    observer_recovery_failpoint after-resolved-journal-rename || return 1
+    observer_sync_directory "$(dirname "$stage")" || return 1
+    observer_recovery_failpoint after-resolved-journal-parent-fsync || return 1
+    observer_cleanup_resolved_tombstone "$stage" || return 1
+  else
+    rm -rf -- "$stage" || return 1
+    observer_sync_directory "$(dirname "$stage")" || return 1
+  fi
   observer_recovery_failpoint after-journal-directory-deletion || return 1
-  observer_sync_directory "$(dirname "$stage")" || return 1
   observer_recovery_failpoint after-journal-parent-fsync || return 1
 }
 

@@ -13,11 +13,13 @@ import signal
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from unittest import mock
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -979,14 +981,7 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         closure = closures / identity
         staged.rename(closure)
         systemd = root / "systemd"
-        systemd.mkdir()
-        for unit in ("uap-observer.service", "uap-observer-signer.service", "uap-observer-runner.service",
-                     "uap-observer-runner.socket", "uap-observer-caddy.service"):
-            (systemd / unit).write_bytes((closure / "systemd" / unit).read_bytes())
-        for service in ("uap-observer", "uap-observer-runner"):
-            dropin = systemd / f"{service}.service.d"
-            dropin.mkdir()
-            (dropin / "egress.conf").write_bytes((closure / "systemd" / f"{service}.service.d/egress.conf").read_bytes())
+        self._copy_observer_inventory(closure / "systemd", systemd)
         current = root / "uap-observer-current"
         current.symlink_to(f"uap-observer-closures/{identity}")
         return closure, current, install_identity, f"{os.getuid()}:{os.getgid()}"
@@ -2053,6 +2048,7 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             "after-rollback-closure-fsync", "before-journal-resolution", "after-journal-resolution",
             "before-partial-cleanup", "after-partial-cleanup",
             "before-rollback-data-deletion", "after-rollback-data-deletion",
+            "after-resolved-journal-rename", "after-resolved-journal-parent-fsync",
             "before-journal-directory-deletion", "after-journal-directory-deletion",
             "after-journal-parent-fsync",
         )
@@ -2231,6 +2227,119 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
             ).strip()
             self.assertEqual(repeated, identity)
 
+    def test_real_venv_and_pip_build_path_is_bytecode_free_before_publication(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        installer = (Path(__file__).parents[2] / "deploy/uap-observer-install.sh").read_text()
+        self.assertIn("pip install --no-compile --require-hashes", installer)
+        self.assertLess(installer.index("observer_remove_python_bytecode /opt/uap-observer-venv.new"),
+                        installer.index('mv /opt/uap-observer-venv.new "$closure_stage/venv"'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); package = root / "fixturepkg-1-py3-none-any.whl"
+            with zipfile.ZipFile(package, "w") as wheel:
+                wheel.writestr("fixturepkg.py", "VALUE = 7\n")
+                wheel.writestr("fixturepkg-1.dist-info/METADATA", "Metadata-Version: 2.1\nName: fixturepkg\nVersion: 1\n")
+                wheel.writestr("fixturepkg-1.dist-info/WHEEL",
+                               "Wheel-Version: 1.0\nGenerator: observer-fixture\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                wheel.writestr("fixturepkg-1.dist-info/RECORD", "")
+            venv = root / "venv"
+            managed = Path.home() / ".local/share/uv/python"
+            interpreters = [Path("/usr/bin/python3"), *sorted(managed.glob("*/bin/python3"))]
+            failures = []
+            for interpreter in interpreters:
+                if not interpreter.is_file():
+                    continue
+                shutil.rmtree(venv, ignore_errors=True)
+                built = subprocess.run([str(interpreter), "-B", "-m", "venv", str(venv)],
+                                       text=True, capture_output=True)
+                if built.returncode == 0:
+                    break
+                failures.append(f"{interpreter}: {built.stdout}{built.stderr}")
+            else:
+                self.fail("no available Python could construct a pip-backed venv:\n" + "\n".join(failures))
+            subprocess.run(
+                [str(venv / "bin/python"), "-B", "-m", "pip", "install", "--no-compile", "--no-deps",
+                 str(package)],
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=True, capture_output=True, text=True,
+            )
+            # ensurepip itself normally leaves caches; exercise the production
+            # descriptor-safe cleanup rather than manufacturing a clean tree.
+            self.assertTrue(any(path.name == "__pycache__" for path in venv.rglob("*")))
+            subprocess.run(["/bin/sh", "-c", '. "$1"; observer_remove_python_bytecode "$2"',
+                            "sh", str(helper), str(venv)], check=True)
+            self.assertFalse(any(path.name == "__pycache__" or path.suffix in {".pyc", ".pyo"}
+                                 for path in venv.rglob("*")))
+
+    def test_production_systemd_stage_closure_and_live_share_one_stable_authority(self) -> None:
+        self._require_private_noatime_view()
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); stage = root / "stage"; closure = root / "closure"; live = root / "live"
+            self._populate_complete_observer_inventory(stage)
+            for name in ("uap-observer.service.d", "uap-observer-runner.service.d"):
+                (stage / name).chmod(0o755)
+            subprocess.run(["/bin/sh", "-c", '. "$1"; observer_normalize_tree_mtime "$2"; '
+                            'mkdir "$3" "$4"; observer_copy_systemd_tree_neutral "$2" "$3"; '
+                            'activate_observer_systemd "$2" "$4"',
+                            "sh", str(helper), str(stage), str(closure), str(live)], check=True)
+            for tree in (stage, closure, live):
+                for name in ("uap-observer.service.d", "uap-observer-runner.service.d"):
+                    self.assertEqual(stat.S_IMODE((tree / name).stat().st_mode), 0o755)
+            compare = '. "$1"; observer_compare_systemd_trees "$2" "$3"'
+            for left, right in ((stage, closure), (closure, live), (stage, live)):
+                subprocess.run(["/bin/sh", "-c", compare, "sh", str(helper), str(left), str(right)], check=True)
+
+    def test_closure_identity_binds_nanosecond_mtime_for_file_directory_and_symlink(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            closure, _, _, _ = self._completed_closure_fixture(Path(temporary))
+            baseline = closure.name
+            for target in (closure / "systemd/uap-observer.service",
+                           closure / "systemd/uap-observer.service.d", closure / "payload-link"):
+                with self.subTest(target=target.name):
+                    before = target.lstat()
+                    try:
+                        os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 1), follow_symlinks=False)
+                    except (NotImplementedError, OSError) as error:
+                        if target.is_symlink():
+                            self.skipTest(f"fixture filesystem does not support symlink mtime: {error}")
+                        raise
+                    changed = subprocess.check_output(
+                        ["/bin/sh", "-c", '. "$1"; observer_closure_identity "$2"',
+                         "sh", str(helper), str(closure)], text=True,
+                    ).strip()
+                    self.assertNotEqual(changed, baseline)
+                    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns), follow_symlinks=False)
+
+    def test_completed_production_validation_rejects_stable_live_drift(self) -> None:
+        for drift in ("content", "mode", "mtime", "xattr", "acl", "security-label"):
+            with self.subTest(drift=drift), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, _, install_identity, owner = self._completed_closure_fixture(root)
+                target = root / "systemd/uap-observer.service"
+                if drift == "content": target.write_text("drift\n")
+                elif drift == "mode": target.chmod(0o600)
+                elif drift == "mtime":
+                    info=target.stat(); os.utime(target,ns=(info.st_atime_ns,info.st_mtime_ns+1))
+                elif drift == "xattr":
+                    try: os.setxattr(target,"user.uap_observer_live_acl_label",b"drift",follow_symlinks=False)
+                    except OSError as error: self.skipTest(f"fixture filesystem lacks xattrs: {error}")
+                elif drift == "acl":
+                    acl = struct.pack("<I", 2) + b"".join(
+                        struct.pack("<HHI", tag, permissions, identifier)
+                        for tag, permissions, identifier in (
+                            (1, 6, 0xFFFFFFFF), (2, 4, 1), (4, 4, 0xFFFFFFFF),
+                            (16, 4, 0xFFFFFFFF), (32, 4, 0xFFFFFFFF),
+                        )
+                    )
+                    try: os.setxattr(target, "system.posix_acl_access", acl, follow_symlinks=False)
+                    except OSError as error: self.skipTest(f"fixture filesystem lacks POSIX ACL xattrs: {error}")
+                else:
+                    capability = bytes.fromhex("0100000200040000000000000000000000000000")
+                    try: os.setxattr(target, "security.capability", capability, follow_symlinks=False)
+                    except OSError as error: self.skipTest(f"fixture filesystem lacks security xattrs: {error}")
+                result = self._validate_completed_closure(root, install_identity, owner)
+                self.assertNotEqual(result.returncode, 0, f"{drift} live drift was accepted")
+
     def test_current_recovery_uses_authenticated_closure_not_identically_tampered_stage_and_live(self) -> None:
         self._require_private_noatime_view()
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
@@ -2374,6 +2483,84 @@ recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture
                     os.setxattr(live_unit, "user.uap_observer_authority", b"reviewed", follow_symlinks=False)
                     os.utime(live_unit, ns=(fixed_atime, fixed_mtime), follow_symlinks=False)
 
+    def test_recovery_manager_read_advances_atime_but_stable_journal_authority_holds(self) -> None:
+        self._require_private_noatime_view()
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); stage = root / "stage"; closures = root / "closures"; systemd = root / "systemd"
+            stage.mkdir(mode=0o700); closures.mkdir(); self._populate_complete_observer_inventory(systemd)
+            unit = systemd / "uap-observer.service"
+            mtime = 1_700_000_000_123_456_789; old_atime = mtime - 30 * 86400 * 1_000_000_000
+            os.utime(unit, ns=(old_atime, mtime))
+            subprocess.run(["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                            "sh", str(helper), str(stage / "systemd-backup"), str(systemd)], check=True)
+            self._copy_observer_inventory(systemd, stage / "systemd")
+            unit.write_text("installed value\n")
+            digest = "a" * 64; (closures / digest).mkdir()
+            for name, value in (("closure-digest", digest + "\n"), ("journal-committed", "committed-v1\n")):
+                (stage / name).write_text(value); (stage / name).chmod(0o600)
+            manager = root / "systemctl"
+            manager.write_text(f"#!/bin/sh\ntest \"$1\" = daemon-reload\n/usr/bin/head -c 1 '{unit}' >/dev/null\n")
+            manager.chmod(0o755)
+            result = subprocess.run(
+                ["/bin/sh", "-c", '. "$1"; cleanup_fixture() { :; }; recover_observer_install "$2" "$3" "$4" "$5" "$6" cleanup_fixture',
+                 "sh", str(helper), str(stage), str(closures), str(root / "current"), str(systemd), str(manager)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreater(unit.stat().st_atime_ns, old_atime)
+            self.assertEqual(unit.stat().st_mtime_ns, mtime)
+
+    def test_resolved_journal_tombstone_failpoints_are_idempotent_and_do_not_hide_new_stage(self) -> None:
+        self._require_private_noatime_view()
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        for failure_env in ({"UAP_OBSERVER_RECOVERY_FAILPOINT": "after-resolved-journal-rename"},
+                            {"UAP_OBSERVER_TOMBSTONE_DELETE_FAIL_AT": "1"},
+                            {"UAP_OBSERVER_TOMBSTONE_DELETE_FAIL_AT": "3"},
+                            {"UAP_OBSERVER_TOMBSTONE_DELETE_FAIL_AT": "10"}):
+            with self.subTest(failure_env=failure_env), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); stage = root / "stage"; closures = root / "closures"; systemd = root / "systemd"
+                stage.mkdir(mode=0o700); closures.mkdir(); systemd.mkdir()
+                subprocess.run(["/bin/sh", "-c", '. "$1"; journal_observer_systemd "$2" "$3"',
+                                "sh", str(helper), str(stage / "systemd-backup"), str(systemd)], check=True)
+                closure, digest = self._create_hashed_closure(closures, helper)
+                for name, value in (("closure-digest", digest + "\n"), ("journal-committed", "committed-v1\n")):
+                    (stage / name).write_text(value); (stage / name).chmod(0o600)
+                current = root / "current"; current.symlink_to(f"uap-observer-closures/{digest}")
+                self._copy_observer_inventory(closure / "systemd", stage / "systemd")
+                self._copy_observer_inventory(closure / "systemd", systemd)
+                command = ["/bin/sh", "-c", '. "$1"; cleanup_fixture() { :; }; recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture',
+                           "sh", str(helper), str(stage), str(closures), str(current), str(systemd)]
+                failed = subprocess.run(command, env={**os.environ, **failure_env}, text=True, capture_output=True)
+                self.assertNotEqual(failed.returncode, 0)
+                tombstone = Path(str(stage) + ".resolved-tombstone")
+                self.assertFalse(stage.exists())
+                self.assertTrue(tombstone.is_dir())
+                self.assertTrue((tombstone / "journal-tombstone").is_file())
+                # A legitimate new uncommitted journal may claim the original
+                # name while retry finishes only the authenticated sibling.
+                stage.mkdir(mode=0o700); (stage / "new-payload").write_text("new\n")
+                retried = subprocess.run(command, text=True, capture_output=True)
+                self.assertEqual(retried.returncode, 0, retried.stderr)
+                self.assertFalse(tombstone.exists())
+                self.assertFalse(stage.exists())
+
+    def test_unfsynced_tombstone_rename_can_retry_from_original_stage_name(self) -> None:
+        helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary) / "stage"; stage.mkdir(mode=0o700)
+            payload = stage / "payload"; payload.write_text("resolved data\n"); payload.chmod(0o600)
+            command = ["/bin/sh", "-c", '. "$1"; observer_tombstone_resolved_journal "$2"',
+                       "sh", str(helper), str(stage)]
+            subprocess.run(command, check=True)
+            tombstone = Path(str(stage) + ".resolved-tombstone")
+            tombstone.rename(stage)  # model rename loss before the parent fsync
+            self.assertTrue((stage / "journal-tombstone").is_file())
+            subprocess.run(command, check=True)
+            subprocess.run(["/bin/sh", "-c", '. "$1"; observer_cleanup_resolved_tombstone "$2"',
+                            "sh", str(helper), str(stage)], check=True)
+            self.assertFalse(stage.exists()); self.assertFalse(tombstone.exists())
+
     def test_removed_journal_parent_fsync_failure_is_retryable(self) -> None:
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
         with tempfile.TemporaryDirectory() as temporary:
@@ -2423,7 +2610,6 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
 fixture_log=$6
 observer_sync_directory() { printf 'sync %s\n' "$1" >> "$fixture_log"; }
 cleanup_fixture() { printf 'cleanup\n' >> "$fixture_log"; }
-rm() { printf 'rm %s\n' "$3" >> "$fixture_log"; command rm "$@"; }
 recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
 '''
             result = subprocess.run(
@@ -2435,15 +2621,15 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
             self.assertEqual(events[0], f"sync {root}")
             self.assertIn("cleanup", events)
             stage_sync = events.index(f"sync {stage}")
-            stage_remove = events.index(f"rm {stage}")
             self.assertLess(events.index("cleanup"), stage_sync)
-            self.assertLess(stage_sync, stage_remove)
+            self.assertLess(stage_sync, len(events) - 1)
             self.assertEqual(events[-1], f"sync {root}")
+            self.assertFalse(Path(str(stage) + ".resolved-tombstone").exists())
 
     def test_recovery_retains_committed_journal_when_pointer_sync_or_partial_cleanup_fails(self) -> None:
         self._require_private_noatime_view()
         helper = Path(__file__).parents[2] / "deploy/uap-observer-install-lib.sh"
-        for failure in ("missing-closure", "pointer-sync", "systemd-drift", "partial-cleanup", "stage-payload"):
+        for failure in ("missing-closure", "pointer-sync", "systemd-drift", "partial-cleanup", "tombstone-delete"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); stage = root / "stage"; closures = root / "closures"; systemd = root / "systemd"
                 stage.mkdir(mode=0o700); closures.mkdir()
@@ -2464,14 +2650,11 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
                     self._copy_observer_inventory(closure / "systemd", systemd)
                 if failure == "systemd-drift":
                     (systemd / "uap-observer.service").write_text("drifted\n")
-                if failure == "stage-payload":
-                    (stage / "payload").write_text("partial\n")
                 script = r'''. "$1"
 failure=$6
-fixture_stage=$2
 observer_sync_directory() { test "$failure" != pointer-sync; }
 cleanup_fixture() { test "$failure" != partial-cleanup; }
-rm() { test "$failure" != stage-payload || test "$3" != "$fixture_stage" || return 73; command rm "$@"; }
+if [ "$failure" = tombstone-delete ]; then UAP_OBSERVER_TOMBSTONE_DELETE_FAIL_AT=1; export UAP_OBSERVER_TOMBSTONE_DELETE_FAIL_AT; fi
 recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
 '''
                 result = subprocess.run(
@@ -2479,11 +2662,16 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
                     text=True, capture_output=True,
                 )
                 self.assertNotEqual(result.returncode, 0)
-                marker = "journal-resolved" if failure in {"partial-cleanup", "stage-payload"} else "journal-committed"
-                self.assertTrue((stage / marker).is_file())
-                if failure in {"partial-cleanup", "stage-payload"}:
+                if failure == "tombstone-delete":
+                    tombstone = Path(str(stage) + ".resolved-tombstone")
+                    self.assertTrue((tombstone / "journal-tombstone").is_file())
+                else:
+                    marker = "journal-resolved" if failure == "partial-cleanup" else "journal-committed"
+                    self.assertTrue((stage / marker).is_file())
+                if failure == "partial-cleanup":
                     for control in ("journal-resolved", "journal-committed", "closure-digest", "recovery-outcome"):
                         self.assertTrue((stage / control).is_file(), f"lost authenticated retry control {control}")
+                if failure in {"partial-cleanup", "tombstone-delete"}:
                     retried = subprocess.run(
                         ["/bin/sh", "-c", '. "$1"; cleanup_fixture() { :; }; recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture',
                          "sh", str(helper), str(stage), str(closures), str(current), str(systemd)],
@@ -2491,6 +2679,7 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
                     )
                     self.assertEqual(retried.returncode, 0, retried.stderr)
                     self.assertFalse(stage.exists())
+                    self.assertFalse(Path(str(stage) + ".resolved-tombstone").exists())
 
     def test_cgroup_v2_path_stays_beneath_mount_and_kills_descendants_after_leader_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
