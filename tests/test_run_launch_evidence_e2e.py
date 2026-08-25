@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import base64
+import errno
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -93,6 +95,18 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         return e2e.LaunchHarness(
             None, None, mode="fixture-only", consent=CONSENT, run_root=root, **kwargs
         )
+
+    def test_fixture_only_cli_does_not_require_prepared_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "disposable-run"
+            output = run_root / "evidence" / "launch-evidence.json"
+            completed = subprocess.run([
+                sys.executable, str(MODULE), "--mode", "fixture-only",
+                "--consent", str(CONSENT), "--run-root", str(run_root),
+                "--output", str(output),
+            ], cwd=ROOT, text=True, capture_output=True, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(output.is_file())
 
     def test_direct_external_fixture_is_a_valid_skill_package(self) -> None:
         skill = (e2e.EXTERNAL_PACKAGE / "skills/fixture/SKILL.md").read_text()
@@ -1649,6 +1663,46 @@ print((fixtures / name).read_text(), end="")
         _, fixture = self.agentplugins_0_1_14_state_fixture()
         self.assertTrue(observer.validate_released_state_v4(fixture))
 
+        for container, field in (
+            ("package", "format_id"), ("source", "tree_digest"),
+            ("package", "manifest_digest"), ("package", "schema_uri"),
+        ):
+            whitespace_only = json.loads(json.dumps(fixture))
+            whitespace_only["installations"][0][container][field] = "\u00a0\t "
+            self.assertTrue(
+                observer.validate_released_state_v4(whitespace_only),
+                f"released Go uses direct != empty for {container}.{field}",
+            )
+        null_zero_values = json.loads(json.dumps(fixture))
+        installation = null_zero_values["installations"][0]
+        installation["operation_group_id"] = None
+        installation["data_retained"] = None
+        binding = next(iter(installation["clients"].values()))
+        binding["data_receipt_id"] = None
+        binding["receipts"][0]["operation_group_id"] = None
+        self.assertTrue(
+            observer.validate_released_state_v4(null_zero_values),
+            "encoding/json null leaves scalar string/bool fields at their Go zero values",
+        )
+        null_phase = json.loads(json.dumps(fixture))
+        next(iter(null_phase["installations"][0]["clients"].values()))["receipts"][0]["phase"] = None
+        self.assertFalse(observer.validate_released_state_v4(null_phase), "null phase is Go's rejected empty string")
+        absent_snapshot_nulls = json.loads(json.dumps(fixture))
+        current = absent_snapshot_nulls["installations"][0]
+        current["origin_mode"] = "directory"
+        current["directory"] = {
+            "product_id": "context7", "distribution_id": "upstash/context7",
+            "distribution_kind": "upstream", "desired_release_sequence": 1,
+            "snapshot_schema": None, "snapshot_sequence": None, "snapshot_digest": None,
+        }
+        current["source"]["resolved_revision"] = "b" * 40
+        for client in current["clients"].values():
+            client["package_revision"].update({
+                "distribution_id": "upstash/context7", "release_sequence": 1,
+                "resolved_revision": "a" * 40,
+            })
+        self.assertTrue(observer.validate_released_state_v4(absent_snapshot_nulls))
+
         trimmed = json.loads(json.dumps(fixture))
         installation = trimmed["installations"][0]
         installation["installation_id"] = f"  {installation['installation_id']}  "
@@ -2112,8 +2166,186 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             proof = object.__new__(observer._LinuxAncestryLifetimeProof)
             proof._failed = False
             proof._names = {}
-            proof._record_event(-1, observer._IN_Q_OVERFLOW, b"")
+            proof._record_event(-1, observer._IN_Q_OVERFLOW, 0, b"")
             self.assertTrue(proof._failed, "queue overflow must be permanently latched")
+
+    def test_authority_initialization_barrier_rejects_queued_setup_churn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"; root.mkdir()
+            missing = root / "missing"
+            original = observer._LinuxAncestryLifetimeProof.initialize
+
+            def churn_then_initialize(proof: object) -> bool:
+                missing.mkdir()
+                return original(proof)
+
+            with mock.patch.object(
+                observer._LinuxAncestryLifetimeProof, "initialize", autospec=True,
+                side_effect=churn_then_initialize,
+            ):
+                self.assertIsNone(
+                    observer.freeze_path_authority({str(missing)}, (root,)),
+                    "setup churn queued after immutable interest must fail the freeze barrier",
+                )
+
+    def test_existing_final_leaf_is_not_retroactively_an_ancestry_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"; root.mkdir()
+            leaf = root / "delete-me"; leaf.mkdir()
+            frozen = observer.freeze_path_authority({str(leaf)}, (root,))
+            if frozen is None:
+                self.skipTest("kernel ancestry lifetime primitives unavailable (authority failed closed)")
+            self.assertNotIn(os.fsencode(leaf.name), set().union(*frozen.lifetime._names.values()))
+            leaf.rmdir()
+            self.assertTrue(
+                frozen.absent_and_unlinked(),
+                "an initially existing final deletion is a postcondition, not ancestry churn",
+            )
+            frozen.close()
+
+    def test_inotify_stream_parser_fails_closed_on_noncanonical_records(self) -> None:
+        def event(wd: int, mask: int, *, cookie: int = 0, name_buffer: bytes = b"") -> bytes:
+            return b"".join((
+                wd.to_bytes(4, sys.byteorder, signed=True),
+                mask.to_bytes(4, sys.byteorder), cookie.to_bytes(4, sys.byteorder),
+                len(name_buffer).to_bytes(4, sys.byteorder), name_buffer,
+            ))
+
+        def name(value: bytes) -> bytes:
+            return value + b"\0" * (16 - len(value) % 16)
+
+        def parses(body: bytes, names: dict[int, set[bytes]] | None = None) -> bool:
+            proof = object.__new__(observer._LinuxAncestryLifetimeProof)
+            proof._failed = False
+            proof._names = names if names is not None else {7: {b"watched"}}
+            proof._masks = {
+                wd: observer._INOTIFY_WATCH_MASK if interested else observer._INOTIFY_SELF_MASK
+                for wd, interested in proof._names.items()
+            }
+            proof._parse_stream(body)
+            return not proof._failed
+
+        canonical_irrelevant = event(7, 0x00000100, name_buffer=name(b"other"))
+        self.assertTrue(parses(canonical_irrelevant))
+        self.assertTrue(parses(event(7, 0x00000004)), "watched-directory IN_ATTRIB is canonical")
+        self.assertFalse(
+            parses(canonical_irrelevant, {7: set()}),
+            "a self-only final-leaf watch must reject an event it did not install",
+        )
+        self.assertFalse(
+            parses(event(7, 0x00000100, name_buffer=name(b"watched"))),
+            "an event queued before the initialization barrier must use immutable interest",
+        )
+        malformed = (
+            event(99, 0x00000100, name_buffer=name(b"name")),
+            event(7, 0x10000000, name_buffer=name(b"name")),
+            event(7, observer._IN_IGNORED),
+            event(-1, observer._IN_Q_OVERFLOW),
+            b"",
+            b"short",
+            event(7, 0x00000100, name_buffer=b"name"),
+            event(7, 0x00000100, name_buffer=b"x\0y\0"),
+            event(7, 0x00000100, name_buffer=b"abc"),
+            event(7, 0x00000100, name_buffer=b"x\0" + b"\0" * 258),
+            event(7, observer._IN_DELETE_SELF, name_buffer=name(b"x")),
+            event(7, 0x00000040, cookie=0, name_buffer=name(b"x")),
+            event(7, 0x00000008),
+            event(7, 0x00000100, name_buffer=name(b".")),
+            event(7, 0x00000100, name_buffer=name(b"a/b")),
+        )
+        for body in malformed:
+            self.assertFalse(parses(body), body[:32])
+        truncated = event(7, 0x00000100, name_buffer=name(b"name"))[:-1]
+        self.assertFalse(parses(truncated))
+        for read_result in (b"", b"short", OSError(errno.EBADF, "lost inotify fd")):
+            proof = object.__new__(observer._LinuxAncestryLifetimeProof)
+            proof.fd = 123
+            proof._failed = False
+            with mock.patch.object(
+                observer.os, "read",
+                side_effect=read_result if isinstance(read_result, OSError) else None,
+                return_value=None if isinstance(read_result, OSError) else read_result,
+            ):
+                self.assertFalse(proof._drain(), repr(read_result))
+
+    def test_final_drain_catches_rename_temp_use_delete_restore_during_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "root"; root.mkdir()
+            path = root / "missing" / "nested"
+            frozen = observer.freeze_path_authority({str(path)}, (root,))
+            if frozen is None:
+                self.skipTest("kernel ancestry lifetime primitives unavailable (authority failed closed)")
+            original_check = frozen.lifetime.check_mount_bindings
+
+            def attack_after_checks() -> bool:
+                checked = original_check()
+                original = parent / "original-root"
+                root.rename(original)
+                replacement = parent / "root"; replacement.mkdir()
+                (replacement / "missing").mkdir()
+                shutil.rmtree(replacement)
+                original.rename(root)
+                return checked
+
+            with mock.patch.object(frozen.lifetime, "check_mount_bindings", side_effect=attack_after_checks):
+                self.assertFalse(
+                    frozen.absent_and_unlinked(),
+                    "the final drain must catch churn after precheck and all state checks",
+                )
+            frozen.close()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "seccomp is Linux-only and fails closed elsewhere")
+    def test_path_authority_seccomp_is_preexec_inherited_and_blocks_namespace_escape(self) -> None:
+        machine = os.uname().machine.lower()
+        if machine in {"amd64", "x86_64"}:
+            clone_number = 56
+        elif machine in {"arm64", "aarch64"}:
+            clone_number = 220
+        else:
+            with self.assertRaises(OSError):
+                observer._install_path_authority_seccomp()
+            return
+        code = f'''import ctypes, json, os, subprocess
+libc = ctypes.CDLL(None, use_errno=True)
+status = open("/proc/self/status").read()
+def call(number, *arguments):
+    ctypes.set_errno(0)
+    result = libc.syscall(number, *arguments)
+    return [result, ctypes.get_errno()]
+machine = os.uname().machine.lower()
+numbers = {{"x86_64": [272, 308, 165, 166, 155, 161], "aarch64": [97, 268, 40, 39, 41, 51]}}
+key = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
+denied = [call(number, 0, 0, 0, 0, 0, 0) for number in numbers[key] + [428, 429, 430, 431, 432, 433, 435, 442]]
+clone = call({clone_number}, 0x00020000 | 17, 0, 0, 0, 0)
+if clone[0] == 0:
+    os._exit(91)
+ordinary_clone = libc.syscall({clone_number}, 17, 0, 0, 0, 0)
+if ordinary_clone == 0:
+    os._exit(0)
+if ordinary_clone < 0:
+    raise OSError(ctypes.get_errno(), "ordinary clone was blocked")
+os.waitpid(ordinary_clone, 0)
+child = subprocess.run(["/usr/bin/python3", "-c", "import ctypes,json; l=ctypes.CDLL(None,use_errno=True); r=l.unshare(0x10000000); print(json.dumps([r,ctypes.get_errno()]))"], text=True, capture_output=True)
+print(json.dumps({{"no_new_privs": "NoNewPrivs:\\t1" in status, "seccomp": "Seccomp:\\t2" in status, "denied": denied, "clone": clone, "ordinary_clone": ordinary_clone > 0, "subprocess": [child.returncode, json.loads(child.stdout)]}}))
+'''
+        completed = subprocess.run(
+            ["/usr/bin/python3", "-c", code], text=True, capture_output=True,
+            check=False, preexec_fn=observer._install_path_authority_seccomp,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["no_new_privs"])
+        self.assertTrue(result["seccomp"])
+        self.assertTrue(all(item == [-1, 1] for item in result["denied"]), result)
+        self.assertEqual(result["clone"], [-1, 1])
+        self.assertTrue(result["ordinary_clone"])
+        self.assertEqual(result["subprocess"], [0, [-1, 1]])
+
+    def test_path_authority_seccomp_has_no_unconstrained_architecture_fallback(self) -> None:
+        with mock.patch.object(observer.platform, "machine", return_value="unsupported-test-arch"):
+            with self.assertRaisesRegex(OSError, "does not admit"):
+                observer._install_path_authority_seccomp()
 
     def test_absent_purge_authority_binds_linux_mount_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

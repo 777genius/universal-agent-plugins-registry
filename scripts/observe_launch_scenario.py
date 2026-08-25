@@ -151,6 +151,9 @@ def _released_directory_snapshot_coherent(value: dict[str, Any]) -> bool:
     schema = value.get("snapshot_schema", 0)
     sequence = value.get("snapshot_sequence", 0)
     digest = value.get("snapshot_digest", "")
+    schema = 0 if schema is None else schema
+    sequence = 0 if sequence is None else sequence
+    digest = "" if digest is None else digest
     if type(schema) is not int or type(sequence) is not int or not isinstance(digest, str) or sequence < 0:
         return False
     present = sequence > 0 or schema > 0 or digest != ""
@@ -195,6 +198,7 @@ def validate_released_state_v4(value: Any) -> bool:
             return False
         installation_ids.add(installation_id)
         group_id = installation.get("operation_group_id", "")
+        group_id = "" if group_id is None else group_id
         if group_id != "" and not _valid_leaf_id(group_id):
             return False
         origin = installation.get("origin_mode", "")
@@ -215,6 +219,7 @@ def validate_released_state_v4(value: Any) -> bool:
         else:
             return False
         retained = installation.get("data_retained", False)
+        retained = False if retained is None else retained
         if type(retained) is not bool or (retained and (clients or not receipts)):
             return False
         for receipt_key, receipt in receipts.items():
@@ -228,12 +233,24 @@ def validate_released_state_v4(value: Any) -> bool:
         if not _go_nonempty(source_id) or source_id in source_ids:
             return False
         source_ids.add(source_id)
-        if package.get("loader_kind") == "agent_plugins" and not (
-            _go_nonempty(package.get("format_id")) and _go_nonempty(source.get("tree_digest"))
-            and _go_nonempty(package.get("manifest_digest"))
-            and (package.get("format_id") != "agent-plugins/1.0.0" or _go_nonempty(package.get("schema_uri")))
-        ):
-            return False
+        if package.get("loader_kind") == "agent_plugins":
+            format_id = package.get("format_id", "")
+            tree_digest = source.get("tree_digest", "")
+            manifest_digest = package.get("manifest_digest", "")
+            schema_uri = package.get("schema_uri", "")
+            format_id = "" if format_id is None else format_id
+            tree_digest = "" if tree_digest is None else tree_digest
+            manifest_digest = "" if manifest_digest is None else manifest_digest
+            schema_uri = "" if schema_uri is None else schema_uri
+            if (
+                not isinstance(format_id, str) or format_id == ""
+                or not isinstance(tree_digest, str) or tree_digest == ""
+                or not isinstance(manifest_digest, str) or manifest_digest == ""
+                or (format_id == "agent-plugins/1.0.0" and (
+                    not isinstance(schema_uri, str) or schema_uri == ""
+                ))
+            ):
+                return False
         for map_key, client in clients.items():
             if not isinstance(client, dict) or map_key == "" or map_key != client.get("client_binding_id"):
                 return False
@@ -262,6 +279,7 @@ def validate_released_state_v4(value: Any) -> bool:
             ):
                 return False
             data_receipt_id = client.get("data_receipt_id", "")
+            data_receipt_id = "" if data_receipt_id is None else data_receipt_id
             if data_receipt_id != "" and data_receipt_id not in receipts:
                 return False
             object_ids: set[str] = set()
@@ -280,9 +298,12 @@ def validate_released_state_v4(value: Any) -> bool:
             for mutation in mutations:
                 if not isinstance(mutation, dict) or not _valid_leaf_id(mutation.get("operation_id")):
                     return False
-                if mutation.get("client_binding_id") != binding_id or type(mutation.get("sequence")) is not int or mutation["sequence"] < 1 or mutation.get("phase", "") == "":
+                phase = mutation.get("phase", "")
+                phase = "" if phase is None else phase
+                if mutation.get("client_binding_id") != binding_id or type(mutation.get("sequence")) is not int or mutation["sequence"] < 1 or phase == "":
                     return False
                 mutation_group = mutation.get("operation_group_id", "")
+                mutation_group = "" if mutation_group is None else mutation_group
                 if mutation_group != "" and not _valid_leaf_id(mutation_group):
                     return False
                 if mutation["operation_id"] in operation_ids:
@@ -1843,9 +1864,100 @@ def identity_matches_release(identity: dict[str, Any], context: dict[str, Any]) 
     return bool(canonical == expected_source and all(identity.get(field) == value for field, value in expected.items()))
 
 
-def traced(binary: Path, argv: list[str], cwd: Path, challenge: str) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+class _SockFilter(ctypes.Structure):
+    _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte), ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint32)]
+
+
+class _SockFprog(ctypes.Structure):
+    _fields_ = [("length", ctypes.c_ushort), ("filter", ctypes.POINTER(_SockFilter))]
+
+
+_SECCOMP_SYSCALLS = {
+    "x86_64": {
+        "clone": 56, "unshare": 272, "setns": 308, "mount": 165,
+        "umount2": 166, "pivot_root": 155, "chroot": 161,
+    },
+    "aarch64": {
+        "clone": 220, "unshare": 97, "setns": 268, "mount": 40,
+        "umount2": 39, "pivot_root": 41, "chroot": 51,
+    },
+}
+_SECCOMP_MODERN_MOUNT_SYSCALLS = {
+    "open_tree": 428, "move_mount": 429, "fsopen": 430, "fsconfig": 431,
+    "fsmount": 432, "fspick": 433, "clone3": 435, "mount_setattr": 442,
+}
+_AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}
+
+
+def _install_path_authority_seccomp() -> None:
+    """Install a no-fallback inherited filter before an authority-using exec."""
+    machine = platform.machine().lower()
+    if machine == "amd64":
+        machine = "x86_64"
+    elif machine == "arm64":
+        machine = "aarch64"
+    if machine not in _SECCOMP_SYSCALLS or sys.byteorder != "little":
+        raise OSError(errno.ENOTSUP, "path-authority seccomp does not admit this Linux architecture")
+    if platform.system() != "Linux":
+        raise OSError(errno.ENOTSUP, "path-authority seccomp requires Linux")
+
+    bpf_ld_abs = 0x20
+    bpf_jeq = 0x15
+    bpf_jset = 0x45
+    bpf_ret = 0x06
+    seccomp_ret_kill = 0x80000000
+    seccomp_ret_errno = 0x00050000 | errno.EPERM
+    seccomp_ret_allow = 0x7FFF0000
+    instructions: list[tuple[int, int, int, int]] = [
+        (bpf_ld_abs, 0, 0, 4),
+        (bpf_jeq, 1, 0, _AUDIT_ARCH[machine]),
+        (bpf_ret, 0, 0, seccomp_ret_kill),
+        (bpf_ld_abs, 0, 0, 0),
+        # Do not let the x86 x32 syscall-number bit bypass the native table.
+        (bpf_jset, 0, 1, 0x40000000),
+        (bpf_ret, 0, 0, seccomp_ret_errno),
+    ]
+    numbers = _SECCOMP_SYSCALLS[machine]
+    for name in (
+        "unshare", "setns", "mount", "umount2", "pivot_root", "chroot",
+        "open_tree", "move_mount", "fsopen", "fsconfig", "fsmount", "fspick",
+        "mount_setattr", "clone3",
+    ):
+        number = numbers[name] if name in numbers else _SECCOMP_MODERN_MOUNT_SYSCALLS[name]
+        instructions.extend([
+            (bpf_jeq, 0, 1, number),
+            (bpf_ret, 0, 0, seccomp_ret_errno),
+        ])
+    # seccomp_data.args[0] starts at byte 16.  Both admitted architectures are
+    # little-endian, so JSET inspects clone's low 32-bit CLONE_NEWNS flag while
+    # ordinary Go runtime thread creation remains available.
+    instructions.extend([
+        (bpf_jeq, 0, 3, numbers["clone"]),
+        (bpf_ld_abs, 0, 0, 16),
+        (bpf_jset, 0, 1, 0x00020000),
+        (bpf_ret, 0, 0, seccomp_ret_errno),
+        (bpf_ret, 0, 0, seccomp_ret_allow),
+    ])
+    array = (_SockFilter * len(instructions))(*(_SockFilter(*item) for item in instructions))
+    program = _SockFprog(len(instructions), array)
+    prctl = getattr(_LIBC, "prctl", None)
+    if prctl is None or prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
+        code = ctypes.get_errno() or errno.ENOSYS
+        raise OSError(code, "could not set no_new_privs for path-authority command")
+    if prctl(22, 2, ctypes.byref(program), 0, 0) != 0:  # PR_SET_SECCOMP, FILTER
+        code = ctypes.get_errno() or errno.ENOSYS
+        raise OSError(code, "could not install path-authority seccomp filter")
+
+
+def traced(
+    binary: Path, argv: list[str], cwd: Path, challenge: str, *, path_authority: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     started = now()
-    completed = subprocess.run([str(binary), *argv], cwd=cwd, env=os.environ.copy(), text=True, capture_output=True, check=False, timeout=180)
+    completed = subprocess.run(
+        [str(binary), *argv], cwd=cwd, env=os.environ.copy(), text=True,
+        capture_output=True, check=False, timeout=180,
+        preexec_fn=_install_path_authority_seccomp if path_authority else None,
+    )
     ended = now()
     trace = {
         "challenge": challenge, "argv": argv, "started_at": started, "ended_at": ended,
@@ -3147,8 +3259,16 @@ _STATX_MNT_ID = 0x1000
 _AT_EMPTY_PATH = 0x1000
 _AT_SYMLINK_NOFOLLOW = 0x100
 _INOTIFY_EVENT_MASK = 0x00000004 | 0x00000008 | 0x00000100 | 0x00000200 | 0x00000040 | 0x00000080
-_INOTIFY_SELF_MASK = 0x00000400 | 0x00000800 | 0x00002000 | 0x00008000
+_IN_DELETE_SELF = 0x00000400
+_IN_MOVE_SELF = 0x00000800
+_IN_UNMOUNT = 0x00002000
 _IN_Q_OVERFLOW = 0x00004000
+_IN_IGNORED = 0x00008000
+_IN_MASK_ADD = 0x20000000
+_IN_ISDIR = 0x40000000
+_INOTIFY_SELF_MASK = _IN_DELETE_SELF | _IN_MOVE_SELF | _IN_UNMOUNT | _IN_IGNORED
+_INOTIFY_WATCH_MASK = _INOTIFY_EVENT_MASK | _INOTIFY_SELF_MASK
+_INOTIFY_KNOWN_MASK = _INOTIFY_WATCH_MASK | _IN_Q_OVERFLOW | _IN_ISDIR
 
 
 def _statx_mount_id(directory_fd: int, name: str = "") -> int:
@@ -3167,7 +3287,7 @@ def _statx_mount_id(directory_fd: int, name: str = "") -> int:
 
 
 class _LinuxAncestryLifetimeProof:
-    """One fail-closed inotify stream plus statx mount bindings for ancestry edges."""
+    """One linearizable inotify/statx lifetime for a complete authority set."""
 
     def __init__(self):
         init = getattr(_LIBC, "inotify_init1", None)
@@ -3180,43 +3300,126 @@ class _LinuxAncestryLifetimeProof:
             raise OSError(code, os.strerror(code))
         self._add = add
         self._names: dict[int, set[bytes]] = {}
+        self._masks: dict[int, int] = {}
         self._edges: list[tuple[int, str, int, int]] = []
         self._failed = False
         self._roots: list[tuple[int, int]] = []
+        self._initialized = False
+        self._finalized = False
 
     def bind_root(self, root_fd: int) -> None:
+        if self._initialized:
+            raise OSError(errno.EPERM, "ancestry interest is immutable after initialization")
         self._roots.append((root_fd, _statx_mount_id(root_fd)))
 
-    def watch_parent(self, parent_fd: int, name: str) -> int:
+    def watch_parent(self, parent_fd: int, name: str | None) -> int:
+        if self._initialized:
+            raise OSError(errno.EPERM, "ancestry interest is immutable after initialization")
         path = os.fsencode(f"/proc/self/fd/{parent_fd}")
-        wd = self._add(self.fd, path, _INOTIFY_EVENT_MASK | _INOTIFY_SELF_MASK)
+        requested = _INOTIFY_WATCH_MASK if name is not None else _INOTIFY_SELF_MASK
+        # IN_MASK_ADD also creates a new watch when none exists, and prevents a
+        # final-leaf self-only watch from weakening another path's name watch.
+        wd = self._add(self.fd, path, requested | _IN_MASK_ADD)
         if wd < 0:
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code))
-        self._names.setdefault(wd, set()).add(os.fsencode(name))
+        interests = self._names.setdefault(wd, set())
+        self._masks[wd] = self._masks.get(wd, 0) | requested
+        if name is not None:
+            interests.add(os.fsencode(name))
         return wd
 
-    def ignore_name(self, wd: int, name: str) -> None:
-        """Stop treating an existing final authority leaf as an ancestry edge."""
-        wanted = os.fsencode(name)
-        self._names.get(wd, set()).discard(wanted)
-
     def bind_existing_edge(self, parent_fd: int, name: str, child_fd: int) -> None:
+        if self._initialized:
+            raise OSError(errno.EPERM, "ancestry bindings are immutable after initialization")
         child_mount = _statx_mount_id(child_fd)
         if _statx_mount_id(parent_fd, name) != child_mount:
             raise OSError(errno.ESTALE, "ancestry mount changed while freezing")
         self._edges.append((parent_fd, name, child_fd, child_mount))
 
-    def _record_event(self, wd: int, mask: int, raw_name: bytes) -> None:
-        """Latch relevant churn and overflow; a later clean state cannot erase it."""
-        if mask & _IN_Q_OVERFLOW or mask & _INOTIFY_SELF_MASK:
+    def _record_event(self, wd: int, mask: int, cookie: int, raw_name: bytes) -> None:
+        """Validate one kernel-canonical event and latch relevant authority churn."""
+        if mask & ~_INOTIFY_KNOWN_MASK:
             self._failed = True
-        if mask & _INOTIFY_EVENT_MASK and raw_name in self._names.get(wd, set()):
+            return
+        primary = mask & ~_IN_ISDIR
+        if primary == _IN_Q_OVERFLOW:
+            if wd != -1 or cookie != 0 or raw_name or mask & _IN_ISDIR:
+                self._failed = True
+            self._failed = True
+            return
+        if wd not in self._names:
+            self._failed = True
+            return
+        if primary == _IN_IGNORED:
+            if cookie != 0 or raw_name or mask & _IN_ISDIR:
+                self._failed = True
+            self._failed = True
+            return
+        individual = [bit for bit in (
+            0x00000004, 0x00000008, 0x00000100, 0x00000200, 0x00000040,
+            0x00000080, _IN_DELETE_SELF, _IN_MOVE_SELF, _IN_UNMOUNT,
+        ) if primary & bit]
+        if len(individual) != 1 or primary != individual[0]:
+            self._failed = True
+            return
+        event = individual[0]
+        if event & self._masks.get(wd, 0) == 0:
+            self._failed = True
+            return
+        if event in {_IN_DELETE_SELF, _IN_MOVE_SELF, _IN_UNMOUNT}:
+            if cookie != 0 or raw_name or mask & _IN_ISDIR:
+                self._failed = True
+            self._failed = True
+            return
+        if event == 0x00000008 and mask & _IN_ISDIR:
+            self._failed = True
+            return
+        if event == 0x00000004 and not raw_name:
+            # IN_ATTRIB may canonically describe the watched directory itself;
+            # it does not describe any immutable child-name binding.
+            if cookie != 0 or mask & _IN_ISDIR:
+                self._failed = True
+            return
+        if not raw_name or (cookie != 0) != (event in {0x00000040, 0x00000080}):
+            self._failed = True
+            return
+        if raw_name in self._names[wd]:
             self._failed = True
 
-    def verify(self) -> bool:
-        if self._failed:
-            return False
+    def _parse_stream(self, body: bytes) -> None:
+        if len(body) < 16:
+            self._failed = True
+            return
+        offset = 0
+        while offset < len(body):
+            if len(body) - offset < 16:
+                self._failed = True
+                return
+            wd = int.from_bytes(body[offset:offset + 4], sys.byteorder, signed=True)
+            mask = int.from_bytes(body[offset + 4:offset + 8], sys.byteorder)
+            cookie = int.from_bytes(body[offset + 8:offset + 12], sys.byteorder)
+            length = int.from_bytes(body[offset + 12:offset + 16], sys.byteorder)
+            if length % 16 or length > 256 or offset + 16 + length > len(body):
+                self._failed = True
+                return
+            name_buffer = body[offset + 16:offset + 16 + length]
+            if length:
+                nul = name_buffer.find(b"\0")
+                canonical_length = ((nul + 1 + 15) // 16) * 16 if nul >= 0 else -1
+                if (
+                    nul < 0 or canonical_length != length or any(name_buffer[nul + 1:])
+                    or name_buffer[:nul] in {b".", b".."} or b"/" in name_buffer[:nul]
+                ):
+                    self._failed = True
+                    return
+                raw_name = name_buffer[:nul]
+            else:
+                raw_name = b""
+            self._record_event(wd, mask, cookie, raw_name)
+            offset += 16 + length
+
+    def _drain(self) -> bool:
         try:
             while True:
                 try:
@@ -3226,16 +3429,31 @@ class _LinuxAncestryLifetimeProof:
                 if not body:
                     self._failed = True
                     break
-                offset = 0
-                while offset + 16 <= len(body):
-                    wd = int.from_bytes(body[offset:offset + 4], sys.byteorder, signed=True)
-                    mask = int.from_bytes(body[offset + 4:offset + 8], sys.byteorder)
-                    length = int.from_bytes(body[offset + 12:offset + 16], sys.byteorder)
-                    raw_name = body[offset + 16:offset + 16 + length].split(b"\0", 1)[0]
-                    offset += 16 + length
-                    self._record_event(wd, mask, raw_name)
-                if offset != len(body):
-                    self._failed = True
+                self._parse_stream(body)
+                if self._failed:
+                    break
+        except OSError:
+            self._failed = True
+        return not self._failed
+
+    def initialize(self) -> bool:
+        """Drain the setup epoch before the manager is allowed to mutate anything."""
+        if self._initialized:
+            return False
+        self._initialized = True
+        return self._drain()
+
+    def begin(self) -> bool:
+        """Precheck the complete set without ending its lifetime."""
+        if not self._initialized or self._finalized or self._failed:
+            return False
+        return self._drain()
+
+    def check_mount_bindings(self) -> bool:
+        """Check every initial statx binding before the final event barrier."""
+        if not self._initialized or self._finalized or self._failed:
+            return False
+        try:
             for root_fd, root_mount in self._roots:
                 fresh_root = os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
                 try:
@@ -3250,6 +3468,13 @@ class _LinuxAncestryLifetimeProof:
             self._failed = True
         return not self._failed
 
+    def finalize(self) -> bool:
+        """The last operation: a clean drain is the proof's linearization point."""
+        if not self._initialized or self._finalized:
+            return False
+        self._finalized = True
+        return self._drain()
+
     def close(self) -> None:
         try:
             os.close(self.fd)
@@ -3260,12 +3485,13 @@ class _LinuxAncestryLifetimeProof:
 class FrozenAuthoritySet:
     """Descriptor-bound path authority with every lexical component pinned."""
 
-    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]], lifetime: _LinuxAncestryLifetimeProof):
+    def __init__(self, records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]], int]], lifetime: _LinuxAncestryLifetimeProof):
         self.records = records
         self.lifetime = lifetime
+        self._result: bool | None = None
 
     def _ancestry_bound(self, ancestry: list[tuple[int, int | None, str | None, tuple[int, int]]]) -> bool:
-        if not ancestry or not self.lifetime.verify():
+        if not ancestry:
             return False
         try:
             fresh_root = os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
@@ -3287,77 +3513,59 @@ class FrozenAuthoritySet:
         except OSError:
             return False
 
-    def retained(self, paths: set[str]) -> bool:
+    def _evaluate(self, mode: str, retained_paths: set[str] = set()) -> bool:
+        if self._result is not None:
+            return self._result
+        valid = self.lifetime.begin()
         try:
-            for path in paths:
-                kind, descriptor, identity, name, ancestry = self.records[path]
-                if kind != "existing" or not self._ancestry_bound(ancestry):
-                    return False
+            if mode == "retained" and set(self.records) != retained_paths:
+                valid = False
+            for path, (kind, descriptor, identity, name, ancestry, mount_id) in self.records.items():
+                if not valid or not self._ancestry_bound(ancestry):
+                    valid = False
+                    continue
                 opened = os.fstat(descriptor)
-                current = os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
-                if (opened.st_dev, opened.st_ino) != identity or (current.st_dev, current.st_ino) != identity:
-                    return False
-            return True
+                if (opened.st_dev, opened.st_ino) != identity or _statx_mount_id(descriptor) != mount_id:
+                    valid = False
+                    continue
+                keep = mode == "retained" or (mode == "partitioned" and path in retained_paths)
+                if keep:
+                    if kind != "existing":
+                        valid = False
+                        continue
+                    current = os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != identity or _statx_mount_id(ancestry[-1][0], name) != mount_id:
+                        valid = False
+                else:
+                    if kind == "existing" and opened.st_nlink != 0:
+                        valid = False
+                    try:
+                        os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
+                        valid = False
+                    except FileNotFoundError:
+                        pass
+            if not self.lifetime.check_mount_bindings():
+                valid = False
         except (KeyError, OSError):
-            return False
+            valid = False
+        # No state or descriptor check may follow this final event drain.
+        final_clean = self.lifetime.finalize()
+        self._result = bool(valid and final_clean)
+        return self._result
+
+    def retained(self, paths: set[str]) -> bool:
+        return self._evaluate("retained", paths)
 
     def absent_and_unlinked(self) -> bool:
-        try:
-            for _path, (kind, descriptor, identity, name, ancestry) in self.records.items():
-                if not self._ancestry_bound(ancestry):
-                    return False
-                opened = os.fstat(descriptor)
-                if kind == "existing":
-                    if (opened.st_dev, opened.st_ino) != identity or opened.st_nlink != 0:
-                        return False
-                else:
-                    if (opened.st_dev, opened.st_ino) != identity:
-                        return False
-                try:
-                    os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
-                    return False
-                except FileNotFoundError:
-                    pass
-            return True
-        except OSError:
-            return False
+        return self._evaluate("absent")
 
     def partitioned(self, retained_paths: set[str]) -> bool:
-        try:
-            for path, (kind, descriptor, identity, name, ancestry) in self.records.items():
-                if not self._ancestry_bound(ancestry):
-                    return False
-                opened = os.fstat(descriptor)
-                if (opened.st_dev, opened.st_ino) != identity:
-                    return False
-                if path in retained_paths:
-                    if kind != "existing":
-                        return False
-                    current = os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
-                    if (current.st_dev, current.st_ino) != identity:
-                        return False
-                elif kind == "existing":
-                    if opened.st_nlink != 0:
-                        return False
-                    try:
-                        os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
-                        return False
-                    except FileNotFoundError:
-                        pass
-                else:
-                    try:
-                        os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
-                        return False
-                    except FileNotFoundError:
-                        pass
-            return True
-        except OSError:
-            return False
+        return self._evaluate("partitioned", retained_paths)
 
     def close(self) -> None:
         self.lifetime.close()
         closed: set[int] = set()
-        for _, descriptor, _, _, ancestry in self.records.values():
+        for _, descriptor, _, _, ancestry, _ in self.records.values():
             for child in [descriptor, *(item[0] for item in ancestry)]:
                 if child not in closed:
                     try:
@@ -3369,7 +3577,7 @@ class FrozenAuthoritySet:
 
 def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> FrozenAuthoritySet | None:
     """Open an absolute path component-by-component and retain its lexical binding."""
-    records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]]]] = {}
+    records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]], int]] = {}
     opened_descriptors: list[int] = []
     lifetime: _LinuxAncestryLifetimeProof | None = None
     try:
@@ -3393,15 +3601,29 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
                 raise ValueError("filesystem root cannot be purge authority")
             for index, name in enumerate(parts):
                 final = index == len(parts) - 1
-                watch = lifetime.watch_parent(parent_fd, name)
+                # Final leaves which exist at freeze time are deletion targets, not
+                # ancestry names.  Decide that before installing immutable interest;
+                # all non-final and absent-final names are relevant for the lifetime.
+                initial_metadata = None
+                if final:
+                    try:
+                        initial_metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                lifetime.watch_parent(parent_fd, None if final and initial_metadata is not None else name)
                 try:
                     metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
                     opened_parent = os.fstat(parent_fd)
                     records[value] = (
                         "absent", parent_fd, (opened_parent.st_dev, opened_parent.st_ino), name, ancestry,
+                        _statx_mount_id(parent_fd),
                     )
                     break
+                if initial_metadata is not None and (
+                    metadata.st_dev, metadata.st_ino
+                ) != (initial_metadata.st_dev, initial_metadata.st_ino):
+                    raise ValueError("final authority leaf changed while installing its watch")
                 if stat.S_ISLNK(metadata.st_mode) or (not final and not stat.S_ISDIR(metadata.st_mode)):
                     raise ValueError("authority path has a non-directory or symbolic ancestor")
                 flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -3415,8 +3637,10 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
                     os.close(descriptor)
                     raise ValueError("authority component changed while freezing")
                 if final:
-                    lifetime.ignore_name(watch, name)
-                    records[value] = ("existing", descriptor, identity, name, ancestry)
+                    final_mount = _statx_mount_id(descriptor)
+                    if _statx_mount_id(parent_fd, name) != final_mount:
+                        raise ValueError("final authority mount changed while freezing")
+                    records[value] = ("existing", descriptor, identity, name, ancestry, final_mount)
                 else:
                     lifetime.bind_existing_edge(parent_fd, name, descriptor)
                     ancestry.append((descriptor, parent_fd, name, identity))
@@ -3424,9 +3648,11 @@ def freeze_path_authority(paths: set[str], allowed_roots: tuple[Path, ...]) -> F
             else:
                 if value not in records:
                     raise ValueError("authority path was not frozen")
-        frozen = FrozenAuthoritySet(records, lifetime)
         if set(records) != paths:
             raise ValueError("authority set is incomplete")
+        if not lifetime.initialize():
+            raise ValueError("authority setup changed before its initialization barrier")
+        frozen = FrozenAuthoritySet(records, lifetime)
         return frozen
     except (OSError, ValueError):
         if lifetime is not None:
@@ -3627,8 +3853,8 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
 
-    def execute(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        completed, trace = traced(binary, argv, root, challenge)
+    def execute(argv: list[str], *, path_authority: bool = False) -> subprocess.CompletedProcess[str]:
+        completed, trace = traced(binary, argv, root, challenge, path_authority=path_authority)
         traces.append(trace)
         return completed
 
@@ -3680,7 +3906,10 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         pre_remove_state.get("transaction_receipts", []) if pre_remove_state else None,
     )
     removal_authority, frozen_data_paths = removal_frozen_result if removal_frozen_result is not None else (None, set())
-    remove = execute(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"])
+    remove = execute(
+        ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        path_authority=True,
+    )
     try:
         remove_value = strict_json_loads(remove.stdout)
     except (json.JSONDecodeError, DuplicateKeyError, ValueError):
@@ -3708,13 +3937,18 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         extra_paths=frozenset({purge_state_path}),
     )
     purge_authority, purge_data_paths = purge_frozen_result if purge_frozen_result is not None else (None, set())
-    purge = execute(["remove", "e2e-external-package", "--purge-data", "--format", "json"])
+    purge = execute(
+        ["remove", "e2e-external-package", "--purge-data", "--format", "json"],
+        path_authority=True,
+    )
     purge_state = manager_state(manager)
     remaining = [
         item for item in purge_state.get("installations", [])
         if isinstance(item, dict) and item.get("installation_id") == (initial_installation or {}).get("installation_id")
     ] if purge_state else []
     valid_absent_state = purge_state is not None and not remaining
+    marker_purged = marker is not None and marker.purged((root, manager))
+    same_data_authority = purge_authority is not None and purge_data_paths == frozen_data_paths
     purge_authority_valid = bool(
         purge_authority is not None and (
             (valid_absent_state and purge_authority.partitioned({purge_state_path}))
@@ -3722,10 +3956,10 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         )
     )
     authority_consumed = purge_authority_valid
-    purge_deleted = bool(
-        marker is not None and marker.purged((root, manager)) and authority_consumed
-        and purge_authority is not None and purge_data_paths == frozen_data_paths
-    )
+    purge_deleted = bool(marker_purged and authority_consumed and same_data_authority)
+    if purge_authority is not None:
+        purge_authority.close()
+        purge_authority = None
     after = observe(home, manager)
     proof = {
         "info_preserved": info_preserved,
@@ -3740,8 +3974,6 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         marker.close()
     if removal_authority is not None:
         removal_authority.close()
-    if purge_authority is not None:
-        purge_authority.close()
     return safe_locator and all(item.returncode == 0 for item in exits) and all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof,
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,

@@ -2724,6 +2724,7 @@ def main() -> int:
     release_tag = None
     challenge = None
     github: dict[str, str] = {}
+    prepared: dict[str, Any] = {}
     if args.mode == "enforced":
         if not all((args.prepared_context, args.asset_name, args.observer_bundle)):
             raise ValueError("enforced mode requires prepared official context, asset, and observer")
