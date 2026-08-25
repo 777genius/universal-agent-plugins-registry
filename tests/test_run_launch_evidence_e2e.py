@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import base64
+import ctypes
 import errno
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -305,7 +307,13 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         self.assertEqual(record["binary"]["version_stdout"], "agentplugins 0.1.14")
         self.assertEqual(record["binary"]["version_argv"], ["<authenticated-binary-fd>", "version"])
         self.assertEqual(record["binary"]["version_exit"], 0)
-        self.assertEqual(record["binary"]["execution_session"]["mechanism"], "linux-fd-execve-authenticated-descriptor")
+        self.assertEqual(
+            record["binary"]["execution_session"]["mechanism"],
+            "linux-raw-execveat-at-empty-path-authenticated-fd",
+        )
+        self.assertEqual(record["binary"]["execution_session"]["syscall_number"], 322)
+        self.assertTrue(record["binary"]["execution_session"]["empty_path"])
+        self.assertTrue(record["binary"]["execution_session"]["at_empty_path"])
         self.assertNotIn("/proc/self/fd", json.dumps(record))
         self.assertEqual(record["tests"]["skips"], 0)
         self.assertEqual(record["host"]["uid"], os.getuid())
@@ -522,39 +530,103 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
-                real_execve = os.execve
+                real_execveat = observer._raw_execveat
 
-                def audited_execve(authority, argv, environment):
+                def audited_execveat(authority, argv, environment):
                     marker.write_text(f"{type(authority).__name__}:{authority}\n")
-                    return real_execve(authority, argv, environment)
+                    return real_execveat(authority, argv, environment)
 
                 # A fabricated pathname bearing the old predictable spelling
                 # exists, but descriptor execution never consults it.
                 fabricated = root / "proc" / "self" / "fd"
                 fabricated.mkdir(parents=True)
                 (fabricated / str(session._fd)).write_text("malicious pathname")
-                with mock.patch.object(observer.os, "execve", side_effect=audited_execve):
+                with mock.patch.object(observer, "_raw_execveat", side_effect=audited_execveat):
                     completed, binding = session.execute(
                         binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
                         cwd=root, write_authority=None,
                     )
                 self.assertEqual(completed.returncode, 0)
                 self.assertRegex(marker.read_text(), r"^int:[0-9]+\n$")
-                self.assertEqual(binding["mechanism"], "linux-fd-execve-authenticated-descriptor")
+                self.assertEqual(
+                    binding["mechanism"], "linux-raw-execveat-at-empty-path-authenticated-fd",
+                )
+                self.assertEqual(binding["syscall_number"], 322)
+                self.assertTrue(binding["empty_path"])
+                self.assertTrue(binding["at_empty_path"])
                 self.assertFalse(binding["descriptor_inheritable_in_observer"])
                 source = Path(observer.__file__).read_text()
-                session_source = source[source.index("class AuthenticatedBinaryExecutionSession"):source.index("class TestExecutionSession")]
-                self.assertNotIn("/proc/self/fd", session_source)
+                execution_source = source[
+                    source.index("def _raw_execveat"):source.index("class TestExecutionSession")
+                ]
+                for forbidden in ("os.execve", "fexecve", "/proc/self/fd"):
+                    self.assertNotIn(forbidden, execution_source)
+                self.assertIn("ctypes.c_char_p(b\"\")", execution_source)
+                self.assertIn("ctypes.c_int(_AT_EMPTY_PATH)", execution_source)
                 session.abort()
+
+    def test_elf_execution_uses_the_original_authenticated_cloexec_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            elf = Path(shutil.which("true") or "/usr/bin/true")
+            descriptor = os.open(elf, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+            self.assertFalse(os.get_inheritable(descriptor))
+            session = object.__new__(observer.AuthenticatedBinaryExecutionSession)
+            session._fd = descriptor
+            session._parent_fd = -1
+            session._inotify_fd = -1
+            session._body = b"\x7fELF"
+            session._child_pid = None
+            session._last_child_pid = None
+            marker = root / "elf-exec-authority"
+            real_execveat = observer._raw_execveat
+
+            def audited_execveat(authority, argv, environment):
+                marker.write_text(json.dumps({
+                    "authority": authority,
+                    "inheritable": os.get_inheritable(authority),
+                    "argv": argv,
+                }))
+                return real_execveat(authority, argv, environment)
+
+            try:
+                with mock.patch.object(observer, "_raw_execveat", side_effect=audited_execveat):
+                    completed = session._run_descriptor([], cwd=root, write_authority=None)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(completed.stderr, "")
+                audit = json.loads(marker.read_text())
+                self.assertEqual(audit, {
+                    "authority": descriptor,
+                    "inheritable": False,
+                    "argv": ["<authenticated-binary-fd>"],
+                })
+                self.assertIsNone(session._child_pid)
+                with self.assertRaises(ChildProcessError):
+                    os.waitpid(session._last_child_pid, os.WNOHANG)
+            finally:
+                os.close(descriptor)
 
     def test_authenticated_binary_fd_exec_unavailable_fails_enotsup_without_path_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); binary = root / "agentplugins"
             body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
-            with mock.patch.object(observer.os, "supports_fd", set()):
+            with (
+                mock.patch.object(observer.platform, "machine", return_value="unsupported-test-arch"),
+                mock.patch.object(observer.os, "open", wraps=os.open) as opened,
+            ):
                 with self.assertRaises(OSError) as unavailable:
                     observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                opened.assert_not_called()
+            self.assertEqual(unavailable.exception.errno, errno.ENOTSUP)
+            with (
+                mock.patch.object(observer._LIBC, "syscall", None),
+                mock.patch.object(observer.os, "open", wraps=os.open) as opened,
+            ):
+                with self.assertRaises(OSError) as unavailable:
+                    observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                opened.assert_not_called()
             self.assertEqual(unavailable.exception.errno, errno.ENOTSUP)
 
             with (
@@ -562,7 +634,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
-                with mock.patch.object(observer.os, "execve", side_effect=OSError(errno.ENOSYS, "missing")):
+                with mock.patch.object(observer, "_raw_execveat", side_effect=OSError(errno.ENOTSUP, "missing")):
                     with self.assertRaises(OSError) as runtime_unavailable:
                         session.execute(
                             binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
@@ -571,6 +643,118 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 self.assertEqual(runtime_unavailable.exception.errno, errno.ENOTSUP)
                 self.assertTrue(session._closed)
                 self.assertIsNone(session._child_pid)
+
+    def test_raw_execveat_syscall_map_proves_exact_x86_64_host_number(self) -> None:
+        self.assertEqual(platform.system(), "Linux")
+        self.assertIn(platform.machine().lower(), {"amd64", "x86_64"})
+        self.assertEqual(observer._execveat_syscall_number(), 322)
+        self.assertEqual(observer._EXECVEAT_SYSCALLS, {"x86_64": 322, "aarch64": 281})
+
+    def test_raw_execveat_rejects_embedded_nul_before_syscall(self) -> None:
+        calls = []
+
+        def forbidden_syscall(*arguments):
+            calls.append(arguments)
+            ctypes.set_errno(errno.EPERM)
+            return -1
+
+        with mock.patch.object(observer._LIBC, "syscall", side_effect=forbidden_syscall):
+            with self.assertRaisesRegex(ValueError, "valid integer descriptor"):
+                observer._raw_execveat(True, ["agentplugins"], {})
+            with self.assertRaisesRegex(ValueError, "embedded NUL in argv"):
+                observer._raw_execveat(3, ["agentplugins", "bad\0argument"], {})
+            with self.assertRaisesRegex(ValueError, "embedded NUL in environment"):
+                observer._raw_execveat(3, ["agentplugins"], {"KEY": "bad\0value"})
+        self.assertEqual(calls, [])
+
+    def test_inherited_seccomp_execveat_enosys_fails_closed_without_procfs_fallback(self) -> None:
+        code = r'''
+import ctypes, errno, hashlib, importlib.util, json, os, pathlib, sys, tempfile
+root = pathlib.Path(os.environ["PHASE6_REPOSITORY"])
+sys.path.insert(0, str(root / "scripts"))
+spec = importlib.util.spec_from_file_location("isolated_observer", root / "scripts/observe_launch_scenario.py")
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+
+class Filter(ctypes.Structure):
+    _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte), ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint32)]
+class Program(ctypes.Structure):
+    _fields_ = [("length", ctypes.c_ushort), ("filter", ctypes.POINTER(Filter))]
+
+def _closed(fd):
+    try:
+        os.fstat(fd)
+    except OSError:
+        return True
+    return False
+
+with tempfile.TemporaryDirectory() as temporary:
+    directory = pathlib.Path(temporary)
+    binary = directory / "agentplugins"
+    body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+    binary.write_bytes(body); binary.chmod(0o700)
+    module.RELEASED_AGENTPLUGINS_0_1_14_SIZE = len(body)
+    module.RELEASED_AGENTPLUGINS_0_1_14_SHA256 = hashlib.sha256(body).hexdigest()
+    session = module.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=directory)
+    descriptors = [session._fd, session._parent_fd, session._inotify_fd]
+    fabricated = directory / "proc/self/fd"; fabricated.mkdir(parents=True)
+    malicious_marker = directory / "malicious-executed"
+    target = fabricated / str(session._fd)
+    target.write_text("#!/bin/sh\ntouch " + str(malicious_marker) + "\n")
+    target.chmod(0o700)
+
+    number = module._execveat_syscall_number()
+    return_errno = 0x00050000 | errno.ENOSYS
+    allow = 0x7fff0000
+    instructions = (Filter * 4)(
+        Filter(0x20, 0, 0, 0),
+        Filter(0x15, 0, 1, number),
+        Filter(0x06, 0, 0, return_errno),
+        Filter(0x06, 0, 0, allow),
+    )
+    program = Program(len(instructions), instructions)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0 or libc.prctl(22, 2, ctypes.byref(program), 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "could not install inherited ENOSYS filter")
+    try:
+        session.execute(
+            binary.resolve(), list(module.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+            cwd=directory, write_authority=None,
+        )
+        outcome = {"unexpected_success": True}
+    except OSError as error:
+        outcome = {
+            "errno": error.errno,
+            "closed": session._closed,
+            "child_pid": session._child_pid,
+            "last_child_pid": session._last_child_pid,
+            "malicious_executed": malicious_marker.exists(),
+            "fabricated_target_exists": target.exists(),
+            "descriptors_closed": all(_closed(fd) for fd in descriptors),
+        }
+        try:
+            os.waitpid(session._last_child_pid, os.WNOHANG)
+            outcome["reaped"] = False
+        except ChildProcessError:
+            outcome["reaped"] = True
+    print(json.dumps(outcome))
+'''
+        # The fabricated tree is deliberately not bind-mounted over real
+        # procfs: that requires privileges unavailable to the genuine-nonroot
+        # suite. The inherited kernel filter is real; the source regression
+        # above deterministically proves there is no compatibility path.
+        completed = subprocess.run(
+            [sys.executable, "-c", code], cwd=ROOT, text=True, capture_output=True,
+            check=False, env={**os.environ, "PHASE6_REPOSITORY": str(ROOT)}, timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        outcome = json.loads(completed.stdout)
+        self.assertEqual(outcome["errno"], errno.ENOTSUP)
+        self.assertTrue(outcome["closed"])
+        self.assertIsNone(outcome["child_pid"])
+        self.assertTrue(outcome["reaped"])
+        self.assertTrue(outcome["descriptors_closed"])
+        self.assertTrue(outcome["fabricated_target_exists"])
+        self.assertFalse(outcome["malicious_executed"])
 
     def test_authenticated_binary_multithreaded_observer_fails_closed_before_fork(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

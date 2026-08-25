@@ -2084,6 +2084,12 @@ _SECCOMP_SYSCALLS = {
         "umount2": 39, "pivot_root": 41, "chroot": 51,
     },
 }
+_EXECVEAT_SYSCALLS = {
+    # Linux uapi syscall tables, reviewed as architecture-specific constants.
+    # Never infer a number for an architecture absent from this map.
+    "x86_64": 322,
+    "aarch64": 281,
+}
 _SECCOMP_MODERN_MOUNT_SYSCALLS = {
     "open_tree": 428, "move_mount": 429, "fsopen": 430, "fsconfig": 431,
     "fsmount": 432, "fspick": 433, "clone3": 435, "mount_setattr": 442,
@@ -2091,13 +2097,75 @@ _SECCOMP_MODERN_MOUNT_SYSCALLS = {
 _AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}
 
 
+def _linux_machine() -> str:
+    machine = platform.machine().lower()
+    return {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+
+
+def _execveat_syscall_number() -> int:
+    if platform.system() != "Linux" or sys.byteorder != "little":
+        raise OSError(errno.ENOTSUP, "raw execveat requires supported little-endian Linux")
+    try:
+        return _EXECVEAT_SYSCALLS[_linux_machine()]
+    except KeyError as error:
+        raise OSError(errno.ENOTSUP, "raw execveat does not admit this Linux architecture") from error
+
+
+def _nul_terminated_c_vector(values: list[str], *, label: str) -> tuple[Any, list[Any]]:
+    """Encode one exec vector without permitting implicit C-string truncation."""
+    vector = (ctypes.c_char_p * (len(values) + 1))()
+    backing: list[Any] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str):
+            raise TypeError(f"{label} entries must be strings")
+        encoded = os.fsencode(value)
+        if b"\0" in encoded:
+            raise ValueError(f"embedded NUL in {label}")
+        buffer = ctypes.create_string_buffer(encoded)
+        backing.append(buffer)
+        vector[index] = ctypes.cast(buffer, ctypes.c_char_p)
+    vector[len(values)] = None
+    return vector, backing
+
+
+def _raw_execveat(fd: int, argv: list[str], environment: dict[str, str]) -> None:
+    """Select an executable only by FD via the raw Linux execveat syscall."""
+    syscall_number = _execveat_syscall_number()
+    syscall = getattr(_LIBC, "syscall", None)
+    if syscall is None:
+        raise OSError(errno.ENOTSUP, "raw execveat syscall entry is unavailable")
+    if type(fd) is not int or fd < 0:
+        raise ValueError("raw execveat requires a valid integer descriptor")
+    environment_items: list[str] = []
+    for key, value in environment.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise TypeError("exec environment names and values must be strings")
+        if "=" in key:
+            raise ValueError("exec environment name contains '='")
+        environment_items.append(f"{key}={value}")
+    argv_vector, argv_backing = _nul_terminated_c_vector(argv, label="argv")
+    environment_vector, environment_backing = _nul_terminated_c_vector(
+        environment_items, label="environment",
+    )
+    # Keep both backing lists live until the non-returning call completes or
+    # fails. Passing an empty pathname and AT_EMPTY_PATH is the whole contract.
+    _keepalive = (argv_backing, environment_backing)
+    ctypes.set_errno(0)
+    result = syscall(
+        ctypes.c_long(syscall_number), ctypes.c_int(fd), ctypes.c_char_p(b""),
+        argv_vector, environment_vector, ctypes.c_int(_AT_EMPTY_PATH),
+    )
+    if result == 0:
+        raise OSError(errno.EIO, "raw execveat unexpectedly returned success")
+    code = ctypes.get_errno() or errno.EIO
+    if code == errno.ENOSYS:
+        raise OSError(errno.ENOTSUP, "raw execveat is unavailable")
+    raise OSError(code, f"raw execveat failed: {os.strerror(code)}")
+
+
 def _install_path_authority_seccomp() -> None:
     """Install a no-fallback inherited filter before an authority-using exec."""
-    machine = platform.machine().lower()
-    if machine == "amd64":
-        machine = "x86_64"
-    elif machine == "arm64":
-        machine = "aarch64"
+    machine = _linux_machine()
     if machine not in _SECCOMP_SYSCALLS or sys.byteorder != "little":
         raise OSError(errno.ENOTSUP, "path-authority seccomp does not admit this Linux architecture")
     if platform.system() != "Linux":
@@ -2357,8 +2425,8 @@ class AuthenticatedBinaryExecutionSession:
     Linux inotify supplies the epoch property that stat/hash observations alone
     cannot: even a modify/restore or rename/out-and-back attempt invalidates the
     session.  The executable descriptor itself is non-inheritable in this
-    process.  A forked direct child uses it only as the authority argument to
-    ``execve``; no pathname participates in executable selection.
+    process. A forked direct child selects it with the raw ``execveat`` system
+    call, an empty pathname, and ``AT_EMPTY_PATH``.
     """
 
     _IN_MODIFY = 0x00000002
@@ -2375,8 +2443,9 @@ class AuthenticatedBinaryExecutionSession:
     _EXECUTION_TIMEOUT_SECONDS = 180
 
     def __init__(self, binary: Path, *, cwd: Path):
-        if platform.system() != "Linux" or os.execve not in os.supports_fd:
-            raise OSError(errno.ENOTSUP, "authenticated descriptor execution is unavailable")
+        self._execveat_syscall = _execveat_syscall_number()
+        if getattr(_LIBC, "syscall", None) is None:
+            raise OSError(errno.ENOTSUP, "raw execveat syscall entry is unavailable")
         binary = Path(binary)
         if not binary.is_absolute() or binary.name in {"", ".", ".."}:
             raise ValueError("authenticated binary path must be absolute and lexical")
@@ -2579,12 +2648,7 @@ class AuthenticatedBinaryExecutionSession:
                         # observer's descriptor remains CLOEXEC throughout.
                         exec_fd = os.dup(self._fd)
                         os.set_inheritable(exec_fd, True)
-                    try:
-                        os.execve(exec_fd, display_argv, environment)
-                    except OSError as error:
-                        if error.errno == errno.ENOSYS:
-                            raise OSError(errno.ENOTSUP, "descriptor execution is unavailable") from error
-                        raise
+                    _raw_execveat(exec_fd, display_argv, environment)
                 except BaseException as error:
                     code = (
                         errno.ENOTSUP if isinstance(error, (NotImplementedError, TypeError))
@@ -2729,7 +2793,10 @@ class AuthenticatedBinaryExecutionSession:
                 except OSError:
                     pass
         binding = {
-            "mechanism": "linux-fd-execve-authenticated-descriptor",
+            "mechanism": "linux-raw-execveat-at-empty-path-authenticated-fd",
+            "syscall_number": self._execveat_syscall,
+            "empty_path": True,
+            "at_empty_path": True,
             "authenticated_fd_direct_child_only": True,
             "descriptor_inheritable_in_observer": os.get_inheritable(self._fd),
             "pre": pre, "post": post,
@@ -2750,7 +2817,10 @@ class AuthenticatedBinaryExecutionSession:
             final = self._observe("final_barrier")
             self._finalized = True
             return {
-                "mechanism": "linux-fd-execve-authenticated-descriptor",
+                "mechanism": "linux-raw-execveat-at-empty-path-authenticated-fd",
+                "syscall_number": self._execveat_syscall,
+                "empty_path": True,
+                "at_empty_path": True,
                 "path": str(self.path), "parent_path": str(self.parent_path),
                 "pre_authentication": copy.deepcopy(self.pre_authentication),
                 "post_authentication": copy.deepcopy(self.post_authentication),
@@ -2855,7 +2925,10 @@ def bound_lifecycle_evidence(
         raise ValueError("successful lifecycle evidence cannot contain a failed command")
     if not (
         isinstance(binary_execution, dict)
-        and binary_execution.get("mechanism") == "linux-fd-execve-authenticated-descriptor"
+        and binary_execution.get("mechanism") == "linux-raw-execveat-at-empty-path-authenticated-fd"
+        and binary_execution.get("syscall_number") == _execveat_syscall_number()
+        and binary_execution.get("empty_path") is True
+        and binary_execution.get("at_empty_path") is True
         and binary_execution.get("path") == str(binary)
         and binary_execution.get("version_argv") == ["<authenticated-binary-fd>", "version"]
         and binary_execution.get("version_exit") == 0
@@ -2864,7 +2937,10 @@ def bound_lifecycle_evidence(
         and len(binary_execution["commands"]) == 7
         and all(
             trace.get("binary_execution") == binding
-            and binding.get("mechanism") == "linux-fd-execve-authenticated-descriptor"
+            and binding.get("mechanism") == "linux-raw-execveat-at-empty-path-authenticated-fd"
+            and binding.get("syscall_number") == _execveat_syscall_number()
+            and binding.get("empty_path") is True
+            and binding.get("at_empty_path") is True
             and binding.get("authenticated_fd_direct_child_only") is True
             and binding.get("descriptor_inheritable_in_observer") is False
             for trace, binding in zip(command_traces, binary_execution["commands"], strict=True)
