@@ -53,6 +53,10 @@ class ObserverTestClassificationTests(unittest.TestCase):
         self.assertEqual(len(privileged_ids), len(set(privileged_ids)))
         self.assertTrue(set(portable_ids).isdisjoint(privileged_ids))
         self.assertEqual(Counter(portable_ids + privileged_ids), Counter(all_ids))
+        self.assertTrue(any(
+            test_id.startswith("observer.tests.test_egress_proxy.")
+            for test_id in portable_ids
+        ))
 
 
 if __name__ == "__main__":

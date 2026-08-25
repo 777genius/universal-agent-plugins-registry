@@ -63,7 +63,7 @@ MCP_READ_TOOL = "search_cloudflare_documentation"
 MCP_READ_ARGUMENTS = {"query": "Cloudflare Durable Objects SQLite storage API marker cloudflare-docs-read-only-v1"}
 CLIENT_ARGUMENTS = {
     "codex": ("exec", "--skip-git-repo-check", "--json", "--ephemeral", "--sandbox", "read-only"),
-    "cursor": ("--print", "--mode", "ask", "--force", "--sandbox", "enabled", "--trust", "--approve-mcps"),
+    "cursor": ("--print", "--output-format", "stream-json", "--mode", "ask", "--force", "--sandbox", "enabled", "--trust", "--approve-mcps"),
     "kiro": ("chat", "--no-interactive", "--trust-all-tools", "--require-mcp-startup"),
 }
 CLIENT_DISCOVERY_ARGUMENTS = {
@@ -472,47 +472,121 @@ def parsed_native_discovery(client: str, encoded: bytes) -> Any:
     return lines
 
 
-def native_discovery_output_present(client: str, value: Any, plugin: str, approved_tuple: dict[str, Any] | None = None) -> bool:
+def native_discovery_output_present(
+    client: str, value: Any, plugin: str, approved_tuple: dict[str, Any] | None = None,
+    *, phase: str = "after",
+) -> bool:
+    if phase not in {"before", "after"}:
+        raise ValueError("native discovery phase is invalid")
     if client == "codex":
         return native_discovery_present(value, plugin, approved_tuple)
-    # Cursor and Kiro expose only a text table. Accept the server only as the
-    # leading table identity, not as incidental prose elsewhere in a line.
-    identity = re.compile(rf"^(?:[-*+✓✔●]\s*)?{re.escape(plugin)}(?:\s|:|$)")
-    negative = re.compile(r"\b(?:disabled|failed|error|unavailable)\b", re.IGNORECASE)
-    return isinstance(value, list) and any(
-        isinstance(line, str) and identity.search(line) is not None and negative.search(line) is None
-        for line in value
+    # Cursor and Kiro expose text tables. The product must be the exact leading
+    # identity and the status must be explicit; a bare identity is not health.
+    identity = re.compile(
+        rf"^(?:[-*+✓✔●]\s*)?{re.escape(plugin)}(?P<status>(?:(?:\s+|:\s*).*)?)$"
     )
+    unhealthy = re.compile(
+        r"\b(?:not\s+loaded|needs\s+approval|disconnected|stopped|disabled|failed|error|unavailable)\b",
+        re.IGNORECASE,
+    )
+    healthy = re.compile(r"\b(?:connected|running|ready|enabled)\b", re.IGNORECASE)
+    if not isinstance(value, list):
+        return False
+    for line in value:
+        match = identity.fullmatch(line) if isinstance(line, str) else None
+        if match is None:
+            continue
+        status = match.group("status").strip()
+        if status.startswith(":"):
+            status = status[1:].strip()
+        # This one Cursor state proves installed presence before --approve-mcps,
+        # but must never be promoted to post-invocation health.
+        if client == "cursor" and phase == "before" and status == "not loaded (needs approval)":
+            return True
+        if unhealthy.search(status) is None and healthy.search(status) is not None:
+            return True
+    return False
 
 
 def successful_tool_event(value: Any, tool: str, plugin: str) -> bool:
     if isinstance(value, list):
         return any(successful_tool_event(item, tool, plugin) for item in value)
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or value.get("type") != "item.completed":
         return False
-    candidate = value.get("item") if value.get("type") in {"item.completed", "tool.completed"} else value
-    if not isinstance(candidate, dict) or candidate.get("type") not in {"mcp_tool_call", "tool_call", "tool_result"}:
+    candidate = value.get("item")
+    if not isinstance(candidate, dict) or candidate.get("type") != "mcp_tool_call":
         return False
     names = {candidate.get(key) for key in ("name", "tool", "tool_name")}
     servers = {candidate.get(key) for key in ("server", "server_name", "mcp_server", "product_id")}
     error = candidate.get("error")
-    payload = next((candidate.get(key) for key in ("result", "content", "output") if candidate.get(key) not in (None, "", [], {})), None)
-    status = candidate.get("status")
-    if tool in names and plugin in servers and error in (None, "") and (payload is not None or status in {"completed", "succeeded", "success"}):
-        return True
-    return False
+    return bool(
+        tool in names and plugin in servers and error in (None, "")
+        and candidate.get("status") == "completed"
+        and candidate.get("result") not in (None, "", [], {})
+    )
 
 
 def successful_marker_event(value: Any, expected_marker: str) -> bool:
     if isinstance(value, list):
         return any(successful_marker_event(item, expected_marker) for item in value)
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or value.get("type") != "item.completed":
         return False
-    candidate = value.get("item") if value.get("type") in {"item.completed", "message.completed"} else value
-    if isinstance(candidate, dict) and candidate.get("type") in {"agent_message", "assistant_message", "final_response"}:
-        messages = [candidate.get(key) for key in ("text", "message", "output", "content")]
-        if expected_marker in messages:
-            return True
+    candidate = value.get("item")
+    return bool(
+        isinstance(candidate, dict) and candidate.get("type") == "agent_message"
+        and candidate.get("text") == expected_marker
+    )
+
+
+def successful_cursor_tool_event(value: Any, tool: str, plugin: str) -> bool:
+    """Recognize Cursor's typed stream-json completed MCP tool event only."""
+    if isinstance(value, list):
+        return any(successful_cursor_tool_event(item, tool, plugin) for item in value)
+    if not isinstance(value, dict) or value.get("type") != "tool_call" or value.get("subtype") != "completed":
+        return False
+    envelope = value.get("tool_call")
+    if not isinstance(envelope, dict) or set(envelope) != {"mcpToolCall"}:
+        return False
+    candidate = envelope["mcpToolCall"]
+    if not isinstance(candidate, dict):
+        return False
+    arguments, result = candidate.get("args"), candidate.get("result")
+    if not isinstance(arguments, dict) or not isinstance(result, dict):
+        return False
+    server = arguments.get("serverName", arguments.get("server"))
+    name = arguments.get("toolName", arguments.get("tool"))
+    success = result.get("success")
+    return bool(
+        server == plugin and name == tool
+        and set(result) == {"success"}
+        and success not in (None, "", [], {})
+    )
+
+
+def successful_cursor_marker_event(value: Any, expected_marker: str) -> bool:
+    """Recognize an exact assistant text block, never user/prompt/result text."""
+    if isinstance(value, list):
+        return any(successful_cursor_marker_event(item, expected_marker) for item in value)
+    if not isinstance(value, dict) or value.get("type") != "assistant":
+        return False
+    message = value.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return False
+    content = message.get("content")
+    return bool(
+        isinstance(content, list) and len(content) == 1
+        and isinstance(content[0], dict) and content[0].get("type") == "text"
+        and content[0].get("text") == expected_marker
+    )
+
+
+def successful_client_evidence(client: str, value: Any, tool: str, plugin: str, expected_marker: str) -> bool:
+    if client == "codex":
+        return successful_marker_event(value, expected_marker) and successful_tool_event(value, tool, plugin)
+    if client == "cursor":
+        return successful_cursor_marker_event(value, expected_marker) and successful_cursor_tool_event(value, tool, plugin)
+    # Kiro has no reviewed structured output contract. Text, including an exact
+    # challenge marker, cannot independently establish a tool call.
     return False
 
 
@@ -609,20 +683,18 @@ def invoke(
     discovery_argv = [str(binary), *CLIENT_DISCOVERY_ARGUMENTS[client]]
     native_before_bytes, _, _ = run_client(discovery_argv, workspace=workspace, environment=environment, timeout=10)
     native_before = parsed_native_discovery(client, native_before_bytes)
-    if not native_discovery_output_present(client, native_before, plugin, approved_tuple):
+    if not native_discovery_output_present(client, native_before, plugin, approved_tuple, phase="before"):
         raise ValueError("native discovery did not contain the exact approved release identity")
+    if client == "kiro":
+        raise ValueError("Kiro has no reviewed structured tool-use evidence contract")
     stdout, started, ended = run_client(argv, workspace=workspace, environment=environment)
-    if client == "codex":
-        invocation = parsed_json_stream(stdout)
-        succeeded = successful_marker_event(invocation, expected_marker) and successful_tool_event(invocation, tool, plugin)
-    else:
-        output = stdout.decode("utf-8", "strict")
-        succeeded = expected_marker in {line.strip() for line in output.splitlines()}
+    invocation = parsed_json_stream(stdout)
+    succeeded = successful_client_evidence(client, invocation, tool, plugin, expected_marker)
     if not succeeded:
         raise ValueError("fixed client did not emit a successful exact tool invocation")
     native_after_bytes, _, _ = run_client(discovery_argv, workspace=workspace, environment=environment, timeout=10)
     native_after = parsed_native_discovery(client, native_after_bytes)
-    if not native_discovery_output_present(client, native_after, plugin, approved_tuple):
+    if not native_discovery_output_present(client, native_after, plugin, approved_tuple, phase="after"):
         raise ValueError("native discovery disappeared after invocation")
     manager_after_bytes = read_regular(manager_inventory, None, owner_uid=profile_uid, mode=0o600)
     manager_after = json.loads(manager_after_bytes)

@@ -3271,6 +3271,57 @@ class FixedAdapterContractTests(unittest.TestCase):
         }]
         self.assertFalse(fixed_adapters.successful_tool_event(forged, "resolve-library-id", "context7"))
         self.assertFalse(fixed_adapters.successful_marker_event(forged, marker))
+        self.assertFalse(fixed_adapters.successful_tool_event({
+            "type": "tool_result", "server": "context7", "tool_name": "resolve-library-id",
+            "status": "completed", "result": {"ok": True},
+        }, "resolve-library-id", "context7"))
+        self.assertFalse(fixed_adapters.successful_marker_event(
+            {"type": "agent_message", "text": marker}, marker,
+        ))
+
+    def test_cursor_stream_events_require_exact_assistant_marker_and_successful_mcp_call(self) -> None:
+        marker = "UAP_OBSERVER_OK cursor context7 " + "a" * 64
+        tool_event = {
+            "type": "tool_call", "subtype": "completed", "call_id": "call-1",
+            "tool_call": {"mcpToolCall": {
+                "args": {"serverName": "context7", "toolName": "resolve-library-id", "arguments": {}},
+                "result": {"success": {"content": "resolved"}},
+            }},
+        }
+        marker_event = {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]},
+        }
+        self.assertTrue(fixed_adapters.successful_client_evidence(
+            "cursor", [tool_event, marker_event], "resolve-library-id", "context7", marker,
+        ))
+        for forged in (
+            [marker_event],
+            [tool_event, {"type": "user", "message": marker_event["message"]}],
+            [tool_event, {**marker_event, "message": {
+                **marker_event["message"],
+                "content": marker_event["message"]["content"] + [{"type": "text", "text": "extra"}],
+            }}],
+            [{**tool_event, "subtype": "started"}, marker_event],
+            [{**tool_event, "tool_call": {"mcpToolCall": {
+                **tool_event["tool_call"]["mcpToolCall"], "result": {"error": "failed"},
+            }}}, marker_event],
+            [{**tool_event, "tool_call": {"mcpToolCall": {
+                **tool_event["tool_call"]["mcpToolCall"],
+                "args": {"serverName": "different", "toolName": "resolve-library-id"},
+            }}}, marker_event],
+        ):
+            with self.subTest(forged=forged):
+                self.assertFalse(fixed_adapters.successful_client_evidence(
+                    "cursor", forged, "resolve-library-id", "context7", marker,
+                ))
+
+    def test_kiro_marker_text_never_establishes_tool_evidence(self) -> None:
+        marker = "UAP_OBSERVER_OK kiro context7 " + "a" * 64
+        self.assertFalse(fixed_adapters.successful_client_evidence(
+            "kiro", [marker, {"type": "assistant", "message": marker}],
+            "resolve-library-id", "context7", marker,
+        ))
 
     def test_native_discovery_rejects_incidental_identity_text(self) -> None:
         self.assertFalse(fixed_adapters.native_discovery_present({"error": {"missing": "context7"}}, "context7"))
@@ -3285,7 +3336,7 @@ class FixedAdapterContractTests(unittest.TestCase):
         )
         self.assertEqual(
             fixed_adapters.CLIENT_ARGUMENTS["cursor"],
-            ("--print", "--mode", "ask", "--force", "--sandbox", "enabled", "--trust", "--approve-mcps"),
+            ("--print", "--output-format", "stream-json", "--mode", "ask", "--force", "--sandbox", "enabled", "--trust", "--approve-mcps"),
         )
         self.assertEqual(
             fixed_adapters.CLIENT_ARGUMENTS["kiro"],
@@ -3295,13 +3346,28 @@ class FixedAdapterContractTests(unittest.TestCase):
         self.assertEqual(fixed_adapters.CLIENT_DISCOVERY_ARGUMENTS["cursor"], ("mcp", "list"))
         self.assertEqual(fixed_adapters.CLIENT_DISCOVERY_ARGUMENTS["kiro"], ("mcp", "list"))
 
-    def test_plain_native_discovery_parses_only_leading_healthy_identity(self) -> None:
+    def test_plain_native_discovery_distinguishes_installed_before_from_healthy_after(self) -> None:
         cursor = fixed_adapters.parsed_native_discovery("cursor", b"context7: connected\nother: connected\n")
         self.assertTrue(fixed_adapters.native_discovery_output_present("cursor", cursor, "context7"))
         self.assertFalse(fixed_adapters.native_discovery_output_present("cursor", ["missing context7"], "context7"))
         self.assertFalse(fixed_adapters.native_discovery_output_present("kiro", ["context7: failed"], "context7"))
         colored = fixed_adapters.parsed_native_discovery("kiro", b"\x1b[32m\xe2\x9c\x93 context7 connected\x1b[0m\n")
         self.assertTrue(fixed_adapters.native_discovery_output_present("kiro", colored, "context7"))
+        approval = ["context7: not loaded (needs approval)"]
+        self.assertTrue(fixed_adapters.native_discovery_output_present(
+            "cursor", approval, "context7", phase="before",
+        ))
+        self.assertFalse(fixed_adapters.native_discovery_output_present(
+            "cursor", approval, "context7", phase="after",
+        ))
+        for status in ("not loaded", "needs approval", "disconnected", "stopped", "disabled", "failed", "error", "unavailable"):
+            with self.subTest(status=status):
+                self.assertFalse(fixed_adapters.native_discovery_output_present(
+                    "cursor", [f"context7: {status}"], "context7", phase="after",
+                ))
+        self.assertFalse(fixed_adapters.native_discovery_output_present(
+            "cursor", ["context7"], "context7", phase="after",
+        ))
 
     def test_receipt_and_native_identity_require_the_exact_approved_tuple(self) -> None:
         approved = {"product_id": "context7", "package_version": "1.0.0", "client_version": None, "observed_at": None}
@@ -3378,6 +3444,42 @@ class FixedAdapterContractTests(unittest.TestCase):
             item = {"binary": str(binary), "sha256": "sha256:" + hashlib.sha256(binary.read_bytes()).hexdigest(), "profile": str(profile), "client_id": "codex"}
             with self.assertRaisesRegex(ValueError, "successful exact tool invocation"):
                 fixed_adapters.invoke(item, "context7", "codex", "a" * 64, workspace, os.geteuid())
+
+    def test_cursor_invocation_uses_stream_json_and_requires_healthy_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile, workspace = root / "profile", root / "workspace"
+            profile.mkdir(mode=0o700)
+            workspace.mkdir(mode=0o700)
+            (profile / ".agentplugins").mkdir(mode=0o700)
+            receipts = profile / ".agentplugins" / "receipts.json"
+            receipts.write_text('{"products":["context7"]}')
+            receipts.chmod(0o600)
+            binary = root / "cursor-fixture.py"
+            binary.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json,os,sys\n"
+                "state=os.path.join(os.environ['HOME'],'approved')\n"
+                "if sys.argv[1:] == ['--version']: print('cursor-fixture-v1')\n"
+                "elif sys.argv[1:] == ['mcp','list']:\n"
+                " print('context7: connected' if os.path.exists(state) else 'context7: not loaded (needs approval)')\n"
+                "else:\n"
+                " assert sys.argv[1:4] == ['--print','--output-format','stream-json']\n"
+                " open(state,'w').close()\n"
+                " marker=sys.argv[-1].split(': ',1)[-1]\n"
+                " print(json.dumps({'type':'tool_call','subtype':'completed','call_id':'call-1','tool_call':{'mcpToolCall':{'args':{'serverName':'context7','toolName':'resolve-library-id','arguments':{}},'result':{'success':{'content':'resolved'}}}}}))\n"
+                " print(json.dumps({'type':'assistant','message':{'role':'assistant','content':[{'type':'text','text':marker}]}}))\n"
+            )
+            binary.chmod(0o755)
+            item = {
+                "binary": str(binary), "sha256": "sha256:" + hashlib.sha256(binary.read_bytes()).hexdigest(),
+                "profile": str(profile), "client_id": "cursor",
+            }
+            marker, argv, _, _ = fixed_adapters.invoke(
+                item, "context7", "cursor", "a" * 64, workspace, os.geteuid(),
+            )
+            self.assertEqual(marker["client_version"], "cursor-fixture-v1")
+            self.assertEqual(argv[1:4], ["--print", "--output-format", "stream-json"])
 
     def test_consent_control_record_binds_the_full_request_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

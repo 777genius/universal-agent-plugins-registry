@@ -91,16 +91,19 @@ def parse_connect(header: bytes, allowlist: frozenset[str]) -> str:
         if not line or line[0] in " \t" or ":" not in line:
             raise ProxyError("invalid CONNECT header")
         name, value = line.split(":", 1)
-        if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name) or any(ord(c) < 32 and c != "\t" for c in value):
+        if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name) or any(
+            (ord(c) < 32 and c != "\t") or ord(c) == 127 for c in value
+        ):
             raise ProxyError("invalid CONNECT header")
         lowered = name.lower()
         if lowered in seen or lowered in {"proxy-authorization", "authorization"}:
             raise ProxyError("credentials and duplicate headers are forbidden")
         seen.add(lowered)
-    if "host" in seen:
-        host_line = next(line.split(":", 1)[1].strip() for line in lines[1:] if line.split(":", 1)[0].lower() == "host")
-        if host_line != authority:
-            raise ProxyError("Host differs from CONNECT authority")
+    if "host" not in seen:
+        raise ProxyError("Host is required")
+    host_line = next(line.split(":", 1)[1].strip() for line in lines[1:] if line.split(":", 1)[0].lower() == "host")
+    if host_line != authority:
+        raise ProxyError("Host differs from CONNECT authority")
     return host
 
 

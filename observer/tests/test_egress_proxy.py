@@ -75,7 +75,12 @@ class ConnectTests(unittest.TestCase):
                 proxy.parse_connect(header, self.allowlist)
 
     def test_rejects_credentials_duplicate_headers_and_early_tunnel_data(self):
-        for extra in (b"Proxy-Authorization: Basic abc\r\n", b"Host: api.github.com:443\r\nHost: api.github.com:443\r\n"):
+        for extra in (
+            b"Proxy-Authorization: Basic abc\r\n",
+            b"Host: api.github.com:443\r\nHost: api.github.com:443\r\n",
+            b"X-Invalid: value\x7f\r\n",
+            b"X-Only: value\r\n",
+        ):
             with self.assertRaises(proxy.ProxyError):
                 proxy.parse_connect(b"CONNECT api.github.com:443 HTTP/1.1\r\n" + extra + b"\r\n", self.allowlist)
 
