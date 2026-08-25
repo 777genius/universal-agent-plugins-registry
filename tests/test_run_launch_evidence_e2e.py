@@ -419,15 +419,21 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                         binary.rename(malicious); original.rename(binary)
                         release.write_bytes(b"continue")
 
-                    attacker = threading.Thread(target=swap_restore)
-                    attacker.start()
+                    attacker = os.fork()
+                    if attacker == 0:
+                        try:
+                            swap_restore()
+                        except BaseException:
+                            os._exit(1)
+                        os._exit(0)
                     with self.assertRaisesRegex(ValueError, "identity epoch changed"):
                         session.execute(
                             binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
                             cwd=root, write_authority=None,
                         )
-                    attacker.join(timeout=10)
-                    self.assertFalse(attacker.is_alive())
+                    waited, status = os.waitpid(attacker, 0)
+                    self.assertEqual(waited, attacker)
+                    self.assertEqual(os.waitstatus_to_exitcode(status), 0)
                     session.abort()
             finally:
                 os.environ.clear(); os.environ.update(inherited)
@@ -565,6 +571,44 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 self.assertEqual(runtime_unavailable.exception.errno, errno.ENOTSUP)
                 self.assertTrue(session._closed)
                 self.assertIsNone(session._child_pid)
+
+    def test_authenticated_binary_multithreaded_observer_fails_closed_before_fork(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / "agentplugins"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n"
+            binary.write_bytes(body); binary.chmod(0o700)
+            release = threading.Event()
+            started = threading.Event()
+
+            def hold_thread() -> None:
+                started.set()
+                release.wait(timeout=10)
+
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
+                descriptors = (session._fd, session._parent_fd, session._inotify_fd)
+                blocker = threading.Thread(target=hold_thread)
+                blocker.start()
+                self.assertTrue(started.wait(timeout=10))
+                try:
+                    with self.assertRaises(OSError) as busy:
+                        session.execute(
+                            binary.resolve(), list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]),
+                            cwd=root, write_authority=None,
+                        )
+                    self.assertEqual(busy.exception.errno, errno.EBUSY)
+                    self.assertTrue(session._closed)
+                    self.assertIsNone(session._child_pid)
+                    for descriptor in descriptors:
+                        with self.assertRaises(OSError):
+                            os.fstat(descriptor)
+                finally:
+                    release.set()
+                    blocker.join(timeout=10)
+                self.assertFalse(blocker.is_alive())
 
     def test_authenticated_binary_modify_restore_and_replacement_epochs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

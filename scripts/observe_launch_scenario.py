@@ -25,6 +25,7 @@ import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -2524,6 +2525,14 @@ class AuthenticatedBinaryExecutionSession:
     def _run_descriptor(
         self, argv: list[str], *, cwd: Path, write_authority: tuple[int, ...] | None,
     ) -> subprocess.CompletedProcess[str]:
+        if (
+            threading.current_thread() is not threading.main_thread()
+            or threading.active_count() != 1
+        ):
+            raise OSError(
+                errno.EBUSY,
+                "authenticated descriptor execution requires a single-threaded observer",
+            )
         environment = os.environ.copy()
         if write_authority is not None:
             manager_root = Path(os.environ["AGENTPLUGINS_HOME"])
