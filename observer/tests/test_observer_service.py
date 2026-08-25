@@ -1078,6 +1078,19 @@ class FixedRunnerFixtureTests(unittest.TestCase):
                 ready, _, _ = select.select([readfd], [], [], 10)
                 self.assertTrue(ready, "symlink descriptor was not pinned deterministically")
                 self.assertEqual(os.read(readfd, 1), b"1")
+                deadline = time.monotonic() + 10
+                children = Path(f"/proc/{process.pid}/task/{process.pid}/children")
+                while time.monotonic() < deadline:
+                    child_pids = children.read_text().split()
+                    if any(
+                        Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "T"
+                        for pid in child_pids
+                    ):
+                        break
+                    self.assertIsNone(process.poll(), "symlink probe exited before its exchange barrier")
+                    time.sleep(0.01)
+                else:
+                    self.fail("symlink probe did not enter its exchange barrier")
                 link.unlink(); link.symlink_to("exchanged-target")
                 os.killpg(process.pid, signal.SIGCONT)
                 stdout, stderr = process.communicate(timeout=10)
