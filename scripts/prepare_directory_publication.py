@@ -50,7 +50,9 @@ SOURCE_SCHEMA = ROOT / "schemas" / "directory-source.schema.json"
 EVIDENCE_ARTIFACT_SCHEMA = ROOT / "schemas" / "directory-evidence-artifact.schema.json"
 LAUNCH_EVIDENCE_SCHEMA = ROOT / "tests" / "e2e" / "schemas" / "launch-evidence.schema.json"
 CONFIG_FIELDS = {"schema_version", "repository", "snapshot_lifetime_days"}
-OPTIONAL_CONFIG_FIELDS = {"trusted_evidence_workflows", "trusted_external_evidence"}
+OPTIONAL_CONFIG_FIELDS = {
+    "local_evidence_main_anchor", "trusted_evidence_workflows", "trusted_external_evidence",
+}
 TRUSTED_WORKFLOW_FIELDS = {
     "workflow", "protected_source_ref", "source_digest_policy", "allow_self_hosted_runners",
 }
@@ -73,6 +75,11 @@ def load_config(path: Path) -> dict[str, Any]:
     require(value["schema_version"] == 1, f"{path}: schema_version must be 1")
     require(isinstance(value["repository"], str) and "/" in value["repository"], f"{path}: invalid repository")
     require(isinstance(value["snapshot_lifetime_days"], int) and 1 <= value["snapshot_lifetime_days"] <= 30, f"{path}: invalid lifetime")
+    anchor = value.get("local_evidence_main_anchor")
+    require(
+        anchor is None or isinstance(anchor, str) and SHA_RE.fullmatch(anchor) is not None,
+        f"{path}: invalid local evidence main anchor",
+    )
     workflows = value.setdefault("trusted_evidence_workflows", [])
     require(isinstance(workflows, list), f"{path}: invalid trusted evidence workflows")
     workflow_names: list[str] = []
@@ -103,6 +110,43 @@ def load_config(path: Path) -> dict[str, Any]:
             f"{path}: invalid trusted external evidence identity",
         )
     return value
+
+
+def validate_local_evidence_anchor(
+    config: dict[str, Any], repository_root: Path, evidence: list[dict[str, Any]],
+) -> None:
+    artifacts = [
+        item["artifact"] for item in evidence
+        if item["trust"]["kind"] == "reviewed_external"
+        and item["artifact"]["repository"] == config["repository"]
+    ]
+    if not artifacts:
+        return
+    anchor = config.get("local_evidence_main_anchor")
+    require(
+        isinstance(anchor, str) and SHA_RE.fullmatch(anchor) is not None,
+        "catalog-local reviewed evidence requires a durable main anchor",
+    )
+    anchor_reachable = subprocess.run(
+        [GIT, "-C", str(repository_root), "merge-base", "--is-ancestor", anchor, "HEAD"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    require(
+        anchor_reachable.returncode == 0,
+        f"local evidence main anchor {anchor} is unavailable from source HEAD",
+    )
+    for artifact in artifacts:
+        reachable = subprocess.run(
+            [
+                GIT, "-C", str(repository_root), "merge-base", "--is-ancestor",
+                artifact["revision"], anchor,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        require(
+            reachable.returncode == 0,
+            f"{artifact['revision']} is not durable from local evidence main anchor {anchor}",
+        )
 
 
 def previous_releases(snapshot: dict[str, Any] | None) -> dict[tuple[str, int], dict[str, Any]]:
@@ -861,6 +905,7 @@ def build_candidate(
     )
     evidence_overrides = dict(overrides)
     evidence_overrides.setdefault(config["repository"], repository_root)
+    validate_local_evidence_anchor(config, repository_root, candidate_source["evidence"])
     evidence = selected_evidence(
         candidate_source, set(distributions_by_id), config, evidence_overrides,
     )
