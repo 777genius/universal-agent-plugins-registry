@@ -49,6 +49,8 @@ FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "tests/fixtures"
 JOURNEY_VALIDATOR = Path(__file__).resolve().parent / "validate_review_journey.py"
 CONFORMANCE_KEY_ID = "launch-conformance-only"
 CONFORMANCE_SEED = hashlib.sha256(b"UAP launch evidence conformance key; never production").digest()
+RELEASED_AGENTPLUGINS_0_1_14_SIZE = 11_190_456
+RELEASED_AGENTPLUGINS_0_1_14_SHA256 = "7313ad045fa2fa5621f9b9d75914d111f5101c4d3e758515022603fcfb57d31e"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_REPOSITORY = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
@@ -93,13 +95,50 @@ def strict_json_loads(raw: str | bytes) -> Any:
     )
 
 
+class _StateInteger(int):
+    """An integer which retains the token spelling used by encoding/json."""
+
+    def __new__(cls, lexeme: str):
+        value = int.__new__(cls, lexeme)
+        value.lexeme = lexeme
+        return value
+
+
+def _json_has_only_unicode_scalars(value: Any) -> bool:
+    if isinstance(value, str):
+        return all(not 0xD800 <= ord(character) <= 0xDFFF for character in value)
+    if isinstance(value, list):
+        return all(_json_has_only_unicode_scalars(child) for child in value)
+    if isinstance(value, dict):
+        return all(
+            _json_has_only_unicode_scalars(key) and _json_has_only_unicode_scalars(child)
+            for key, child in value.items()
+        )
+    return True
+
+
+def strict_state_json_loads(raw: str | bytes) -> Any:
+    """Decode State-v4 while retaining integer lexemes needed for Go parity."""
+    value = json.loads(
+        raw, object_pairs_hook=unique_json_object, parse_int=_StateInteger,
+        parse_constant=lambda token: (_ for _ in ()).throw(ValueError(f"invalid JSON number: {token}")),
+    )
+    if not _json_has_only_unicode_scalars(value):
+        raise ValueError("State JSON contains a non-Unicode scalar")
+    return value
+
+
 def _exact_int(value: Any, expected: int | None = None) -> bool:
-    return type(value) is int and -(1 << 63) <= value <= (1 << 63) - 1 and (expected is None or value == expected)
+    return type(value) in {int, _StateInteger} and -(1 << 63) <= value <= (1 << 63) - 1 and (expected is None or value == expected)
 
 
 def _uint64(value: Any) -> bool:
     """Match encoding/json's representable range for a Go uint64 field."""
-    return type(value) is int and 0 <= value <= (1 << 64) - 1
+    return (
+        type(value) in {int, _StateInteger}
+        and not (isinstance(value, _StateInteger) and value.lexeme.startswith("-"))
+        and 0 <= value <= (1 << 64) - 1
+    )
 
 
 def _nonempty(value: Any) -> bool:
@@ -134,7 +173,11 @@ def _valid_leaf_id(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     value = _go_trim_space(value)
-    if not value or len(value.encode()) > 64:
+    try:
+        encoded = value.encode("utf-8", "strict")
+    except UnicodeEncodeError:
+        return False
+    if not value or len(encoded) > 64:
         return False
     if not LEAF_ID.fullmatch(value) or value in {".", ".."} or value.endswith(".") or ".." in value:
         return False
@@ -159,43 +202,21 @@ def _released_directory_snapshot_coherent(value: dict[str, Any]) -> bool:
     schema = 0 if schema is None else schema
     sequence = 0 if sequence is None else sequence
     digest = "" if digest is None else digest
-    if type(schema) is not int or not _uint64(sequence) or not isinstance(digest, str):
+    if not _exact_int(schema) or not _uint64(sequence) or not isinstance(digest, str):
         return False
     present = sequence > 0 or schema > 0 or digest != ""
     return not present or (sequence >= 1 and schema >= 1 and _go_nonempty(digest))
 
 
-def _released_catalog_uint64s(value: Any) -> bool:
-    """Check every uint64 reachable from State-v4 CatalogEvidence."""
-    if not isinstance(value, dict):
-        return False
-    groups: list[Any] = [value.get("current_evidence", [])]
-    compatibility = value.get("compatibility", {})
-    compatibility = {} if compatibility is None else compatibility
-    if not isinstance(compatibility, dict):
-        return False
-    for item in compatibility.values():
-        if not isinstance(item, dict):
-            return False
-        groups.append(item.get("evidence", []))
-    for group in groups:
-        group = [] if group is None else group
-        if not isinstance(group, list):
-            return False
-        for evidence in group:
-            if not isinstance(evidence, dict):
-                return False
-            sequence = evidence.get("release_sequence", 0)
-            sequence = 0 if sequence is None else sequence
-            if not _uint64(sequence):
-                return False
-    return True
-
-
 def _released_state_v4_decodes(value: Any) -> bool:
     """Model strict encoding/json decoding into every State-v4 Go field."""
+    if not _json_has_only_unicode_scalars(value):
+        return False
+
     def scalar(expected: type):
-        return lambda child: child is None or type(child) is expected
+        return lambda child: child is None or (
+            type(child) is expected and (expected is not str or _json_has_only_unicode_scalars(child))
+        )
 
     string = scalar(str)
     boolean = scalar(bool)
@@ -212,7 +233,11 @@ def _released_state_v4_decodes(value: Any) -> bool:
         return child is None or (isinstance(child, list) and all(item(entry) for entry in child))
 
     def mapping(child: Any, item: Any) -> bool:
-        return child is None or (isinstance(child, dict) and all(item(entry) for entry in child.values()))
+        return child is None or (
+            isinstance(child, dict)
+            and all(isinstance(key, str) and _json_has_only_unicode_scalars(key) for key in child)
+            and all(item(entry) for entry in child.values())
+        )
 
     strings = lambda child: sequence(child, string)
     string_map = lambda child: mapping(child, string)
@@ -318,7 +343,7 @@ def validate_released_state_v4(value: Any) -> bool:
     after this check; those constraints are not represented as State.Validate
     parity.
     """
-    if not _released_state_v4_decodes(value) or not isinstance(value, dict) or value.get("schema_version") != 4 or type(value.get("schema_version")) is not int:
+    if not _released_state_v4_decodes(value) or not isinstance(value, dict) or not _exact_int(value.get("schema_version"), 4):
         return False
     installations = value.get("installations")
     if installations is None:
@@ -422,9 +447,6 @@ def validate_released_state_v4(value: Any) -> bool:
             revision = client.get("package_revision")
             if revision is not None and (not isinstance(revision, dict) or not _go_nonempty(revision.get("tree_digest")) or not _go_nonempty(revision.get("manifest_digest"))):
                 return False
-            catalog = revision.get("catalog_evidence") if isinstance(revision, dict) else None
-            if catalog is not None and not _released_catalog_uint64s(catalog):
-                return False
             if origin == "directory" and not (
                 isinstance(revision, dict) and revision.get("distribution_id") == directory.get("distribution_id")
                 and _uint64(revision.get("release_sequence"))
@@ -454,7 +476,7 @@ def validate_released_state_v4(value: Any) -> bool:
                     return False
                 phase = mutation.get("phase", "")
                 phase = "" if phase is None else phase
-                if mutation.get("client_binding_id") != binding_id or type(mutation.get("sequence")) is not int or mutation["sequence"] < 1 or not isinstance(phase, str) or phase == "":
+                if mutation.get("client_binding_id") != binding_id or not _exact_int(mutation.get("sequence")) or mutation["sequence"] < 1 or not isinstance(phase, str) or phase == "":
                     return False
                 mutation_group = mutation.get("operation_group_id", "")
                 mutation_group = "" if mutation_group is None else mutation_group
@@ -1448,7 +1470,7 @@ def manager_state(
     """Read only the State-v4 contract file, without following a link."""
     try:
         _, bodies = _stable_tree_snapshot(manager)
-        value = strict_json_loads(bodies["state-v2.json"])
+        value = strict_state_json_loads(bodies["state-v2.json"])
     except (OSError, KeyError, UnicodeError, json.JSONDecodeError, DuplicateKeyError, ValueError):
         return None
     if (
@@ -2041,7 +2063,8 @@ class _SockFprog(ctypes.Structure):
 
 _SECCOMP_SYSCALLS = {
     "x86_64": {
-        "clone": 56, "unshare": 272, "setns": 308, "mount": 165,
+        "clone": 56, "fork": 57, "vfork": 58,
+        "unshare": 272, "setns": 308, "mount": 165,
         "umount2": 166, "pivot_root": 155, "chroot": 161,
     },
     "aarch64": {
@@ -2095,13 +2118,19 @@ def _install_path_authority_seccomp() -> None:
             (bpf_jeq, 0, 1, number),
             (bpf_ret, 0, 0, seccomp_ret_errno),
         ])
-    # seccomp_data.args[0] starts at byte 16.  Both admitted architectures are
-    # little-endian, so JSET inspects clone's low 32-bit CLONE_NEWNS flag while
-    # ordinary Go runtime thread creation remains available.
+    for name in ("fork", "vfork"):
+        if name in numbers:
+            instructions.extend([
+                (bpf_jeq, 0, 1, numbers[name]),
+                (bpf_ret, 0, 0, seccomp_ret_errno),
+            ])
+    # seccomp_data.args[0] starts at byte 16. Only CLONE_THREAD creation is
+    # admitted; clone3, fork and vfork were denied above. This lets the Go
+    # runtime grow its thread pool without leaving a descendant after wait().
     instructions.extend([
         (bpf_jeq, 0, 3, numbers["clone"]),
         (bpf_ld_abs, 0, 0, 16),
-        (bpf_jset, 0, 1, 0x00020000),
+        (bpf_jset, 1, 0, 0x00010000),  # CLONE_THREAD
         (bpf_ret, 0, 0, seccomp_ret_errno),
         (bpf_ret, 0, 0, seccomp_ret_allow),
     ])
@@ -2133,15 +2162,16 @@ def _install_path_authority_guard(allowed_write_roots: tuple[int, ...]) -> None:
         raise OSError(errno.ENOSYS, "Landlock syscalls are unavailable")
     create_ruleset, add_rule, restrict_self = 444, 445, 446
     abi = syscall(create_ruleset, None, 0, 1)
-    if abi < 1:
+    if abi < 3:
         code = ctypes.get_errno() or errno.ENOSYS
-        raise OSError(code, "Landlock ABI is unavailable")
-    access = (1 << 1) | (1 << 4) | (1 << 5) | sum(1 << bit for bit in range(6, 13))
-    if abi >= 2:
-        access |= 1 << 13
-    if abi >= 3:
-        access |= 1 << 14
-    ruleset_attr = _LandlockRulesetAttr(access)
+        raise OSError(code, "Landlock ABI 3 with truncate mediation is required")
+    # Handle every mutating filesystem class so omitted grants fail closed.
+    # Released 0.1.14 needs only ordinary file writes/removal, directories,
+    # regular files, and truncate. REFER is deliberately handled but never
+    # granted: same-directory active-to-backup rename does not need it.
+    handled_access = (1 << 1) | (1 << 4) | (1 << 5) | sum(1 << bit for bit in range(6, 15))
+    granted_access = (1 << 1) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 14)
+    ruleset_attr = _LandlockRulesetAttr(handled_access)
     ruleset_fd = syscall(create_ruleset, ctypes.byref(ruleset_attr), ctypes.sizeof(ruleset_attr), 0)
     if ruleset_fd < 0:
         code = ctypes.get_errno()
@@ -2151,7 +2181,7 @@ def _install_path_authority_guard(allowed_write_roots: tuple[int, ...]) -> None:
             metadata = os.fstat(descriptor)
             if not stat.S_ISDIR(metadata.st_mode):
                 raise OSError(errno.ENOTDIR, "Landlock write authority is not a directory")
-            rule = _LandlockPathBeneathAttr(access, descriptor, 0)
+            rule = _LandlockPathBeneathAttr(granted_access, descriptor, 0)
             if syscall(add_rule, ruleset_fd, 1, ctypes.byref(rule), 0) != 0:
                 code = ctypes.get_errno()
                 raise OSError(code, "could not add Landlock path rule")
@@ -2174,7 +2204,7 @@ def _install_path_authority_guard(allowed_write_roots: tuple[int, ...]) -> None:
 
 def traced(
     binary: Path, argv: list[str], cwd: Path, challenge: str,
-    *, write_authority: tuple[int, ...] | None = None,
+    *, write_authority: tuple[int, ...] | None = None, deny_process_creation: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     started = now()
     environment = os.environ.copy()
@@ -2190,7 +2220,7 @@ def traced(
             capture_output=True, check=False, timeout=180,
             pass_fds=write_authority or (),
             preexec_fn=(lambda: _install_path_authority_guard(write_authority))
-            if write_authority is not None else None,
+            if write_authority is not None else (_install_path_authority_seccomp if deny_process_creation else None),
         )
     finally:
         for descriptor in write_authority or ():
@@ -2204,8 +2234,255 @@ def traced(
         "exit_code": completed.returncode,
         "stdout_digest": "sha256:" + hashlib.sha256(completed.stdout.encode()).hexdigest(),
         "stderr_digest": "sha256:" + hashlib.sha256(completed.stderr.encode()).hexdigest(),
+        "process_creation_denied": bool(deny_process_creation or write_authority is not None),
+        "write_guarded": write_authority is not None,
     }
     return completed, trace
+
+
+def _landlock_abi() -> int | None:
+    if platform.system() != "Linux" or getattr(_LIBC, "syscall", None) is None:
+        return None
+    value = _LIBC.syscall(444, None, 0, 1)
+    return int(value) if value >= 0 else None
+
+
+def _git_command_for_trusted_repository(repository: Path, *arguments: str) -> list[str]:
+    """Confine Git's ownership exception to one caller-derived repository."""
+    if not repository.is_absolute():
+        raise ValueError("trusted Git repository path must be absolute")
+    git = shutil.which("git") or "/usr/bin/git"
+    return [git, "-c", f"safe.directory={repository}", *arguments]
+
+
+def lifecycle_source_hash() -> str:
+    """Hash every tracked worktree input using Git's path and mode semantics."""
+    repository = Path(__file__).resolve().parents[1]
+    listed = subprocess.run(
+        _git_command_for_trusted_repository(repository, "ls-files", "-z"),
+        cwd=repository, check=True,
+        capture_output=True, timeout=30,
+    ).stdout
+    digest = hashlib.sha256()
+    paths = listed.split(b"\0")
+    if not paths or paths[-1] != b"":
+        raise ValueError("git returned a malformed tracked-path list")
+    for encoded in paths[:-1]:
+        if not encoded:
+            raise ValueError("git returned an empty tracked path")
+        path = repository / os.fsdecode(encoded)
+        metadata = path.lstat()
+        if stat.S_ISREG(metadata.st_mode):
+            kind = b"100755" if metadata.st_mode & stat.S_IXUSR else b"100644"
+            body = path.read_bytes()
+        elif stat.S_ISLNK(metadata.st_mode):
+            kind = b"120000"
+            body = os.fsencode(os.readlink(path))
+        else:
+            raise ValueError(f"unsupported tracked worktree object: {os.fsdecode(encoded)!r}")
+        digest.update(len(encoded).to_bytes(8, "big")); digest.update(encoded)
+        digest.update(len(kind).to_bytes(8, "big")); digest.update(kind)
+        digest.update(len(body).to_bytes(8, "big")); digest.update(body)
+    return "sha256:" + digest.hexdigest()
+
+
+def _owned_sources_match_head(repository: Path) -> bool:
+    try:
+        completed = subprocess.run(
+            _git_command_for_trusted_repository(
+                repository, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+            ),
+            cwd=repository, check=False, capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return completed.returncode == 0 and completed.stdout == b""
+
+
+class LifecycleEvidenceSession:
+    """One-shot source binding captured before a disposable lifecycle starts."""
+
+    def __init__(self):
+        self._source_hash_before = lifecycle_source_hash()
+        self._consumed = False
+
+
+class TestExecutionSession:
+    """A test result populated only by executing and parsing one exact command."""
+
+    def __init__(self, *args, **kwargs):
+        raise TypeError("use TestExecutionSession.run_phase6")
+
+    @classmethod
+    def run_phase6(cls, *, cwd: Path) -> TestExecutionSession:
+        command = [
+            sys.executable, "-m", "unittest", "tests.test_run_launch_evidence_e2e",
+            "tests.test_materialize_launch_evidence", "tests.test_workflow_contracts",
+        ]
+        completed = subprocess.run(
+            command, cwd=cwd, text=True, capture_output=True, check=False, timeout=600,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        transcript = completed.stdout + "\n" + completed.stderr
+        counts = re.findall(r"(?m)^Ran ([0-9]+) tests? in ", transcript)
+        if len(counts) != 1:
+            raise ValueError("test command did not emit one canonical unittest count")
+        skipped = re.findall(r"skipped=([0-9]+)", transcript)
+        if len(skipped) > 1:
+            raise ValueError("test command emitted multiple unittest skip counts")
+        value = object.__new__(cls)
+        value.command = list(command)
+        value.count = int(counts[0])
+        value.skips = int(skipped[0]) if len(skipped) == 1 else 0
+        value.exit_code = completed.returncode
+        value.stdout_digest = "sha256:" + hashlib.sha256(completed.stdout.encode()).hexdigest()
+        value.stderr_digest = "sha256:" + hashlib.sha256(completed.stderr.encode()).hexdigest()
+        return value
+
+
+def _authenticated_public_binary(
+    binary: Path, *, cwd: Path,
+) -> tuple[bytes, tuple[int, int, int, int, int, int, int, int, int], subprocess.CompletedProcess[str]]:
+    """Authenticate stable release bytes and one path identity before use."""
+    descriptor = os.open(binary, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("evidence binary is not a regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    stable = lambda value: (
+        value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+        value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns,
+    )
+    identity = stable(before)
+    body = b"".join(chunks)
+    rebound = os.stat(binary, follow_symlinks=False)
+    if stable(after) != identity or stable(rebound) != identity:
+        raise ValueError("evidence binary changed while it was authenticated")
+    if (
+        len(body) != RELEASED_AGENTPLUGINS_0_1_14_SIZE
+        or hashlib.sha256(body).hexdigest() != RELEASED_AGENTPLUGINS_0_1_14_SHA256
+    ):
+        raise ValueError("evidence binary is not the authenticated public agentplugins 0.1.14 asset")
+    version = subprocess.run(
+        [str(binary), "version"], cwd=cwd, text=True, capture_output=True,
+        check=False, timeout=30,
+    )
+    if version.returncode != 0 or version.stdout.rstrip("\n") != "agentplugins 0.1.14":
+        raise ValueError("evidence binary is not exact released agentplugins 0.1.14")
+    if stable(os.stat(binary, follow_symlinks=False)) != identity:
+        raise ValueError("evidence binary changed while its version was checked")
+    return body, identity, version
+
+
+def bound_lifecycle_evidence(
+    binary: Path, command_traces: list[dict[str, Any]], proof: dict[str, Any],
+    *, session: LifecycleEvidenceSession, test_execution: TestExecutionSession,
+) -> dict[str, Any]:
+    """Produce a credential-free, independently replayable lifecycle record."""
+    repository = Path(__file__).resolve().parents[1]
+    if type(session) is not LifecycleEvidenceSession or session._consumed:
+        raise ValueError("lifecycle evidence requires one fresh pre-command source session")
+    session._consumed = True
+    if not _owned_sources_match_head(repository):
+        raise ValueError("lifecycle evidence sources do not equal the bound commit")
+
+    def git(*arguments: str) -> bytes:
+        return subprocess.run(
+            _git_command_for_trusted_repository(repository, *arguments),
+            cwd=repository, check=True, capture_output=True, timeout=30,
+        ).stdout
+
+    if len(command_traces) != 7 or any(
+        not isinstance(trace, dict) or not {
+            "argv", "exit_code", "stdout_digest", "stderr_digest",
+        } <= set(trace) for trace in command_traces
+    ):
+        raise ValueError("evidence requires all seven exact command traces")
+    if any(
+        type(trace["exit_code"]) is not int
+        or not _digest(trace["stdout_digest"]) or not _digest(trace["stderr_digest"])
+        for trace in command_traces
+    ):
+        raise ValueError("lifecycle command exits and digests must be concrete")
+    if [trace.get("process_creation_denied") for trace in command_traces] != [True] * 7:
+        raise ValueError("every lifecycle command must deny descendant process creation")
+    if [trace.get("write_guarded") for trace in command_traces] != [False, True, True, True, True, True, True]:
+        raise ValueError("lifecycle command write guards do not match the exact authority plan")
+    expected_argv = [
+        ["add", "./package-plugin-data", "--target", "cursor", "--format", "json"],
+        ["info", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["repair", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["switch", "e2e-external-package", "--to", "./package-plugin-data-alternate", "--format", "json"],
+        ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["remove", "e2e-external-package", "--purge-data", "--format", "json"],
+    ]
+    if [trace["argv"] for trace in command_traces] != expected_argv:
+        raise ValueError("lifecycle evidence command argv is not the exact seven-command plan")
+    if any(trace["exit_code"] != 0 for trace in command_traces):
+        raise ValueError("successful lifecycle evidence cannot contain a failed command")
+    required_proofs = {
+        "info_preserved", "update_changed_package_digest", "update_preserved",
+        "update_preserved_data_receipt", "repair_preserved", "switch_preserved",
+        "remove_preserved", "explicit_owned_purge_deleted",
+    }
+    if set(proof) != required_proofs or any(type(flag) is not bool or not flag for flag in proof.values()):
+        raise ValueError("successful lifecycle evidence requires true boolean proof flags")
+    if not (
+        type(test_execution) is TestExecutionSession
+        and test_execution.command == [
+            sys.executable, "-m", "unittest", "tests.test_run_launch_evidence_e2e",
+            "tests.test_materialize_launch_evidence", "tests.test_workflow_contracts",
+        ]
+        and test_execution.count > 0
+        and test_execution.skips == 0 and test_execution.exit_code == 0
+    ):
+        raise ValueError("successful lifecycle evidence requires a passing zero-skip test execution")
+    source_hash_after = lifecycle_source_hash()
+    if session._source_hash_before != source_hash_after:
+        raise ValueError("owned lifecycle sources changed during evidence production")
+    binary_body, _, version = _authenticated_public_binary(binary, cwd=repository)
+    script_body = Path(__file__).read_bytes()
+    return {
+        "schema_version": 1,
+        "repository": {
+            "commit": git("rev-parse", "HEAD").decode().strip(),
+            "parent": git("rev-parse", "HEAD^").decode().strip(),
+            "patch_sha256": "sha256:" + hashlib.sha256(git("show", "--format=", "--binary", "HEAD")).hexdigest(),
+        },
+        "observer": {"sha256": "sha256:" + hashlib.sha256(script_body).hexdigest(), "size": len(script_body)},
+        "binary": {
+            "sha256": "sha256:" + hashlib.sha256(binary_body).hexdigest(), "size": len(binary_body),
+            "version_argv": [str(binary), "version"], "version_exit": version.returncode,
+            "version_stdout": version.stdout.rstrip("\n"),
+            "version_stderr_digest": "sha256:" + hashlib.sha256(version.stderr.encode()).hexdigest(),
+        },
+        "host": {
+            "uid": os.getuid(), "gid": os.getgid(), "platform": platform.system(),
+            "architecture": platform.machine(), "landlock_abi": _landlock_abi(),
+        },
+        "commands": [
+            {**copy.deepcopy(trace), "exec_argv": [str(binary), *trace["argv"]]}
+            for trace in command_traces
+        ],
+        "proof": copy.deepcopy(proof),
+        "tests": {
+            "command": list(test_execution.command), "count": test_execution.count,
+            "skips": test_execution.skips, "exit_code": test_execution.exit_code,
+            "stdout_digest": test_execution.stdout_digest,
+            "stderr_digest": test_execution.stderr_digest,
+        },
+        "source_hash_before": session._source_hash_before, "source_hash_after": source_hash_after,
+    }
 
 
 def traced_with_environment(
@@ -3170,7 +3447,7 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     migrated_state: dict[str, Any] | None = None
     try:
         _, manager_bodies = _stable_tree_snapshot(manager)
-        migrated_state = strict_json_loads(manager_bodies["state-v2.json"])
+        migrated_state = strict_state_json_loads(manager_bodies["state-v2.json"])
         migrated_schema = migrated_state.get("schema_version")
     except (OSError, KeyError, ValueError, json.JSONDecodeError):
         pass
@@ -3215,7 +3492,7 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
         ),
         "migration_applied": bool(
             apply.returncode == 0
-            and type(migrated_schema) is int and migrated_schema == 4
+            and _exact_int(migrated_schema, 4)
             and manager_state(manager) is not None
             and len(manager_state(manager)["installations"]) == 1
             and apply_value and validate_cli_envelope(apply_value, "migrate-state")
@@ -3733,6 +4010,12 @@ class _LinuxAncestryLifetimeProof:
                         item != (_IN_MODIFY, 0, temp_name) for item in middle
                     ):
                         return False
+            elif outcome == "bind":
+                # A released command may chmod an authority ancestor such as
+                # the manager root. Binding topology is still immutable: only
+                # name-level IN_ATTRIB is admitted, never rename/delete/create.
+                if any(event != _IN_ATTRIB or cookie != 0 for event, cookie, _ in named):
+                    return False
             else:
                 return False
         return True
@@ -3958,7 +4241,7 @@ class FrozenAuthoritySet:
                 rebound = os.stat(name, dir_fd=ancestry[-1][0], follow_symlinks=False)
                 if identity != (after.st_dev, after.st_ino) or identity != (rebound.st_dev, rebound.st_ino):
                     return None
-                value = strict_json_loads(b"".join(chunks))
+                value = strict_state_json_loads(b"".join(chunks))
                 self._replacement_observations[path] = (identity, value)
                 return copy.deepcopy(value)
             finally:
@@ -4109,6 +4392,7 @@ def freeze_path_authority(
     paths: set[str], allowed_roots: tuple[Path, ...], *, outcomes: dict[str, str] | None = None,
     replacement_counts: dict[str, int] | None = None,
     replacement_attrib_counts: dict[str, int] | None = None,
+    allow_ancestor_attrib: bool = False,
 ) -> FrozenAuthoritySet | None:
     """Open an absolute path component-by-component and retain its lexical binding."""
     records: dict[str, tuple[str, int, tuple[int, int], str, list[tuple[int, int | None, str | None, tuple[int, int]]], int]] = {}
@@ -4157,7 +4441,9 @@ def freeze_path_authority(
                         pass
                 outcome = intended.get(value)
                 if not final:
-                    edge_wd = lifetime.watch_parent(parent_fd, name, "retain")
+                    edge_wd = lifetime.watch_parent(
+                        parent_fd, name, "bind" if allow_ancestor_attrib else "retain",
+                    )
                 else:
                     if outcome is None:
                         outcome = "delete" if initial_metadata is not None else "absent"
@@ -4372,6 +4658,69 @@ def released_operation_write_authority(
     return descriptors
 
 
+def released_lifecycle_write_authority(
+    installation: Any, manager: Path, *, read_only: bool = False,
+) -> tuple[int, ...] | None:
+    """Open the frozen, state-derived roots needed by a lifecycle command.
+
+    An empty tuple is intentional authority for read-only ``info``. The other
+    lifecycle operations receive the manager and exact detected client binding
+    parent, never a source path, receipt locator, CLI argument, or stdout path.
+    The retained-tree lifetime guard independently makes any use of the
+    manager grant against PLUGIN_DATA fatal to the evidence.
+    """
+    if read_only:
+        return ()
+    roots = released_operation_authority_roots(installation, manager)
+    if roots is None:
+        return None
+    descriptors: list[int] = []
+    identities: set[tuple[int, int, int]] = set()
+    try:
+        for root in roots:
+            if not root.is_absolute() or ".." in root.parts:
+                raise OSError(errno.EINVAL, "lifecycle authority root is not absolute and lexical")
+            expected = root.stat(follow_symlinks=False)
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            ancestry: list[int] = [os.open("/", flags)]
+            try:
+                for name in root.parts[1:]:
+                    before = os.stat(name, dir_fd=ancestry[-1], follow_symlinks=False)
+                    child = os.open(name, flags, dir_fd=ancestry[-1])
+                    opened = os.fstat(child)
+                    if (
+                        not stat.S_ISDIR(before.st_mode)
+                        or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+                    ):
+                        os.close(child)
+                        raise OSError(errno.ESTALE, "lifecycle authority ancestry changed while opening")
+                    ancestry.append(child)
+                descriptor = ancestry.pop()
+                observed = os.fstat(descriptor)
+                if (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
+                    os.close(descriptor)
+                    raise OSError(errno.ESTALE, "lifecycle authority root changed while opening")
+            finally:
+                for ancestor in reversed(ancestry):
+                    os.close(ancestor)
+            try:
+                metadata = os.fstat(descriptor)
+                identity = (metadata.st_dev, metadata.st_ino, _statx_mount_id(descriptor))
+            except OSError:
+                os.close(descriptor)
+                raise
+            if identity in identities:
+                os.close(descriptor)
+                continue
+            identities.add(identity)
+            descriptors.append(descriptor)
+        return tuple(descriptors)
+    except OSError:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        return None
+
+
 def create_contained_marker(
     locator: Path | None, allowed_roots: tuple[Path, ...], leaf: str, body: bytes,
 ) -> RetainedMarker | None:
@@ -4525,7 +4874,10 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     def execute(
         argv: list[str], *, write_authority: tuple[int, ...] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        completed, trace = traced(binary, argv, root, challenge, write_authority=write_authority)
+        completed, trace = traced(
+            binary, argv, root, challenge, write_authority=write_authority,
+            deny_process_creation=True,
+        )
         traces.append(trace)
         return completed
 
@@ -4537,8 +4889,17 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     canonical_locator = canonical_allowed_locator(locator, (root, manager))
     safe_locator = canonical_locator is not None
     marker = create_contained_marker(locator, (root, manager), "launch-marker.txt", b"stable-launch-marker")
-    safe_locator = marker is not None and marker.verify()
-    info = execute(["info", "e2e-external-package", "--target", "cursor", "--format", "json"])
+    retained_path = str(marker.path.parent) if marker is not None else ""
+    retained_lifetime = freeze_path_authority(
+        {retained_path}, (root, manager), outcomes={retained_path: "retain"},
+        allow_ancestor_attrib=True,
+    ) if marker is not None and retained_path else None
+    safe_locator = safe_locator and retained_lifetime is not None and marker is not None and marker.verify()
+    info_authority = released_lifecycle_write_authority(initial_installation, manager, read_only=True)
+    info = execute(
+        ["info", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        write_authority=info_authority,
+    )
     info_preserved = marker is not None and marker.verify()
     update_manifest = json.loads((package / "plugin.json").read_text())
     update_manifest["version"] = "2.0.0"
@@ -4546,8 +4907,13 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     (package / "plugin.json").write_text(json.dumps(update_manifest, sort_keys=True))
     (package / "fixture-revision.txt").write_text("revision-two\n")
     expected_updated_identity = package_identity(package)
-    update = execute(["update", "e2e-external-package", "--target", "cursor", "--format", "json"])
+    update_authority = released_lifecycle_write_authority(initial_installation, manager)
+    update = execute(
+        ["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        write_authority=update_authority if update_authority is not None else (),
+    )
     updated_identity = manager_identity(manager, "e2e-external-package")
+    updated_installation = selected_manager_installation(manager, "e2e-external-package")
     updated_receipt = data_receipt(manager, "e2e-external-package")
     update_preserved = marker is not None and marker.verify()
     update_changed_package, update_preserved_receipt = plugin_data_update_proof(
@@ -4561,9 +4927,18 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     ] if cursor.exists() else []
     if len(repair_candidates) == 1:
         shutil.rmtree(repair_candidates[0])
-    repair = execute(["repair", "e2e-external-package", "--target", "cursor", "--format", "json"])
+    repair_authority = released_lifecycle_write_authority(updated_installation, manager)
+    repair = execute(
+        ["repair", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        write_authority=repair_authority if repair_authority is not None else (),
+    )
     repair_preserved = marker is not None and marker.verify()
-    switch = execute(["switch", "e2e-external-package", "--to", "./" + alternate.name, "--format", "json"])
+    repaired_installation = selected_manager_installation(manager, "e2e-external-package")
+    switch_authority = released_lifecycle_write_authority(repaired_installation, manager)
+    switch = execute(
+        ["switch", "e2e-external-package", "--to", "./" + alternate.name, "--format", "json"],
+        write_authority=switch_authority if switch_authority is not None else (),
+    )
     switch_preserved = marker is not None and marker.verify()
     pre_remove_state = manager_state(manager)
     pre_remove_installation = selected_manager_installation(manager, "e2e-external-package")
@@ -4613,7 +4988,15 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     # This must remain the last state-dependent authority operation: it performs
     # the proof's sole post-command event drain.
     remove_checks["authority_partitioned"] = removal_authority is not None and removal_authority.expected()
+    # This is the retained tree's sole final drain. Its baseline was captured
+    # immediately after marker creation, before info/update/repair/switch.
+    remove_checks["lifetime_retained"] = (
+        retained_lifetime is not None and retained_lifetime.expected()
+    )
     remove_preserved = all(remove_checks.values())
+    if retained_lifetime is not None:
+        retained_lifetime.close()
+        retained_lifetime = None
     if removal_authority is not None:
         removal_authority.close()
         removal_authority = None
@@ -4670,8 +5053,6 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
     exits = (add, info, update, repair, switch, remove, purge)
     if marker is not None:
         marker.close()
-    if removal_authority is not None:
-        removal_authority.close()
     return safe_locator and all(item.returncode == 0 for item in exits) and all(proof.values()), {
         "command_traces": traces, "before": before, "after": after, "proof": proof,
         "data_receipt_observed": safe_locator, "initial_identity": initial_identity,
@@ -4682,6 +5063,61 @@ def plugin_data_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool
         "expected_initial_identity": expected_initial_identity,
         "expected_updated_identity": expected_updated_identity,
     }
+
+
+def run_bound_plugin_data_evidence(binary: Path, root: Path, challenge: str) -> dict[str, Any]:
+    """Run tests and the lifecycle in fresh, credential-free disposable roots."""
+    repository = Path(__file__).resolve().parents[1]
+    binary = binary.resolve(strict=True)
+    if root.exists() or not root.name or root.name in {".", ".."}:
+        raise ValueError("bound lifecycle evidence requires a fresh disposable root")
+    parent = root.parent.resolve(strict=True)
+    root = parent / root.name
+    if repository == root or repository in root.parents or root in repository.parents:
+        raise ValueError("bound lifecycle evidence root must be outside the source worktree")
+
+    session = LifecycleEvidenceSession()
+    root.mkdir(mode=0o700)
+    test_home = root / "test-home"
+    test_manager = root / "test-manager"
+    test_tmp = root / "test-tmp"
+    lifecycle_home = root / "lifecycle-home"
+    lifecycle_manager = root / "lifecycle-manager"
+    lifecycle_tmp = root / "lifecycle-tmp"
+    workspace = root / "workspace"
+    for directory in (test_home, test_manager, test_tmp, lifecycle_manager, lifecycle_tmp, workspace):
+        directory.mkdir(mode=0o700)
+    (lifecycle_home / ".cursor" / "plugins" / "local").mkdir(parents=True, mode=0o700)
+    inherited = os.environ.copy()
+    environment = {
+        key: inherited[key] for key in ("PATH", "LANG", "LC_ALL", "TZ") if key in inherited
+    }
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        os.environ.clear()
+        os.environ.update({
+            **environment, "HOME": str(test_home),
+            "AGENTPLUGINS_HOME": str(test_manager), "TMPDIR": str(test_tmp),
+        })
+        binary_body, binary_identity, _ = _authenticated_public_binary(binary, cwd=repository)
+        test_execution = TestExecutionSession.run_phase6(cwd=repository)
+        os.environ.update({
+            "HOME": str(lifecycle_home), "AGENTPLUGINS_HOME": str(lifecycle_manager),
+            "TMPDIR": str(lifecycle_tmp),
+        })
+        passed, lifecycle = plugin_data_scenario(binary, workspace, challenge)
+        if not passed:
+            raise ValueError("exact public seven-command lifecycle did not pass")
+        final_body, final_identity, _ = _authenticated_public_binary(binary, cwd=repository)
+        if final_identity != binary_identity or final_body != binary_body:
+            raise ValueError("public binary changed during bound lifecycle evidence")
+        return bound_lifecycle_evidence(
+            binary, lifecycle["command_traces"], lifecycle["proof"],
+            session=session, test_execution=test_execution,
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(inherited)
 
 
 def explicit_switch_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -166,6 +167,183 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             e2e.parse_stable_version("latest")
         with self.assertRaisesRegex(ValueError, "exact semantic version"):
             e2e.parse_stable_version("0.1.8-rc.1")
+
+    def test_lifecycle_git_commands_scope_safe_directory_to_exact_repository(self) -> None:
+        git = "/opt/test-tools/git"
+        with (
+            mock.patch.object(observer.shutil, "which", return_value=git),
+            mock.patch.object(
+                observer.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, b"", b""),
+            ) as run,
+        ):
+            observer.lifecycle_source_hash()
+        run.assert_called_once_with(
+            [git, "-c", f"safe.directory={ROOT}", "ls-files", "-z"],
+            cwd=ROOT, check=True, capture_output=True, timeout=30,
+        )
+
+        repository = Path("/opt/exact-trusted-repository")
+        with (
+            mock.patch.object(observer.shutil, "which", return_value=git),
+            mock.patch.object(
+                observer.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, b"", b""),
+            ) as run,
+        ):
+            self.assertTrue(observer._owned_sources_match_head(repository))
+        run.assert_called_once_with(
+            [
+                git, "-c", f"safe.directory={repository}", "status",
+                "--porcelain=v1", "-z", "--untracked-files=all",
+            ],
+            cwd=repository, check=False, capture_output=True, timeout=30,
+        )
+        for command in (run.call_args.args[0],):
+            self.assertEqual(command.count("-c"), 1)
+            self.assertNotIn("safe.directory=*", command)
+
+    def test_lifecycle_git_failures_remain_fail_closed(self) -> None:
+        with mock.patch.object(
+            observer.subprocess, "run",
+            side_effect=subprocess.CalledProcessError(128, ["git", "ls-files"]),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                observer.lifecycle_source_hash()
+        with mock.patch.object(
+            observer.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, b"not-nul-terminated", b""),
+        ):
+            with self.assertRaisesRegex(ValueError, "malformed tracked-path list"):
+                observer.lifecycle_source_hash()
+        with mock.patch.object(observer.subprocess, "run", side_effect=FileNotFoundError()):
+            with self.assertRaises(FileNotFoundError):
+                observer.lifecycle_source_hash()
+        with mock.patch.object(
+            observer.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 128, b"", b"fatal"),
+        ):
+            self.assertFalse(observer._owned_sources_match_head(ROOT))
+        with mock.patch.object(
+            observer.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, b" M tracked-source.py\0", b""),
+        ):
+            self.assertFalse(observer._owned_sources_match_head(ROOT))
+        with mock.patch.object(observer.subprocess, "run", side_effect=FileNotFoundError()):
+            self.assertFalse(observer._owned_sources_match_head(ROOT))
+        self.assertFalse(observer._owned_sources_match_head(Path("relative/repository")))
+
+    def test_disposable_lifecycle_evidence_binds_every_replay_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "agentplugins"
+            binary.write_text("#!/bin/sh\nprintf 'agentplugins 0.1.14\\n'\n")
+            binary.chmod(0o700)
+            commands = (
+                ["add", "./package-plugin-data", "--target", "cursor", "--format", "json"],
+                ["info", "e2e-external-package", "--target", "cursor", "--format", "json"],
+                ["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
+                ["repair", "e2e-external-package", "--target", "cursor", "--format", "json"],
+                ["switch", "e2e-external-package", "--to", "./package-plugin-data-alternate", "--format", "json"],
+                ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"],
+                ["remove", "e2e-external-package", "--purge-data", "--format", "json"],
+            )
+            traces = [{
+                "argv": command, "exit_code": 0,
+                "stdout_digest": "sha256:" + hashlib.sha256("\0".join(command).encode()).hexdigest(),
+                "stderr_digest": "sha256:" + hashlib.sha256(b"").hexdigest(),
+                "process_creation_denied": True, "write_guarded": index != 0,
+            } for index, command in enumerate(commands)]
+            proof = {
+                "info_preserved": True, "update_changed_package_digest": True,
+                "update_preserved": True, "update_preserved_data_receipt": True,
+                "repair_preserved": True, "switch_preserved": True,
+                "remove_preserved": True, "explicit_owned_purge_deleted": True,
+            }
+            session = observer.LifecycleEvidenceSession()
+            test_result = subprocess.CompletedProcess([], 0, "", "Ran 165 tests in 1.000s\n\nOK\n")
+            with mock.patch.object(observer.subprocess, "run", return_value=test_result):
+                test_execution = observer.TestExecutionSession.run_phase6(cwd=ROOT)
+            with (
+                mock.patch.object(observer, "_owned_sources_match_head", return_value=True),
+                self.assertRaisesRegex(ValueError, "authenticated public"),
+            ):
+                observer.bound_lifecycle_evidence(
+                    binary, traces, proof,
+                    session=observer.LifecycleEvidenceSession(), test_execution=test_execution,
+                )
+            with (
+                mock.patch.object(observer, "_owned_sources_match_head", return_value=True),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", binary.stat().st_size),
+                mock.patch.object(
+                    observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256",
+                    hashlib.sha256(binary.read_bytes()).hexdigest(),
+                ),
+            ):
+                record = observer.bound_lifecycle_evidence(
+                    binary, traces, proof,
+                    session=session, test_execution=test_execution,
+                )
+                with self.assertRaisesRegex(ValueError, "fresh pre-command"):
+                    observer.bound_lifecycle_evidence(
+                        binary, traces, proof, session=session,
+                        test_execution=test_execution,
+                    )
+        self.assertEqual(record["source_hash_before"], record["source_hash_after"])
+        self.assertEqual(len(record["commands"]), 7)
+        self.assertEqual(record["binary"]["version_stdout"], "agentplugins 0.1.14")
+        self.assertEqual(record["binary"]["version_argv"], [str(binary), "version"])
+        self.assertEqual(record["binary"]["version_exit"], 0)
+        self.assertEqual(record["tests"]["skips"], 0)
+        self.assertEqual(record["host"]["uid"], os.getuid())
+        self.assertEqual(record["host"]["gid"], os.getgid())
+        self.assertRegex(record["repository"]["commit"], r"^[0-9a-f]{40}$")
+        self.assertRegex(record["repository"]["parent"], r"^[0-9a-f]{40}$")
+        self.assertRegex(record["repository"]["patch_sha256"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_bound_evidence_harness_owns_fresh_credential_free_roots(self) -> None:
+        inherited_home = os.environ.get("HOME")
+        observed: dict[str, object] = {}
+
+        def lifecycle(binary: Path, root: Path, challenge: str):
+            observed.update({
+                "binary": binary, "root": root, "challenge": challenge,
+                "home": os.environ.get("HOME"), "manager": os.environ.get("AGENTPLUGINS_HOME"),
+                "tmp": os.environ.get("TMPDIR"), "secret": os.environ.get("PHASE6_TEST_SECRET"),
+            })
+            return True, {"command_traces": [], "proof": {}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            binary = parent / "agentplugins"
+            binary.write_text("exact-binary-placeholder")
+            root = parent / "fresh-evidence-root"
+            test_execution = object()
+            authenticated = (
+                b"exact-binary-placeholder", (1, 2, 0o100700, 0, 0, 1, 24, 3, 4),
+                subprocess.CompletedProcess([], 0, "agentplugins 0.1.14\n", ""),
+            )
+            with (
+                mock.patch.dict(os.environ, {"PHASE6_TEST_SECRET": "must-not-propagate"}),
+                mock.patch.object(observer, "_authenticated_public_binary", return_value=authenticated),
+                mock.patch.object(observer.TestExecutionSession, "run_phase6", return_value=test_execution),
+                mock.patch.object(observer, "plugin_data_scenario", side_effect=lifecycle),
+                mock.patch.object(observer, "bound_lifecycle_evidence", return_value={"bound": True}) as bind,
+            ):
+                self.assertEqual(
+                    observer.run_bound_plugin_data_evidence(binary, root, "challenge"),
+                    {"bound": True},
+                )
+                self.assertEqual(os.environ.get("PHASE6_TEST_SECRET"), "must-not-propagate")
+            self.assertTrue(root.is_dir())
+            self.assertEqual(observed["binary"], binary.resolve())
+            self.assertEqual(observed["root"], root / "workspace")
+            self.assertEqual(observed["challenge"], "challenge")
+            self.assertEqual(observed["home"], str(root / "lifecycle-home"))
+            self.assertEqual(observed["manager"], str(root / "lifecycle-manager"))
+            self.assertEqual(observed["tmp"], str(root / "lifecycle-tmp"))
+            self.assertIsNone(observed["secret"])
+            bind.assert_called_once()
+        self.assertEqual(os.environ.get("HOME"), inherited_home)
 
     def test_challenge_binds_github_release_directory_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e.secrets, "token_hex", return_value="ab" * 32):
@@ -1732,6 +1910,16 @@ print((fixtures / name).read_text(), end="")
         self.assertTrue(observer.validate_released_state_v4(catalog_uint))
         catalog_revision["catalog_evidence"]["compatibility"]["cursor"]["evidence"][0]["release_sequence"] = 1 << 64
         self.assertFalse(observer.validate_released_state_v4(catalog_uint))
+        null_catalog = json.loads(json.dumps(fixture))
+        null_revision = next(iter(null_catalog["installations"][0]["clients"].values()))["package_revision"]
+        null_revision["catalog_evidence"] = {
+            "current_evidence": [None],
+            "compatibility": {"cursor": {"evidence": [None]}},
+        }
+        self.assertTrue(
+            observer.validate_released_state_v4(null_catalog),
+            "encoding/json decodes null []struct elements as zero-value structs",
+        )
         numeric_phase = json.loads(json.dumps(fixture))
         next(iter(numeric_phase["installations"][0]["clients"].values()))["receipts"][0]["phase"] = 123
         self.assertFalse(observer.validate_released_state_v4(numeric_phase), "Go cannot decode a number into a string field")
@@ -1750,6 +1938,24 @@ print((fixtures / name).read_text(), end="")
         oversized_go_int = json.loads(json.dumps(absent_snapshot_nulls))
         oversized_go_int["installations"][0]["directory"]["snapshot_schema"] = 1 << 80
         self.assertFalse(observer.validate_released_state_v4(oversized_go_int))
+
+        directory_vector = json.loads(json.dumps(uint_fixture))
+        raw = json.dumps(directory_vector, separators=(",", ":"))
+        token = str((1 << 64) - 1)
+        parsed_max = observer.strict_state_json_loads(raw)
+        self.assertTrue(observer.validate_released_state_v4(parsed_max))
+        self.assertFalse(observer.validate_released_state_v4(
+            observer.strict_state_json_loads(raw.replace(token, "18446744073709551616", 1)),
+        ))
+        self.assertFalse(observer.validate_released_state_v4(
+            observer.strict_state_json_loads(raw.replace(token, "-0", 1)),
+        ))
+        for malformed in (
+            raw.replace("context7", "\\ud800context7", 1),
+            b'{"schema_version":4,"installations":[],"transaction_receipts":["\xff"]}',
+        ):
+            with self.assertRaises((ValueError, UnicodeDecodeError)):
+                observer.strict_state_json_loads(malformed)
 
         trimmed = json.loads(json.dumps(fixture))
         installation = trimmed["installations"][0]
@@ -1851,6 +2057,75 @@ print((fixtures / name).read_text(), end="")
         nil_maps["installations"][0]["clients"] = None
         nil_maps["installations"][0]["data_receipts"] = None
         self.assertTrue(observer.validate_released_state_v4(nil_maps), "JSON null decodes to nil Go maps")
+
+    @unittest.skipUnless(
+        Path("/tmp/agentplugins-0.1.14-public").is_file(),
+        "exact public agentplugins 0.1.14 decoder is unavailable",
+    )
+    def test_state_v4_raw_vectors_match_released_go_decoder(self) -> None:
+        binary = Path("/tmp/agentplugins-0.1.14-public")
+        self.assertEqual(binary.stat().st_size, 11_190_456)
+        self.assertEqual(
+            hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "7313ad045fa2fa5621f9b9d75914d111f5101c4d3e758515022603fcfb57d31e",
+        )
+        _, fixture = self.agentplugins_0_1_14_state_fixture()
+
+        def cloned() -> dict:
+            return json.loads(json.dumps(fixture))
+
+        def revision(value: dict) -> dict:
+            return next(iter(value["installations"][0]["clients"].values()))["package_revision"]
+
+        def encoded(mutate) -> bytes:
+            value = cloned(); mutate(value)
+            return json.dumps(value, separators=(",", ":")).encode()
+
+        maximum = encoded(lambda value: revision(value).__setitem__("release_sequence", (1 << 64) - 1))
+        vectors: list[tuple[str, bytes, bool]] = [
+            ("uint64-max", maximum, True),
+            ("uint64-overflow", encoded(lambda value: revision(value).__setitem__("release_sequence", 1 << 64)), False),
+            ("uint64-negative", encoded(lambda value: revision(value).__setitem__("release_sequence", -1)), False),
+            ("uint64-negative-zero", maximum.replace(str((1 << 64) - 1).encode(), b"-0", 1), False),
+            ("null-struct-elements", encoded(lambda value: revision(value).__setitem__(
+                "catalog_evidence", {"current_evidence": [None], "compatibility": {"cursor": {"evidence": [None]}}},
+            )), True),
+            ("null-string", encoded(lambda value: value["installations"][0]["source"].__setitem__("requested_source", None)), True),
+            ("bool-for-string", encoded(lambda value: value["installations"][0]["source"].__setitem__("requested_source", True)), False),
+            ("float-for-string", encoded(lambda value: value["installations"][0]["source"].__setitem__("requested_source", 1.5)), False),
+            ("ascii-whitespace-trim", encoded(lambda value: value["installations"][0].__setitem__("installation_id", "\tportable-id\t")), True),
+            ("nbsp-trim", encoded(lambda value: value["installations"][0].__setitem__("installation_id", "\u00a0portable-id\u00a0")), True),
+            ("nbsp-blank", encoded(lambda value: (
+                value["installations"][0].__setitem__("declared_name", "\u00a0"),
+                value["installations"][0]["package"].__setitem__("declared_name", "\u00a0"),
+            )), False),
+        ]
+        surrogate = encoded(lambda value: value["installations"][0].__setitem__("installation_id", "SURROGATE"))
+        vectors.extend([
+            ("unpaired-surrogate", surrogate.replace(b"SURROGATE", b"\\ud800portable", 1), False),
+            ("invalid-utf8", surrogate.replace(b"SURROGATE", b"\xffportable", 1), False),
+        ])
+
+        for name, raw, expected in vectors:
+            with self.subTest(vector=name), tempfile.TemporaryDirectory(
+                prefix="state-v4-go-oracle-",
+            ) as tmp:
+                disposable = Path(tmp)
+                home = disposable / "home"; manager = disposable / "manager"
+                (home / ".cursor" / "plugins" / "local").mkdir(parents=True)
+                manager.mkdir(); (manager / "state-v2.json").write_bytes(raw)
+                completed = subprocess.run(
+                    [str(binary), "info", "context7", "--target", "cursor", "--format", "json"],
+                    env={**os.environ, "HOME": str(home), "AGENTPLUGINS_HOME": str(manager)},
+                    cwd=disposable, text=True, capture_output=True, check=False, timeout=30,
+                )
+                go_accepted = completed.returncode == 0
+                try:
+                    python_accepted = observer.validate_released_state_v4(observer.strict_state_json_loads(raw))
+                except (UnicodeError, ValueError, json.JSONDecodeError):
+                    python_accepted = False
+                self.assertEqual(go_accepted, expected, completed.stderr)
+                self.assertEqual(python_accepted, go_accepted, name)
 
     def test_state_v4_validate_rejects_duplicate_sources_receipt_ids_and_operation_ids(self) -> None:
         _, fixture = self.agentplugins_0_1_14_state_fixture()
@@ -2174,6 +2449,7 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             "bytes": lambda root: (root / "nested/file").write_bytes(b"changed"),
             "add_delete": lambda root: (root / "transient").write_text("transient"),
             "chmod": lambda root: (root / "nested/file").chmod(0o600),
+            "hardlink": lambda root: os.link(root / "nested/file", root / "transient-link"),
             "symlink": lambda root: ((root / "link").unlink(), (root / "link").symlink_to("other")),
         }
         for name, mutate in mutators.items():
@@ -2190,9 +2466,24 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
                 if name == "bytes": file.write_bytes(b"original")
                 elif name == "add_delete": (retained / "transient").unlink()
                 elif name == "chmod": file.chmod(0o640)
+                elif name == "hardlink": (retained / "transient-link").unlink()
                 elif name == "symlink":
                     (retained / "link").unlink(); (retained / "link").symlink_to("nested/file")
                 self.assertFalse(frozen.expected(), f"{name} restore must not erase the mutation epoch")
+                frozen.close()
+
+        if os.geteuid() == 0:
+            with tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp); retained = parent / "retained"; retained.mkdir()
+                file = retained / "file"; file.write_text("x")
+                original_owner = (file.stat().st_uid, file.stat().st_gid)
+                frozen = observer.freeze_path_authority(
+                    {str(retained)}, (parent,), outcomes={str(retained): "retain"},
+                )
+                if frozen is None:
+                    self.skipTest("kernel retained-tree lifetime primitives unavailable")
+                os.chown(file, *original_owner); os.chown(file, *original_owner)
+                self.assertFalse(frozen.expected(), "owner-setting epoch must not erase the mutation proof")
                 frozen.close()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2269,10 +2560,15 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             attack.write_text('''#!/usr/bin/python3
 import os, pathlib
 retained = pathlib.Path(os.environ["RETAINED"]); saved = retained.with_name("saved-retained")
-retained.rename(saved); retained.symlink_to(os.environ["OUTSIDE"], target_is_directory=True)
-try: (retained / "victim").unlink()
-except PermissionError: pass
-retained.unlink(); saved.rename(retained)
+retained.rename(saved)
+try:
+    try:
+        retained.symlink_to(os.environ["OUTSIDE"], target_is_directory=True)
+        try: (retained / "victim").unlink()
+        except PermissionError: pass
+    except PermissionError: pass
+    if retained.is_symlink(): retained.unlink()
+finally: saved.rename(retained)
 ''')
             attack.chmod(0o700)
             environment = {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager), "RETAINED": str(retained), "OUTSIDE": str(outside)}
@@ -2353,6 +2649,94 @@ print(json.dumps(denied))
             self.assertFalse((outside / "forbidden").exists())
             self.assertTrue(frozen.expected(), "the exact released backup rename/delete must be admitted")
             frozen.close()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Landlock proof is Linux-only")
+    def test_landlock_abi3_denies_cross_root_refer_and_unrelated_truncate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); workspace = base / "workspace"; workspace.mkdir()
+            home = base / "home"; home.mkdir()
+            manager = base / "manager"; manager.mkdir()
+            data = manager / "plugin-data" / "owned-data"; data.mkdir(parents=True)
+            binding_parent = home / ".cursor" / "plugins" / "local"; binding_parent.mkdir(parents=True)
+            active = binding_parent / "e2e-external-package-active"; active.mkdir()
+            source = manager / "manager-source"; source.write_text("manager")
+            unrelated = home / "unrelated"; unrelated.write_text("untouched")
+            helper = workspace / "authority-probe"
+            helper.write_text('''#!/usr/bin/python3
+import errno, json, os, pathlib
+active = pathlib.Path(os.environ["ACTIVE"]); backup = active.with_name("backup")
+active.rename(backup); backup.rename(active)
+source = pathlib.Path(os.environ["SOURCE"]); binding = active.parent
+denied = []
+for operation in (
+    lambda: source.rename(binding / "cross-root-rename"),
+    lambda: os.link(source, binding / "cross-root-link"),
+    lambda: os.truncate(os.environ["UNRELATED"], 0),
+    lambda: pathlib.Path(os.environ["HOME"]).joinpath("unrelated-write").write_text("no"),
+    lambda: source.with_name("forbidden-symlink").symlink_to(source),
+    lambda: os.mkfifo(source.with_name("forbidden-fifo")),
+):
+    try: operation(); denied.append(False)
+    except OSError as error: denied.append(error.errno in (errno.EPERM, errno.EXDEV, errno.EACCES))
+os.truncate(source, 1)
+print(json.dumps({"same_parent": active.is_dir(), "denied": denied, "source": source.read_text()}))
+''')
+            helper.chmod(0o700)
+            installation = {
+                "data_receipts": {"receipt": {"locator": str(data)}},
+                "clients": {"binding": {"client_id": "cursor", "target_locator": str(active)}},
+            }
+            environment = {
+                "HOME": str(home), "AGENTPLUGINS_HOME": str(manager), "ACTIVE": str(active),
+                "SOURCE": str(source), "UNRELATED": str(unrelated),
+            }
+            with mock.patch.dict(os.environ, environment, clear=False):
+                authority = observer.released_lifecycle_write_authority(installation, manager)
+                self.assertIsNotNone(authority)
+                completed, _ = observer.traced(helper, [], workspace, "challenge", write_authority=authority)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads(completed.stdout)
+            self.assertTrue(result["same_parent"])
+            self.assertEqual(result["denied"], [True, True, True, True, True, True])
+            self.assertEqual(result["source"], "m")
+            self.assertEqual(unrelated.read_text(), "untouched")
+            self.assertFalse((binding_parent / "cross-root-rename").exists())
+            self.assertFalse((binding_parent / "cross-root-link").exists())
+            self.assertFalse((manager / "forbidden-symlink").exists())
+            self.assertFalse((manager / "forbidden-fifo").exists())
+
+    def test_lifecycle_authority_rejects_ancestor_swap_during_descriptor_freeze(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); home = base / "home"; manager = base / "manager"
+            binding_parent = home / ".cursor" / "plugins" / "local"; binding_parent.mkdir(parents=True)
+            data = manager / "plugin-data" / "owned-data"; data.mkdir(parents=True)
+            active = binding_parent / "e2e-external-package-active"; active.mkdir()
+            installation = {
+                "data_receipts": {"receipt": {"locator": str(data)}},
+                "clients": {"binding": {"client_id": "cursor", "target_locator": str(active)}},
+            }
+            original_open = observer.os.open
+            saved = base / "saved-manager"
+            swapped = False
+
+            def swap_before_final_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if path == "manager" and kwargs.get("dir_fd") is not None and not swapped:
+                    swapped = True
+                    manager.rename(saved); manager.mkdir()
+                return original_open(path, flags, *args, **kwargs)
+
+            environment = {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}
+            try:
+                with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(
+                    observer.os, "open", side_effect=swap_before_final_open,
+                ):
+                    self.assertIsNone(observer.released_lifecycle_write_authority(installation, manager))
+                self.assertTrue(swapped)
+            finally:
+                if saved.exists():
+                    if manager.exists(): manager.rmdir()
+                    saved.rename(manager)
 
     def test_absent_purge_authority_rejects_lexical_ancestor_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2534,7 +2918,7 @@ print(json.dumps(denied))
             frozen.close()
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "seccomp is Linux-only and fails closed elsewhere")
-    def test_path_authority_seccomp_is_preexec_inherited_and_blocks_namespace_escape(self) -> None:
+    def test_path_authority_seccomp_denies_every_descendant_and_namespace_escape(self) -> None:
         machine = os.uname().machine.lower()
         if machine in {"amd64", "x86_64"}:
             clone_number = 56
@@ -2544,7 +2928,7 @@ print(json.dumps(denied))
             with self.assertRaises(OSError):
                 observer._install_path_authority_seccomp()
             return
-        code = f'''import ctypes, json, os, subprocess
+        code = f'''import ctypes, json, os, time
 libc = ctypes.CDLL(None, use_errno=True)
 status = open("/proc/self/status").read()
 def call(number, *arguments):
@@ -2555,30 +2939,33 @@ machine = os.uname().machine.lower()
 numbers = {{"x86_64": [272, 308, 165, 166, 155, 161], "aarch64": [97, 268, 40, 39, 41, 51]}}
 key = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
 denied = [call(number, 0, 0, 0, 0, 0, 0) for number in numbers[key] + [428, 429, 430, 431, 432, 433, 435, 442]]
-clone = call({clone_number}, 0x00020000 | 17, 0, 0, 0, 0)
-if clone[0] == 0:
-    os._exit(91)
-ordinary_clone = libc.syscall({clone_number}, 17, 0, 0, 0, 0)
-if ordinary_clone == 0:
-    os._exit(0)
-if ordinary_clone < 0:
-    raise OSError(ctypes.get_errno(), "ordinary clone was blocked")
-os.waitpid(ordinary_clone, 0)
-child = subprocess.run(["/usr/bin/python3", "-c", "import ctypes,json; l=ctypes.CDLL(None,use_errno=True); r=l.unshare(0x10000000); print(json.dumps([r,ctypes.get_errno()]))"], text=True, capture_output=True)
-print(json.dumps({{"no_new_privs": "NoNewPrivs:\\t1" in status, "seccomp": "Seccomp:\\t2" in status, "denied": denied, "clone": clone, "ordinary_clone": ordinary_clone > 0, "subprocess": [child.returncode, json.loads(child.stdout)]}}))
+namespace_clone = call({clone_number}, 0x00020000 | 17, 0, 0, 0, 0)
+ordinary_clone = call({clone_number}, 17, 0, 0, 0, 0)
+thread_clone = call({clone_number}, 0x00010000 | 17, 0, 0, 0, 0)
+forks = [call(number) for number in ({'57, 58' if machine in {'amd64', 'x86_64'} else ''})]
+if ordinary_clone[0] == 0:
+    os.setsid(); time.sleep(0.1); open(os.environ["DETACHED_TARGET"], "w").write("escaped"); os._exit(0)
+print(json.dumps({{"no_new_privs": "NoNewPrivs:\\t1" in status, "seccomp": "Seccomp:\\t2" in status, "denied": denied, "namespace_clone": namespace_clone, "ordinary_clone": ordinary_clone, "thread_clone": thread_clone, "forks": forks}}))
 '''
-        completed = subprocess.run(
-            ["/usr/bin/python3", "-c", code], text=True, capture_output=True,
-            check=False, preexec_fn=observer._install_path_authority_seccomp,
-        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ, {"DETACHED_TARGET": str(Path(tmp) / "detached-mutation")}, clear=False,
+        ):
+            completed = subprocess.run(
+                ["/usr/bin/python3", "-c", code], text=True, capture_output=True,
+                check=False, preexec_fn=observer._install_path_authority_seccomp,
+            )
+            time.sleep(0.2)
+            self.assertFalse((Path(tmp) / "detached-mutation").exists())
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
         self.assertTrue(result["no_new_privs"])
         self.assertTrue(result["seccomp"])
         self.assertTrue(all(item == [-1, 1] for item in result["denied"]), result)
-        self.assertEqual(result["clone"], [-1, 1])
-        self.assertTrue(result["ordinary_clone"])
-        self.assertEqual(result["subprocess"], [0, [-1, 1]])
+        self.assertEqual(result["namespace_clone"], [-1, 1])
+        self.assertEqual(result["ordinary_clone"], [-1, 1])
+        self.assertTrue(all(item == [-1, 1] for item in result["forks"]), result)
+        self.assertEqual(result["thread_clone"][0], -1)
+        self.assertNotEqual(result["thread_clone"][1], errno.EPERM, "CLONE_THREAD reached the kernel")
 
     def test_path_authority_seccomp_has_no_unconstrained_architecture_fallback(self) -> None:
         with mock.patch.object(observer.platform, "machine", return_value="unsupported-test-arch"):
@@ -2647,9 +3034,46 @@ print(json.dumps({{"no_new_privs": "NoNewPrivs:\\t1" in status, "seccomp": "Secc
 
     def test_plugin_data_update_requires_changed_package_and_preserves_exact_receipt(self) -> None:
         fake = f'''#!/usr/bin/python3
-import json, os, pathlib, shutil, sys
+import json, os, pathlib, shutil, sys, time
 manager = pathlib.Path(os.environ["AGENTPLUGINS_HOME"]); manager.mkdir(parents=True, exist_ok=True)
 state_path = manager / "state-v2.json"; command = sys.argv[1]
+def attempt_detached_descendant():
+    if command != "add" or not os.environ.get("DETACHED_PROOF"):
+        return
+    try:
+        child = os.fork()
+    except PermissionError:
+        pathlib.Path(os.environ["DETACHED_PROOF"]).write_text("denied")
+        return
+    if child == 0:
+        os.setsid(); os.close(1); os.close(2); time.sleep(0.3)
+        pathlib.Path(os.environ["DETACHED_PROOF"]).write_text("escaped")
+        os._exit(0)
+def malicious_lifetime_epoch():
+    requested = os.environ.get("ATTACK_COMMAND")
+    if requested != command and not (
+        requested == "remove-retain" and command == "remove" and "--purge-data" not in sys.argv
+    ):
+        return
+    retained = manager / "plugin-data/e2e-external-package-owned"
+    marker = retained / "launch-marker.txt"
+    mode = os.environ.get("ATTACK_MODE")
+    if mode == "modify-restore":
+        original = marker.read_bytes(); marker.write_bytes(b"changed"); marker.write_bytes(original)
+    elif mode == "permanent-addition":
+        (retained / "unrelated-attacker-content").write_text("persist")
+    elif mode == "rename-symlink":
+        saved = retained.with_name("saved-retained")
+        retained.rename(saved)
+        try:
+            try:
+                retained.symlink_to(os.environ["OUTSIDE"], target_is_directory=True)
+                (retained / "victim").write_text("mutated")
+            except PermissionError:
+                pass
+            if retained.is_symlink(): retained.unlink()
+        finally:
+            saved.rename(retained)
 def atomic_state(state):
     os.chmod(manager, 0o700)
     atomic_state.epoch += 1
@@ -2685,14 +3109,19 @@ def write_state(package):
       "tree_digest": identity["tree_digest"], "manifest_digest": identity["manifest_digest"]}},
       "updated_at": "2026-08-24T00:00:00Z"}}}}, "created_at": "2026-08-24T00:00:00Z", "updated_at": "2026-08-24T00:00:00Z"}}]}}
     atomic_state(state)
-if command == "add": write_state(pathlib.Path.cwd() / sys.argv[2].removeprefix("./"))
+if command == "add":
+    attempt_detached_descendant(); write_state(pathlib.Path.cwd() / sys.argv[2].removeprefix("./"))
 elif command == "update":
+    malicious_lifetime_epoch()
     state = json.loads(state_path.read_text()); write_state(pathlib.Path.cwd() / state["installations"][0]["source"]["requested_source"].removeprefix("./"))
 elif command == "repair":
+    malicious_lifetime_epoch()
     state = json.loads(state_path.read_text())
     for binding in state["installations"][0]["clients"].values(): pathlib.Path(binding["target_locator"]).mkdir(parents=True, exist_ok=True)
-elif command in ("info", "switch"): pass
+elif command == "switch": malicious_lifetime_epoch()
+elif command == "info": malicious_lifetime_epoch()
 elif command == "remove" and "--purge-data" not in sys.argv:
+    malicious_lifetime_epoch()
     state = json.loads(state_path.read_text()); installation = state["installations"][0]
     for binding in installation["clients"].values():
         active = pathlib.Path(binding["target_locator"])
@@ -2737,6 +3166,39 @@ print("{{}}")
                 expected = mode == "atomic-state"
                 self.assertEqual(passed, expected, value)
                 self.assertEqual(value["proof"]["explicit_owned_purge_deleted"], expected)
+
+        for attacked_command in ("info", "update", "repair", "switch", "remove-retain"):
+            for attack_mode in ("modify-restore", "permanent-addition", "rename-symlink"):
+                with self.subTest(command=attacked_command, attack=attack_mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
+                    workspace = root / "workspace"; workspace.mkdir()
+                    outside = root / "outside"; outside.mkdir(); victim = outside / "victim"; victim.write_text("survives")
+                    environment = {
+                        "HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"),
+                        "PYTHONDONTWRITEBYTECODE": "1", "ATTACK_COMMAND": attacked_command,
+                        "ATTACK_MODE": attack_mode, "OUTSIDE": str(outside),
+                    }
+                    with mock.patch.dict(os.environ, environment, clear=False):
+                        passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+                    self.assertFalse(passed, value)
+                    if attacked_command == "info":
+                        self.assertNotEqual(value["command_traces"][1]["exit_code"], 0, value)
+                    else:
+                        self.assertFalse(value["proof"]["remove_preserved"], value)
+                    self.assertEqual(victim.read_text(), "survives")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
+            workspace = root / "workspace"; workspace.mkdir(); detached_proof = workspace / "detached-proof"
+            environment = {
+                "HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"),
+                "PYTHONDONTWRITEBYTECODE": "1", "DETACHED_PROOF": str(detached_proof),
+            }
+            with mock.patch.dict(os.environ, environment, clear=False):
+                passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+            time.sleep(0.5)
+            self.assertTrue(passed, value)
+            self.assertEqual(detached_proof.read_text(), "denied")
     def test_plugin_data_update_proof_fails_closed_for_no_change_or_receipt_replacement(self) -> None:
         first = {"tree_digest": "sha256:" + "a" * 64, "manifest_digest": "sha256:" + "e" * 64}
         second = {"tree_digest": "sha256:" + "b" * 64, "manifest_digest": "sha256:" + "f" * 64}
