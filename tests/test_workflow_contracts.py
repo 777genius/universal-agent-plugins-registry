@@ -12,6 +12,7 @@ LIVE = ROOT / ".github/workflows/live-e2e.yml"
 PAGES = ROOT / ".github/workflows/pages.yml"
 VALIDATE = ROOT / ".github/workflows/validate.yml"
 DIRECTORY_PUBLICATION = ROOT / ".github/workflows/directory-publication.yml"
+OBSERVER_RUNBOOK = ROOT / "docs/OBSERVER_OPERATIONS.md"
 PUBLICATION_INPUTS = {
     "publication_id": "string",
     "publication_sequence": "number",
@@ -93,6 +94,43 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("secrets.", body)
         self.assertEqual(job["permissions"], {"contents": "read"})
         self.assertLessEqual(int(job["timeout-minutes"]), 10)
+
+    def test_observer_policy_accepts_exactly_the_protected_workflow_events(self) -> None:
+        workflow = load(LAUNCH)
+        protected_if = workflow["jobs"]["protected-observer-inputs"]["if"]
+        workflow_events = set(re.findall(
+            r"inputs\.caller_event_name\s*==\s*'([^']+)'", protected_if,
+        ))
+        observer = json.loads((ROOT / "deploy/uap-observer.json").read_text())
+        policy_events = set(observer["policies"][0]["event_names"])
+        self.assertEqual(workflow_events, {"push", "schedule", "workflow_dispatch"})
+        self.assertEqual(policy_events, workflow_events)
+
+    def test_observer_runbook_binds_fail_closed_loopback_proxy_operations(self) -> None:
+        runbook = OBSERVER_RUNBOOK.read_text()
+        required = (
+            "UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST=/etc/uap-observer-egress-fqdns.txt",
+            "UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_SHA256=sha256:<64-lowercase-hex>",
+            "UAP_OBSERVER_EGRESS_FQDN_ALLOWLIST_MODE=0:0:644:1",
+            "systemctl enable --now uap-observer-egress-proxy.socket",
+            "systemctl is-active uap-observer-egress-proxy.service",
+            "systemctl stop uap-observer-egress-proxy.socket",
+            "127.0.0.1:8765",
+            "127.0.0.2:8766",
+            "no transparent or direct-fallback mode",
+            "HTTP_PROXY=http://127.0.0.2:8766",
+            "HTTPS_PROXY=http://127.0.0.2:8766",
+            "ALL_PROXY=http://127.0.0.2:8766",
+            "explicitly empty `NO_PROXY`",
+            "current provider-owned\nhost list for Codex, Cursor, Kiro, GitHub",
+            "current installer supports a fresh host only",
+        )
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, runbook)
+        self.assertIn("Do not bypass OIDC", runbook)
+        self.assertIn("five minutes before", runbook)
+        self.assertIn("genuinely\nexternal unmerged PR", runbook)
 
     def test_launch_evidence_jobs_fetch_parent_for_patch_binding(self) -> None:
         launch = load(LAUNCH)

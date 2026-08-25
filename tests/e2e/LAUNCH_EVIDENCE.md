@@ -109,6 +109,10 @@ primary artifact;
 its separate artifact must contain exactly three passed runtime records for
 Codex, Cursor, and Kiro.
 
+Fresh-host preflight, deployment, consent/ChatGPT timing, health, evidence, and
+rollback procedures are in [Observer operations](../../docs/OBSERVER_OPERATIONS.md).
+That runbook explicitly forbids copied Mac authentication and real projects.
+
 Consent and every runtime record are independently bound to the same challenge,
 GitHub run/attempt, and scenario contract. They carry only pseudonymous
 dedicated identity/workspace IDs and signed fields for disposable-project state,
