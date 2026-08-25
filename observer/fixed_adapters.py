@@ -36,8 +36,9 @@ ENTRYPOINT_ARTIFACT = {
 }
 CONFIG_PATH = Path("/opt/uap-observer-current/etc/uap-observer-adapter-config.json")
 CONSENT_DIRECTORY = Path("/var/lib/uap-observer-consent/pending")
+GIT_BINARY = Path("/opt/uap-observer-inputs/bin/git")
 FIXED_INPUT_PATHS = {
-    "/opt/uap-observer-inputs/bin/git",
+    str(GIT_BINARY),
     "/opt/uap-observer-inputs/bin/codex",
     "/opt/uap-observer-inputs/bin/cursor",
     "/opt/uap-observer-inputs/bin/kiro",
@@ -358,9 +359,9 @@ def verified_git(item: Any, owner_uid: int) -> Path:
     if not isinstance(item, dict) or set(item) != {"binary", "sha256"}:
         raise ValueError("fixed Git config is invalid")
     binary = Path(item["binary"])
-    verify_executable_file(binary, item["sha256"], owner_uid=owner_uid)
-    if binary != Path("/usr/bin/git"):
+    if binary != GIT_BINARY:
         raise ValueError("fixed Git executable differs")
+    verify_executable_file(binary, item["sha256"], owner_uid=owner_uid)
     return binary
 
 

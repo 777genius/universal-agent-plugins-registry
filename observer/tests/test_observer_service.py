@@ -3084,6 +3084,24 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
 
 
 class FixedAdapterContractTests(unittest.TestCase):
+    def test_verified_git_requires_exact_immutable_schema_path(self) -> None:
+        digest = "sha256:" + "a" * 64
+        item = {"binary": "/opt/uap-observer-inputs/bin/git", "sha256": digest}
+        with mock.patch.object(fixed_adapters, "verify_executable_file") as verify:
+            self.assertEqual(
+                fixed_adapters.verified_git(item, owner_uid=1234),
+                Path("/opt/uap-observer-inputs/bin/git"),
+            )
+            verify.assert_called_once_with(
+                Path("/opt/uap-observer-inputs/bin/git"), digest, owner_uid=1234,
+            )
+
+        item["binary"] = "/usr/bin/git"
+        with mock.patch.object(fixed_adapters, "verify_executable_file") as verify:
+            with self.assertRaisesRegex(ValueError, "fixed Git executable differs"):
+                fixed_adapters.verified_git(item, owner_uid=1234)
+            verify.assert_not_called()
+
     def test_historical_external_pr_capture_is_reusable_for_same_bound_state(self) -> None:
         request = Fixture(Path(tempfile.mkdtemp())).request()
         evidence = artifacts(request["challenge"]["value"])["runtime-attestations.json"]["external_pr_evidence"]
