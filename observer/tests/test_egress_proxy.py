@@ -55,6 +55,11 @@ class AllowlistTests(unittest.TestCase):
         with self.assertRaises(proxy.ProxyError):
             self.load({"schema_version": 1, "hosts": [f"h{i}.example.com" for i in range(33)]})
 
+    def test_rejects_boolean_schema_versions(self):
+        for value in (True, False):
+            with self.subTest(value=value), self.assertRaises(proxy.ProxyError):
+                self.load({"schema_version": value, "hosts": ["api.github.com"]})
+
 
 class ConnectTests(unittest.TestCase):
     allowlist = frozenset({"api.github.com"})
@@ -159,9 +164,12 @@ class RelayTests(unittest.TestCase):
         for worker in workers:
             worker.start()
         for worker in workers:
-            worker.join(5)
+            # The forced 17-byte writes deliberately require tens of
+            # thousands of selector turns; leave headroom on loaded portable
+            # CI runners while retaining a hard deadlock bound.
+            worker.join(15)
             self.assertFalse(worker.is_alive())
-        relay_thread.join(5)
+        relay_thread.join(15)
         self.assertFalse(relay_thread.is_alive())
         self.assertEqual(received["client"], right_to_left)
         self.assertEqual(received["upstream"], left_to_right)

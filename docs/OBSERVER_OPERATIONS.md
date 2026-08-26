@@ -26,7 +26,7 @@ digests below. Do not record the signing key or profile contents.
 
 ```sh
 sha256sum "$SOURCE_ROOT/deploy/uap-observer-runtime.sha256" \
-  /root/uap-observer-adapter-config.json /root/uap-observer.json \
+  /root/uap-observer-adapter-config.template.json /root/uap-observer.json \
   /root/Caddyfile /root/caddy_2.11.4_linux_amd64.tar.gz \
   /root/uap-observer-egress-allowlist.json
 ```
@@ -39,7 +39,7 @@ installer-managed deployment files are:
 
 | Artifact | Installed path | Mode |
 | --- | --- | --- |
-| Git, Codex, Cursor, Kiro native executables | `/opt/uap-observer-inputs/bin/{git,codex,cursor,kiro}` | root-owned `0755` regular files |
+| Git, Codex, Cursor, Kiro native executables | `/opt/uap-observer-inputs/bin/{git,codex,cursor,kiro,kiro-cli-chat}` | root-owned `0755` regular files; Kiro requires both digest-pinned executables |
 | ChatGPT app binding and projection receipt | `/opt/uap-observer-inputs/chatgpt/{app-binding.json,projection-receipt.json}` | `root:uap-observer-adapter-config`, `0640` |
 | independently captured external-PR evidence | `/opt/uap-observer-inputs/external-pr-evidence.json` | `root:uap-observer-adapter-config`, `0640` |
 | operator-approved proxy FQDN allowlist | `/opt/uap-observer-current/etc/uap-observer-egress-allowlist.json` | `root:root`, `0644`, one-link regular file |
@@ -67,7 +67,7 @@ getent group uap-observer-adapter-config >/dev/null || \
   groupadd --system uap-observer-adapter-config
 install -d -o root -g root -m 0755 /opt/uap-observer-inputs \
   /opt/uap-observer-inputs/bin /opt/uap-observer-inputs/chatgpt
-for name in git codex cursor kiro; do
+for name in git codex cursor kiro kiro-cli-chat; do
   install -o root -g root -m 0755 "/root/approved-inputs/$name" \
     "/opt/uap-observer-inputs/bin/$name"
 done
@@ -78,12 +78,108 @@ done
 install -o root -g uap-observer-adapter-config -m 0640 \
   /root/approved-inputs/external-pr-evidence.json \
   /opt/uap-observer-inputs/external-pr-evidence.json
-python3 -m jsonschema -i /root/uap-observer-adapter-config.json \
-  "$SOURCE_ROOT/deploy/uap-observer-adapter-config.schema.json"
 sha256sum /opt/uap-observer-inputs/bin/* \
   /opt/uap-observer-inputs/chatgpt/* \
   /opt/uap-observer-inputs/external-pr-evidence.json
 ```
+
+Before installation or any manager source resolution, freeze the reviewed
+pre-projection adapter template and derive its source matrix exactly once:
+
+```sh
+test -f /root/uap-observer-adapter-config.template.json
+test ! -L /root/uap-observer-adapter-config.template.json
+test "$(stat -c '%U %a %h' /root/uap-observer-adapter-config.template.json)" = "root 400 1"
+PYTHONPATH="$SOURCE_ROOT" python3 - \
+  /root/uap-observer-adapter-config.template.json /root/uap-observer-matrix.json \
+  "$SOURCE_ROOT/deploy/uap-observer-adapter-config.schema.json" <<'PY'
+import copy, json, math, os, pathlib, sys, tempfile
+import jsonschema
+source, target = map(pathlib.Path, sys.argv[1:3])
+schema_path = pathlib.Path(sys.argv[3])
+def strict_load(path):
+    def pairs(items):
+        value, folded = {}, set()
+        for key, child in items:
+            normalized = key.casefold()
+            if key in value or normalized in folded:
+                raise SystemExit(f"{path}: duplicate or case-confusable JSON member")
+            value[key] = child; folded.add(normalized)
+        return value
+    def constant(value): raise SystemExit(f"{path}: non-finite JSON number {value}")
+    def finite(value):
+        decoded = float(value)
+        if not math.isfinite(decoded): constant(value)
+        return decoded
+    return json.loads(path.read_bytes(), object_pairs_hook=pairs,
+                      parse_constant=constant, parse_float=finite)
+value = strict_load(source)
+schema = strict_load(schema_path)
+clients = value.get("clients") if isinstance(value, dict) else None
+if (type(value.get("schema_version")) is not int or value["schema_version"] != 1
+    or not isinstance(clients, dict) or set(clients) != {"codex", "cursor", "kiro"}
+    or any(not isinstance(record, dict) or "native_projection" in record
+           for record in clients.values())):
+    raise SystemExit("reviewed pre-projection template is not the exact unprojected schema")
+validated = copy.deepcopy(value)
+for client in ("codex", "cursor", "kiro"):
+    validated["clients"][client]["native_projection"] = {
+        "path": f"/var/lib/uap-observer/proofs/{client}/native-projection.json",
+        "sha256": "sha256:" + "0" * 64,
+    }
+jsonschema.validate(validated, schema)
+matrix = value.get("matrix")
+body = json.dumps({"matrix": matrix}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+fd, temporary = tempfile.mkstemp(prefix=".matrix.", dir=target.parent)
+try:
+    os.fchmod(fd, 0o400); os.write(fd, body); os.fsync(fd)
+finally: os.close(fd)
+os.link(temporary, target, follow_symlinks=False); os.unlink(temporary)
+directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+try: os.fsync(directory)
+finally: os.close(directory)
+PY
+sha256sum /root/uap-observer-matrix.json
+```
+
+Do not create, read, hash, or validate the final adapter config at this point. Its three
+projection digests do not exist until the first bootstrap phase below.
+
+Acquire the manager from the exact immutable public release; a package-manager
+facade, locally built binary, or the sanitized repository fixture is not a
+deployment input. The repository resolver checks GitHub's immutable release
+flag, tag commit, exact asset set, manifest/checksums agreement, selected asset
+SHA-256, and GitHub artifact attestation before writing the binary:
+
+```sh
+install -d -o root -g root -m 0700 /root/approved-inputs/agentplugins-0.1.14
+PYTHONPATH="$SOURCE_ROOT" python3 - <<'PY'
+import hashlib
+import subprocess
+from pathlib import Path
+from scripts.run_launch_evidence_e2e import resolve_github_release
+
+root = Path("/root/approved-inputs/agentplugins-0.1.14")
+binary, manifest, manifest_digest = resolve_github_release(
+    "777genius/plugin-kit-ai", "agentplugins-v0.1.14",
+    root / "agentplugins", asset_name="agentplugins_0.1.14_linux_amd64",
+)
+if manifest_digest != "sha256:21b72bb9fc82df2b45ce2e83ea79eeb5b8436cfd9b09f8ccfcbb25c8d0fda8f9":
+    raise SystemExit("release-manifest.json differs from the deployment pin")
+checksums = "sha256:" + hashlib.sha256((root / "checksums.txt").read_bytes()).hexdigest()
+if checksums != "sha256:bd9f8de83b9b04589d2b29ce36ae079bf5f67b10b8f44c5ab811fc5d6706ff6b":
+    raise SystemExit("checksums.txt differs from the deployment pin")
+observed = subprocess.run([binary, "version"], check=True, text=True,
+                          stdout=subprocess.PIPE).stdout.strip()
+if manifest["version"] != "0.1.14" or observed != "agentplugins 0.1.14":
+    raise SystemExit("selected manager binary is not exact agentplugins 0.1.14")
+PY
+```
+
+This requires authenticated GitHub attestation verification and fails closed
+when public provenance cannot be verified. Retain the emitted release identity,
+manifest, checksums, binary digest, and attestation JSON in the non-secret
+change ticket.
 
 Use exact, approved Linux client binaries at the paths above, not wrappers.
 Create authentication independently on this disposable host with dedicated
@@ -105,24 +201,342 @@ Use only the clients' supported fresh-host login paths: Codex supports
 automation; Kiro supports its remote device flow and `KIRO_API_KEY` headless
 mode. API keys may be supplied only transiently to the login/preflight process:
 never put them in a script, image, adapter config, service environment, or
-evidence. Prefer device flow for the persistent test profile. Confirm that the
-three completed seed trees contain only that client's disposable-host profile,
-then make the seed directories and entries root-owned and non-group/other-
-writable before provisioning.
+evidence. Prefer device flow for the persistent test profile.
+
+Materialize the five reviewed heroes separately in each seed. Short names are
+not eligible protected inputs in agentplugins 0.1.14. Derive every add argument
+from the approved tuple as the canonical
+`source_repository@source_revision//source_path`; reject a missing revision, a
+non-40-lowercase-hex revision, or any source field mismatch. Agentplugins 0.1.14
+prepares these clients, but an add record that still contains
+`manual_activation_required` anywhere is incomplete and cannot be sealed. Its
+real successful add envelope uses `result: success`, `data.status:
+completed`, and a selected target status of `external_completed` (the validator
+below also accepts the documented success/completed status spellings at the
+target boundary).
+
+The manager detects clients through `PATH`. Never run it with an ambient client
+on `PATH`. Create one root-owned temporary bin directory per seed containing
+the pinned Git binary and only the exact pinned client under names that 0.1.14
+recognizes (`codex`, the `cursor` and `agent` aliases for the same pinned Cursor
+bytes, or `kiro-cli`). Create `.codex` explicitly, but export `CODEX_HOME` only
+for Codex. Before any source is resolved or installed, the sole detection gate
+is exactly `agentplugins doctor --format json` (no source or target operands):
+
+```sh
+AGENTPLUGINS=/root/approved-inputs/agentplugins-0.1.14/agentplugins
+for client in codex cursor kiro; do
+  seed="/root/profile-seeds/$client"
+  evidence="/root/profile-seed-evidence/$client"
+  client_path="/root/profile-seed-path/$client"
+  install -d -o root -g root -m 0700 "$seed" "$seed/.config" "$seed/.cache" "$seed/.auth" "$seed/.state" \
+    "$seed/.agentplugins" "$seed/.codex" "$evidence/add" "$evidence/info" \
+    "$evidence/doctor" "$evidence/post-doctor" "$client_path"
+  install -o root -g root -m 0755 /opt/uap-observer-inputs/bin/git "$client_path/git"
+  case "$client" in
+    codex) install -o root -g root -m 0755 /opt/uap-observer-inputs/bin/codex "$client_path/codex" ;;
+    cursor)
+      install -o root -g root -m 0755 /opt/uap-observer-inputs/bin/cursor "$client_path/cursor"
+      install -o root -g root -m 0755 /opt/uap-observer-inputs/bin/cursor "$client_path/agent"
+      ;;
+    kiro)
+      install -o root -g root -m 0755 /opt/uap-observer-inputs/bin/kiro "$client_path/kiro-cli"
+      install -o root -g root -m 0755 /opt/uap-observer-inputs/bin/kiro-cli-chat "$client_path/kiro-cli-chat"
+      ;;
+  esac
+  # Record and compare regular-file identity, inode, link count, mode, and digest.
+  # Stop on a symlink, hardlink, digest mismatch, or an alias outside this list.
+  find "$client_path" -maxdepth 1 -type f -printf '%f %D:%i %n %m\n' | LC_ALL=C sort
+  sha256sum "$client_path"/* /opt/uap-observer-inputs/bin/git \
+    "/opt/uap-observer-inputs/bin/$client"
+  test "$(sha256sum "$client_path/git" | cut -d' ' -f1)" = \
+    "$(sha256sum /opt/uap-observer-inputs/bin/git | cut -d' ' -f1)"
+  case "$client" in
+    codex) expected_names='codex git'; aliases='codex' ;;
+    cursor) expected_names='agent cursor git'; aliases='agent cursor' ;;
+    kiro) expected_names='git kiro-cli kiro-cli-chat'; aliases='kiro-cli' ;;
+  esac
+  test "$(find "$client_path" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" = "$expected_names"
+  for alias in $aliases; do
+    test -f "$client_path/$alias" && test ! -L "$client_path/$alias"
+    test "$(stat -c %h "$client_path/$alias")" = 1
+    test "$(sha256sum "$client_path/$alias" | cut -d' ' -f1)" = \
+      "$(sha256sum "/opt/uap-observer-inputs/bin/$client" | cut -d' ' -f1)"
+  done
+  if [ "$client" = kiro ]; then
+    test "$(sha256sum "$client_path/kiro-cli-chat" | cut -d' ' -f1)" = \
+      c8c4edf122e66b07cc96729823ffa04d6f9a4dfd887590d36b76f809fce039c4
+    test "$(sha256sum "$client_path/kiro-cli" | cut -d' ' -f1)" = \
+      adab7305f27302bb4da93590ecb6d6ac49b9cad6d7f4cd17010735358cf32336
+  fi
+  set -- env HOME="$seed" XDG_CONFIG_HOME="$seed/.config" \
+    XDG_CACHE_HOME="$seed/.cache" AGENTPLUGINS_HOME="$seed/.agentplugins" PATH="$client_path"
+  if [ "$client" = codex ]; then set -- "$@" CODEX_HOME="$seed/.codex"; fi
+  "$@" "$AGENTPLUGINS" doctor --format json >"$evidence/doctor/detection.json"
+  python3 - "$client" "$evidence/doctor/detection.json" <<'PY'
+import json, math, pathlib, sys
+expected, path = sys.argv[1:]
+def pairs(items):
+    value, folded = {}, set()
+    for key, child in items:
+        normalized = key.casefold()
+        if key in value or normalized in folded:
+            raise SystemExit("doctor returned duplicate or case-confusable JSON member")
+        value[key] = child; folded.add(normalized)
+    return value
+def constant(value): raise SystemExit(f"doctor returned non-finite JSON number {value}")
+def finite(value):
+    decoded = float(value)
+    if not math.isfinite(decoded): constant(value)
+    return decoded
+value = json.loads(pathlib.Path(path).read_bytes(), object_pairs_hook=pairs,
+                   parse_constant=constant, parse_float=finite)
+if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1 or value.get("command") != "doctor"
+        or value.get("result") != "success"):
+    raise SystemExit("doctor did not return the exact successful 0.1.14 envelope")
+positive = []
+def visit(item):
+    if isinstance(item, dict):
+        client = item.get("client_id")
+        detected = item.get("detected") is True or item.get("status") == "detected"
+        if isinstance(client, str) and detected:
+            positive.append(client)
+        for child in item.values(): visit(child)
+    elif isinstance(item, list):
+        for child in item: visit(child)
+visit(value.get("data"))
+if positive != [expected]:
+    raise SystemExit("doctor did not detect exactly the intended target")
+PY
+  for plugin in agent-code-navigator context7 cloudflare-docs chrome-devtools notion; do
+    source="$(python3 - "$client" "$plugin" /root/uap-observer-matrix.json <<'PY'
+import json, re, sys
+client, plugin, path = sys.argv[1:]
+matrix = json.load(open(path, encoding="utf-8"))["matrix"]
+matches = [row["tuple"] for row in matrix if row["client"] == client and row["plugin"] == plugin]
+if len(matches) != 1:
+    raise SystemExit("approved matrix does not contain exactly one tuple")
+item = matches[0]
+revision = item.get("source_revision")
+if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+    raise SystemExit("approved source revision is not a full lowercase commit SHA")
+repository, source_path = item.get("source_repository"), item.get("source_path")
+if not isinstance(repository, str) or not isinstance(source_path, str) or not repository or not source_path:
+    raise SystemExit("approved package source is incomplete")
+print(f"{repository}@{revision}//{source_path}")
+PY
+)"
+    "$@" "$AGENTPLUGINS" add "$source" --target "$client" --format json \
+      >"$evidence/add/$plugin.json"
+    "$@" "$AGENTPLUGINS" doctor --format json \
+      >"$evidence/post-doctor/$plugin.json"
+    "$@" "$AGENTPLUGINS" info "$plugin" --target "$client" --format json \
+      >"$evidence/info/$plugin.json"
+  done
+done
+```
+
+Stop unless the pre-add doctor file is structured successful JSON, names the
+intended target as the sole detected client, and contains no other recognized
+client. Stop unless every add
+file is the exact successful structured 0.1.14 envelope, its top-level source
+and revision reproduce the approved canonical argument, and the one requested
+target has status `success`, `completed`, or `external_completed`, with no
+failed target or incomplete, warning, error, cancellation, audit, event, or
+conflicting lifecycle state at any depth.
+
+The hosted probe established all five exact canonical sources install for
+Codex and materialize for Cursor. Kiro must be logged in before attempting any
+Power/MCP activation. An unauthenticated Kiro probe mutated its seed and then
+failed four MCP activations; that is partial state, not sealable evidence. On
+any post-mutation failure, stop, retain the sanitized failure record, log in,
+remove or repair the partial registrations using the pinned client and manager,
+rerun doctor/add/info for all five sources, and seal only after the repaired
+native state is complete. Complete each returned human `next_action` in the
+exact pinned client using only its seed and disposable identity, then verify all
+five native registrations. If activation cannot be completed on this Linux
+host, that profile is inconclusive and must not be provisioned or represented
+as reconciled. The validated Kiro runtime grammar is ACP protocol v1 from Kiro
+CLI 2.19.1, invoked only as `kiro-cli acp --agent-engine v3 --auth-method cli`.
+The protected `kiro-cli` digest is
+`adab7305f27302bb4da93590ecb6d6ac49b9cad6d7f4cd17010735358cf32336` and
+the required protected `kiro-cli-chat` companion digest is
+`c8c4edf122e66b07cc96729823ffa04d6f9a4dfd887590d36b76f809fce039c4`.
+The adapter sends `session/new` with `mcpServers: []`; Kiro must load the sealed
+ native `~/.kiro/settings/mcp.json` itself. The checked-in file is a sanitized
+ summary of observed structured discovery, permission, tool-result, marker, and
+ terminal shapes; it is not an ordered raw ACP capture. The observed shapes
+ include a connected multi-tool catalog and an unrelated `kiro_power` failure
+ after the successful prompt-response boundary. This is grammar evidence from
+ one disposable observation, not the
+final five-plugin-by-three-client launch matrix. Do not claim 15/15/PASS until
+the external live matrix supplies all 15 required results.
+
+After human activation, repeat post-add doctor without a source operand and
+info with 0.1.14's installed identity syntax: the installed plugin name plus
+its exact `--target`. There is no receipt-export or automatic client-activation
+operation in agentplugins 0.1.14:
+
+```sh
+for client in codex cursor kiro; do
+  seed="/root/profile-seeds/$client"
+  evidence="/root/profile-seed-evidence/$client"
+  client_path="/root/profile-seed-path/$client"
+  set -- env HOME="$seed" XDG_CONFIG_HOME="$seed/.config" \
+    XDG_CACHE_HOME="$seed/.cache" AGENTPLUGINS_HOME="$seed/.agentplugins" PATH="$client_path"
+  if [ "$client" = codex ]; then set -- "$@" CODEX_HOME="$seed/.codex"; fi
+  for plugin in agent-code-navigator context7 cloudflare-docs chrome-devtools notion; do
+    "$@" "$AGENTPLUGINS" doctor --format json \
+      >"$evidence/post-doctor/$plugin.json"
+    "$@" "$AGENTPLUGINS" info "$plugin" --target "$client" --format json \
+      >"$evidence/info/$plugin.json"
+  done
+done
+```
+
+Freeze `/root/uap-observer-matrix.json` first as an object containing only the
+final `matrix` array, root-owned mode `0400`. For each client, create
+`/root/native-config-$client.json` as a JSON object
+mapping each exact hero name to the profile-relative regular file the pinned
+client actually reads for that hero. Do not guess paths, hand-write tuple
+receipts, or treat name/status output as tuple binding. The repository sealer
+checks each manager record against the approved matrix tuple and each native
+config's containment, ownership, mode, link count, and SHA-256. It emits the
+manager receipt and immutable native projection consumed by the adapter:
+
+```sh
+install -d -o root -g root -m 0700 /root/projection-digests
+for client in codex cursor kiro; do
+  python3 "$SOURCE_ROOT/deploy/uap-observer-seal-profile.py" \
+    --client "$client" --root-owned-seed "/root/profile-seeds/$client" \
+    --matrix-file /root/uap-observer-matrix.json \
+    --manager-add-directory "/root/profile-seed-evidence/$client/add" \
+    --manager-info-directory "/root/profile-seed-evidence/$client/info" \
+    --post-doctor-directory "/root/profile-seed-evidence/$client/post-doctor" \
+    --native-config-map "/root/native-config-$client.json" --digest-only \
+    >"/root/projection-digests/$client.sha256"
+done
+PYTHONPATH="$SOURCE_ROOT" python3 - /root/uap-observer-adapter-config.template.json \
+  /root/uap-observer-adapter-config.json /root/projection-digests \
+  "$SOURCE_ROOT/deploy/uap-observer-adapter-config.schema.json" <<'PY'
+import json, math, os, pathlib, re, sys, tempfile
+import jsonschema
+source, target, digests, schema_path = map(pathlib.Path, sys.argv[1:])
+def strict_load(path):
+    def pairs(items):
+        value, folded = {}, set()
+        for key, child in items:
+            normalized = key.casefold()
+            if key in value or normalized in folded:
+                raise SystemExit(f"{path}: duplicate or case-confusable JSON member")
+            value[key] = child; folded.add(normalized)
+        return value
+    def constant(value): raise SystemExit(f"{path}: non-finite JSON number {value}")
+    def finite(value):
+        decoded = float(value)
+        if not math.isfinite(decoded): constant(value)
+        return decoded
+    return json.loads(path.read_bytes(), object_pairs_hook=pairs,
+                      parse_constant=constant, parse_float=finite)
+value = strict_load(source)
+schema = strict_load(schema_path)
+clients = value.get("clients") if isinstance(value, dict) else None
+if (type(value.get("schema_version")) is not int or value["schema_version"] != 1
+    or not isinstance(clients, dict) or set(clients) != {"codex", "cursor", "kiro"}
+    or any(not isinstance(record, dict) or "native_projection" in record
+           for record in clients.values())):
+    raise SystemExit("reviewed pre-projection template is not the exact unprojected schema")
+for client in ("codex", "cursor", "kiro"):
+    digest = (digests / f"{client}.sha256").read_text(encoding="ascii").strip()
+    if re.fullmatch(r"sha256:[a-f0-9]{64}", digest) is None:
+        raise SystemExit(f"{client}: projection digest is malformed")
+    value["clients"][client]["native_projection"] = {
+        "path": f"/var/lib/uap-observer/proofs/{client}/native-projection.json",
+        "sha256": digest,
+    }
+jsonschema.validate(value, schema)
+body = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+fd, temporary = tempfile.mkstemp(prefix=".adapter.", dir=target.parent)
+try:
+    os.fchmod(fd, 0o400)
+    view = memoryview(body)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0: raise OSError("short adapter-config write")
+        view = view[written:]
+    os.fsync(fd)
+finally:
+    os.close(fd)
+os.replace(temporary, target)
+directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+try: os.fsync(directory)
+finally: os.close(directory)
+PY
+python3 -m jsonschema -i /root/uap-observer-adapter-config.json \
+  "$SOURCE_ROOT/deploy/uap-observer-adapter-config.schema.json"
+for client in codex cursor kiro; do
+  sealed_digest="$(python3 "$SOURCE_ROOT/deploy/uap-observer-seal-profile.py" \
+    --client "$client" --root-owned-seed "/root/profile-seeds/$client" \
+    --matrix-file /root/uap-observer-matrix.json \
+    --adapter-config /root/uap-observer-adapter-config.json \
+    --manager-add-directory "/root/profile-seed-evidence/$client/add" \
+    --manager-info-directory "/root/profile-seed-evidence/$client/info" \
+    --post-doctor-directory "/root/profile-seed-evidence/$client/post-doctor" \
+    --native-config-map "/root/native-config-$client.json")"
+  test "$sealed_digest" = "$(cat "/root/projection-digests/$client.sha256")"
+done
+```
+
+Real 0.1.14 info JSON reports `data.source` as `repository//path` (without the
+revision in that display field). Its `package_revision` has exactly `version`,
+`resolved_revision`, `tree_digest`, and `manifest_digest`; it does not repeat
+distribution metadata. The sealer checks those fields and the displayed source
+against the approved tuple. Distribution ID, kind, and release sequence come
+only from that approved tuple and are copied into the sealed receipt.
+After all three projections are sealed, remove the temporary
+`/root/profile-seed-path` tree; it is not part of a profile seed or deployment
+input.
+
+The final adapter config names each projection's eventual protected path under
+`/var/lib/uap-observer/proofs/<client>` and exact SHA-256. This is intentionally
+two phase: `--digest-only` consumes only the frozen matrix/add/info/post-doctor,
+native-map, and seed inputs; insert those printed digests into the final config,
+schema-validate and freeze that config; then run the writing phase from unchanged
+inputs against the final config and require the same digest. A
+mismatch requires correction and re-review; never rewrite generated bytes to
+make a digest match. Provisioning moves `.uap-observer-proof` out of the copied
+profile, installs its root-owned receipt, projection, and authoritative
+native-config snapshots as client-group-readable `0440` files below a
+root-owned non-writable parent,
+and leaves no proof material writable or renameable by the client.
 
 The installed profiles are isolated at
-`/var/lib/uap-observer/profiles/{codex,cursor,kiro}` with client-specific
-ownership, `0700` directories, and `0600` files. The helper refuses a non-empty
+`/var/lib/uap-observer/profiles/{codex,cursor,kiro}`. Provisioning changes the
+profile root and every directory on an active native-config path to
+`root:<client-group>` mode `0510`, and every active native config to root-owned
+mode `0440`. Those directories are the non-renameable boundary. Pre-existing
+authentication and state files and their dedicated subdirectories stay
+client-owned (`0600`/`0700`); no other seed content may be client-writable. The
+runner mounts the profile tree read-only and remounts only the reviewed
+per-client `.auth` and `.state` roots writable through optional exact binds.
+All `.config`, client-native config, cache, and other profile paths remain
+read-only in the deployed namespace. The helper refuses a non-empty
 destination. Do not use any seed exported from a Mac or normal workstation,
 and never bake credentials into the source checkout or protected input tree.
 
-The operator must provide the proxy allowlist as an immutable deployment input,
+The adapter config's `egress_hosts` is the canonical reviewed contract covering
+every exact MCP, observer, GitHub, client, and provider FQDN needed by this
+deployment. The operator must provide the proxy allowlist as an immutable deployment input,
 not derive it during installation. It is canonical JSON with exactly
 `schema_version` set to `1` and a non-empty `hosts` array of bytewise-sorted,
 unique, exact lowercase ASCII FQDNs. The JSON has no extra keys or insignificant
 whitespace and ends with one LF. Hosts have no ports, URLs, IP literals, leading
-dots, or wildcards. The set must equal the HTTPS hosts in the final adapter and
-observer configs; the installer checks that equality. Review the current
+dots, or wildcards. Its `hosts` array must equal adapter `egress_hosts` byte for
+byte. Every matrix endpoint, ChatGPT MCP endpoint, observer JWKS/API endpoint,
+and GitHub release host must be included; the installer checks that required
+subset and exact allowlist equality. Provider hosts can therefore be added
+without falsifying matrix endpoints. Review the current
 provider-owned host list for Codex, Cursor, Kiro, GitHub, and the configured
 ChatGPT MCP before approving it; redirects and CDN hosts are separate exact
 entries and are never implicitly trusted. Record this exact tuple in the change
@@ -250,10 +664,10 @@ each isolated profile with the installed helper's two-pass digest check:
 
 ```sh
 for client in codex cursor kiro; do
-  digest="$(/usr/local/libexec/uap-observer-provision-profile \
+  digest="$(/opt/uap-observer-current/libexec/uap-observer-provision-profile \
     --client "$client" --root-owned-seed "/root/profile-seeds/$client" \
     --seed-digest show)"
-  /usr/local/libexec/uap-observer-provision-profile \
+  /opt/uap-observer-current/libexec/uap-observer-provision-profile \
     --client "$client" --root-owned-seed "/root/profile-seeds/$client" \
     --seed-digest "$digest"
 done
@@ -298,12 +712,12 @@ and key ID match the repository variables.
 Before approving the protected job, obtain its challenge, run ID/attempt,
 catalog SHA, canonical request digest, scenario-contract digest, and fresh
 pseudonymous identity/root IDs through the release-coordinator channel. Create
-the root consent record with `/usr/local/libexec/uap-observer-attest-consent`;
+the root consent record with `/opt/uap-observer-current/libexec/uap-observer-attest-consent`;
 choose only `read-only` or `synthetic` and `fresh-dedicated-identity` (or `none`)
 as true for this disposable run.
 
 ```sh
-/usr/local/libexec/uap-observer-attest-consent \
+/opt/uap-observer-current/libexec/uap-observer-attest-consent \
   --challenge <64-hex> --run-id <decimal> --run-attempt <decimal> \
   --catalog-sha <40-hex> --request-digest sha256:<64-hex> \
   --scenario-contract-digest sha256:<64-hex> \
@@ -315,14 +729,14 @@ as true for this disposable run.
 For ChatGPT, use only the configured dedicated test app and the public
 Cloudflare Docs MCP. After visually confirming consent, UI activation, the
 read-only runtime result, no secrets, and no real-project access, run
-`/usr/local/libexec/uap-observer-attest-chatgpt` with the exact challenge,
+`/opt/uap-observer-current/libexec/uap-observer-attest-chatgpt` with the exact challenge,
 run/attempt, app ID, and request digest. Create this human attestation no more
 than **five minutes before** the observer will consume it; never pre-stage it.
 Pass `yes` only for facts the human actually observed. Both helpers use
 exclusive, challenge-specific files and intentionally accept no free-form text.
 
 ```sh
-/usr/local/libexec/uap-observer-attest-chatgpt \
+/opt/uap-observer-current/libexec/uap-observer-attest-chatgpt \
   --challenge <64-hex> --run-id <decimal> --run-attempt <decimal> \
   --app-id plugin_asdk_app_<32-hex> --request-digest sha256:<64-hex> \
   --consent yes --ui-activation yes --runtime-observed yes \

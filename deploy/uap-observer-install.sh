@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 5443ad8519eb8903fab36536c5f27052f210d6f3ea344a2761f5cbcaa96a854d
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 67eee68b5b47c85076c9fe1f1d9ee91e888d225a5b81603eae9500a617862df1
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256 EGRESS_ALLOWLIST EGRESS_ALLOWLIST_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=8a155804cccd882a344a0434e4f7e6bd36b717a5e120d1a29c201cf7d5db1d0b
+runtime_manifest_digest=7fff87a23a3c9669fcec412a2061e76778a5a88bfa98e0a14cb2fdbb7555439b
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -51,8 +51,8 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" "$untrusted_egress_allowlist" \
-    8a791b21d3c13cbb858e8a043a3fefe0c593dba0d6c0522fe5e9df1aa55a815a \
-    a3710e41c8b0482df46d394243d1124f79371ba00e21abf2ce62ef3b927691ed \
+    8768c618f51808ddaf2ab9e4b6f136ae428880d0d31dbd99f05bd206d9512486 \
+    8f52501c5fc67df6fdb15a3752bbc787f370f6aac193dcf92cf834e0241e1ad6 \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state "$installed_closure"
   observer_validate_protected_inputs "$installed_closure"
@@ -113,8 +113,8 @@ caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
 egress_proxy_source="$source_root/deploy/uap-observer-egress-proxy.py"
-runner_digest=8a791b21d3c13cbb858e8a043a3fefe0c593dba0d6c0522fe5e9df1aa55a815a
-adapter_digest=a3710e41c8b0482df46d394243d1124f79371ba00e21abf2ce62ef3b927691ed
+runner_digest=8768c618f51808ddaf2ab9e4b6f136ae428880d0d31dbd99f05bd206d9512486
+adapter_digest=8f52501c5fc67df6fdb15a3752bbc787f370f6aac193dcf92cf834e0241e1ad6
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
 test -f "$runner_source"
@@ -183,7 +183,7 @@ done
 
 install -d -o root -g root -m 0711 /var/lib/uap-observer
 install -d -o uap-observer -g uap-observer -m 0700 /var/lib/uap-observer/state
-install -d -o root -g root -m 0711 /var/lib/uap-observer/jobs /var/lib/uap-observer/workspaces /var/lib/uap-observer/profiles
+install -d -o root -g root -m 0711 /var/lib/uap-observer/jobs /var/lib/uap-observer/workspaces /var/lib/uap-observer/profiles /var/lib/uap-observer/proofs
 for client in codex cursor kiro; do
   install -d -o "uap-observer-$client" -g "uap-observer-$client" -m 0700 "/var/lib/uap-observer/profiles/$client" "/var/lib/uap-observer/workspaces/$client"
 done
@@ -202,7 +202,7 @@ test ! -e /opt/uap-observer-venv.new
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m venv /opt/uap-observer-venv.new
 PYTHONDONTWRITEBYTECODE=1 /opt/uap-observer-venv.new/bin/python -B -m pip install --no-compile --require-hashes --no-deps -r "$source_root/observer/requirements.lock"
 PYTHONDONTWRITEBYTECODE=1 /opt/uap-observer-venv.new/bin/python -B -m jsonschema -i "$adapter_config" "$source_root/deploy/uap-observer-adapter-config.schema.json"
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -B -c 'import json,sys; from observer.fixed_adapters import validate_config; validate_config(json.load(open(sys.argv[1], encoding="utf-8")))' "$adapter_config"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -B -c 'import sys; from observer.fixed_adapters import strict_json_loads,validate_config; validate_config(strict_json_loads(open(sys.argv[1], "rb").read()))' "$adapter_config"
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$source_root" /opt/uap-observer-venv.new/bin/python -B -c 'import sys; from pathlib import Path; from observer.config import Config; Config.load(Path(sys.argv[1]))' "$observer_config"
 observer_remove_python_bytecode /opt/uap-observer-venv.new
 
@@ -210,19 +210,40 @@ observer_remove_python_bytecode /opt/uap-observer-venv.new
 # hosts reachable from the fixed observer and adapter configuration. DNS is
 # intentionally deferred to the gateway for every new tunnel.
 PYTHONDONTWRITEBYTECODE=1 python3 -B - "$adapter_config" "$observer_config" "$stage_root/egress-allowlist.json" <<'PY'
-import json,sys
+import json,math,sys
 from pathlib import Path
 from urllib.parse import urlsplit
-adapter=json.load(open(sys.argv[1], encoding="utf-8"))
-observer=json.load(open(sys.argv[2], encoding="utf-8"))
+def strict(path):
+    def pairs(items):
+        value={}
+        folded=set()
+        for key, child in items:
+            normalized=key.casefold()
+            if key in value or normalized in folded:
+                raise ValueError("duplicate or case-confusable JSON member")
+            value[key]=child
+            folded.add(normalized)
+        return value
+    def constant(value): raise ValueError("non-finite JSON number")
+    def floating(value):
+        decoded=float(value)
+        if not math.isfinite(decoded): raise ValueError("non-finite JSON number")
+        return decoded
+    with open(path,"rb") as stream:
+        return json.loads(stream.read(),object_pairs_hook=pairs,parse_constant=constant,parse_float=floating)
+adapter=strict(sys.argv[1])
+observer=strict(sys.argv[2])
 urls=[item["endpoint"] for item in adapter["matrix"]]
 urls += [adapter["chatgpt"]["mcp_endpoint"], observer["jwks_url"], observer["github_api_url"]]
-host_values={urlsplit(url).hostname for url in urls}
-if None in host_values or any(urlsplit(url).scheme != "https" or urlsplit(url).port not in (None,443) for url in urls):
+required_hosts={urlsplit(url).hostname for url in urls} | {"github.com"}
+if None in required_hosts or any(urlsplit(url).scheme != "https" or urlsplit(url).port not in (None,443) for url in urls):
     raise SystemExit("observer egress hostname is invalid")
-allowlist=json.load(open(sys.argv[3],encoding="utf-8"))
-if allowlist.get("schema_version") != 1 or host_values != set(allowlist.get("hosts", [])):
-    raise SystemExit("egress allowlist differs from the exact fixed configured endpoints")
+egress_hosts=adapter.get("egress_hosts")
+if not isinstance(egress_hosts,list) or not required_hosts <= set(egress_hosts):
+    raise SystemExit("adapter egress_hosts omits a configured endpoint, JWKS, or GitHub host")
+allowlist=strict(sys.argv[3])
+if type(allowlist.get("schema_version")) is not int or allowlist.get("schema_version") != 1 or allowlist.get("hosts") != egress_hosts:
+    raise SystemExit("egress allowlist differs from exact adapter egress_hosts")
 PY
 
 test ! -e /opt/uap-observer-runtime.new

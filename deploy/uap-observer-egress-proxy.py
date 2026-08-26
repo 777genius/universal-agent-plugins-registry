@@ -54,7 +54,7 @@ def load_allowlist(path: Path) -> frozenset[str]:
         value = json.loads(encoded)
     except (UnicodeError, json.JSONDecodeError):
         raise ProxyError("allowlist is not valid JSON") from None
-    if not isinstance(value, dict) or set(value) != {"schema_version", "hosts"} or value["schema_version"] != 1:
+    if not isinstance(value, dict) or set(value) != {"schema_version", "hosts"} or type(value["schema_version"]) is not int or value["schema_version"] != 1:
         raise ProxyError("allowlist object is not canonical")
     hosts = value["hosts"]
     if not isinstance(hosts, list) or not 1 <= len(hosts) <= MAX_HOSTS:
