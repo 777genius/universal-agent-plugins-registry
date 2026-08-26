@@ -4165,6 +4165,7 @@ class FixedAdapterContractTests(unittest.TestCase):
                     "cursor", stream, "resolve-library-id", "context7", marker,
                 ))
 
+    @requires_disposable_observer_host
     def test_native_projection_requires_exact_tuple_contained_native_file_and_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             profile = Path(temporary) / "profile"
@@ -4561,6 +4562,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             finally:
                 fixed_adapters.MAX_STDOUT = original
 
+    @requires_disposable_observer_host
     def test_fixed_client_argv_uses_disposable_root_and_expected_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -4603,6 +4605,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             self.assertEqual(argv[1:4], ["exec", "--skip-git-repo-check", "--json"])
             self.assertNotIn(str(profile), argv)
 
+    @requires_disposable_observer_host
     def test_fixed_client_rejects_prompt_echo_without_tool_event(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -4627,6 +4630,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "successful exact tool invocation"):
                 fixed_adapters.invoke(item, "context7", "codex", "a" * 64, workspace, os.geteuid(), approved)
 
+    @requires_disposable_observer_host
     def test_cursor_invocation_uses_stream_json_and_requires_healthy_after_approval(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -4664,6 +4668,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             self.assertEqual(marker["client_version"], "cursor-fixture-v1")
             self.assertEqual(argv[1:4], ["--print", "--output-format", "stream-json"])
 
+    @requires_disposable_observer_host
     def test_profile_sealer_derives_receipt_and_projection_from_manager_info_and_native_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -5100,6 +5105,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             set(revision), {"version", "resolved_revision", "tree_digest", "manifest_digest"},
         )
 
+    @requires_disposable_observer_host
     def test_profile_sealer_native_config_bound_is_exact_and_mutation_safe(self) -> None:
         helper = Path(__file__).parents[2] / "deploy" / "uap-observer-seal-profile.py"
         specification = importlib.util.spec_from_file_location("bounded_profile_sealer", helper)
@@ -5166,6 +5172,7 @@ class FixedAdapterContractTests(unittest.TestCase):
                 fixed_adapters.isolation_proof = original_isolation
 
 
+@requires_disposable_observer_host
 class ProfileProvisioningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
