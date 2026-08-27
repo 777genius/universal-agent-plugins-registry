@@ -703,6 +703,16 @@ class WorkflowContractTests(unittest.TestCase):
             "id-token": "write",
         })
 
+    def test_upstream_package_cohort_authenticates_exact_release_assets(self) -> None:
+        body = (ROOT / ".github/workflows/upstream-package-e2e.yml").read_text()
+        workflow = load(ROOT / ".github/workflows/upstream-package-e2e.yml")
+        self.assertEqual(workflow["permissions"], {"attestations": "read", "contents": "read"})
+        self.assertIn("AGENTPLUGINS_COMMIT: f4f5113c4176173c2ff3ca7e72c9fb71af1516b8", body)
+        self.assertIn("--pattern release-manifest.json", body)
+        self.assertIn('manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]', body)
+        self.assertEqual(body.count("gh attestation verify"), 1)
+        self.assertIn('--source-digest "$AGENTPLUGINS_COMMIT"', body)
+
     def test_nested_launch_workflow_permissions_never_escalate(self) -> None:
         publication = load(DIRECTORY_PUBLICATION)
         live = load(LIVE)

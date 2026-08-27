@@ -4,10 +4,12 @@ on:
   workflow_dispatch:
 
 permissions:
+  attestations: read
   contents: read
 
 env:
   AGENTPLUGINS_VERSION: "0.1.17"
+  AGENTPLUGINS_COMMIT: f4f5113c4176173c2ff3ca7e72c9fb71af1516b8
 
 jobs:
   install-lifecycle:
@@ -52,10 +54,34 @@ jobs:
             --repo 777genius/plugin-kit-ai \
             --pattern "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
             --pattern checksums.txt \
+            --pattern release-manifest.json \
             --dir "$RUNNER_TEMP/release"
           chmod +x "$RUNNER_TEMP/release/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
           cd "$RUNNER_TEMP/release"
           sha256sum --check checksums.txt --ignore-missing
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("release-manifest.json").read_text())
+          asset = manifest["assets"]["linux-amd64"]
+          binary = Path(asset["file"])
+          assert manifest["schema_version"] == 2
+          assert manifest["tag"] == f"agentplugins-v{os.environ['AGENTPLUGINS_VERSION']}"
+          assert manifest["version"] == os.environ["AGENTPLUGINS_VERSION"]
+          assert manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]
+          assert asset["file"] == f"agentplugins_{os.environ['AGENTPLUGINS_VERSION']}_linux_amd64"
+          assert asset["size"] == binary.stat().st_size
+          assert asset["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+          PY
+          for asset in "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
+            gh attestation verify "$asset" \
+              --repo 777genius/plugin-kit-ai \
+              --signer-workflow 777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml \
+              --source-digest "$AGENTPLUGINS_COMMIT"
+          done
           test "$(./agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 version)" = "agentplugins ${AGENTPLUGINS_VERSION}"
       - name: Install, inspect, and remove from three disposable client homes
         env:
