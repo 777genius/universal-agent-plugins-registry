@@ -185,9 +185,9 @@ import run_launch_evidence_e2e
 
     def test_stable_version_floor(self) -> None:
         for version in ("0.1.6", "0.1.8", "0.1.13", "0.1.14"):
-            with self.assertRaisesRegex(ValueError, "0.1.15 or newer"):
+            with self.assertRaisesRegex(ValueError, "0.1.16 or newer"):
                 e2e.parse_stable_version(version)
-        self.assertEqual(e2e.parse_stable_version("0.1.15"), (0, 1, 15))
+        self.assertEqual(e2e.parse_stable_version("0.1.16"), (0, 1, 16))
         self.assertEqual(e2e.parse_stable_version("1.0.0"), (1, 0, 0))
         with self.assertRaisesRegex(ValueError, "exact semantic version"):
             e2e.parse_stable_version("latest")
@@ -262,7 +262,7 @@ import run_launch_evidence_e2e
     def test_disposable_lifecycle_evidence_binds_every_replay_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "agentplugins"
-            binary.write_text("#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n")
+            binary.write_text("#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n")
             binary.chmod(0o700)
             commands = (
                 ["add", "./package-plugin-data", "--target", "cursor", "--format", "json"],
@@ -327,7 +327,7 @@ import run_launch_evidence_e2e
                     )
         self.assertEqual(record["source_hash_before"], record["source_hash_after"])
         self.assertEqual(len(record["commands"]), 7)
-        self.assertEqual(record["binary"]["version_stdout"], "agentplugins 0.1.15")
+        self.assertEqual(record["binary"]["version_stdout"], "agentplugins 0.1.16")
         self.assertEqual(record["binary"]["version_argv"], ["<authenticated-binary-fd>", "version"])
         self.assertEqual(record["binary"]["version_exit"], 0)
         self.assertEqual(
@@ -393,7 +393,7 @@ import run_launch_evidence_e2e
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
@@ -424,7 +424,7 @@ import run_launch_evidence_e2e
                 "#!/usr/bin/python3\n"
                 "import os, sys, time\n"
                 "if sys.argv[1:] == ['version']:\n"
-                " print('agentplugins 0.1.15')\n"
+                " print('agentplugins 0.1.16')\n"
                 "else:\n"
                 " open(os.environ['PHASE6_SWAP_SIGNAL'], 'wb').close()\n"
                 " while not os.path.exists(os.environ['PHASE6_SWAP_RELEASE']): time.sleep(0.01)\n"
@@ -473,7 +473,7 @@ import run_launch_evidence_e2e
     def test_authenticated_binary_session_fails_closed_on_early_close_and_incomplete_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
@@ -528,7 +528,7 @@ import run_launch_evidence_e2e
             ):
                 observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
 
-            good = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            good = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(good)
             with (
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(good)),
@@ -545,7 +545,7 @@ import run_launch_evidence_e2e
     def test_authenticated_binary_execution_uses_only_an_integer_fd_authority(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             marker = root / "exec-authority"
             with (
@@ -633,7 +633,7 @@ import run_launch_evidence_e2e
     def test_authenticated_binary_fd_exec_unavailable_fails_enotsup_without_path_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
                 mock.patch.object(observer.platform, "machine", return_value="unsupported-test-arch"),
@@ -713,7 +713,7 @@ def _closed(fd):
 with tempfile.TemporaryDirectory() as temporary:
     directory = pathlib.Path(temporary)
     binary = directory / "agentplugins"
-    body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+    body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
     binary.write_bytes(body); binary.chmod(0o700)
     module.RELEASED_AGENTPLUGINS_0_1_14_SIZE = len(body)
     module.RELEASED_AGENTPLUGINS_0_1_14_SHA256 = hashlib.sha256(body).hexdigest()
@@ -782,7 +782,7 @@ with tempfile.TemporaryDirectory() as temporary:
     def test_authenticated_binary_multithreaded_observer_fails_closed_before_fork(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             release = threading.Event()
             started = threading.Event()
@@ -820,7 +820,7 @@ with tempfile.TemporaryDirectory() as temporary:
     def test_authenticated_binary_modify_restore_and_replacement_epochs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
@@ -861,7 +861,7 @@ with tempfile.TemporaryDirectory() as temporary:
     def test_authenticated_binary_all_execute_failures_close_authority_and_session(self) -> None:
         def make_session(root: Path) -> tuple[observer.AuthenticatedBinaryExecutionSession, Path, bytes]:
             binary = root / "agentplugins"
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             return observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root), binary, body
 
@@ -877,7 +877,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.15\\n'\n"
+            body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             with (
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
@@ -932,7 +932,7 @@ with tempfile.TemporaryDirectory() as temporary:
             body = (
                 "#!/usr/bin/python3\n"
                 "import sys, time\n"
-                "print('agentplugins 0.1.15') if sys.argv[1:] == ['version'] else time.sleep(60)\n"
+                "print('agentplugins 0.1.16') if sys.argv[1:] == ['version'] else time.sleep(60)\n"
             ).encode()
             binary.write_bytes(body); binary.chmod(0o700)
             supplied = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
@@ -965,7 +965,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 "#!/usr/bin/python3\n"
                 "import os, sys\n"
                 "if sys.argv[1:] == ['version']:\n"
-                " print('agentplugins 0.1.15')\n"
+                " print('agentplugins 0.1.16')\n"
                 "else:\n"
                 " os.write(1, (os.getcwd() + '\\n' + os.environ['PHASE6_FD_ENV'] + '\\n').encode() + b'o' * 200000)\n"
                 " os.write(2, b'e' * 200000)\n"
@@ -1299,7 +1299,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     def test_github_attestation_pins_release_identity_predicate_subject_and_hosted_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            asset = Path(tmp) / "agentplugins_0.1.15_linux_amd64"
+            asset = Path(tmp) / "agentplugins_0.1.16_linux_amd64"
             asset.write_bytes(b"native")
             digest = "sha256:" + hashlib.sha256(asset.read_bytes()).hexdigest()
             statement = [{"verificationResult": {"statement": {
@@ -1340,11 +1340,11 @@ with tempfile.TemporaryDirectory() as temporary:
 
     def test_native_observation_schema_accepts_exact_producer_attestation(self) -> None:
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
-        asset = "agentplugins_0.1.15_linux_amd64"
+        asset = "agentplugins_0.1.16_linux_amd64"
         digest = "sha256:" + "a" * 64
         observation = {
             "schema_version": 1, "kind": "binary", "os": "linux", "architecture": "amd64",
-            "node_major": None, "executed": True, "version": "0.1.15",
+            "node_major": None, "executed": True, "version": "0.1.16",
             "catalog_repository": e2e.TRUSTED_CATALOG_REPOSITORY, "catalog_sha": "b" * 40,
             "cli_release_repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
             "cli_release_tag": e2e.TRUSTED_CLI_RELEASE_TAG,
@@ -1385,7 +1385,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     def test_npm_installed_executable_must_equal_authenticated_native_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            executable = Path(tmp) / "0.1.15" / "linux-amd64" / "agentplugins"
+            executable = Path(tmp) / "0.1.16" / "linux-amd64" / "agentplugins"
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"prints-correct-version-but-is-not-release-binary")
             executable.chmod(0o700)
@@ -1431,13 +1431,13 @@ with tempfile.TemporaryDirectory() as temporary:
         config = e2e.read_production_config()
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
-        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.15")
+        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.16")
         self.assertEqual(config["cli_release_commit"], e2e.TRUSTED_CLI_RELEASE_COMMIT)
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
-        self.assertEqual(config["cli_release_manifest_digest"], "sha256:cb50b4a6c48627ab2653c28d4f097d9414171206816c80c0045ea57df2643233")
-        self.assertEqual(config["cli_release_checksums_digest"], "sha256:ab92dcb33f6109b03ed29971f0badcc37f8c9babfdcad92dad6566b7bf929094")
-        self.assertEqual(config["npm_facade_version"], "0.1.15")
-        self.assertEqual(config["npm_facade_integrity"], "sha512-Ju9kXpxp0KCJGYzwlS9Ev0aSfsT7tzr3wT5FTZAfksX03esBlxcyeWH6Xsh3fKPei7LSbMgTaGEzlU4h7bGA2g==")
+        self.assertEqual(config["cli_release_manifest_digest"], "sha256:1e7300899df0b98b181cfdfb6b08fd34cb57b64e500649538afe8d48ea0b83e0")
+        self.assertEqual(config["cli_release_checksums_digest"], "sha256:1a92ed016f364d89dda04645b338302b1c0a8f1f90032d001530bb3cf8cde4b1")
+        self.assertEqual(config["npm_facade_version"], "0.1.16")
+        self.assertEqual(config["npm_facade_integrity"], "sha512-xIEArMM9P0/zSQUi5K5KhN53SUwY81lOXqZtQhx6yuijGbn/ceIRo4k6EvKC46M/ySXHARfno9M8OD0AhKYuFQ==")
         self.assertEqual(config["directory_source_digest"], e2e.sha256_file(ROOT / "registry/directory.json"))
         self.assertEqual(config["scenario_contract_digest"], e2e.sha256_file(e2e.SCENARIOS))
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
@@ -1962,8 +1962,8 @@ with tempfile.TemporaryDirectory() as temporary:
                 "package_version": "1.0.0", "source_repository": "cloudflare/cloudflare-docs",
                 "source_revision": "b" * 40, "source_path": "agent-plugin",
                 "snapshot_sequence": 1, "snapshot_digest": digest, "binary_digest": digest,
-                "dependency_identity": "registered-app", "installer_version": "0.1.15",
-                "adapter_version": "0.1.15", "client_version": "chatgpt-app-v1",
+                "dependency_identity": "registered-app", "installer_version": "0.1.16",
+                "adapter_version": "0.1.16", "client_version": "chatgpt-app-v1",
                 "os": "linux", "architecture": "amd64", "observed_at": "2026-08-23T00:00:00Z",
             },
             "details": {
@@ -2011,7 +2011,7 @@ with tempfile.TemporaryDirectory() as temporary:
         }
         harness.snapshot_digest = "sha256:" + "c" * 64
         harness.binary_digest = "sha256:" + "d" * 64
-        harness.expected_version = "0.1.15"
+        harness.expected_version = "0.1.16"
         commands = [[operation, "context7", "--target", "codex,cursor,kiro", "--format", "json"] for operation in ("add", "update", "repair", "remove")]
         acquisition = {
             "acquisition_id": "fetch-1", "acquisition_count": 1,
@@ -2183,7 +2183,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 },
                 "snapshot_sequence": 1, "snapshot_digest": "sha256:" + "c" * 64,
                 "directory_digest": "sha256:" + "c" * 64,
-                "binary_digest": "sha256:" + "d" * 64, "expected_version": "0.1.15",
+                "binary_digest": "sha256:" + "d" * 64, "expected_version": "0.1.16",
             }
             with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}), mock.patch.object(
                 observer, "traced", side_effect=invoke,
@@ -2540,7 +2540,7 @@ print((fixtures / name).read_text(), end="")
             context = {
                 "release": {"product_id": "context7", "tree_digest": "sha256:" + "a" * 64, "manifest_digest": "sha256:" + "b" * 64, "distribution_id": "upstash/context7", "distribution_kind": "upstream", "release_sequence": 1, "package_version": "1.0.0", "source_repository": "upstash/context7", "source_revision": "1" * 40, "source_path": "plugins/agent-plugins/context7"},
                 "snapshot_sequence": 1, "directory_digest": "sha256:" + "c" * 64,
-                "binary_digest": "sha256:" + "d" * 64, "expected_version": "0.1.15",
+                "binary_digest": "sha256:" + "d" * 64, "expected_version": "0.1.16",
             }
             with mock.patch.dict(os.environ, {"HOME": str(home), "AGENTPLUGINS_HOME": str(manager)}, clear=False):
                 passed, value = observer.lifecycle(binary, "context7", ("codex", "cursor", "kiro"), workspace, "challenge", context, include_repair=True)
@@ -2627,12 +2627,12 @@ print((fixtures / name).read_text(), end="")
             ("windows-arm64", "windows", "arm64", ".exe"),
         )
         assets = {
-            key: {"file": f"agentplugins_0.1.15_{os_name}_{arch}{suffix}", "sha256": f"{index + 1:064x}", "size": index + 1}
+            key: {"file": f"agentplugins_0.1.16_{os_name}_{arch}{suffix}", "sha256": f"{index + 1:064x}", "size": index + 1}
             for index, (key, os_name, arch, suffix) in enumerate(slots)
         }
         manifest = {
             "schema_version": 2, "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
-            "version": "0.1.15", "assets": assets,
+            "version": "0.1.16", "assets": assets,
         }
         asset = assets["linux-amd64"]
         digest = "sha256:" + asset["sha256"]
@@ -4615,7 +4615,7 @@ else: raise SystemExit(2)
 
     def test_journey_aggregation_requires_accepted_and_rejected_fork_artifacts(self) -> None:
         harness = self.fixture_harness()
-        harness.cli_version = "0.1.15"
+        harness.cli_version = "0.1.16"
         accepted = {
             "fork_created": True, "branch_submission": True, "submission_validated": True,
             "publication_performed": False, "pr_created": False, "network_performed": False,
@@ -4635,7 +4635,7 @@ else: raise SystemExit(2)
 
     def test_direct_external_journey_requires_add_info_and_remove(self) -> None:
         harness = self.fixture_harness()
-        harness.cli_version = "0.1.15"
+        harness.cli_version = "0.1.16"
         digest = e2e.package_digest(e2e.EXTERNAL_PACKAGE)
         command_results = [
             ("passed", {"package_digest": digest, "client_version": "cursor-test-v1", "mutated": True, "_launch_command_trace": {"argv": ["add"]}}, "added"),
@@ -4686,7 +4686,7 @@ else: raise SystemExit(2)
         for label, expected_outcome, command_results in cases:
             with self.subTest(label=label):
                 harness = self.fixture_harness()
-                harness.cli_version = "0.1.15"
+                harness.cli_version = "0.1.16"
                 with mock.patch.object(harness, "command", side_effect=command_results) as command, mock.patch.object(
                     harness, "driven_scenario", side_effect=[("passed", accepted, "accepted"), ("passed", rejected, "rejected")],
                 ):
