@@ -10,9 +10,9 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from directory_publication import PublicationError, ed25519_private_key
-from discovery_publication import publish
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.directory_publication import PublicationError, ed25519_private_key
+from scripts.discovery_publication import publish
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")

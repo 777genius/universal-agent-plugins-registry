@@ -1216,6 +1216,18 @@ class DirectoryDomainTests(unittest.TestCase):
             with self.assertRaisesRegex(registry.RegistryError, "runtime identity does not match"):
                 registry.validate_locked_npm_runtime(package)
 
+    def test_locked_npm_runtime_rejects_non_string_dependency_version_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "context7"
+            shutil.copytree(registry.ROOT / "plugins" / "context7", package)
+            package_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package.json"
+            document = json.loads(package_path.read_text())
+            dependency = next(iter(document["dependencies"]))
+            document["dependencies"][dependency] = ["1.2.3"]
+            package_path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(registry.RegistryError, "one exact npm version"):
+                registry.validate_locked_npm_runtime(package)
+
     def test_locked_npm_runtime_binds_ignored_install_script_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "firebase"
@@ -1266,6 +1278,21 @@ class DirectoryDomainTests(unittest.TestCase):
             lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
             lock = json.loads(lock_path.read_text())
             lock["packages"]["node_modules/@sentry/node"]["version"] = "10.70.0"
+            lock_path.write_text(json.dumps(lock))
+            config_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "security override .* is not exact"):
+                registry.validate_locked_npm_runtime(package)
+
+    def test_locked_npm_runtime_rejects_malformed_override_entry_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "hubspot-developer"
+            shutil.copytree(registry.ROOT / "plugins" / "hubspot-developer", package)
+            lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
+            lock = json.loads(lock_path.read_text())
+            lock["packages"]["node_modules/@sentry/node"] = None
             lock_path.write_text(json.dumps(lock))
             config_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json"
             config = json.loads(config_path.read_text())

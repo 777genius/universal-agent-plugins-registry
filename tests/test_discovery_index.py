@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from scripts.build_bridges import PinnedRepository
 from scripts.build_discovery_index import (
     DiscoveryError,
+    GitHubAPI,
     SameOriginRedirect,
     build_candidate,
     discover_search_items,
@@ -170,8 +171,6 @@ class DiscoveryIndexTests(unittest.TestCase):
             handler.redirect_request(request, None, 302, "Found", {}, "https://attacker.example/token")
 
     def test_github_api_retries_transient_server_failure(self):
-        from scripts.build_discovery_index import GitHubAPI
-
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true}'
         api = GitHubAPI("test-token")
@@ -183,6 +182,23 @@ class DiscoveryIndexTests(unittest.TestCase):
         with mock.patch("scripts.build_discovery_index.time.sleep"):
             self.assertEqual(api.get("test"), {"ok": True})
         self.assertEqual(api.opener.open.call_count, 2)
+
+    def test_graphql_accepts_scoped_not_found_but_rejects_unrelated_partial_errors(self):
+        api = GitHubAPI("test-token")
+        api._request = mock.Mock(return_value={
+            "data": {"r0": None, "r1": {"nameWithOwner": "owner/repo"}},
+            "errors": [{"type": "NOT_FOUND", "path": ["r0"], "message": "Could not resolve"}],
+        })
+        self.assertEqual(api.graphql("query", {}), {
+            "r0": None, "r1": {"nameWithOwner": "owner/repo"},
+        })
+
+        api._request.return_value = {
+            "data": {"r0": None},
+            "errors": [{"type": "FORBIDDEN", "path": ["r0"], "message": "Forbidden"}],
+        }
+        with self.assertRaisesRegex(DiscoveryError, "GraphQL returned errors"):
+            api.graphql("query", {})
 
     def test_search_partitions_before_paginating_past_github_cap(self):
         items, partitions = discover_search_items(PartitionAPI(), "schema filename:plugin.json", 10)
@@ -255,6 +271,24 @@ class DiscoveryIndexTests(unittest.TestCase):
         self.assertEqual([len(call) for call in api.calls], [100, 2])
         self.assertEqual(set(states), set(repositories))
         self.assertTrue(all(state["available"] for state in states.values()))
+
+    def test_repository_lookup_preserves_github_owner_and_name_casing(self):
+        class CasingAPI:
+            def graphql(self, query: str, variables: dict[str, object]):
+                self.variables = variables
+                return {
+                    "r0": {
+                        "nameWithOwner": "MixedOwner/MixedRepo", "isPrivate": False, "isArchived": False,
+                        "stargazerCount": 1, "pushedAt": "2026-08-27T00:00:00Z",
+                        "updatedAt": "2026-08-27T00:00:00Z",
+                        "defaultBranchRef": {"target": {"oid": "a" * 40}},
+                    },
+                }
+
+        api = CasingAPI()
+        states = repository_states(api, ["MixedOwner/MixedRepo"])
+        self.assertEqual(api.variables, {"owner0": "MixedOwner", "name0": "MixedRepo"})
+        self.assertIn("MixedOwner/MixedRepo", states)
 
     def test_exact_head_package_is_validated_without_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -330,6 +364,33 @@ class DiscoveryIndexTests(unittest.TestCase):
         self.assertEqual(candidate["records"][0]["availability"], "unavailable")
         self.assertEqual(diagnostics[0]["kind"], "unavailable")
 
+    def test_mass_availability_drop_marks_candidate_partial(self):
+        class MissingBatchAPI:
+            @staticmethod
+            def graphql(query: str, variables: dict[str, object]):
+                count = len([key for key in variables if key.startswith("owner")])
+                return {f"r{index}": None for index in range(count)}
+
+        previous = []
+        for index in range(20):
+            record = candidate_record(f"{index:040x}")
+            record["repository"] = f"owner/repo-{index:02d}"
+            record["slug"] = f"discovery:owner/repo-{index:02d}//packages/demo"
+            previous.append(record)
+        candidate, diagnostics = build_candidate(
+            api=MissingBatchAPI(),
+            config={"schema_version": 1, "query": "schema", "maximum_file_size": 10,
+                    "maximum_records": 100, "seeds": []},
+            mode="refresh", generated_at="2026-08-27T06:00:00Z",
+            previous_records=previous,
+        )
+        self.assertFalse(candidate["complete"])
+        self.assertEqual(sum(record["availability"] == "available" for record in candidate["records"]), 0)
+        self.assertTrue(any(
+            item["kind"] == "scan_error" and "preserving the last-known-good index" in item["error"]
+            for item in diagnostics
+        ))
+
     def test_refresh_does_not_fetch_unchanged_package_bytes(self):
         previous = candidate_record("a" * 40)
         with mock.patch("scripts.build_discovery_index.PinnedRepository") as pinned:
@@ -361,6 +422,12 @@ class DiscoveryIndexTests(unittest.TestCase):
                     },
                 }
 
+            @staticmethod
+            def get(path: str, parameters: dict[str, object] | None = None):
+                return {"total_count": 1, "incomplete_results": False, "items": [
+                    {"path": "packages/demo/plugin.json", "repository": {"full_name": "owner/repo"}},
+                ]}
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             mirror, revision = create_mirror(root, repository="new-owner/new-repo")
@@ -369,7 +436,7 @@ class DiscoveryIndexTests(unittest.TestCase):
                 api=TransferredAPI(revision),
                 config={"schema_version": 1, "query": "schema", "maximum_file_size": 10,
                         "maximum_records": 100, "seeds": []},
-                mode="refresh", generated_at="2026-08-27T06:00:00Z",
+                mode="reconcile", generated_at="2026-08-27T06:00:00Z",
                 previous_records=[previous], mirror_root=mirror,
             )
         self.assertTrue(candidate["complete"])
@@ -411,6 +478,39 @@ class DiscoveryIndexTests(unittest.TestCase):
                 publish(candidate, feed, root / "unused.json", bytes(range(32)), "unused", "run-1", "b" * 40, 3)
             self.assertFalse((feed / "latest.json").exists())
             self.assertEqual(list(feed.rglob("*")), [])
+
+    def test_failed_bundle_verification_never_advances_latest_pointer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            feed = root / "feed"
+            feed.mkdir()
+            candidate = root / "candidate.json"
+            candidate.write_bytes(canonical_json({
+                "candidate_schema_version": 1,
+                "mode": "discover",
+                "generated_at": "2026-08-27T00:00:00Z",
+                "complete": True,
+                "query_manifest_digest": "sha256:" + "3" * 64,
+                "partitions": [],
+                "records": [candidate_record("a" * 40)],
+            }))
+            with mock.patch.object(discovery_publication, "ed25519_sign", return_value=b"0" * 64), \
+                 mock.patch.object(
+                     discovery_publication, "verify_bundle",
+                     side_effect=PublicationError("verification failed"),
+                 ):
+                with self.assertRaisesRegex(PublicationError, "verification failed"):
+                    publish(
+                        candidate, feed, root / "unused.json", bytes(range(32)),
+                        "discovery-test", "run-1", "b" * 40, 3,
+                    )
+            self.assertFalse((feed / "latest.json").exists())
+            self.assertEqual(list(feed.rglob("*")), [])
+
+    def test_discovery_modules_share_one_publication_error_type(self):
+        from scripts import directory_publication
+
+        self.assertIs(discovery_publication.PublicationError, directory_publication.PublicationError)
 
     def test_signed_feed_is_append_only_and_search_tampering_fails(self):
         with tempfile.TemporaryDirectory() as temporary:

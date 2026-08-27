@@ -159,14 +159,32 @@ describe('signed public Discovery Index', () => {
     assert.equal(cached.source, 'cache')
     assert.equal(cached.snapshot.sequence, 7)
   })
+
+  it('keeps the last-known-good cache when the pointer rolls back', async () => {
+    const current = fixture(7)
+    const older = fixture(6)
+    const cache = new MemoryCache()
+    const origin = new URL('https://catalog.example/discovery/')
+    await loadDiscovery({ origin, trust: current.trust, cache, fetcher: makeFetcher(origin, current.bytes, 7), now })
+    const rolledBack = await loadDiscovery({
+      origin,
+      trust: current.trust,
+      cache,
+      fetcher: makeFetcher(origin, older.bytes, 6),
+      now,
+    })
+    assert.equal(rolledBack.source, 'cache')
+    assert.equal(rolledBack.snapshot.sequence, 7)
+  })
 })
 
-function makeFetcher(origin: URL, bytes: ReturnType<typeof fixture>['bytes']): typeof fetch {
+function makeFetcher(origin: URL, bytes: ReturnType<typeof fixture>['bytes'], sequence = 7): typeof fetch {
+  const stem = String(sequence).padStart(20, '0')
   const values = new Map([
     [new URL('latest.json', origin).href, bytes.pointer],
-    [new URL('snapshots/00000000000000000007.json', origin).href, bytes.snapshot],
-    [new URL('snapshots/00000000000000000007.envelope.json', origin).href, bytes.envelope],
-    [new URL('search/00000000000000000007.json', origin).href, bytes.search],
+    [new URL(`snapshots/${stem}.json`, origin).href, bytes.snapshot],
+    [new URL(`snapshots/${stem}.envelope.json`, origin).href, bytes.envelope],
+    [new URL(`search/${stem}.json`, origin).href, bytes.search],
   ])
   return (async (input) => {
     const url = String(input)

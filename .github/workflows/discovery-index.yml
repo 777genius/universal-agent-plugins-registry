@@ -305,8 +305,10 @@ jobs:
           path: exact-pages-tree
           persist-credentials: false
       - name: Archive exact ledger commit
+        env:
+          LEDGER_COMMIT: ${{ needs.sign-and-publish.outputs.ledger_commit }}
         run: |
-          test "$(git -C exact-pages-tree rev-parse HEAD)" = "${{ needs.sign-and-publish.outputs.ledger_commit }}"
+          test "$(git -C exact-pages-tree rev-parse HEAD)" = "${LEDGER_COMMIT}"
           tar --directory exact-pages-tree -cvf "$RUNNER_TEMP/artifact.tar" --exclude=.git --exclude=.github .
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

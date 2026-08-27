@@ -1183,17 +1183,8 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
     config = read_object(config_path)
     lock_body = lock_path.read_bytes()
     lock = read_object(lock_path)
-    expected_overrides = LOCKED_NPM_SECURITY_OVERRIDES.get((
-        next(iter(package.get("dependencies", {}).items()))
-        if isinstance(package.get("dependencies"), dict) and len(package["dependencies"]) == 1
-        else ("", "")
-    ), {})
-    expected_package_fields = {"name", "version", "private", "dependencies"}
-    if expected_overrides:
-        expected_package_fields.add("overrides")
     require(
-        set(package) == expected_package_fields
-        and package.get("private") is True
+        package.get("private") is True
         and isinstance(package.get("dependencies"), dict)
         and len(package["dependencies"]) == 1,
         f"{package_path}: runtime package must contain one exact production dependency and no scripts",
@@ -1205,6 +1196,13 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         f"{package_path}: runtime dependency must use one exact npm version",
     )
     expected_overrides = LOCKED_NPM_SECURITY_OVERRIDES.get((dependency, version), {})
+    expected_package_fields = {"name", "version", "private", "dependencies"}
+    if expected_overrides:
+        expected_package_fields.add("overrides")
+    require(
+        set(package) == expected_package_fields,
+        f"{package_path}: runtime package must contain one exact production dependency and no scripts",
+    )
     require(package.get("overrides", {}) == expected_overrides, f"{package_path}: runtime security overrides differ from the reviewed allowlist")
     require(
         set(config) == {"schema_version", "package", "version", "entrypoint", "package_lock_sha256", "omit_optional"}
@@ -1236,7 +1234,10 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
             entry for relative, entry in packages.items()
             if relative == f"node_modules/{overridden}" or relative.endswith(f"/node_modules/{overridden}")
         ]
-        require(matches and all(entry.get("version") == overridden_version for entry in matches),
+        require(matches and all(
+            isinstance(entry, dict) and entry.get("version") == overridden_version
+            for entry in matches
+        ),
                 f"{lock_path}: security override {overridden}@{overridden_version} is not exact across the lockfile")
     ignored_install_scripts: set[tuple[str, str, str]] = set()
     optional_install_scripts: set[tuple[str, str, str]] = set()

@@ -24,10 +24,10 @@ from typing import Any
 
 import jsonschema
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_bridges import BridgeError, GIT_MODES, LFS_HEADER, PinnedRepository, git, portable_path
-from build_registry import directory_tree_digest, digest_bytes, read_json
-from directory_publication import canonical_json, format_timestamp, parse_timestamp, sha256_digest, validate_with_schema
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER, PinnedRepository, git, portable_path
+from scripts.build_registry import directory_tree_digest, digest_bytes, read_json
+from scripts.directory_publication import canonical_json, format_timestamp, parse_timestamp, sha256_digest, validate_with_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +42,7 @@ SCHEMA_URI = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 PORTABLE_CLIENTS = ["codex", "cursor", "copilot", "vscode", "kiro"]
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+MIN_AVAILABLE_RECORDS_FOR_DROP_GUARD = 20
 MAX_FILES = 5_000
 MAX_FILE_BYTES = 16 << 20
 MAX_TREE_BYTES = 64 << 20
@@ -150,7 +151,20 @@ class GitHubAPI:
         response = self._request("graphql", payload={"query": query, "variables": variables})
         errors = response.get("errors")
         data = response.get("data")
-        require(not errors and isinstance(data, dict), f"GitHub GraphQL returned errors: {errors!r}")
+        require(isinstance(data, dict), f"GitHub GraphQL returned invalid data: {data!r}")
+        if errors:
+            require(isinstance(errors, list), "GitHub GraphQL errors must be an array")
+            for error in errors:
+                path = error.get("path") if isinstance(error, dict) else None
+                require(
+                    isinstance(error, dict)
+                    and error.get("type") == "NOT_FOUND"
+                    and isinstance(path, list)
+                    and bool(path)
+                    and isinstance(path[0], str)
+                    and re.fullmatch(r"r[0-9]+", path[0]) is not None,
+                    f"GitHub GraphQL returned errors: {errors!r}",
+                )
         return data
 
 
@@ -247,14 +261,18 @@ def repository_states(api: GitHubAPI, repositories: list[str]) -> dict[str, dict
     GraphQL aliases retain the same repository/default-head trust boundary while
     reducing that phase to one request per 50 repositories.
     """
-    identities = sorted(set(repository.casefold() for repository in repositories))
+    original_by_identity: dict[str, str] = {}
+    for repository in repositories:
+        original_by_identity.setdefault(repository.casefold(), repository)
+    identities = sorted(original_by_identity)
     states: dict[str, dict[str, Any]] = {}
     for offset in range(0, len(identities), REPOSITORY_GRAPHQL_BATCH):
         batch = identities[offset:offset + REPOSITORY_GRAPHQL_BATCH]
         declarations: list[str] = []
         selections: list[str] = []
         variables: dict[str, object] = {}
-        for index, repository in enumerate(batch):
+        for index, repository_identity in enumerate(batch):
+            repository = original_by_identity[repository_identity]
             require(REPOSITORY_RE.fullmatch(repository) is not None, f"invalid repository {repository!r}")
             owner, name = repository.split("/", 1)
             declarations.extend((f"$owner{index}: String!", f"$name{index}: String!"))
@@ -267,7 +285,8 @@ def repository_states(api: GitHubAPI, repositories: list[str]) -> dict[str, dict
         query = "query(" + ", ".join(declarations) + ") { " + " ".join(selections) + " }"
         data = api.graphql(query, variables)
         require(set(data) == {f"r{index}" for index in range(len(batch))}, "GitHub GraphQL repository batch is incomplete")
-        for index, repository in enumerate(batch):
+        for index, repository_identity in enumerate(batch):
+            repository = original_by_identity[repository_identity]
             metadata = data[f"r{index}"]
             if metadata is None:
                 states[repository] = {"repository": repository, "available": False}
@@ -473,12 +492,14 @@ def validate_previous_records(records: list[dict[str, Any]]) -> None:
 
 def candidate_paths(items: list[dict[str, Any]]) -> dict[str, set[str]]:
     result: dict[str, set[str]] = {}
+    canonical_keys: dict[str, str] = {}
     for item in items:
         repository = item["repository"]
+        key = canonical_keys.setdefault(repository.casefold(), repository)
         manifest = PurePosixPath(item["manifest_path"])
         require(manifest.name == "plugin.json", f"invalid manifest path {manifest}")
         package_path = "" if str(manifest.parent) == "." else normalized_path(str(manifest.parent))
-        result.setdefault(repository.casefold(), set()).add(package_path)
+        result.setdefault(key, set()).add(package_path)
     return result
 
 
@@ -522,6 +543,8 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             continue
         canonical_repository = state["repository"]
         transferred = canonical_repository != repository_name.casefold()
+        for package_path in paths[repository_name]:
+            discovered.add(record_identity(canonical_repository, package_path))
         if transferred:
             for package_path in paths[repository_name]:
                 old_identity = record_identity(repository_name, package_path)
@@ -575,6 +598,21 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     ordered = sorted(records.values(), key=lambda item: (item["repository"], item["package_path"].casefold(), item["slug"]))
     maximum_records = min(config.get("maximum_records", MAX_RECORDS), MAX_RECORDS)
     require(len(ordered) <= maximum_records, f"Discovery Index exceeds {maximum_records} records")
+    previous_available = sum(record.get("availability") == "available" for record in previous_records)
+    current_available = sum(record.get("availability") == "available" for record in ordered)
+    if (
+        previous_available >= MIN_AVAILABLE_RECORDS_FOR_DROP_GUARD
+        and current_available * 2 < previous_available
+    ):
+        diagnostics.append({
+            "kind": "scan_error",
+            "repository": "*",
+            "path": "",
+            "error": (
+                "available Discovery records fell from "
+                f"{previous_available} to {current_available}; preserving the last-known-good index"
+            ),
+        })
     complete = not any(item["kind"] == "scan_error" for item in diagnostics)
     candidate_path_identities = sorted(
         record_identity(repository, package_path)

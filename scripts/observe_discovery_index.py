@@ -13,8 +13,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from directory_publication import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.directory_publication import (
     PublicationError,
     canonical_json,
     format_timestamp,
@@ -24,7 +24,7 @@ from directory_publication import (
     sha256_digest,
     validate_with_schema,
 )
-from discovery_publication import LATEST_SCHEMA, MAX_LATEST_BYTES, load_latest
+from scripts.discovery_publication import LATEST_SCHEMA, MAX_LATEST_BYTES, load_latest
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -87,6 +87,7 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
         envelope = parse_json_bytes(
             read_bytes_bounded(feed / latest["envelope_path"], latest["fetch_contract"]["envelope_max_bytes"]),
             "Discovery envelope",
+            max_bytes=latest["fetch_contract"]["envelope_max_bytes"],
         )
         return {
             "observation_schema_version": 1,

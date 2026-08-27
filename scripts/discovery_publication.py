@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from directory_publication import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.directory_publication import (
     PublicationError,
     atomic_write,
     b64decode_exact,
@@ -223,9 +225,9 @@ def publish(candidate_path: Path, feed: Path, trusted_keys: Path, private_seed: 
     validate_with_schema(latest, LATEST_SCHEMA)
     for relative in (snapshot_path, envelope_path, search_path):
         require(not (feed / relative).exists(), f"Discovery artifact already exists: {relative}")
+    verify_bundle(snapshot_body, envelope_body, search_body, trusted_keys)
     atomic_write(feed / snapshot_path, snapshot_body)
     atomic_write(feed / envelope_path, envelope_body)
     atomic_write(feed / search_path, search_body)
     atomic_write(feed / "latest.json", canonical_json(latest))
-    verify_bundle(snapshot_body, envelope_body, search_body, trusted_keys)
     return {"sequence": sequence, "snapshot_digest": envelope["snapshot_digest"], "record_count": len(search["records"])}
