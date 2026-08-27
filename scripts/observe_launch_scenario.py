@@ -181,7 +181,7 @@ def _go_nonempty(value: Any) -> bool:
 
 
 def _valid_leaf_id(value: Any) -> bool:
-    """Exact portable leaf-ID rule used by released agentplugins 0.1.14."""
+    """Exact portable leaf-ID rule used by released agentplugins 0.1.15."""
     if not isinstance(value, str):
         return False
     value = _go_trim_space(value)
@@ -349,7 +349,7 @@ def _released_state_v4_decodes(value: Any) -> bool:
 
 
 def validate_released_state_v4(value: Any) -> bool:
-    """Exact acceptance semantics of agentplugins 0.1.14 statev2.Validate.
+    """Exact acceptance semantics of agentplugins 0.1.15 statev2.Validate.
 
     The evidence reader applies additional path/digest authority constraints
     after this check; those constraints are not represented as State.Validate
@@ -871,7 +871,7 @@ def _validate_grouped(value: dict[str, Any], command: str, *, verify_acquisition
 def validate_cli_envelope(
     value: Any, command: str, *, requested_argv: list[str] | tuple[str, ...] | None = None,
 ) -> bool:
-    """Validate public agentplugins 0.1.14 JSON, without accepting invented shapes."""
+    """Validate public agentplugins 0.1.15 JSON, without accepting invented shapes."""
     if requested_argv is not None:
         normalized_argv = list(requested_argv)
         try:
@@ -1019,7 +1019,7 @@ def validate_full_sha_update_failure(
     value: Any, stderr: str, *, plugin: str, source: str, revision: str,
     tree_digest: str, expected_targets: tuple[str, ...], requested_argv: list[str] | tuple[str, ...] | None = None,
 ) -> bool:
-    """Validate the complete public 0.1.14 preflight-refusal contract."""
+    """Validate the complete public 0.1.15 preflight-refusal contract."""
     if not (
         _keys(value, {"schema_version", "command", "result", "data"})
         and _exact_int(value.get("schema_version"), 1) and value.get("command") == "update"
@@ -2246,7 +2246,7 @@ def _install_path_authority_guard(allowed_write_roots: tuple[int, ...]) -> None:
         code = ctypes.get_errno() or errno.ENOSYS
         raise OSError(code, "Landlock ABI 3 with truncate mediation is required")
     # Handle every mutating filesystem class so omitted grants fail closed.
-    # Released 0.1.14 needs only ordinary file writes/removal, directories,
+    # Released 0.1.15 needs only ordinary file writes/removal, directories,
     # regular files, and truncate. REFER is deliberately handled but never
     # granted: same-directory active-to-backup rename does not need it.
     handled_access = (1 << 1) | (1 << 4) | (1 << 5) | sum(1 << bit for bit in range(6, 15))
@@ -2489,12 +2489,12 @@ class AuthenticatedBinaryExecutionSession:
                 len(self._body) != RELEASED_AGENTPLUGINS_0_1_14_SIZE
                 or hashlib.sha256(self._body).hexdigest() != RELEASED_AGENTPLUGINS_0_1_14_SHA256
             ):
-                raise ValueError("evidence binary is not the authenticated public agentplugins 0.1.14 asset")
+                raise ValueError("evidence binary is not the authenticated public agentplugins 0.1.15 asset")
             self.pre_authentication = self._observe("pre_version_authentication")
             self.version = self._run_descriptor(["version"], cwd=cwd, write_authority=None)
             self.post_authentication = self._observe("post_version_authentication")
-            if self.version.returncode != 0 or self.version.stdout.rstrip("\n") != "agentplugins 0.1.14":
-                raise ValueError("evidence binary is not exact released agentplugins 0.1.14")
+            if self.version.returncode != 0 or self.version.stdout.rstrip("\n") != "agentplugins 0.1.15":
+                raise ValueError("evidence binary is not exact released agentplugins 0.1.15")
         except BaseException:
             self._close_descriptors()
             raise
@@ -2932,7 +2932,7 @@ def bound_lifecycle_evidence(
         and binary_execution.get("path") == str(binary)
         and binary_execution.get("version_argv") == ["<authenticated-binary-fd>", "version"]
         and binary_execution.get("version_exit") == 0
-        and binary_execution.get("version_stdout") == "agentplugins 0.1.14"
+        and binary_execution.get("version_stdout") == "agentplugins 0.1.15"
         and isinstance(binary_execution.get("commands"), list)
         and len(binary_execution["commands"]) == 7
         and all(
@@ -3056,7 +3056,7 @@ def conformance_directory(
     release["sequence"] = 1
     release["published_at"] = now()
     policy["release_sequence"] = 1
-    policy["minimum_installer_version"] = "0.1.14"
+    policy["minimum_installer_version"] = "0.1.15"
     policy["targets"] = [
         {
             "client": client,
