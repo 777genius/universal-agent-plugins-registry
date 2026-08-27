@@ -35,6 +35,10 @@ def commands(job):
     return "\n".join(step.get("run", "") for step in job["steps"] if isinstance(step, dict))
 
 
+def pinned_requirements(body: str) -> set[str]:
+    return set(re.findall(r"(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]+==[A-Za-z0-9_.+-]+", body))
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_adapter_egress_and_native_projection_are_canonical_generic_contracts(self) -> None:
         schema = json.loads((ROOT / "deploy/uap-observer-adapter-config.schema.json").read_text())
@@ -397,8 +401,8 @@ class WorkflowContractTests(unittest.TestCase):
         for job_name in ("scan", "sign-and-publish", "observe"):
             with self.subTest(job=job_name):
                 body = commands(workflow["jobs"][job_name])
-                self.assertIn("cryptography==46.0.3", body)
-                self.assertIn("jsonschema==4.26.0", body)
+                self.assertIn("cryptography==46.0.3", pinned_requirements(body))
+                self.assertIn("jsonschema==4.26.0", pinned_requirements(body))
 
     def test_pages_concurrency_isolates_prs_from_production(self) -> None:
         workflow = load(PAGES)
@@ -746,9 +750,10 @@ class WorkflowContractTests(unittest.TestCase):
         for name, job in scheduled.items():
             with self.subTest(job=name):
                 job_commands = commands(job)
-                self.assertIn("cryptography==46.0.3", job_commands)
-                self.assertIn("jsonschema==4.26.0", job_commands)
-                self.assertIn("PyYAML==6.0.3", job_commands)
+                requirements = pinned_requirements(job_commands)
+                self.assertIn("cryptography==46.0.3", requirements)
+                self.assertIn("jsonschema==4.26.0", requirements)
+                self.assertIn("PyYAML==6.0.3", requirements)
                 self.assertLess(
                     job_commands.index("jsonschema==4.26.0"),
                     job_commands.index("scripts/run_launch_evidence_e2e.py")
@@ -975,7 +980,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         persist = publication["jobs"]["record_launch_approval"]
         body = commands(persist)
-        self.assertIn("jsonschema==4.26.0", body)
+        self.assertIn("jsonschema==4.26.0", pinned_requirements(body))
         self.assertNotIn("jsonschema==4.25.1", str(publication))
         self.assertIn("materialize_launch_evidence.py verify-bundle", body)
         self.assertIn("--verify-attestation", body)

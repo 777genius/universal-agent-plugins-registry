@@ -291,9 +291,9 @@ import run_launch_evidence_e2e
                 test_execution = observer.TestExecutionSession.run_phase6(cwd=ROOT)
             with (
                 mock.patch.object(observer, "_owned_sources_match_head", return_value=True),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", binary.stat().st_size),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", binary.stat().st_size),
                 mock.patch.object(
-                    observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256",
+                    observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256",
                     hashlib.sha256(binary.read_bytes()).hexdigest(),
                 ),
             ):
@@ -396,8 +396,8 @@ import run_launch_evidence_e2e
             body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 original = root / "authenticated-original"
@@ -434,8 +434,8 @@ import run_launch_evidence_e2e
             os.environ.update({"PHASE6_SWAP_SIGNAL": str(signal), "PHASE6_SWAP_RELEASE": str(release)})
             try:
                 with (
-                    mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                    mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                    mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                    mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
                 ):
                     session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
 
@@ -476,8 +476,8 @@ import run_launch_evidence_e2e
             body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 incomplete = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 descriptors = (incomplete._fd, incomplete._parent_fd, incomplete._inotify_fd)
@@ -516,14 +516,14 @@ import run_launch_evidence_e2e
             with self.assertRaises(OSError):
                 observer.AuthenticatedBinaryExecutionSession(link, cwd=root)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", "0" * 64),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", "0" * 64),
                 self.assertRaisesRegex(ValueError, "authenticated public"),
             ):
                 observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
                 self.assertRaisesRegex(ValueError, "exact released"),
             ):
                 observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
@@ -531,8 +531,8 @@ import run_launch_evidence_e2e
             good = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(good)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(good)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(good).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(good)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(good).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 with self.assertRaisesRegex(ValueError, "wrong path"):
@@ -549,8 +549,8 @@ import run_launch_evidence_e2e
             binary.write_bytes(body); binary.chmod(0o700)
             marker = root / "exec-authority"
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 real_execveat = observer._raw_execveat
@@ -653,8 +653,8 @@ import run_launch_evidence_e2e
             self.assertEqual(unavailable.exception.errno, errno.ENOTSUP)
 
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 with mock.patch.object(observer, "_raw_execveat", side_effect=OSError(errno.ENOTSUP, "missing")):
@@ -715,8 +715,8 @@ with tempfile.TemporaryDirectory() as temporary:
     binary = directory / "agentplugins"
     body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
     binary.write_bytes(body); binary.chmod(0o700)
-    module.RELEASED_AGENTPLUGINS_0_1_14_SIZE = len(body)
-    module.RELEASED_AGENTPLUGINS_0_1_14_SHA256 = hashlib.sha256(body).hexdigest()
+    module.RELEASED_AGENTPLUGINS_0_1_16_SIZE = len(body)
+    module.RELEASED_AGENTPLUGINS_0_1_16_SHA256 = hashlib.sha256(body).hexdigest()
     session = module.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=directory)
     descriptors = [session._fd, session._parent_fd, session._inotify_fd]
     fabricated = directory / "proc/self/fd"; fabricated.mkdir(parents=True)
@@ -792,8 +792,8 @@ with tempfile.TemporaryDirectory() as temporary:
                 release.wait(timeout=10)
 
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 descriptors = (session._fd, session._parent_fd, session._inotify_fd)
@@ -823,8 +823,8 @@ with tempfile.TemporaryDirectory() as temporary:
             body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             binary.write_bytes(body); binary.chmod(0o700)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 modified = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 binary.write_bytes(body + b"# changed\n"); binary.write_bytes(body); binary.chmod(0o700)
@@ -879,8 +879,8 @@ with tempfile.TemporaryDirectory() as temporary:
             base = Path(tmp)
             body = b"#!/bin/sh\nprintf 'agentplugins 0.1.16\\n'\n"
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 for name, operation, pattern in (
                     ("wrong-path", lambda s, b, fd: s.execute(base / "other", list(observer.EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[0]), cwd=base, write_authority=(fd,)), "wrong path"),
@@ -937,8 +937,8 @@ with tempfile.TemporaryDirectory() as temporary:
             binary.write_bytes(body); binary.chmod(0o700)
             supplied = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)
                 descriptors = (session._fd, session._parent_fd, session._inotify_fd)
@@ -973,8 +973,8 @@ with tempfile.TemporaryDirectory() as temporary:
             ).encode()
             binary.write_bytes(body); binary.chmod(0o700)
             with (
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SIZE", len(body)),
-                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_14_SHA256", hashlib.sha256(body).hexdigest()),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_16_SHA256", hashlib.sha256(body).hexdigest()),
                 mock.patch.dict(os.environ, {"PHASE6_FD_ENV": "exact-environment"}),
             ):
                 session = observer.AuthenticatedBinaryExecutionSession(binary.resolve(), cwd=root)

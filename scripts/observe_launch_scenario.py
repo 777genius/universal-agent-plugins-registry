@@ -52,8 +52,8 @@ FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "tests/fixtures"
 JOURNEY_VALIDATOR = Path(__file__).resolve().parent / "validate_review_journey.py"
 CONFORMANCE_KEY_ID = "launch-conformance-only"
 CONFORMANCE_SEED = hashlib.sha256(b"UAP launch evidence conformance key; never production").digest()
-RELEASED_AGENTPLUGINS_0_1_14_SIZE = 11_190_456
-RELEASED_AGENTPLUGINS_0_1_14_SHA256 = "7313ad045fa2fa5621f9b9d75914d111f5101c4d3e758515022603fcfb57d31e"
+RELEASED_AGENTPLUGINS_0_1_16_SIZE = 11_624_632
+RELEASED_AGENTPLUGINS_0_1_16_SHA256 = "5fa0ac5b25280bb6f5c42b0b6dfa1c94f550ba602801536a872c927eb7870547"
 EXACT_PLUGIN_DATA_LIFECYCLE_ARGV = (
     ("add", "./package-plugin-data", "--target", "cursor", "--format", "json"),
     ("info", "e2e-external-package", "--target", "cursor", "--format", "json"),
@@ -2486,8 +2486,8 @@ class AuthenticatedBinaryExecutionSession:
             )
             self._body = self._read_authenticated_body()
             if (
-                len(self._body) != RELEASED_AGENTPLUGINS_0_1_14_SIZE
-                or hashlib.sha256(self._body).hexdigest() != RELEASED_AGENTPLUGINS_0_1_14_SHA256
+                len(self._body) != RELEASED_AGENTPLUGINS_0_1_16_SIZE
+                or hashlib.sha256(self._body).hexdigest() != RELEASED_AGENTPLUGINS_0_1_16_SHA256
             ):
                 raise ValueError("evidence binary is not the authenticated public agentplugins 0.1.16 asset")
             self.pre_authentication = self._observe("pre_version_authentication")
@@ -2953,14 +2953,14 @@ def bound_lifecycle_evidence(
         *(item[phase] for item in binary_execution["commands"] for phase in ("pre", "post")),
         binary_execution["final_barrier"],
     ]
-    expected_digest = "sha256:" + RELEASED_AGENTPLUGINS_0_1_14_SHA256
+    expected_digest = "sha256:" + RELEASED_AGENTPLUGINS_0_1_16_SHA256
     if not all(isinstance(observation, dict) for observation in authentication_observations):
         raise ValueError("authenticated binary observations do not bind one exact identity")
     first_authentication = authentication_observations[0]
     if any(
         observation.get("path") != str(binary)
         or observation.get("sha256") != expected_digest
-        or observation.get("size") != RELEASED_AGENTPLUGINS_0_1_14_SIZE
+        or observation.get("size") != RELEASED_AGENTPLUGINS_0_1_16_SIZE
         or observation.get("descriptor_identity") != observation.get("path_identity")
         or observation.get("parent_identity") != first_authentication.get("parent_identity")
         or observation.get("descriptor_identity") != first_authentication.get("descriptor_identity")
@@ -2997,7 +2997,7 @@ def bound_lifecycle_evidence(
         },
         "observer": {"sha256": "sha256:" + hashlib.sha256(script_body).hexdigest(), "size": len(script_body)},
         "binary": {
-            "sha256": expected_digest, "size": RELEASED_AGENTPLUGINS_0_1_14_SIZE,
+            "sha256": expected_digest, "size": RELEASED_AGENTPLUGINS_0_1_16_SIZE,
             "version_argv": copy.deepcopy(binary_execution["version_argv"]),
             "version_exit": binary_execution["version_exit"],
             "version_stdout": binary_execution["version_stdout"],
