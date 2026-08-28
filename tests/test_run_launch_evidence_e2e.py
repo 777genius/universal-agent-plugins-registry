@@ -182,140 +182,84 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 "", observer.revoked_target_probe_stderr(context["release"]["distribution_id"], 1), True,
             )
             root, bindings = observer.revoked_probe_scenario_root(workspace, environment)
-            before = observer.filesystem_snapshot(root)
             expected_binary = scenario_root / "release" / "agentplugins"
+            expected_binary.parent.mkdir()
+            body = (
+                "#!/usr/bin/python3\nimport sys\n"
+                "if sys.argv[1:] == ['version']:\n print('agentplugins 0.1.18')\n"
+                "else:\n"
+                f" sys.stderr.write({probe.expected_stderr!r})\n raise SystemExit(1)\n"
+            ).encode()
+            expected_binary.write_bytes(body)
+            expected_binary.chmod(0o700)
+            before = observer.filesystem_snapshot(root)
 
-            identity = {
-                "device": 1, "inode": 2, "mode": 0o100755, "uid": 3, "gid": 4,
-                "links": 1, "size": observer.RELEASED_AGENTPLUGINS_0_1_18_SIZE,
-                "mtime_ns": 5, "ctime_ns": 6,
-            }
-            parent_identity = {"device": 1, "inode": 7, "mode": 0o40755, "uid": 3, "gid": 4}
-
-            def issued_binding():
-                path = str(expected_binary)
-                observation = {
-                    "path": path, "descriptor_identity": copy.deepcopy(identity),
-                    "path_identity": copy.deepcopy(identity),
-                    "parent_identity": copy.deepcopy(parent_identity),
-                    "sha256": "sha256:" + observer.RELEASED_AGENTPLUGINS_0_1_18_SHA256,
-                    "size": observer.RELEASED_AGENTPLUGINS_0_1_18_SIZE,
-                }
-                return observer.AuthenticatedBinaryExecutionBinding({
-                    "mechanism": "linux-raw-execveat-at-empty-path-authenticated-fd",
-                    "syscall_number": observer._execveat_syscall_number(),
-                    "empty_path": True, "at_empty_path": True,
-                    "authenticated_fd_direct_child_only": True,
-                    "descriptor_inheritable_in_observer": False,
-                    "argv": ["<authenticated-binary-fd>", *probe.target_argv],
-                    "path": path, "parent_path": str(Path(path).parent),
-                    "pre": {"stage": "command_1_pre", **copy.deepcopy(observation)},
-                    "post": {"stage": "command_1_post", **copy.deepcopy(observation)},
-                }, authority=observer._EXECUTION_BINDING_AUTHORITY)
-
-            def verify(
-                returncode=probe.expected_exit_code, stdout=probe.expected_stdout,
-                stderr=probe.expected_stderr, candidate_probe=probe,
-                process_argv=("<authenticated-binary-fd>", *observer.REVOKED_TARGET_PROBE_ARGV),
-                execution_binding=None,
-            ):
-                completed = subprocess.CompletedProcess(
-                    list(process_argv), returncode, stdout=stdout, stderr=stderr,
+            def issue():
+                session = observer.AuthenticatedBinaryExecutionSession(
+                    expected_binary.resolve(), cwd=workspace,
+                    command_plan=(observer.REVOKED_TARGET_PROBE_ARGV,),
                 )
+                completed, evidence = session.execute(
+                    expected_binary.resolve(), list(observer.REVOKED_TARGET_PROBE_ARGV),
+                    cwd=workspace, write_authority=None,
+                )
+                return session, completed, evidence
+
+            def verify(session, completed, evidence, *, candidate_probe=probe):
                 return observer.verify_revoked_target_probe_result(
                     completed, candidate_probe, argv=list(probe.target_argv), environment=environment,
                     scenario_root=root, writable_bindings=bindings, before=before,
                     after=observer.filesystem_snapshot(root),
-                    execution_binding=issued_binding() if execution_binding is None else execution_binding,
+                    execution_binding=evidence, execution_session=session,
                     binary=expected_binary,
                 )
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                session, completed, evidence = issue()
+                self.assertIs(type(evidence), dict)
+                self.assertFalse(hasattr(observer, "AuthenticatedBinaryExecutionBinding"))
+                self.assertTrue(verify(session, completed, evidence)["verified"])
+                self.assertFalse(verify(session, completed, evidence)["verified"])
 
-            valid = verify()
-            self.assertTrue(valid["verified"])
-            self.assertEqual(valid["exit"], {"expected": 1, "observed": 1, "bound": True})
-            self.assertEqual(valid["rejection"]["observed_class"], "revoked-release")
-            self.assertEqual(valid["rejection"]["observed_reason"], "revoked Directory release")
-            self.assertEqual(
-                probe.expected_stderr,
-                "Resolving and validating one Agent Plugin package for every selected target...\n"
-                "agentplugins: no eligible directory release for \"context7\": "
-                f"{context['release']['distribution_id']}: release 1 is revoked\n",
-            )
-            near_misses = {
-                "different exit": verify(returncode=42),
-                "extra process argv": verify(process_argv=("<authenticated-binary-fd>", "--verbose", *probe.target_argv)),
-                "fake executable exact output": verify(process_argv=("/tmp/fake-agentplugins", *probe.target_argv)),
-                "correct result without binding": verify(execution_binding={}),
-                "unexpected stdout": verify(stdout="{}\n"),
-                "omitted progress": verify(stderr=probe.expected_stderr.split("\n", 1)[1]),
-                "wrong selector": verify(stderr=probe.expected_stderr.replace('"context7"', '"other"')),
-                "wrong distribution": verify(stderr=probe.expected_stderr.replace(
-                    context["release"]["distribution_id"], "fixture/wrong-distribution",
-                )),
-                "wrong sequence": verify(stderr=probe.expected_stderr.replace("release 1", "release 2")),
-                "wrong reason": verify(stderr=probe.expected_stderr.replace("is revoked", "is suspended")),
-                "reversed lines": verify(stderr="\n".join(
-                    reversed(probe.expected_stderr.removesuffix("\n").splitlines()),
-                ) + "\n"),
-                "extra output": verify(stderr=probe.expected_stderr + "unexpected\n"),
-                "wrong class descriptor": verify(candidate_probe=probe._replace(expected_rejection_class="timeout")),
-                "wrong reason descriptor": verify(candidate_probe=probe._replace(expected_rejection_reason="revoked")),
-            }
-            for label, result in near_misses.items():
-                with self.subTest(label=label):
-                    self.assertFalse(result["verified"])
+                for label, result_factory in {
+                    "identical result": lambda item: subprocess.CompletedProcess(
+                        list(item.args), item.returncode, item.stdout, item.stderr,
+                    ),
+                    "identical executable output": lambda item: subprocess.run(
+                        [sys.executable, "-c", f"import sys;sys.stderr.write({item.stderr!r});raise SystemExit(1)"],
+                        text=True, capture_output=True, check=False,
+                    ),
+                }.items():
+                    candidate_session, candidate_completed, candidate_evidence = issue()
+                    with self.subTest(label=label):
+                        self.assertFalse(verify(
+                            candidate_session, result_factory(candidate_completed), candidate_evidence,
+                        )["verified"])
+                        self.assertFalse(verify(
+                            candidate_session, candidate_completed, candidate_evidence,
+                        )["verified"])
 
-            def substitute_every_path(value):
-                replacement = "/tmp/substitute/agentplugins"
-                value["path"] = replacement
-                value["parent_path"] = str(Path(replacement).parent)
-                value["pre"]["path"] = replacement
-                value["post"]["path"] = replacement
+                mutated_session, mutated_completed, mutated_evidence = issue()
+                mutated_evidence["mechanism"] = "path-subprocess-run"
+                self.assertFalse(verify(mutated_session, mutated_completed, mutated_evidence)["verified"])
+                mutated_evidence["mechanism"] = "linux-raw-execveat-at-empty-path-authenticated-fd"
+                self.assertFalse(verify(mutated_session, mutated_completed, mutated_evidence)["verified"])
 
-            binding_mutations = {
-                "wrong mechanism": lambda value: value.__setitem__("mechanism", "path-subprocess-run"),
-                "wrong argv": lambda value: value.__setitem__("argv", ["agentplugins", *probe.target_argv]),
-                "wrong digest": lambda value: value["post"].__setitem__("sha256", "sha256:" + "0" * 64),
-                "wrong size": lambda value: value["pre"].__setitem__("size", identity["size"] + 1),
-                "descriptor drift": lambda value: value["post"]["descriptor_identity"].__setitem__("inode", 99),
-                "path identity drift": lambda value: value["post"]["path_identity"].__setitem__("inode", 99),
-                "parent identity drift": lambda value: value["post"]["parent_identity"].__setitem__("inode", 99),
-                "path substitution": lambda value: value["post"].__setitem__("path", "/tmp/substitute"),
-                "coherent path substitution": substitute_every_path,
-                "missing post": lambda value: value.pop("post"),
-            }
-            for label, mutate in binding_mutations.items():
-                candidate = issued_binding()
-                mutate(candidate)
-                with self.subTest(label=label):
-                    self.assertFalse(verify(execution_binding=candidate)["verified"])
-            self.assertFalse(verify(execution_binding=dict(issued_binding()))["verified"])
-
-            original = issued_binding()
-            pre_consumption_copies = (
-                copy.copy(original), copy.deepcopy(original), dict(original),
-                json.loads(json.dumps(original)),
-            )
-            self.assertTrue(verify(execution_binding=original)["verified"])
-            self.assertFalse(verify(execution_binding=original)["verified"])
-            for candidate in (*pre_consumption_copies, copy.copy(original), copy.deepcopy(original)):
-                with self.subTest(copy_type=type(candidate).__name__):
-                    self.assertIs(type(candidate), dict)
-                    self.assertFalse(verify(execution_binding=candidate)["verified"])
-            forged = dict(original)
-            forged["_authority"] = observer._EXECUTION_BINDING_AUTHORITY
-            forged["_consumed"] = False
-            self.assertFalse(verify(execution_binding=forged)["verified"])
-            with self.assertRaisesRegex(TypeError, "session-issued"):
-                observer.AuthenticatedBinaryExecutionBinding(
-                    dict(original), authority=object(),
-                )
-
-            (workspace / "mutation").write_text("changed")
-            self.assertFalse(verify()["verified"])
-            (workspace / "mutation").unlink()
-            (scenario_root / "cache" / "mutation").write_text("changed")
-            self.assertFalse(verify()["verified"])
+                copy_factories = {
+                    "copy": lambda value, _session: copy.copy(value),
+                    "deepcopy": lambda value, _session: copy.deepcopy(value),
+                    "dict": lambda value, _session: dict(value),
+                    "json": lambda value, _session: json.loads(json.dumps(value)),
+                    "internal lifecycle copy": lambda _value, bound_session: bound_session.command_observations[0],
+                }
+                for label, copy_factory in copy_factories.items():
+                    copied_session, copied_completed, copied_evidence = issue()
+                    candidate = copy_factory(copied_evidence, copied_session)
+                    with self.subTest(copy_type=label):
+                        self.assertFalse(verify(copied_session, copied_completed, candidate)["verified"])
+                        self.assertFalse(verify(copied_session, copied_completed, copied_evidence)["verified"])
 
     def test_authenticated_binary_one_command_revoked_probe_plan_is_descriptor_bound(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -346,7 +290,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 )
             self.assertEqual(completed.args, ["<authenticated-binary-fd>", *observer.REVOKED_TARGET_PROBE_ARGV])
             self.assertEqual((completed.returncode, completed.stdout, completed.stderr), (1, "", expected_stderr))
-            self.assertIs(type(binding), observer.AuthenticatedBinaryExecutionBinding)
+            self.assertIs(type(binding), dict)
             self.assertEqual(binding["mechanism"], "linux-raw-execveat-at-empty-path-authenticated-fd")
             self.assertEqual(binding["pre"]["descriptor_identity"], binding["post"]["descriptor_identity"])
             self.assertEqual(binding["pre"]["path_identity"], binding["post"]["path_identity"])
@@ -994,6 +938,48 @@ import run_launch_evidence_e2e
                     os.waitpid(session._last_child_pid, os.WNOHANG)
             finally:
                 os.close(descriptor)
+
+    def test_authenticated_image_cannot_inherit_an_unrelated_inheritable_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "agentplugins"
+            token = b"unrelated-inheritable-descriptor"
+            read_fd, write_fd = os.pipe()
+            os.set_inheritable(read_fd, True)
+            os.write(write_fd, token)
+            body = (
+                "#!/usr/bin/python3\nimport os,sys\n"
+                "try:\n inherited = os.read(int(os.environ['UAP_UNRELATED_FD']), 31)\n"
+                "except OSError:\n inherited = b''\n"
+                f"if inherited == {token!r}:\n sys.stderr.write('unrelated descriptor inherited\\n');raise SystemExit(91)\n"
+                "if sys.argv[1:] == ['version']:\n print('agentplugins 0.1.18')\n"
+                "else:\n sys.stderr.write('exact revoked probe rejection\\n');raise SystemExit(1)\n"
+            ).encode()
+            binary.write_bytes(body)
+            binary.chmod(0o700)
+            try:
+                with (
+                    mock.patch.dict(os.environ, {"UAP_UNRELATED_FD": str(read_fd)}),
+                    mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SIZE", len(body)),
+                    mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SHA256", hashlib.sha256(body).hexdigest()),
+                ):
+                    session = observer.AuthenticatedBinaryExecutionSession(
+                        binary.resolve(), cwd=root,
+                        command_plan=(observer.REVOKED_TARGET_PROBE_ARGV,),
+                    )
+                    completed, _evidence = session.execute(
+                        binary.resolve(), list(observer.REVOKED_TARGET_PROBE_ARGV),
+                        cwd=root, write_authority=None,
+                    )
+                self.assertEqual((completed.returncode, completed.stdout, completed.stderr), (
+                    1, "", "exact revoked probe rejection\n",
+                ))
+                self.assertTrue(session._closed)
+                self.assertTrue(os.get_inheritable(read_fd))
+                self.assertEqual(os.read(read_fd, len(token)), token)
+            finally:
+                os.close(read_fd)
+                os.close(write_fd)
 
     def test_authenticated_binary_fd_exec_unavailable_fails_enotsup_without_path_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

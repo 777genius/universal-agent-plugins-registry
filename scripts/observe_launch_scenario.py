@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
@@ -199,26 +200,6 @@ CONFORMANCE_KEY_ID = "launch-conformance-only"
 CONFORMANCE_SEED = hashlib.sha256(b"UAP launch evidence conformance key; never production").digest()
 RELEASED_AGENTPLUGINS_0_1_18_SIZE = 11_677_880
 RELEASED_AGENTPLUGINS_0_1_18_SHA256 = "9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779"
-_EXECUTION_BINDING_AUTHORITY = object()
-
-
-class AuthenticatedBinaryExecutionBinding(dict[str, Any]):
-    """In-process proof emitted only around one authenticated descriptor exec."""
-
-    def __init__(self, evidence: dict[str, Any], *, authority: object):
-        if authority is not _EXECUTION_BINDING_AUTHORITY:
-            raise TypeError("authenticated execution bindings are session-issued")
-        super().__init__(evidence)
-        self._authority = authority
-        self._consumed = False
-
-    def __copy__(self) -> dict[str, Any]:
-        return dict(self)
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> dict[str, Any]:
-        return copy.deepcopy(dict(self), memo)
-
-
 def exact_plugin_data_lifecycle_argv(scenario_targets: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
     target = contract_target_argument(scenario_targets)
     return (
@@ -1653,7 +1634,7 @@ def verify_revoked_target_probe_result(
     argv: list[str], environment: dict[str, str], scenario_root: Path,
     writable_bindings: dict[str, str], before: dict[str, dict[str, Any]],
     after: dict[str, dict[str, Any]], execution_binding: dict[str, Any] | None,
-    binary: Path,
+    execution_session: AuthenticatedBinaryExecutionSession | None, binary: Path,
 ) -> dict[str, Any]:
     """Verify the full pinned process result and whole-root zero-mutation proof."""
     process_argv = list(completed.args) if isinstance(completed.args, (list, tuple)) else []
@@ -1672,14 +1653,14 @@ def verify_revoked_target_probe_result(
             and all(type(item) is int for item in value.values())
         )
 
-    authentic_binding = bool(
-        type(execution_binding) is AuthenticatedBinaryExecutionBinding
-        and execution_binding._authority is _EXECUTION_BINDING_AUTHORITY
-        and execution_binding._consumed is False
+    pending_execution = bool(
+        type(execution_session) is AuthenticatedBinaryExecutionSession
+        and AuthenticatedBinaryExecutionSession._consume_pending_execution(
+            execution_session, completed, execution_binding,
+        )
     )
+    authentic_binding = pending_execution and type(execution_binding) is dict
     binding = execution_binding if authentic_binding else {}
-    if authentic_binding:
-        execution_binding._consumed = True
     pre = binding.get("pre") if isinstance(binding.get("pre"), dict) else {}
     post = binding.get("post") if isinstance(binding.get("post"), dict) else {}
     identities_bound = bool(
@@ -2742,6 +2723,21 @@ def _raw_execveat(fd: int, argv: list[str], environment: dict[str, str]) -> None
     raise OSError(code, f"raw execveat failed: {os.strerror(code)}")
 
 
+def _mark_all_descriptors_close_on_exec() -> None:
+    """Atomically deny inheritance to the complete descriptor range."""
+    close_range = getattr(_LIBC, "close_range", None)
+    if close_range is None:
+        raise OSError(errno.ENOTSUP, "close_range CLOEXEC is required for descriptor execution")
+    ctypes.set_errno(0)
+    if close_range(
+        ctypes.c_uint(3), ctypes.c_uint(0xFFFFFFFF), ctypes.c_uint(_CLOSE_RANGE_CLOEXEC),
+    ) != 0:
+        code = ctypes.get_errno() or errno.EIO
+        if code == errno.ENOSYS:
+            code = errno.ENOTSUP
+        raise OSError(code, "could not make the complete child descriptor range close-on-exec")
+
+
 def _install_path_authority_seccomp() -> None:
     """Install a no-fallback inherited filter before an authority-using exec."""
     machine = _linux_machine()
@@ -3004,6 +3000,34 @@ def _stable_directory_identity(value: os.stat_result) -> dict[str, int]:
     }
 
 
+def _bind_pending_execution_state(session_type: type) -> type:
+    """Keep exact one-use process/evidence pairs outside mutable session state."""
+    pending: weakref.WeakKeyDictionary[Any, tuple[Any, Any]] = weakref.WeakKeyDictionary()
+    lock = threading.Lock()
+    execute = session_type.execute
+
+    def execute_and_bind(self, *args, **kwargs):
+        completed, evidence = execute(self, *args, **kwargs)
+        if self._command_plan == (REVOKED_TARGET_PROBE_ARGV,):
+            with lock:
+                pending[self] = (completed, evidence)
+        return completed, evidence
+
+    def consume(self, completed, evidence) -> bool:
+        with lock:
+            issued = pending.pop(self, None)
+        return bool(
+            issued is not None
+            and issued[0] is completed
+            and issued[1] is evidence
+        )
+
+    session_type.execute = execute_and_bind
+    session_type._consume_pending_execution = consume
+    return session_type
+
+
+@_bind_pending_execution_state
 class AuthenticatedBinaryExecutionSession:
     """One-use, descriptor-bound execution of the exact public lifecycle.
 
@@ -3239,6 +3263,7 @@ class AuthenticatedBinaryExecutionSession:
                         _install_path_authority_guard(write_authority)
                     else:
                         _install_path_authority_seccomp()
+                    _mark_all_descriptors_close_on_exec()
                     exec_fd = self._fd
                     if not self._body.startswith(b"\x7fELF"):
                         # A child-local inheritable duplicate is required for
@@ -3391,7 +3416,7 @@ class AuthenticatedBinaryExecutionSession:
                     os.close(descriptor)
                 except OSError:
                     pass
-        binding = AuthenticatedBinaryExecutionBinding({
+        binding = {
             "mechanism": "linux-raw-execveat-at-empty-path-authenticated-fd",
             "syscall_number": self._execveat_syscall,
             "empty_path": True,
@@ -3401,8 +3426,8 @@ class AuthenticatedBinaryExecutionSession:
             "argv": list(completed.args), "path": str(self.path),
             "parent_path": str(self.parent_path),
             "pre": pre, "post": post,
-        }, authority=_EXECUTION_BINDING_AUTHORITY)
-        self.command_observations.append(copy.deepcopy(dict(binding)))
+        }
+        self.command_observations.append(copy.deepcopy(binding))
         self._next_command += 1
         if completed.returncode != 0:
             self._compromised = True
@@ -4948,6 +4973,7 @@ def _load_linux_libc() -> ctypes.CDLL | None:
 _LIBC = _load_linux_libc()
 _STATX_MNT_ID = 0x1000
 _AT_EMPTY_PATH = 0x1000
+_CLOSE_RANGE_CLOEXEC = 1 << 2
 _AT_SYMLINK_NOFOLLOW = 0x100
 _IN_MODIFY = 0x00000002
 _IN_ATTRIB = 0x00000004
@@ -6743,7 +6769,8 @@ def revoked_boundary_scenario(
         new_target, probe, argv=list(REVOKED_TARGET_PROBE_ARGV), environment=revoked_env,
         scenario_root=probe_root, writable_bindings=writable_bindings,
         before=before_probe_root, after=after_probe_root,
-        execution_binding=probe_execution_binding, binary=binary,
+        execution_binding=probe_execution_binding,
+        execution_session=probe_binary_session, binary=binary,
     )
     probe_verified = probe_verifier["verified"] and before_probe == after_probe
     repair = execute(["repair", "context7", "--target", target, "--format", "json"], revoked_env)
