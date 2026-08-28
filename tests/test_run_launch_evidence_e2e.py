@@ -466,6 +466,7 @@ import run_launch_evidence_e2e
             output = run_root / "evidence" / "launch-evidence.json"
             completed = subprocess.run([
                 sys.executable, str(MODULE), "--mode", "fixture-only",
+                "--uap-sha", "a" * 40,
                 "--consent", str(CONSENT), "--run-root", str(run_root),
                 "--output", str(output),
             ], cwd=ROOT, text=True, capture_output=True, check=False)
@@ -509,7 +510,7 @@ import run_launch_evidence_e2e
     def test_fixture_mode_is_explicitly_non_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e, "ROOT", Path("/opt/test-repository")):
             evidence = self.fixture_harness(Path(tmp) / "fresh").export()
-        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["schema_version"], 4)
         self.assertEqual(evidence["run"]["mode"], "fixture-only")
         self.assertFalse(evidence["run"]["runtime_claims"])
         self.assertFalse(evidence["summary"]["required_gates_complete"])
@@ -2241,8 +2242,8 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertNotIn("lifecycle_verified", item["properties"])
         self.assertNotIn("lifecycle_operations", item["properties"])
         self.assertNotIn("copilot", schema["$defs"]["nativeDiscoveryEvidence"]["properties"]["client"]["enum"])
-        launch = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
-        discovery_rule = launch["properties"]["matrix"]["items"]["allOf"][0]
+        launch = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
+        discovery_rule = launch["properties"]["matrix"]["items"]["allOf"][1]
         self.assertEqual(discovery_rule["then"]["properties"]["details"]["properties"]["evidence_basis"]["const"], "native_client_command")
         with tempfile.TemporaryDirectory() as tmp:
             artifact = Path(tmp) / "external.json"
@@ -2407,7 +2408,7 @@ with tempfile.TemporaryDirectory() as temporary:
         evidence["matrix"].append(row)
         evidence["run"]["mode"] = "contract-test"
         e2e.assert_redacted(evidence)
-        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
         jsonschema.Draft202012Validator(schema).evolve(
             schema=schema["properties"]["matrix"]["items"],
         ).validate(row)
@@ -2423,7 +2424,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 e2e.assert_redacted(rejected)
 
     def test_launch_schema_rejects_unknown_outcome_and_mutable_ref(self) -> None:
-        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
         evidence = self.fixture_harness().export()
         evidence["matrix"][0]["outcome"] = "not_tested"
         with self.assertRaises(jsonschema.ValidationError):

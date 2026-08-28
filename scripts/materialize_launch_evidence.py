@@ -32,14 +32,14 @@ from launch_observer_signatures import (  # noqa: E402
 )
 from sequence_boundaries import parse_public_sequence  # noqa: E402
 from two_lane_evidence import (  # noqa: E402
-    UAP_COMMIT,
+    require_uap_sha,
+    validate_launch_schema,
     validate_completed_readiness,
     sha256_file as policy_sha256_file,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCH_SCHEMA = ROOT / "tests" / "e2e" / "schemas" / "launch-evidence.schema.json"
 OBSERVER_SCHEMA_ROOT = ROOT / "tests" / "e2e" / "schemas"
 EVIDENCE_SCHEMA = ROOT / "schemas" / "directory-evidence-artifact.schema.json"
 DIRECTORY_EVIDENCE_SCHEMA = ROOT / "schemas" / "directory-evidence.schema.json"
@@ -133,7 +133,7 @@ def applicability(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def selected_rows(launch: dict[str, Any]) -> list[dict[str, Any]]:
-    if launch.get("evidence_class") != "released_binary":
+    if launch.get("schema_version") != 3 and launch.get("evidence_class") != "released_binary":
         fail("Directory accepts only released-binary runtime evidence")
     rows: list[dict[str, Any]] = []
     for row in launch["matrix"]:
@@ -375,11 +375,15 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
     launch = read_json(launch_path, "launch evidence")
     observer_bytes = read_bytes_bounded(bundle_path, MAX_FILE_BYTES)
     observer = parse_json_bytes(observer_bytes, "signed observer bundle", max_bytes=MAX_FILE_BYTES)
-    validate_with_schema(launch, LAUNCH_SCHEMA)
+    try:
+        validate_launch_schema(launch, historical=launch.get("schema_version") == 3)
+    except ValueError as error:
+        fail(str(error))
     validate_evidence_redaction(launch, context="canonical launch evidence")
-    if launch.get("evidence_class") != "released_binary" or launch["run"].get("mode") != "enforced" or launch["run"].get("runtime_claims") is not True:
+    if (launch.get("schema_version") == 4 and launch.get("evidence_class") != "released_binary") or launch["run"].get("mode") != "enforced" or launch["run"].get("runtime_claims") is not True:
         fail("only enforced runtime launch evidence is publishable")
-    if launch["summary"].get("released_binary_gate_complete") is not True or launch["summary"].get("hero_runtime_results") != 15:
+    gate = "released_binary_gate_complete" if launch.get("schema_version") == 4 else "required_gates_complete"
+    if launch["summary"].get(gate) is not True or launch["summary"].get("hero_runtime_results") != 15:
         fail("launch evidence does not prove the complete stable gate")
     if launch["run"].get("github_sha") != source_digest:
         fail("launch evidence workflow source digest mismatch")
@@ -530,7 +534,7 @@ def attach_attestation_bundle(files: Mapping[str, bytes], body: bytes) -> dict[s
 
 
 def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
-                             readiness_body: bytes) -> dict[str, bytes]:
+                             readiness_body: bytes, *, uap_sha: str) -> dict[str, bytes]:
     """Validate and add gate-only sidecars without projecting policy rows."""
     result = dict(files)
     result.pop("SHA256SUMS", None)
@@ -539,12 +543,15 @@ def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
     readiness = parse_json_bytes(readiness_body, "two-lane readiness", max_bytes=MAX_FILE_BYTES)
     if not all(isinstance(item, dict) for item in (runtime, policy, readiness)):
         fail("two-lane evidence sidecars must be objects")
+    if policy_body != canonical_json(policy) or readiness_body != canonical_json(readiness):
+        fail("two-lane evidence sidecars must be the canonical bytes bound by readiness")
+    uap_sha = require_uap_sha(uap_sha)
     validate_completed_readiness(
         readiness, runtime, policy,
         scenario_digest=policy_sha256_file(ROOT / "tests/e2e/launch-scenarios.json"),
         harness_digest=policy_sha256_file(ROOT / "tests/e2e/source-policy-tests.json"),
         overlay_digest=policy_sha256_file(ROOT / "tests/e2e/source-policy-overlay.json"),
-        uap_sha=str(runtime.get("run", {}).get("github_sha", "")),
+        uap_sha=uap_sha,
     )
     result[POLICY_EVIDENCE_NAME] = policy_body
     result[READINESS_EVIDENCE_NAME] = readiness_body
@@ -824,6 +831,9 @@ def verify_completed_state(
         path.removeprefix(root + "/"): _git(ledger_repo, ["show", f"{ledger_commit}:{path}"]).stdout
         for path in paths
     }
+    launch = parse_json_bytes(files["launch-evidence.json"], "completed launch evidence", max_bytes=MAX_FILE_BYTES)
+    if not isinstance(launch, dict):
+        fail("completed launch evidence must be an object")
     index = load_index(files)
     if (
         index.get("repository") != repository
@@ -865,11 +875,13 @@ def verify_completed_state(
             observer_key_id=observer_key_id, enforce_observer_freshness=False,
         )
         derived = attach_attestation_bundle(derived, files[ATTESTATION_BUNDLE_NAME])
-        if POLICY_EVIDENCE_NAME not in files or READINESS_EVIDENCE_NAME not in files:
-            fail("completed evidence root lacks the canonical two-lane sidecars")
-        derived = attach_two_lane_evidence(
-            derived, files[POLICY_EVIDENCE_NAME], files[READINESS_EVIDENCE_NAME],
-        )
+        if launch.get("schema_version") == 4:
+            if POLICY_EVIDENCE_NAME not in files or READINESS_EVIDENCE_NAME not in files:
+                fail("completed v4 evidence root lacks the canonical two-lane sidecars")
+            derived = attach_two_lane_evidence(
+                derived, files[POLICY_EVIDENCE_NAME], files[READINESS_EVIDENCE_NAME],
+                uap_sha=source_digest,
+            )
         write_bundle(bundle, derived)
     if files != derived:
         fail("completed permanent evidence root is not the exact canonical bundle")
@@ -967,6 +979,7 @@ def main() -> int:
     commit.add_argument("--attestation-bundle", type=Path, required=True)
     commit.add_argument("--policy-evidence", type=Path, required=True)
     commit.add_argument("--readiness-evidence", type=Path, required=True)
+    commit.add_argument("--uap-sha", required=True)
     commit.add_argument("--output", type=Path, required=True)
     completed = commands.add_parser("verify-completed")
     completed.add_argument("--source-repo", type=Path, required=True)
@@ -1039,6 +1052,7 @@ def main() -> int:
                     files,
                     read_bytes_bounded(args.policy_evidence, MAX_FILE_BYTES),
                     read_bytes_bounded(args.readiness_evidence, MAX_FILE_BYTES),
+                    uap_sha=args.uap_sha,
                 )
                 values = materialize_commits(
                     args.source_repo, args.ledger_repo, args.artifact_dir, files,

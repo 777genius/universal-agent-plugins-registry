@@ -157,6 +157,7 @@ jobs:
         run: |
           run_root="${RUNNER_TEMP}/uap-fixture-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           python scripts/run_launch_evidence_e2e.py --mode fixture-only \
+            --uap-sha "$GITHUB_SHA" \
             --consent tests/e2e/fixtures/fixture-only-consent.json \
             --run-root "$run_root" --output "$run_root/evidence/launch-evidence.json"
           python -m unittest tests.test_run_launch_evidence_e2e tests.test_materialize_launch_evidence tests.test_workflow_contracts
@@ -301,10 +302,11 @@ jobs:
             --npm-package-root "$npm_package_root" --npm-binary-cache "$AGENTPLUGINS_CACHE_DIR" \
             --output npm-observation.json
           sha256sum npm-observation.json > npm-observation.SHA256SUMS
-          mkdir prepared-observer-context prepared-producer-inputs
+          mkdir prepared-observer-context prepared-producer-inputs prepared-policy-inputs
           cp "$run_root/context.json" prepared-observer-context/context.json
           cp "$run_root/context.json" prepared-producer-inputs/context.json
           cp -R "$run_root/release" "$run_root/directory" prepared-producer-inputs/
+          cp "$run_root/release/release-manifest.json" "$run_root/release/checksums.txt" prepared-policy-inputs/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-node22-${{ github.run_id }}-${{ github.run_attempt }}
@@ -327,6 +329,15 @@ jobs:
         with:
           name: prepared-producer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: prepared-producer-inputs
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prepared-policy-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            prepared-policy-inputs/release-manifest.json
+            prepared-policy-inputs/checksums.txt
           if-no-files-found: error
           retention-days: 1
           overwrite: false
@@ -448,7 +459,7 @@ jobs:
       - run: python -m pip install check-jsonschema==0.37.4
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: prepared-producer-inputs-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
+          name: prepared-policy-inputs-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
           path: prepared
       - name: Run exact production-source policy tests without editing production source
         id: policy
@@ -458,8 +469,8 @@ jobs:
           mkdir source-policy-evidence
           python scripts/run_source_policy_conformance.py \
             --source _plugin-kit-source \
-            --release-manifest prepared/release/release-manifest.json \
-            --release-checksums prepared/release/checksums.txt \
+            --release-manifest prepared/release-manifest.json \
+            --release-checksums prepared/checksums.txt \
             --uap-sha "$GITHUB_SHA" \
             --output source-policy-evidence/source-policy-conformance.json
           check-jsonschema --schemafile schemas/e2e/source-policy-conformance.schema.json source-policy-evidence/source-policy-conformance.json
@@ -745,6 +756,7 @@ jobs:
           EVIDENCE_RUN_ATTEMPT: ${{ needs.protected-observer-inputs.outputs.evidence_run_attempt }}
         run: |
           python scripts/run_launch_evidence_e2e.py --prepared-context "$RUN_ROOT/context.json" \
+            --uap-sha "$GITHUB_SHA" \
             --asset-name agentplugins_0.1.18_linux_amd64 \
             --native-observations native-observations \
             --observer-bundle "$RUN_ROOT/live-inputs/observer-bundle.json" \

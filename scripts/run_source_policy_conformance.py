@@ -20,7 +20,6 @@ from two_lane_evidence import (
     RELEASE_CHECKSUMS_DIGEST,
     RELEASE_MANIFEST_DIGEST,
     POLICY_SCENARIO_IDS,
-    UAP_COMMIT,
     canonical_json,
     sha256,
     sha256_file,
@@ -119,7 +118,7 @@ def run_test(source: Path, package: str, name: str, go: str, *, scratch: Path) -
 
 
 def produce(source: Path, manifest: Path, checksums: Path, *, go: str,
-            uap_sha: str = UAP_COMMIT) -> dict[str, Any]:
+            uap_sha: str) -> dict[str, Any]:
     if len(uap_sha) != 40 or any(character not in "0123456789abcdef" for character in uap_sha):
         raise ValueError("invalid universal-agent-plugins source SHA")
     before = validate_source_identity(source)
@@ -205,7 +204,7 @@ def main() -> int:
     parser.add_argument("--release-manifest", type=Path, required=True)
     parser.add_argument("--release-checksums", type=Path, required=True)
     parser.add_argument("--go", default="go")
-    parser.add_argument("--uap-sha", default=UAP_COMMIT)
+    parser.add_argument("--uap-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists() or args.output.is_symlink():

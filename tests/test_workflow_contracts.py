@@ -62,6 +62,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("build_two_lane_readiness.py", readiness_body)
         self.assertIn("two-lane-readiness.schema.json", readiness_body)
 
+    def test_source_policy_transport_contains_no_released_executable(self) -> None:
+        launch = load(LAUNCH)
+        producer = launch["jobs"]["node22-npm-facade"]
+        policy = launch["jobs"]["source-policy-conformance"]
+        upload = next(step for step in producer["steps"] if step.get("with", {}).get("name", "").startswith("prepared-policy-inputs-"))
+        self.assertEqual(set(upload["with"]["path"].splitlines()), {
+            "prepared-policy-inputs/release-manifest.json", "prepared-policy-inputs/checksums.txt",
+        })
+        downloads = [step["with"]["name"] for step in policy["steps"] if "download-artifact" in step.get("uses", "")]
+        self.assertEqual(len(downloads), 1)
+        self.assertTrue(downloads[0].startswith("prepared-policy-inputs-"))
+        self.assertNotIn("prepared-producer-inputs", yaml.safe_dump(policy))
+        self.assertNotRegex(yaml.safe_dump(policy), r"agentplugins_0\.1\.18_(?:linux|darwin|windows)")
+
     def test_public_sequence_inputs_stay_canonical_strings_across_reusable_edges(self) -> None:
         launch = load(LAUNCH)
         live = load(LIVE)

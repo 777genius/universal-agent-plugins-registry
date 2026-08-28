@@ -287,12 +287,16 @@ EXPECTED_ACCEPTANCE_SCENARIOS = tuple(
         "signed_sequence_not_semver",
     }
 )
+_CANONICAL_SCENARIOS = json.loads(SCENARIOS.read_text())
+_RUNTIME_LISTS = classified_runtime_lists(_CANONICAL_SCENARIOS)
 EXPECTED_COUNTS = {
     "directory_products": 26, "directory_lifecycle_rows": 78,
-    "hero_lifecycle_rows": 15, "hero_runtime_rows": 15,
-    "context7_grouped_rows": 4, "chatgpt_rows": 1,
-    "shared_backend_rows": 1, "acceptance_postcondition_rows": 10,
-    "native_platform_rows": 7, "fault_rows": 13, "journey_rows": 3,
+    "hero_lifecycle_rows": len(_CANONICAL_SCENARIOS["heroes"]) * len(_CANONICAL_SCENARIOS["runtime_clients"]),
+    "hero_runtime_rows": len(_CANONICAL_SCENARIOS["heroes"]) * len(_CANONICAL_SCENARIOS["runtime_clients"]),
+    "context7_grouped_rows": len(_CANONICAL_SCENARIOS["context7_lifecycle"]), "chatgpt_rows": 1,
+    "shared_backend_rows": 1, "acceptance_postcondition_rows": len(_RUNTIME_LISTS["acceptance"]),
+    "native_platform_rows": 7, "fault_rows": len(_RUNTIME_LISTS["fault_adapter_advanced"]),
+    "journey_rows": len(_CANONICAL_SCENARIOS["journeys"]),
 }
 OUTCOMES = {"passed", "failed", "inconclusive", "not_applicable"}
 DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -2924,7 +2928,7 @@ class LaunchHarness:
         runtime_lists = classified_runtime_lists(self.config)
         required_ids = list(runtime_lists["fault_adapter_advanced"] + runtime_lists["acceptance"]) + self.config["journeys"] + ["shared_copilot_vscode_backend"]
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "evidence_class": "released_binary" if self.mode == "enforced" else "fixture_contract",
             "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": exported_root_id(self.challenge), "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "caller_event_name": self.caller_event_name, "caller_ref": self.caller_ref, "caller_workflow_ref": self.caller_workflow_ref, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
             "release": {"repository": read_production_config()["cli_release_repository"] if self.mode == "enforced" else None, "tag": self.release_tag, "tag_commit": self.release_manifest.get("commit"), "release_id": self.release_identity.get("release_id"), "immutable": self.release_identity.get("immutable") if self.mode == "enforced" else None, "manifest_digest": self.release_manifest_digest, "checksums_digest": self.release_checksums_digest},
@@ -3103,6 +3107,7 @@ def validate_enforced_scenario_coverage(rows: list[dict[str, Any]], config: dict
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("enforced", "fixture-only"), default="enforced")
+    parser.add_argument("--uap-sha", required=True, help="exact universal-agent-plugins source commit")
     parser.add_argument("--binary", type=Path, help="exact Agent Plugins CLI binary")
     parser.add_argument("--binary-digest", help="sha256 checksum of the exact binary")
     parser.add_argument("--expected-version", help="exact stable agentplugins version (0.1.8 or newer)")
@@ -3123,6 +3128,8 @@ def main() -> int:
     parser.add_argument("--consent", type=Path, required=True, help="explicit stable-launch E2E consent artifact")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if FULL_SHA.fullmatch(args.uap_sha) is None:
+        raise ValueError("--uap-sha must be one canonical 40-hex commit")
     release_manifest = None
     release_identity = None
     release_manifest_digest = None
@@ -3152,6 +3159,8 @@ def main() -> int:
         release_checksums_digest = prepared["release_checksums_digest"]
         release_tag = prepared["cli_release_tag"]
         github = prepared["github"]
+        if github.get("sha") != args.uap_sha:
+            raise ValueError("prepared runtime identity differs from --uap-sha")
         challenge = prepared["challenge"]
         if challenge.get("release_manifest_digest") != release_manifest_digest or challenge.get("directory_digest") != prepared["directory"]["digest"] or challenge.get("scenario_contract_digest") != sha256_file(SCENARIOS):
             raise ValueError("prepared challenge is not bound to release and Directory digests")

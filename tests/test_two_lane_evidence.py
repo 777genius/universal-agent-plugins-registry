@@ -22,25 +22,65 @@ def digest(character: str = "a") -> str:
     return "sha256:" + character * 64
 
 
+FIXTURE_UAP_SHA = "b" * 40
+
+
 def runtime_evidence(passed: int = 15) -> dict:
+    rows = []
+    pairs = ((plugin, client) for plugin in lanes.HERO_PLUGINS for client in lanes.RUNTIME_CLIENTS)
+    for ordinal, (plugin, client) in enumerate(pairs):
+        tuple_value = {
+            "product_id": plugin, "tree_digest": digest("1"), "manifest_digest": digest("2"),
+            "distribution_id": f"fixture/{plugin}", "distribution_kind": "community",
+            "release_sequence": 1, "package_version": "1.0.0", "source_repository": "fixture/repository",
+            "source_revision": "d" * 40, "source_path": f"plugins/{plugin}", "snapshot_sequence": 1,
+            "snapshot_digest": digest("a"), "binary_digest": lanes.RELEASED_LINUX_AMD64_DIGEST,
+            "dependency_identity": "fixture", "installer_version": "0.1.18", "adapter_version": "0.1.18",
+            "client_version": "1.0.0", "os": "linux", "architecture": "amd64",
+            "observed_at": "2026-08-28T00:00:00Z",
+        }
+        rows.append({
+            "id": f"{ordinal:024x}", "scenario": "hero_5x3_runtime", "plugin": plugin, "client": client,
+            "level": "runtime", "outcome": "passed" if ordinal < passed else "failed", "tuple": tuple_value,
+            "reason": "fixture", "details": {"evidence_basis": "protected_external_observer",
+                "runtime_proof": True, "native_discovery_proof": True,
+                "release_manifest_digest": lanes.RELEASE_MANIFEST_DIGEST,
+                "release_checksums_digest": lanes.RELEASE_CHECKSUMS_DIGEST,
+                "directory_digest": digest("a"), "scenario_id": "hero_5x3_runtime",
+                "native_discovery_evidence": {}},
+        })
     return {
+        "schema_version": 4,
         "evidence_class": "released_binary",
-        "run": {"mode": "enforced", "runtime_claims": True, "github_sha": "b" * 40,
-                "cli": {"version": "0.1.18", "binary_digest": lanes.RELEASED_LINUX_AMD64_DIGEST}},
+        "run": {"id": "1" * 16, "mode": "enforced", "runtime_claims": True, "github_sha": FIXTURE_UAP_SHA,
+                "observed_at": "2026-08-28T00:00:00Z", "platform": "linux", "architecture": "amd64",
+                "disposable": True, "root_id": "2" * 16, "github_run_id": "1", "github_run_attempt": "1",
+                "caller_event_name": "push", "caller_ref": "refs/heads/main",
+                "caller_workflow_ref": "fixture/repository/.github/workflows/directory-publication.yml@refs/heads/main",
+                "challenge": "3" * 64, "observer_bundle_digest": digest("4"),
+                "cli": {"available": True, "version": "0.1.18", "binary_digest": lanes.RELEASED_LINUX_AMD64_DIGEST}},
         "release": {"repository": lanes.PLUGIN_KIT_REPOSITORY, "tag": lanes.PLUGIN_KIT_TAG,
-                    "tag_commit": lanes.PLUGIN_KIT_COMMIT, "immutable": True,
+                    "tag_commit": lanes.PLUGIN_KIT_COMMIT, "release_id": 1, "immutable": True,
                     "manifest_digest": lanes.RELEASE_MANIFEST_DIGEST,
                     "checksums_digest": lanes.RELEASE_CHECKSUMS_DIGEST},
-        "directory": {"origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins/" + "c" * 40 + "/registry/schemas/1/",
+        "directory": {"origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins/" + FIXTURE_UAP_SHA + "/registry/schemas/1/",
                       "sequence": 1, "snapshot_digest": digest("a"), "trust_root_digest": digest("b")},
+        "scenario_contract": {"id": "acceptance-26.1-stable-release-v2", "digest": digest("c"),
+            "expected_ids": [f"acceptance-{i}" for i in range(10)],
+            "required_singleton_ids": [f"singleton-{i}" for i in range(27)],
+            "expected_counts": {f"count-{i}": 1 for i in range(9)}},
         "summary": {
+            "passed": passed, "failed": 15 - passed, "inconclusive": 0, "not_applicable": 0,
+            "required_gates_complete": passed == 15,
             "released_binary_gate_complete": passed == 15,
             "hero_runtime_results": passed,
         },
-        "matrix": [
-            {"scenario": "hero_5x3_runtime", "outcome": "passed"}
-            for _ in range(passed)
-        ],
+        "matrix": rows,
+        "privacy": {"redacted_export": True, "consent_artifact_digest": digest("6"),
+            "pseudonymous_identity_id": "fixture-id", "pseudonymous_workspace_id": "fixture-workspace",
+            "dedicated_identity": True, "disposable_project_status": "disposed", "operation_mode": "synthetic",
+            "auth_origin": "none", "cleanup_outcome": "cleaned", "contains_absolute_home_paths": False,
+            "contains_credentials": False, "real_user_project_used": False, "auth_copied": False},
     }
 
 
@@ -51,14 +91,19 @@ def policy_evidence(passed: int = 11) -> dict:
         "plugin_kit_commit": lanes.PLUGIN_KIT_COMMIT,
         "release_manifest_digest": lanes.RELEASE_MANIFEST_DIGEST,
         "release_checksums_digest": lanes.RELEASE_CHECKSUMS_DIGEST,
-        "uap_sha": lanes.UAP_COMMIT,
+        "uap_sha": FIXTURE_UAP_SHA,
         "scenario_digest": digest("3"),
         "harness_digest": digest("4"),
         "overlay_digest": digest("5"),
+        "production_source_tree_before": lanes.PLUGIN_KIT_PRODUCTION_TREE_DIGEST,
+        "production_source_tree_after": lanes.PLUGIN_KIT_PRODUCTION_TREE_DIGEST,
     }
     results = []
+    harness = json.loads((ROOT / "tests/e2e/source-policy-tests.json").read_text())["tests"]
     for index, scenario_id in enumerate(lanes.POLICY_SCENARIO_IDS):
-        proof = {"runtime_evidence_eligible": False}
+        test = {**harness[scenario_id], "passed": index < passed, "transcript_digest": digest("9")}
+        proof = {"id": scenario_id, "source_test": test, "fixture_key_id": lanes.FIXTURE_KEY_ID,
+                 "overlay_digest": digest("5"), "runtime_evidence_eligible": False}
         if scenario_id == "revoked_operations_boundary":
             stderr = (
                 "Resolving and validating one Agent Plugin package for every selected target...\n"
@@ -74,7 +119,7 @@ def policy_evidence(passed: int = 11) -> dict:
         results.append({
             "id": scenario_id,
             "outcome": "passed" if index < passed else "failed",
-            "test": {"passed": index < passed},
+            "test": test,
             "proof": proof,
             "proof_digest": lanes.sha256(lanes.canonical_json(proof)),
         })
@@ -95,7 +140,7 @@ class TwoLaneEvidenceTests(unittest.TestCase):
     def identity(self) -> dict[str, str]:
         return {
             "scenario_digest": digest("3"), "harness_digest": digest("4"),
-            "overlay_digest": digest("5"), "uap_sha": lanes.UAP_COMMIT,
+            "overlay_digest": digest("5"), "uap_sha": FIXTURE_UAP_SHA,
         }
 
     def test_exact_policy_set_rejects_missing_duplicate_renamed_and_extra(self) -> None:
@@ -117,6 +162,76 @@ class TwoLaneEvidenceTests(unittest.TestCase):
         for runtime, policy in ((runtime_evidence(), policy_evidence(10)), (runtime_evidence(14), policy_evidence())):
             with self.assertRaises(lanes.TwoLaneEvidenceError):
                 lanes.build_readiness_envelope(runtime, policy, **self.identity())
+
+    def test_runtime_rejects_arbitrary_fifteen_rows_and_identity_forgery(self) -> None:
+        baseline = runtime_evidence()
+        mutations = []
+        duplicate = copy.deepcopy(baseline)
+        duplicate["matrix"][0]["plugin"] = duplicate["matrix"][1]["plugin"]
+        duplicate["matrix"][0]["client"] = duplicate["matrix"][1]["client"]
+        mutations.append(duplicate)
+        wrong_outcome = copy.deepcopy(baseline); wrong_outcome["matrix"][0]["outcome"] = "failed"; mutations.append(wrong_outcome)
+        wrong_tuple = copy.deepcopy(baseline); wrong_tuple["matrix"][0]["tuple"]["binary_digest"] = digest("7"); mutations.append(wrong_tuple)
+        policy_row = copy.deepcopy(baseline); policy_row["matrix"][0]["scenario"] = lanes.POLICY_SCENARIO_IDS[0]; mutations.append(policy_row)
+        wrong_sha = copy.deepcopy(baseline); wrong_sha["run"]["github_sha"] = "c" * 40; mutations.append(wrong_sha)
+        import jsonschema
+        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
+        for value in mutations[:4]:
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.Draft202012Validator(schema).validate(value)
+        for value in mutations:
+            with self.subTest(mutation=mutations.index(value)), self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.build_readiness_envelope(value, policy_evidence(), **self.identity())
+
+    def test_policy_rejects_canonical_mapping_proof_and_tree_defects(self) -> None:
+        baseline = policy_evidence()
+        mutations = []
+        wrong_package = copy.deepcopy(baseline); wrong_package["results"][0]["test"]["package"] = "./attacker"; mutations.append(wrong_package)
+        mismatched_test = copy.deepcopy(baseline); mismatched_test["results"][0]["proof"]["source_test"] = {**mismatched_test["results"][0]["test"], "name": "Other"}; mutations.append(mismatched_test)
+        bad_transcript = copy.deepcopy(baseline); bad_transcript["results"][0]["test"]["transcript_digest"] = "bad"; mutations.append(bad_transcript)
+        changed_tree = copy.deepcopy(baseline); changed_tree["identities"]["production_source_tree_after"] = digest("8"); mutations.append(changed_tree)
+        import jsonschema
+        schema = json.loads((ROOT / "schemas/e2e/source-policy-conformance.schema.json").read_text())
+        for value in (wrong_package, bad_transcript, changed_tree):
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.Draft202012Validator(schema).validate(value)
+        for value in mutations:
+            with self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.validate_source_policy_evidence(value, **self.identity())
+
+    def test_schema_versions_route_without_reinterpreting_v3(self) -> None:
+        v3 = runtime_evidence()
+        v3["schema_version"] = 3
+        v3.pop("evidence_class")
+        v3["scenario_contract"]["expected_ids"] = [f"acceptance-{i}" for i in range(13)]
+        v3["scenario_contract"]["required_singleton_ids"] = [f"singleton-{i}" for i in range(38)]
+        v3["summary"].pop("released_binary_gate_complete")
+        lanes.validate_launch_schema(v3, historical=True)
+        with self.assertRaisesRegex(lanes.TwoLaneEvidenceError, "historical replay only"):
+            lanes.validate_launch_schema(v3)
+        unknown = copy.deepcopy(v3); unknown["schema_version"] = 5
+        with self.assertRaisesRegex(lanes.TwoLaneEvidenceError, "unknown"):
+            lanes.validate_launch_schema(unknown, historical=True)
+
+        schema_root = ROOT / "tests/e2e/schemas"
+        router = json.loads((schema_root / "launch-evidence.schema.json").read_text())
+        self.assertEqual(router["oneOf"], [
+            {"$ref": "launch-evidence-v3.schema.json"},
+            {"$ref": "launch-evidence-v4.schema.json"},
+        ])
+        self.assertEqual(json.loads((schema_root / "launch-evidence-v3.schema.json").read_text())["properties"]["schema_version"], {"const": 3})
+        self.assertEqual(json.loads((schema_root / "launch-evidence-v4.schema.json").read_text())["properties"]["schema_version"], {"const": 4})
+
+    def test_all_two_lane_clis_require_explicit_uap_sha(self) -> None:
+        scripts = (
+            "run_launch_evidence_e2e.py", "run_source_policy_conformance.py",
+            "build_two_lane_readiness.py", "materialize_launch_evidence.py",
+        )
+        for name in scripts:
+            body = (ROOT / "scripts" / name).read_text()
+            with self.subTest(script=name):
+                self.assertRegex(body, r'add_argument\("--uap-sha", required=True(?:,|\))')
+                self.assertNotIn("b37eda9a710b4e41bde3cc27ada56dd3b17edc40", body)
 
     def test_completed_replay_rejects_either_digest_mutation(self) -> None:
         runtime, policy = runtime_evidence(), policy_evidence()
@@ -211,7 +326,7 @@ class TwoLaneEvidenceTests(unittest.TestCase):
                 producer, "validate_release_identity",
                 return_value=(lanes.RELEASE_MANIFEST_DIGEST, lanes.RELEASE_CHECKSUMS_DIGEST),
             ):
-                value = producer.produce(source, manifest, checksums, go="go")
+                value = producer.produce(source, manifest, checksums, go="go", uap_sha=FIXTURE_UAP_SHA)
         self.assertTrue(value["production_source_unchanged"])
         self.assertEqual([row["id"] for row in value["results"]], list(lanes.POLICY_SCENARIO_IDS))
         self.assertEqual(
@@ -224,7 +339,6 @@ class TwoLaneEvidenceTests(unittest.TestCase):
         policy = policy_evidence()
         for row in policy["results"]:
             row["test"].update({
-                "package": "./package", "name": "TestPolicy",
                 "transcript_digest": digest("e"),
             })
             row["proof"].update({
@@ -234,8 +348,8 @@ class TwoLaneEvidenceTests(unittest.TestCase):
             })
             row["proof_digest"] = lanes.sha256(lanes.canonical_json(row["proof"]))
         policy["identities"].update({
-            "production_source_tree_before": digest("f"),
-            "production_source_tree_after": digest("f"),
+            "production_source_tree_before": lanes.PLUGIN_KIT_PRODUCTION_TREE_DIGEST,
+            "production_source_tree_after": lanes.PLUGIN_KIT_PRODUCTION_TREE_DIGEST,
         })
         policy_schema = json.loads((ROOT / "schemas/e2e/source-policy-conformance.schema.json").read_text())
         readiness_schema = json.loads((ROOT / "schemas/e2e/two-lane-readiness.schema.json").read_text())

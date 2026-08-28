@@ -83,7 +83,7 @@ def authoritative_rows() -> list[dict]:
 class LaunchEvidenceBundleTests(unittest.TestCase):
     def launch(self, observer: bytes) -> dict:
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "evidence_class": "released_binary",
             "run": {
                 "mode": "enforced", "runtime_claims": True,
@@ -107,7 +107,7 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         observer = evidence.canonical_json({"schema_version": 1, "signed": True})
         (root / "launch-evidence.json").write_text(json.dumps(self.launch(observer), indent=2) + "\n")
         (root / "signed-observer-bundle.json").write_bytes(observer)
-        with mock.patch.object(evidence, "validate_with_schema"):
+        with mock.patch.object(evidence, "validate_with_schema"), mock.patch.object(evidence, "validate_launch_schema"):
             return evidence.build_bundle(
                 root, repository="owner/repository",
                 workflow="owner/repository/.github/workflows/launch-evidence-e2e.yml",
@@ -545,6 +545,7 @@ class ProtectedWorkflowChainTests(unittest.TestCase):
                 bundle_identity_digest=evidence.sha256(files["bundle-identity.json"]),
             )
             with mock.patch.object(evidence, "validate_with_schema"), \
+             mock.patch.object(evidence, "validate_launch_schema"), \
              mock.patch.object(prepare.Path, "is_file", return_value=True), \
              mock.patch.object(prepare.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
                 prepare.verify_evidence_trust(

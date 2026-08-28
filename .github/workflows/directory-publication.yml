@@ -1003,6 +1003,7 @@ jobs:
           WORKFLOW_SOURCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.workflow_source_digest }}
         run: |
           python3 trusted-source/scripts/materialize_launch_evidence.py commit \
+            --uap-sha "${WORKFLOW_SOURCE_DIGEST}" \
             --artifact-dir launch-evidence --repository "${GITHUB_REPOSITORY}" \
             --workflow "${GITHUB_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml" \
             --source-ref refs/heads/main --source-digest "${WORKFLOW_SOURCE_DIGEST}" \

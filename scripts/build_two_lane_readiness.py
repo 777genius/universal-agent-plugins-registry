@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from two_lane_evidence import (
-    UAP_COMMIT, build_readiness_envelope, canonical_json, sha256_file,
+    build_readiness_envelope, canonical_json, require_uap_sha, sha256_file,
     validate_completed_readiness,
 )
 
@@ -34,16 +34,25 @@ def main() -> int:
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--completed", type=Path)
-    parser.add_argument("--uap-sha", default=UAP_COMMIT)
+    parser.add_argument("--uap-sha", required=True)
     args = parser.parse_args()
-    runtime = json.loads(args.runtime.read_text())
-    policy = json.loads(args.policy.read_text())
+    uap_sha = require_uap_sha(args.uap_sha)
+    runtime_body = args.runtime.read_bytes()
+    policy_body = args.policy.read_bytes()
+    runtime = json.loads(runtime_body)
+    policy = json.loads(policy_body)
+    if runtime_body != canonical_json(runtime) or policy_body != canonical_json(policy):
+        raise ValueError("runtime and policy inputs must be canonical evidence bytes")
     if bool(args.output) == bool(args.completed):
         raise ValueError("select exactly one of --output or --completed")
     if args.completed:
-        validate_completed_readiness(json.loads(args.completed.read_text()), runtime, policy, **identities(args.uap_sha))
+        completed_body = args.completed.read_bytes()
+        completed = json.loads(completed_body)
+        if completed_body != canonical_json(completed):
+            raise ValueError("completed readiness must use canonical bytes")
+        validate_completed_readiness(completed, runtime, policy, **identities(uap_sha))
     else:
-        value = build_readiness_envelope(runtime, policy, **identities(args.uap_sha))
+        value = build_readiness_envelope(runtime, policy, **identities(uap_sha))
         if args.output.exists() or args.output.is_symlink():
             raise ValueError("readiness output must not already exist")
         args.output.parent.mkdir(parents=True, exist_ok=True)
