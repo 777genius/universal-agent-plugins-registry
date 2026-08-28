@@ -4986,9 +4986,17 @@ class FixedAdapterContractTests(unittest.TestCase):
             contract.accept(record)
         self.assertTrue(contract.complete())
 
+        empty = json.loads(json.dumps(progressive))
+        empty["params"]["items"] = []
+        candidate = [*records[:2], empty, *records[2:]]
+        contract = fixed_adapters.KiroACPContract("cloudflare-docs", "search_cloudflare_documentation", marker)
+        for record in candidate:
+            contract.accept(record)
+        self.assertTrue(contract.complete())
+
         mutations = (
             lambda params: params.update(status="failed"),
-            lambda params: params.update(items=[]),
+            lambda params: params.update(status="loading", items=[]),
             lambda params: params.update(items=[None]),
             lambda params: params.update(extra=True),
             lambda params: params.update(sessionId="foreign"),

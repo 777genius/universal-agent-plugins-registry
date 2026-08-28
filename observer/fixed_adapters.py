@@ -1769,7 +1769,8 @@ class KiroACPContract:
             if (
                 set(params) != {"items", "sessionId", "status"}
                 or params.get("status") not in {"loading", "success"}
-                or not isinstance(items, list) or not items or len(items) > KIRO_MAX_TOOLS
+                or not isinstance(items, list) or len(items) > KIRO_MAX_TOOLS
+                or not items and params.get("status") != "success"
                 or any(not isinstance(item, dict) or not item for item in items)
             ):
                 raise ValueError("Kiro ACP progressive context notification differs")
