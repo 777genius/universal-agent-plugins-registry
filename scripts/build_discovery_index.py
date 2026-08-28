@@ -156,7 +156,10 @@ class GitHubAPI:
                     require(isinstance(value, dict), "GitHub response must be an object")
                     return value
             except urllib.error.HTTPError as error:
-                detail = error.read(4096).decode("utf-8", "replace")
+                try:
+                    detail = error.read(4096).decode("utf-8", "replace")
+                except OSError as body_error:
+                    detail = f"<unable to read response body: {type(body_error).__name__}>"
                 if error.code not in {403, 429, 500, 502, 503, 504} or attempt == 5:
                     raise GitHubHTTPError(error.code, path, detail) from error
                 secondary_limit = error.code in {403, 429}
