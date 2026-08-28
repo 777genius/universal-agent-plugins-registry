@@ -81,7 +81,8 @@ them.
 - three deterministic community bridges;
 - signed snapshot generation, verification, cache, expiry, and sequence floor;
 - static website and Git-native external submission flow;
-- six-platform `0.1.19` binaries and npm facade, with public provenance and a
+- public-release-only evidence outside the protected hero contract:
+  six-platform `0.1.19` binaries and npm facade, with public provenance and a
   clean-registry lifecycle proof;
 - contributor fork-PR E2E.
 
@@ -98,8 +99,9 @@ them.
    not replace the approved upstream Context7 tuple in the protected matrix.
    The Kiro ACP capture remains a sanitized shape summary. Its capability probes do not replace the five-result launch matrix.
    Their sequence is not asserted.
-2. The latest public CLI is `universal-agent-plugins@0.1.19`, built from exact
-   commit `6a916221cd2a67192dd13d2eb2475a6451d22723`. Its release manifest,
+2. Outside the protected hero contract, the latest public CLI is
+   `universal-agent-plugins@0.1.19`, built from exact commit
+   `6a916221cd2a67192dd13d2eb2475a6451d22723`. Its release manifest,
    checksums, six native platform proofs, npm provenance, and clean-registry
    add/info/doctor/update/remove lifecycle passed in
    [release run 33170444069](https://github.com/777genius/plugin-kit-ai/actions/runs/33170444069)
@@ -150,8 +152,9 @@ them.
 ### 3.3 Implementation checkpoint
 
 - Exact `0.1.18` release tuple: complete.
-- Latest public CLI release `0.1.19`: complete, published, provenance-verified,
-  and clean-registry lifecycle-verified.
+- Latest public CLI release `0.1.19`: public-release evidence only, outside the
+  protected hero tuple; published, provenance-verified, and clean-registry
+  lifecycle-verified.
 - Capability-specific native projection (`skill` versus `mcp`): implemented.
 - Real disposable Agent Code Navigator skill runtime: passed in Codex 0.147.0,
   Cursor 2026.08.25, and Kiro CLI 2.20.0. Cursor also passed a native Context7
