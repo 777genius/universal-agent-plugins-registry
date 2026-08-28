@@ -95,6 +95,24 @@ def public_evidence_projection(record: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
+def validate_projected_evidence_ids(
+    records: list[tuple[str, dict[str, Any]]],
+    historical_evidence: dict[str, dict[str, Any]] | None,
+) -> None:
+    """Reject a source identity that aliases different immutable public evidence."""
+    if not historical_evidence:
+        return
+    for source_id, public_record in records:
+        public_id = public_record["id"]
+        historical = historical_evidence.get(public_id)
+        if historical is not None and historical != public_record:
+            require(
+                False,
+                f"{source_id}: projected public evidence ID {public_id!r} collides with "
+                "a different immutable historical evidence record; choose a new source evidence ID",
+            )
+
+
 def repository_override(overrides: dict[str, Path], repository: str) -> Path | None:
     """Resolve GitHub repository identities without case-sensitive bypasses."""
     identity = repository.casefold()
@@ -548,7 +566,7 @@ def verified_evidence(
 
 def selected_evidence(
     source: dict[str, Any], published_distributions: set[str], config: dict[str, Any],
-    overrides: dict[str, Path],
+    overrides: dict[str, Path], historical_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     evidence = {item["id"]: item for item in source["evidence"]}
     require(len(evidence) == len(source["evidence"]), "duplicate evidence identity")
@@ -583,7 +601,10 @@ def selected_evidence(
                     f"{evidence_id}: evidence source identity mismatch",
                 )
                 selected.add(evidence_id)
-    return [public_evidence_projection(verified[item]) for item in sorted(selected)]
+    source_ids = sorted(selected)
+    projected = [public_evidence_projection(verified[item]) for item in source_ids]
+    validate_projected_evidence_ids(list(zip(source_ids, projected)), historical_evidence)
+    return projected
 
 
 def validate_upstream_default_evidence(
@@ -622,6 +643,12 @@ def validate_upstream_default_evidence(
             and observation.get("package_tree_digest") == release["tree_digest"]
             and observation.get("level") == "materialization"
             and observation.get("outcome") == "passed"
+            and observation.get("trust", {}).get("kind") == "github_actions"
+            and observation["trust"].get("workflow", "").startswith(
+                observation.get("artifact", {}).get("repository", "") + "/.github/workflows/"
+            )
+            and observation["trust"].get("source_digest")
+            == observation.get("artifact", {}).get("revision")
         }
         missing = sorted(target["client"] for target in policy["targets"] if target["client"] not in passed)
         require(
@@ -777,6 +804,7 @@ def build_candidate(
     publication_id: str, previous: dict[str, Any] | None,
     *, repository_root: Path = ROOT,
     external_overrides: dict[str, Path] | None = None,
+    historical_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     validate_with_schema(source, SOURCE_SCHEMA)
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be a full lowercase SHA")
@@ -951,6 +979,7 @@ def build_candidate(
         evidence_overrides[config["repository"]] = repository_root
     evidence = selected_evidence(
         candidate_source, set(distributions_by_id), config, evidence_overrides,
+        historical_evidence,
     )
     source_selected_ids = {
         evidence_id
@@ -1024,6 +1053,7 @@ def main() -> int:
         if args.source_tree_commit:
             validate_marker(ROOT, args.source_commit, args.source_tree_commit, args.publication_id)
         previous = None
+        historical_evidence: dict[str, dict[str, Any]] = {}
         if args.ledger:
             require(args.trusted_keys is not None, "--trusted-keys is required with --ledger")
             loaded = load_ledger_latest(
@@ -1034,9 +1064,12 @@ def main() -> int:
                 require_external_floor=True,
             )
             previous = loaded[0] if loaded else None
+            historical_evidence = loaded[2] if loaded else {}
         candidate = build_candidate(
             read_json(args.directory), load_config(args.config), args.source_commit,
-            args.publication_id, previous, external_overrides=parse_overrides(args.external_repository),
+            args.publication_id, previous,
+            external_overrides=parse_overrides(args.external_repository),
+            historical_evidence=historical_evidence,
         )
         validate_with_schema(candidate, CANDIDATE_SCHEMA)
         body = canonical_json(candidate)

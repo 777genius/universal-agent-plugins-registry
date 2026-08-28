@@ -147,16 +147,27 @@ describe('registry parsing', () => {
     }
   })
 
-  it('matches the CLI by ignoring untrusted materialization evidence', () => {
-    for (const mutation of ['missing', 'mismatched-source']) {
+  it('matches the signer-vouched CLI policy for repository-bound github_actions materialization evidence', () => {
+    for (const mutation of ['missing', 'mismatched-source', 'reviewed-external']) {
       const raw = signedFixture()
       for (const observation of raw.evidence.filter(item => item.level === 'materialization')) {
         if (mutation === 'missing') delete (observation as unknown as Record<string, unknown>).trust
-        else observation.trust.source_digest = '0'.repeat(40)
+        else if (mutation === 'mismatched-source') observation.trust.source_digest = '0'.repeat(40)
+        else observation.trust = { kind: 'reviewed_external' }
       }
       const plugin = parseDirectoryData(raw, 'published_snapshot').plugins[0]!
       assert.equal(expectedDistribution(plugin, ['codex'])?.id, 'example/demo-bridge', mutation)
     }
+  })
+
+  it('never trusts review-preview observations for distribution eligibility', () => {
+    const raw = signedFixture()
+    const preview = parseDirectoryData(raw, 'review_preview').plugins[0]!
+    const published = parseDirectoryData(raw, 'published_snapshot').plugins[0]!
+    assert.equal(expectedDistribution(published, ['codex'])?.id, 'example/demo')
+    assert.equal(expectedDistribution(preview, ['codex'])?.id, 'example/demo-bridge')
+    assert.ok(preview.distributions.flatMap(item => item.evidence).every(item => !item.trusted_for_eligibility))
+    assert.ok(preview.distributions.flatMap(item => item.package_evidence).every(item => !item.trusted_for_eligibility))
   })
 
   it('does not let unsigned, stale, or non-blocking evidence affect eligibility', () => {
@@ -406,7 +417,8 @@ describe('registry parsing', () => {
     ;(unresolved.distributions as Array<{ releases: Array<{ package_source: { revision: string | null } }> }>)[0]!.releases[0]!.package_source.revision = null
     const preview = parseDirectoryData(unresolved, 'review_preview')
     assert.equal(preview.data_source, 'review_preview')
-    assert.equal(preview.plugins[0]?.source.revision, null)
+    assert.equal(preview.plugins[0]?.distributions.find(item => item.id === 'example/demo')?.source.revision, null)
+    assert.equal(preview.plugins[0]?.default_distribution, 'example/demo-bridge')
     assert.throws(() => parseDirectoryData(unresolved, 'published_snapshot'), /signed sequence, generated_at, and expires_at/)
     assert.throws(() => parseDirectoryData(fixture, 'published_snapshot'), /requires signed snapshot products and distributions/)
   })

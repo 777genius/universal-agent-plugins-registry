@@ -792,6 +792,7 @@ jobs:
           AGENTPLUGINS_COMMIT: 74a3790ee15d92afda8e8e3dd8f903c04811cfc7
           AGENTPLUGINS_VERSION: 0.1.18
           EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
+          EXPECTED_SOURCE_COMMIT: ${{ needs.sign.outputs.marker_commit }}
           EXPECTED_MATERIALIZED_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
         run: |
           release_dir="${RUNNER_TEMP}/agentplugins-release"
@@ -840,6 +841,7 @@ jobs:
           "${isolated[@]}" "${binary}" add context7 --dry-run --target cursor --format json > "${run_root}/evidence/add.json"
           python3 - "${run_root}/evidence" "${EXPECTED_SEQUENCE}" <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
 
@@ -851,6 +853,10 @@ jobs:
           assert search["data"]["snapshot_sequence"] == expected_sequence
           result = next(item for item in search["data"]["results"] if item["product_id"] == "context7")
           assert result["status"] == "available"
+          assert result["distribution_id"] == "777genius/context7"
+          assert result["repository"] == "777genius/universal-agent-plugins"
+          assert result["revision"] == os.environ["EXPECTED_SOURCE_COMMIT"]
+          assert result["package_path"] == "plugins/context7"
           assert add["result"] == "success"
           assert add["data"]["targets"][0]["target"] == "cursor"
           assert add["data"]["targets"][0]["output"]["plugin"] == "context7"

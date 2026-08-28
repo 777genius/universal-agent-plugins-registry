@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import importlib.util
 import json
@@ -113,9 +114,10 @@ class CanonicalAndSignatureTests(unittest.TestCase):
 
     def test_publication_evidence_schema_matches_released_cli_wire_contract(self) -> None:
         source = json.loads((ROOT / "schemas" / "directory-evidence.schema.json").read_bytes())
-        candidate = json.loads(
+        candidate_defs = json.loads(
             (ROOT / "schemas" / "directory-publication-candidate.schema.json").read_bytes()
-        )["$defs"]["evidence"]
+        )["$defs"]
+        candidate = candidate_defs["wireEvidence"]
         internal_only = {
             "product_id", "manifest_digest", "source_repository", "source_revision",
             "source_path", "adapter_version",
@@ -173,8 +175,47 @@ class CanonicalAndSignatureTests(unittest.TestCase):
             },
         )
 
+    def test_projected_public_evidence_id_collision_fails_before_signing(self) -> None:
+        source = fixture_json("candidate.json")["evidence"][0]
+        source["id"] = "runtime-demo-codex"
+        projected = prepare.public_evidence_projection(source)
+        changed = copy.deepcopy(projected)
+        changed["outcome"] = "failed"
+        with self.assertRaisesRegex(
+            publication.PublicationError,
+            "runtime-demo-codex: projected public evidence ID 'runtime-demo-codex\\.wire-v1' collides.*choose a new source evidence ID",
+        ):
+            prepare.validate_projected_evidence_ids(
+                [(source["id"], projected)], {projected["id"]: changed},
+            )
+        prepare.validate_projected_evidence_ids(
+            [(source["id"], projected)], {projected["id"]: copy.deepcopy(projected)},
+        )
+
     def test_snapshot_reader_accepts_immutable_legacy_history_then_wire_projection(self) -> None:
+        seed = publication.ed25519_private_key(
+            fixture_json("test-private-seeds.json")["test-current"],
+        )
+        keys = publication.load_public_keys(FIXTURES / "trusted-keys.json")
+
+        def verify_synthetic_signature(snapshot: dict) -> None:  # type: ignore[type-arg]
+            body = publication.canonical_json(snapshot)
+            envelope = {
+                "envelope_schema_version": 1,
+                "snapshot_schema_version": 1,
+                "sequence": snapshot["sequence"],
+                "algorithm": "Ed25519",
+                "key_id": "test-current",
+                "signature_domain": "UAP-DIRECTORY-SNAPSHOT-ED25519-V1",
+                "snapshot_digest": publication.sha256_digest(body),
+                "signature": base64.b64encode(
+                    publication.ed25519_sign(seed, publication.signature_message(body)),
+                ).decode("ascii"),
+            }
+            publication.verify_envelope(body, envelope, keys)
+
         legacy = fixture_json("snapshot.json")
+        legacy["sequence"] = 14
         evidence = legacy["evidence"][0]
         evidence.update({
             "product_id": "demo",
@@ -187,6 +228,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         evidence.pop("trust")
         publication.validate_with_schema(legacy, publication.SNAPSHOT_SCHEMA)
         publication.validate_snapshot_semantics(legacy, None)
+        verify_synthetic_signature(legacy)
 
         candidate = fixture_json("candidate.json")
         candidate["evidence"] = [copy.deepcopy(evidence)]
@@ -194,7 +236,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
             publication.validate_with_schema(candidate, publication.CANDIDATE_SCHEMA)
 
         projected = fixture_json("snapshot.json")
-        projected["sequence"] = legacy["sequence"] + 1
+        projected["sequence"] = publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE
         projected["publication_id"] = "wire-migration"
         projected["generated_at"] = "2026-08-27T00:00:00Z"
         projected["expires_at"] = "2026-09-26T00:00:00Z"
@@ -205,6 +247,11 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         publication.validate_snapshot_semantics(
             projected, legacy, {evidence["id"]: evidence},
         )
+        verify_synthetic_signature(projected)
+        legacy_after_cutover = copy.deepcopy(legacy)
+        legacy_after_cutover["sequence"] = publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE
+        with self.assertRaises(publication.PublicationError):
+            publication.validate_snapshot_semantics(legacy_after_cutover)
 
     def test_signature_domain_digest_and_two_key_overlap(self) -> None:
         snapshot = fixture("snapshot.json")
@@ -580,6 +627,12 @@ class PublicationLifecycleTests(unittest.TestCase):
             "id": "materialized", "distribution_id": "upstream/demo", "release_sequence": 7,
             "package_tree_digest": release["tree_digest"], "client": "codex",
             "level": "materialization", "outcome": "passed",
+            "artifact": {"repository": "example/evidence", "revision": "a" * 40},
+            "trust": {
+                "kind": "github_actions",
+                "workflow": "example/evidence/.github/workflows/evidence.yml",
+                "source_digest": "a" * 40,
+            },
         }
         prepare.validate_upstream_default_evidence([product], [distribution], [observation])
         for field, value in (
@@ -594,6 +647,19 @@ class PublicationLifecycleTests(unittest.TestCase):
             changed[field] = value
             with self.subTest(field=field), self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
                 prepare.validate_upstream_default_evidence([product], [distribution], [changed])
+
+        reviewed_external = copy.deepcopy(observation)
+        reviewed_external["trust"] = {"kind": "reviewed_external"}
+        with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
+            prepare.validate_upstream_default_evidence(
+                [product], [distribution], [reviewed_external],
+            )
+        repository_mismatch = copy.deepcopy(observation)
+        repository_mismatch["artifact"]["repository"] = "other/evidence"
+        with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
+            prepare.validate_upstream_default_evidence(
+                [product], [distribution], [repository_mismatch],
+            )
 
     def signer(self, root: Path, candidate: Path, publication_id: str, now: str) -> subprocess.CompletedProcess[str]:
         value = json.loads(candidate.read_bytes())
@@ -1505,6 +1571,21 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertEqual(gate_step["env"]["EXPECTED_SIGNED_LEDGER_COMMIT"], "${{ needs.sign.outputs.ledger_commit }}")
         self.assertIn("raw.githubusercontent.com", gate_step["run"])
         self.assertIn('cmp --silent "${feed}/${relative}"', gate_step["run"])
+        cli_step = next(
+            step for step in exact_gate["steps"]
+            if step.get("name") == "Prove compatibility with the exact released CLI"
+        )
+        self.assertEqual(
+            cli_step["env"]["EXPECTED_SOURCE_COMMIT"],
+            "${{ needs.sign.outputs.marker_commit }}",
+        )
+        for exact_identity in (
+            'result["distribution_id"] == "777genius/context7"',
+            'result["repository"] == "777genius/universal-agent-plugins"',
+            'result["revision"] == os.environ["EXPECTED_SOURCE_COMMIT"]',
+            'result["package_path"] == "plugins/context7"',
+        ):
+            self.assertIn(exact_identity, cli_step["run"])
         self.assertIn("gate_launch_approval", workflow["jobs"]["deploy"]["needs"])
         self.assertIn("gate_exact_staged_publication", workflow["jobs"]["deploy"]["needs"])
         self.assertIn("sign", workflow["jobs"]["deploy"]["needs"])

@@ -289,8 +289,13 @@ function releaseTargets(value: unknown, context: string): ReleaseTarget[] {
   })
 }
 
-function evidenceTrustedForEligibility(item: Record<string, unknown>, level: EvidenceLevel): boolean {
-  if (!record(item.trust)) return false
+function evidenceTrustedForEligibility(item: Record<string, unknown>, level: EvidenceLevel, signerVouched: boolean): boolean {
+  // On the published_snapshot call path, production receives only snapshot
+  // bytes verified by the publication workflow. The Directory signer therefore
+  // vouches that github_actions trust matched the repository's approved
+  // workflow and protected-ref policy; these public fields are the CLI 0.1.18
+  // projection of that reviewed decision. Review previews never enable commands.
+  if (!signerVouched || !record(item.trust)) return false
   const trust = item.trust
   if (trust.kind === 'github_actions') {
     const workflow = optionalString(trust, 'workflow')
@@ -308,7 +313,7 @@ function evidenceTrustedForEligibility(item: Record<string, unknown>, level: Evi
   return trust.kind === 'reviewed_external' && ['discovery', 'runtime', 'oauth'].includes(level)
 }
 
-function evidenceFromSnapshot(input: unknown, distributionID: string, releaseSequence: number, treeDigest: string, selectedIDs: readonly string[]): { client: ClientEvidence[], package: PackageEvidence[] } {
+function evidenceFromSnapshot(input: unknown, distributionID: string, releaseSequence: number, treeDigest: string, selectedIDs: readonly string[], signerVouched: boolean): { client: ClientEvidence[], package: PackageEvidence[] } {
   const client: ClientEvidence[] = []
   const packageEvidence: PackageEvidence[] = []
   if (!Array.isArray(input)) return { client, package: packageEvidence }
@@ -337,7 +342,7 @@ function evidenceFromSnapshot(input: unknown, distributionID: string, releaseSeq
       id: String(item.id),
       outcome: outcome as ClientEvidence['outcome'],
       package_tree_digest: treeDigest,
-      trusted_for_eligibility: evidenceTrustedForEligibility(item, level as EvidenceLevel),
+      trusted_for_eligibility: evidenceTrustedForEligibility(item, level as EvidenceLevel, signerVouched),
       ...(optionalString(item, 'observed_at') ? { tested_at: optionalString(item, 'observed_at') } : {}),
       artifact,
     }
@@ -435,7 +440,7 @@ function parseSnapshot(input: Record<string, unknown>, mode: 'published_snapshot
         const releaseStatus = revoked.has(`${id}:${String(releaseSequence)}`) ? 'revoked' : policyStatus as DistributionView['release_status']
         if (!Array.isArray(policy.current_evidence) || policy.current_evidence.some(value => typeof value !== 'string')) throw new Error(`distribution ${id}: current_evidence must be an array of evidence IDs`)
         const treeDigest = digestValue(release.tree_digest, `distribution ${id} tree digest`)
-        const evidence = evidenceFromSnapshot(input.evidence ?? input.verification_summaries ?? input.current_verification, id, releaseSequence, treeDigest, policy.current_evidence as string[])
+        const evidence = evidenceFromSnapshot(input.evidence ?? input.verification_summaries ?? input.current_verification, id, releaseSequence, treeDigest, policy.current_evidence as string[], mode === 'published_snapshot')
         const components = stringArray(release.components ?? [], 'components', `distribution ${id}`) as ComponentID[]
         if (components.some(component => !COMPONENTS.has(component))) throw new Error(`distribution ${id}: unsupported component`)
         const blockingClients = [...new Set(evidence.client.filter(observation => observation.trusted_for_eligibility && observation.outcome === 'failed' && ['materialization', 'discovery', 'runtime'].includes(observation.level)).map(observation => observation.client))]
