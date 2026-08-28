@@ -38,6 +38,7 @@ MAX_SNAPSHOT_BYTES = 4 << 20
 MAX_ENVELOPE_BYTES = 16 << 10
 MAX_LATEST_BYTES = 16 << 10
 MAX_LEDGER_SNAPSHOTS = 100_000
+JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
 WIRE_EVIDENCE_CUTOVER_SEQUENCE = 15
 LEDGER_CONTRACT_NAME = "ledger-contract.json"
 OPENSSL = "/usr/bin/openssl"
@@ -282,7 +283,11 @@ def validate_envelope_contract(envelope: dict[str, Any]) -> None:
     }, "signature envelope fields are invalid")
     require_integer_const(envelope["envelope_schema_version"], 1, "signature envelope version is invalid")
     require_integer_const(envelope["snapshot_schema_version"], 1, "signature envelope snapshot version is invalid")
-    require(type(envelope["sequence"]) is int and envelope["sequence"] >= 1, "signature envelope sequence is invalid")
+    require(
+        type(envelope["sequence"]) is int
+        and 1 <= envelope["sequence"] <= JSON_SAFE_INTEGER_MAX,
+        "signature envelope sequence is invalid",
+    )
     require(isinstance(envelope["key_id"], str) and ID_RE.fullmatch(envelope["key_id"]) is not None, "signature envelope key ID is invalid")
     require(envelope["algorithm"] == "Ed25519", "signature envelope algorithm is invalid")
     require(envelope["signature_domain"] == "UAP-DIRECTORY-SNAPSHOT-ED25519-V1", "signature envelope domain is invalid")
@@ -324,7 +329,10 @@ def _array(value: Any, label: str, *, minimum: int = 0, maximum: int | None = No
 
 
 def _positive_integer(value: Any, label: str) -> None:
-    require(type(value) is int and value >= 1, f"{label} is invalid")
+    require(
+        type(value) is int and 1 <= value <= JSON_SAFE_INTEGER_MAX,
+        f"{label} is invalid",
+    )
 
 
 def _validate_source(value: Any, label: str) -> None:
@@ -584,7 +592,11 @@ def validate_snapshot_semantics(
         "generated_at", "expires_at", "products", "distributions", "evidence", "revocations",
     }, "snapshot fields are invalid")
     require_integer_const(snapshot["snapshot_schema_version"], 1, "snapshot schema version is invalid")
-    require(type(snapshot["sequence"]) is int and snapshot["sequence"] >= 1, "snapshot sequence is invalid")
+    require(
+        type(snapshot["sequence"]) is int
+        and 1 <= snapshot["sequence"] <= JSON_SAFE_INTEGER_MAX,
+        "snapshot sequence is invalid",
+    )
     require(isinstance(snapshot["publication_id"], str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", snapshot["publication_id"]) is not None, "snapshot publication ID is invalid")
     require(isinstance(snapshot["source_commit"], str) and SHA_RE.fullmatch(snapshot["source_commit"]) is not None, "snapshot source commit is invalid")
     for field in ("products", "distributions", "evidence", "revocations"):
@@ -752,7 +764,11 @@ def validate_latest(latest: dict[str, Any], *, validate_schema: bool = True) -> 
     }, "latest pointer fields are invalid")
     require_integer_const(latest["pointer_schema_version"], 1, "latest pointer version is invalid")
     require_integer_const(latest["snapshot_schema_version"], 1, "latest pointer snapshot version is invalid")
-    require(type(latest["sequence"]) is int and latest["sequence"] >= 1, "latest pointer sequence is invalid")
+    require(
+        type(latest["sequence"]) is int
+        and 1 <= latest["sequence"] <= JSON_SAFE_INTEGER_MAX,
+        "latest pointer sequence is invalid",
+    )
     sequence = latest["sequence"]
     stem = f"{sequence:020d}"
     validate_relative_artifact(latest["snapshot_path"], f"snapshots/{stem}.json")
@@ -793,7 +809,11 @@ def load_ledger_latest(
     require(not allow_initialization or minimum_sequence is None, "initialization cannot accept an existing sequence floor")
     if require_external_floor and not allow_initialization:
         require(seed_commit is not None and SHA_RE.fullmatch(seed_commit) is not None, "normal publication requires the protected seed commit")
-        require(type(minimum_sequence) is int and minimum_sequence >= 1, "normal publication requires the immutable tag sequence floor")
+        require(
+            type(minimum_sequence) is int
+            and 1 <= minimum_sequence <= JSON_SAFE_INTEGER_MAX,
+            "normal publication requires the immutable tag sequence floor",
+        )
     contract_path = feed / LEDGER_CONTRACT_NAME
     contract_body = read_bytes_bounded(contract_path, MAX_LATEST_BYTES)
     contract = parse_json_bytes(contract_body, str(contract_path), max_bytes=MAX_LATEST_BYTES)
@@ -824,7 +844,11 @@ def load_ledger_latest(
     validate_latest(latest, validate_schema=validate_schema)
     highest = latest["sequence"]
     if minimum_sequence is not None:
-        require(type(minimum_sequence) is int and minimum_sequence >= 1, "publication ledger sequence floor is invalid")
+        require(
+            type(minimum_sequence) is int
+            and 1 <= minimum_sequence <= JSON_SAFE_INTEGER_MAX,
+            "publication ledger sequence floor is invalid",
+        )
         require(highest >= minimum_sequence, "publication ledger latest sequence regressed below the immutable tag floor")
     require(highest <= MAX_LEDGER_SNAPSHOTS, "publication ledger exceeds supported history bound")
     snapshots_dir = feed / "snapshots"

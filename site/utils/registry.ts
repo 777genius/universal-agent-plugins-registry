@@ -27,6 +27,7 @@ const KINDS = new Set<DistributionKind>(['upstream', 'community_bridge', 'commun
 const RFC3339_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/
 const EVIDENCE_WORKFLOW = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*\/\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/
 const EVIDENCE_SOURCE_REF = /^refs\/heads\/[A-Za-z0-9._/-]+$/
+const JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -53,6 +54,14 @@ function stringArray(value: unknown, field: string, context: string): string[] {
 
 function digestValue(value: unknown, context: string): string {
   if (typeof value !== 'string' || !DIGEST.test(value)) throw new Error(`${context} must be a sha256 digest`)
+  return value
+}
+
+function safeSequence(value: unknown, context: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)
+    || value < 1 || value > JSON_SAFE_INTEGER_MAX) {
+    throw new Error(`${context} must be a safe positive integer`)
+  }
   return value
 }
 
@@ -379,8 +388,27 @@ function parseSnapshot(input: Record<string, unknown>, mode: 'published_snapshot
     throw new Error('Directory data must have schema version 1, products, and distributions')
   }
   const snapshotSequence = isSigned ? input.sequence : input.snapshot_sequence
-  if (mode === 'published_snapshot' && (!isSigned || !Number.isInteger(snapshotSequence) || typeof input.generated_at !== 'string' || typeof input.expires_at !== 'string')) {
+  if (mode === 'published_snapshot' && (!isSigned || typeof input.generated_at !== 'string' || typeof input.expires_at !== 'string')) {
     throw new Error('published snapshot requires one signed sequence, generated_at, and expires_at')
+  }
+  if (isSigned) safeSequence(snapshotSequence, 'Directory snapshot sequence')
+  else if (snapshotSequence !== undefined) safeSequence(snapshotSequence, 'Directory preview snapshot sequence')
+
+  // Reject unsafe identities before building keys or comparing them. JSON.parse
+  // aliases 9007199254740992 and 9007199254740993 in JavaScript, so filtering
+  // or stringifying first would make distinct signed identities collide.
+  for (const [field, records] of [
+    ['evidence', input.evidence],
+    ['verification_summaries', input.verification_summaries],
+    ['current_verification', input.current_verification],
+    ['revocations', input.revocations],
+  ] as const) {
+    if (!Array.isArray(records)) continue
+    for (const [index, item] of records.entries()) {
+      if (record(item) && item.release_sequence !== undefined) {
+        safeSequence(item.release_sequence, `Directory ${field}[${index}] release sequence`)
+      }
+    }
   }
   let generatedAt: string | undefined
   let expiresAt: string | undefined
@@ -421,12 +449,18 @@ function parseSnapshot(input: Record<string, unknown>, mode: 'published_snapshot
       const status = requiredString(item, 'status', `distribution ${id}`)
       if (!['candidate', 'active', 'suspended'].includes(status)) throw new Error(`distribution ${id}: unsupported status`)
       const policies = Array.isArray(item.release_policies) ? item.release_policies.filter(record) : []
-      const releases = item.releases.filter(record).sort((a, b) => Number(b.sequence) - Number(a.sequence))
+      for (const [policyIndex, policy] of policies.entries()) {
+        safeSequence(policy.release_sequence, `distribution ${id} policy ${policyIndex} release sequence`)
+      }
+      const releases = item.releases.filter(record)
+      for (const [releaseIndex, release] of releases.entries()) {
+        safeSequence(release.sequence, `distribution ${id} release ${releaseIndex} sequence`)
+      }
+      releases.sort((a, b) => Number(b.sequence) - Number(a.sequence))
       const releaseSequences = releases.map(release => release.sequence)
       if (new Set(releaseSequences).size !== releaseSequences.length) throw new Error(`distribution ${id}: release sequences must be unique`)
       const releaseViews = releases.map((release): DistributionReleaseView => {
-        if (!Number.isInteger(release.sequence) || Number(release.sequence) < 1) throw new Error(`distribution ${id}: release sequence must be a positive integer`)
-        const releaseSequence = release.sequence as number
+        const releaseSequence = safeSequence(release.sequence, `distribution ${id} release sequence`)
         const packageSource = source({
           ...(record(release.package_source) ? release.package_source : {}),
           manifest_digest: release.manifest_digest,

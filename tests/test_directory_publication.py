@@ -126,6 +126,43 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         self.assertTrue(internal_only.isdisjoint(candidate["properties"]))
         self.assertIn("trust", candidate["required"])
 
+    def test_sequence_schemas_and_standard_library_validators_share_safe_integer_boundary(self) -> None:
+        maximum = publication.JSON_SAFE_INTEGER_MAX
+        candidate = fixture_json("candidate.json")
+        distribution = candidate["distributions"][0]
+        distribution["releases"][0]["sequence"] = maximum
+        distribution["release_policies"][0]["release_sequence"] = maximum
+        candidate["evidence"][0]["release_sequence"] = maximum
+        candidate["revocations"][0]["release_sequence"] = maximum
+        publication.validate_with_schema(candidate, publication.CANDIDATE_SCHEMA)
+        publication.validate_directory_records(candidate, snapshot=False)
+
+        unsafe = copy.deepcopy(candidate)
+        unsafe["distributions"][0]["releases"][0]["sequence"] = maximum + 1
+        unsafe["distributions"][0]["release_policies"][0]["release_sequence"] = maximum + 1
+        unsafe["evidence"][0]["release_sequence"] = maximum + 1
+        unsafe["revocations"][0]["release_sequence"] = maximum + 1
+        with self.assertRaises(publication.PublicationError):
+            publication.validate_with_schema(unsafe, publication.CANDIDATE_SCHEMA)
+        with self.assertRaisesRegex(publication.PublicationError, "sequence is invalid"):
+            publication.validate_directory_records(unsafe, snapshot=False)
+
+        for name, schema, validator in (
+            ("snapshot.json", publication.SNAPSHOT_SCHEMA, publication.validate_snapshot_semantics),
+            ("envelope-current.json", publication.ENVELOPE_SCHEMA, publication.validate_envelope_contract),
+            ("latest.json", publication.LATEST_SCHEMA, publication.validate_latest),
+        ):
+            with self.subTest(name=name):
+                value = fixture_json(name)
+                value["sequence"] = maximum + 1
+                with self.assertRaises(publication.PublicationError):
+                    publication.validate_with_schema(value, schema)
+                with self.assertRaises(publication.PublicationError):
+                    if validator is publication.validate_envelope_contract:
+                        validator(value)
+                    else:
+                        validator(value, validate_schema=False)
+
     def test_public_evidence_projection_strips_internal_identity_and_attestation_chain(self) -> None:
         record = {
             "schema_version": 1,
@@ -702,6 +739,14 @@ class PublicationLifecycleTests(unittest.TestCase):
         value = json.loads(candidate.read_bytes())
         value["publication_id"] = publication_id
         value["distributions"][0]["status"] = "suspended"
+        for evidence in value["evidence"]:
+            evidence["artifact"]["repository"] = "777genius/universal-agent-plugins"
+            evidence["trust"] = {
+                "kind": "github_actions",
+                "workflow": "777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml",
+                "source_ref": "refs/heads/main",
+                "source_digest": evidence["artifact"]["revision"],
+            }
         candidate.write_bytes(publication.canonical_json(value))
         digest = publication.candidate_digest(candidate.read_bytes())
         seed = fixture_json("test-private-seeds.json")["test-current"]

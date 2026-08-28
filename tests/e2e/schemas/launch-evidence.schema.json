@@ -59,7 +59,7 @@
       "properties": {
         "origin": {"type": ["string", "null"], "pattern": "^https://"},
         "snapshot_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
-        "sequence": {"type": ["integer", "null"], "minimum": 1},
+        "sequence": {"type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991},
         "trust_root_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"}
       }, "additionalProperties": false
     },
@@ -168,12 +168,12 @@
         "manifest_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
         "distribution_id": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$"},
         "distribution_kind": {"type": ["string", "null"], "enum": ["upstream", "community_bridge", "community", "direct", null]},
-        "release_sequence": {"type": ["integer", "null"], "minimum": 1},
+        "release_sequence": {"type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991},
         "package_version": {"type": ["string", "null"], "minLength": 1},
         "source_repository": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"},
         "source_revision": {"type": ["string", "null"], "pattern": "^[a-f0-9]{40}$"},
         "source_path": {"type": ["string", "null"], "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[?#%])[^\\u0000]+(?<!/)$"},
-        "snapshot_sequence": {"type": ["integer", "null"], "minimum": 1},
+        "snapshot_sequence": {"type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991},
         "snapshot_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
         "binary_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
         "dependency_identity": {"type": ["string", "null"]},

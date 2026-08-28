@@ -47,6 +47,16 @@ class LedgerFailureTests(unittest.TestCase):
         # Most ledger tests exercise safety publications, for which an inactive
         # upstream default intentionally has no eligible release.
         value["distributions"][0]["status"] = "suspended"
+        # Total signer trust applies even to safety-publication evidence. Keep
+        # the common fixture on an approved workflow unless a test overrides it.
+        baseline_evidence = value["evidence"][0]
+        baseline_evidence["artifact"]["repository"] = "777genius/universal-agent-plugins"
+        baseline_evidence["trust"] = {
+            "kind": "github_actions",
+            "workflow": "777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml",
+            "source_ref": "refs/heads/main",
+            "source_digest": baseline_evidence["artifact"]["revision"],
+        }
         if mutate is not None:
             mutate(value)
         candidate.write_bytes(publication.canonical_json(value))
@@ -157,6 +167,76 @@ class LedgerFailureTests(unittest.TestCase):
             )
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("must name the trusted-source publication config", rejected.stderr)
+            self.assertFalse((root / "registry").exists())
+
+    def test_direct_signer_validates_trust_for_all_candidate_evidence(self) -> None:
+        def unapproved_evidence(value: dict[str, object]) -> None:
+            evidence = value["evidence"][0]  # type: ignore[index]
+            evidence["trust"] = {
+                "kind": "github_actions",
+                "workflow": "777genius/universal-agent-plugins/.github/workflows/unapproved.yml",
+                "source_ref": "refs/heads/main",
+                "source_digest": evidence["artifact"]["revision"],
+            }
+
+        def suspended(value: dict[str, object]) -> None:
+            unapproved_evidence(value)
+            value["distributions"][0]["status"] = "suspended"  # type: ignore[index]
+
+        def retired_policy(value: dict[str, object], status: str) -> None:
+            unapproved_evidence(value)
+            distribution = value["distributions"][0]  # type: ignore[index]
+            distribution["status"] = "active"
+            distribution["release_policies"][0]["status"] = status
+
+        def unreferenced(value: dict[str, object]) -> None:
+            unapproved_evidence(value)
+            value["distributions"][0]["release_policies"][0]["current_evidence"] = []  # type: ignore[index]
+
+        cases = {
+            "suspended distribution": suspended,
+            "superseded policy": lambda value: retired_policy(value, "superseded"),
+            "revoked policy": lambda value: retired_policy(value, "revoked"),
+            "unreferenced evidence": unreferenced,
+        }
+        for label, mutation in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                rejected = self.run_signer(
+                    root, "run-1", "--initialize-ledger",
+                    "--ledger-seed-commit", "0" * 40, mutate=mutation,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("evidence workflow has no reviewed trust policy", rejected.stderr)
+                self.assertFalse((root / "registry").exists())
+
+    def test_direct_signer_caps_release_identities_at_json_safe_integer_max(self) -> None:
+        maximum = publication.JSON_SAFE_INTEGER_MAX
+
+        def sequence(value: dict[str, object], number: int) -> None:
+            for distribution in value["distributions"]:  # type: ignore[union-attr]
+                distribution["releases"][0]["sequence"] = number
+                distribution["release_policies"][0]["release_sequence"] = number
+            value["evidence"][0]["release_sequence"] = number  # type: ignore[index]
+            for revocation in value["revocations"]:  # type: ignore[union-attr]
+                revocation["release_sequence"] = number
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            accepted = self.run_signer(
+                root, "run-1", "--initialize-ledger", "--ledger-seed-commit",
+                "0" * 40, mutate=lambda value: sequence(value, maximum),
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rejected = self.run_signer(
+                root, "run-1", "--initialize-ledger", "--ledger-seed-commit",
+                "0" * 40, mutate=lambda value: sequence(value, maximum + 1),
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("sequence is invalid", rejected.stderr)
             self.assertFalse((root / "registry").exists())
 
     def test_projected_protected_workflow_digest_reaches_actual_signer(self) -> None:

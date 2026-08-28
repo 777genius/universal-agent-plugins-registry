@@ -6,7 +6,7 @@
   "required": ["snapshot_schema_version", "sequence", "publication_id", "source_commit", "generated_at", "expires_at", "products", "distributions", "evidence", "revocations"],
   "properties": {
     "snapshot_schema_version": {"const": 1},
-    "sequence": {"type": "integer", "minimum": 1},
+    "sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
     "publication_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
     "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "generated_at": {"$ref": "#/$defs/timestamp"},

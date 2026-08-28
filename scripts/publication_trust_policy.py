@@ -144,11 +144,16 @@ def validate_publication_eligibility_trust(
     products: list[dict[str, Any]], distributions: list[dict[str, Any]],
     evidence: list[dict[str, Any]], config: dict[str, Any],
 ) -> None:
-    """Enforce signer-visible evidence policy for every installable target."""
+    """Enforce signer-visible identity and trust for all candidate evidence."""
     distributions_by_id = {item["id"]: item for item in distributions}
     evidence_by_id = {item["id"]: item for item in evidence}
+    require(
+        len(distributions_by_id) == len(distributions),
+        "duplicate distribution identity",
+    )
     require(len(evidence_by_id) == len(evidence), "duplicate evidence identity")
 
+    releases_by_identity: dict[tuple[str, int], dict[str, Any]] = {}
     for distribution in distributions:
         releases = {item["sequence"]: item for item in distribution["releases"]}
         policies = {
@@ -160,11 +165,9 @@ def validate_publication_eligibility_trust(
             and len(policies) == len(distribution["release_policies"]),
             f"{distribution['id']}: duplicate release or policy identity",
         )
-        if distribution["status"] != "active":
-            continue
+        for sequence, release in releases.items():
+            releases_by_identity[(distribution["id"], sequence)] = release
         for sequence, policy in policies.items():
-            if policy["status"] != "active":
-                continue
             require(sequence in releases, f"{distribution['id']}: policy references missing release {sequence}")
             release = releases[sequence]
             for evidence_id in policy["current_evidence"]:
@@ -176,10 +179,31 @@ def validate_publication_eligibility_trust(
                     and record["package_tree_digest"] == release["tree_digest"],
                     f"{evidence_id}: evidence release/tree identity mismatch",
                 )
-                if record["trust"]["kind"] == "github_actions":
-                    trusted_workflow_policy(record, config, evidence_id)
-                elif record["trust"]["kind"] == "reviewed_external":
-                    trusted_external_artifact_policy(record, config, evidence_id)
+
+    # Trust is a property of every byte the signer admits, not merely evidence
+    # that is currently installable or selected by a policy.  This also keeps a
+    # future policy/status transition from activating evidence the signer never
+    # reviewed.
+    for record in evidence:
+        evidence_id = record["id"]
+        identity = (record["distribution_id"], record["release_sequence"])
+        require(
+            record["distribution_id"] in distributions_by_id,
+            f"{evidence_id}: evidence distribution is missing",
+        )
+        require(identity in releases_by_identity, f"{evidence_id}: evidence release is missing")
+        require(
+            record["package_tree_digest"] == releases_by_identity[identity]["tree_digest"],
+            f"{evidence_id}: evidence release/tree identity mismatch",
+        )
+        trust = record.get("trust")
+        require(isinstance(trust, dict), f"{evidence_id}: evidence trust is missing")
+        if trust.get("kind") == "github_actions":
+            trusted_workflow_policy(record, config, evidence_id)
+        elif trust.get("kind") == "reviewed_external":
+            trusted_external_artifact_policy(record, config, evidence_id)
+        else:
+            require(False, f"{evidence_id}: evidence trust kind is not supported")
 
     for product in products:
         require(

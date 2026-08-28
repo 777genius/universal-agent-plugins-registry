@@ -152,6 +152,42 @@ describe('registry parsing', () => {
     assert.equal(expectedDistribution(parsed, ['codex'])?.release_sequence, 2)
   })
 
+  it('accepts the safe sequence boundary and rejects every unsafe signed identity', () => {
+    const maximum = 9_007_199_254_740_991
+    const boundary = signedFixture()
+    boundary.sequence = maximum
+    const distribution = boundary.distributions[0]!
+    distribution.releases[0]!.sequence = maximum
+    distribution.release_policies[0]!.release_sequence = maximum
+    for (const evidence of boundary.evidence.filter(item => item.distribution_id === distribution.id)) {
+      evidence.release_sequence = maximum
+    }
+    assert.equal(parseDirectoryData(boundary, 'published_snapshot').snapshot_sequence, maximum)
+
+    const unsafe = maximum + 1
+    const mutations: Array<(value: SnapshotFixture & Record<string, unknown>) => void> = [
+      value => { value.sequence = unsafe },
+      value => { value.distributions[0]!.releases[0]!.sequence = unsafe },
+      value => { value.distributions[0]!.release_policies[0]!.release_sequence = unsafe },
+      value => { value.evidence[0]!.release_sequence = unsafe },
+      value => { value.revocations.push({ distribution_id: 'example/demo', release_sequence: unsafe }) },
+    ]
+    for (const mutate of mutations) {
+      const value = signedFixture()
+      mutate(value)
+      assert.throws(() => parseDirectoryData(value, 'published_snapshot'), /safe positive integer/)
+    }
+  })
+
+  it('rejects unsafe release identities before JavaScript can compare an aliased pair', () => {
+    const collision = JSON.parse('{"release":9007199254740992,"policy":9007199254740993}') as { release: number, policy: number }
+    assert.equal(collision.release, collision.policy, 'the regression requires the known JSON/Number alias')
+    const raw = signedFixture()
+    raw.distributions[0]!.releases[0]!.sequence = collision.release
+    raw.distributions[0]!.release_policies[0]!.release_sequence = collision.policy
+    assert.throws(() => parseDirectoryData(raw, 'published_snapshot'), /safe positive integer/)
+  })
+
   it('matches authoritative blocking-evidence fallback decisions', () => {
     for (const level of ['materialization', 'discovery', 'runtime']) {
       const raw = signedFixture()
