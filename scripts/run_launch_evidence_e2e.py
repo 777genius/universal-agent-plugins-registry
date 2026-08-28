@@ -60,6 +60,7 @@ from observe_launch_scenario import (  # noqa: E402
     selected_manager_installation,
     scenario_client_targets,
     strict_json_loads,
+    validate_scenario_target_contract,
     validate_cli_envelope,
 )
 
@@ -538,7 +539,7 @@ def read_production_config() -> dict[str, Any]:
         or value.get("npm_facade_version") != "0.1.18"
         or value.get("npm_facade_integrity") != "sha512-48UfVVaGrvmniWQpoiXQYZvTS3QqrCN0HFLSQBVCsqQJwPdecRtuK9XEsOs4nTMQuWImjX6ZAflUeY/79biRZg=="
         or value.get("directory_source_digest") != "sha256:e4998f9ed1aca8a76cc2efa9ae5d2945dd4c3410ecf7263df8429d863f84d05d"
-        or value.get("scenario_contract_digest") != "sha256:d62f160de32f9af53d7bb2d7c03fbfa8c3203e2fe5c99e616985b1e583996e66"
+        or value.get("scenario_contract_digest") != "sha256:4f1302eb6cefd82e2587c716db4fa2faa96db565fd2c530bf4350dc156e314be"
         or value.get("copilot_cli_package") != "@github/copilot"
         or value.get("copilot_cli_version") != "1.0.80"
         or value.get("copilot_cli_integrity") != "sha512-6tf93ZF56KOiTTAjK/UhLZkl1W543IzaTQly288kockJZFswpRTnQEI00Yvacpb39DTvTYu3/ha9SeKpo/pgZQ=="
@@ -1636,6 +1637,7 @@ class LaunchHarness:
         copilot_metadata: Path | None = None,
     ) -> None:
         self.config = json.loads(SCENARIOS.read_text())
+        self.scenario_targets = validate_scenario_target_contract(self.config)
         if mode not in {"enforced", "fixture-only"}:
             raise ValueError("mode must be enforced or fixture-only")
         self.mode = mode
@@ -2159,7 +2161,10 @@ class LaunchHarness:
             product_id = source_selection["product_id"]
         if scenario.startswith("hero_lifecycle_"):
             product_id = scenario.removeprefix("hero_lifecycle_").rsplit("_", 1)[0]
-        targets = scenario_client_targets(scenario)
+        try:
+            targets = self.scenario_targets[scenario]
+        except KeyError:
+            raise ValueError("scenario is not in the immutable target contract")
         env = isolated_environment(sandbox, targets, self.directory_environment)
         if "copilot" in targets:
             if not self.copilot_executable:
@@ -2449,7 +2454,7 @@ class LaunchHarness:
                 self.add(f"all_26_{operation}", plugin, client, "discovery" if operation == "info" else "materialization", outcome, reason or "unknown result", tuple_value=tuple_value, details=details)
 
     def context7_multi_target(self) -> None:
-        targets = tuple(self.config["context7_targets"])
+        targets = self.scenario_targets["context7_grouped_lifecycle"]
         target_arg = ",".join(targets)
         release = self.directory_release("context7", targets)
         expected_digest = release["tree_digest"]
@@ -2543,7 +2548,7 @@ class LaunchHarness:
                 self.add("hero_5x3_lifecycle", plugin, client, "materialization", outcome, reason, tuple_value=tuple_value or self.evidence_tuple(plugin, [client], client_version=None, dependency=f"signed-directory@{self.snapshot_digest}"), details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "operations": sorted(required_operations), "operation_outcomes": operation_outcomes, "command_traces": value.get("command_traces", []) if value else [], "resolution": release})
 
     def shared_backend(self) -> None:
-        targets = tuple(self.config["shared_backend_targets"])
+        targets = self.scenario_targets["shared_copilot_vscode_backend"]
         outcome, value, reason = self.driven_scenario("shared_copilot_vscode_backend")
         valid = bool(value) and value.get("affected_surfaces") == list(targets)
         valid = valid and value.get("physical_mutations") == {"add": 1, "remove": 1}
@@ -2559,10 +2564,11 @@ class LaunchHarness:
             if outcome == "passed" and not self.driver_proof_valid(scenario, value):
                 outcome, reason = "failed", "scenario driver omitted the required exact proof fields"
             tuple_value = value.get("tuple") if value else None
-            client = scenario.removeprefix("repair_") if scenario.startswith("repair_") else "cursor"
+            targets = self.scenario_targets[scenario]
+            client = ",".join(targets)
             source_selection = self.config.get("source_identity_scenarios", {}).get(scenario)
             product = source_selection["product_id"] if source_selection else "context7"
-            release = self.configured_source_release(scenario, [client]) if source_selection else self.directory_release(product, [client])
+            release = self.configured_source_release(scenario, targets) if source_selection else self.directory_release(product, targets)
             if source_selection:
                 observed = value.get("source_identity") if value else None
                 exact_source_identity = self.source_identity_matches_release(release, observed)
@@ -2575,11 +2581,11 @@ class LaunchHarness:
                 if outcome == "passed":
                     observed_client_version = find_value(value, {"client_version"}) if value else None
                     tuple_value = self.tuple(product_id=observed["product_id"], digest=observed["tree_digest"], manifest_digest=observed["manifest_digest"], distribution_id=observed["distribution_id"], distribution_kind=observed["distribution_kind"], release_sequence=observed["release_sequence"], package_version=release["package_version"], source_repository=observed["source_repository"], source_revision=observed["source_revision"], source_path=observed["source_path"], client_version=observed_client_version if isinstance(observed_client_version, str) else None, dependency=f"signed-directory-source@{observed['source_revision']}")
-            if outcome == "passed" and not source_selection and tuple_value is not None and (not isinstance(tuple_value, dict) or not self.tuple_matches_release(product, [client], tuple_value)):
+            if outcome == "passed" and not source_selection and tuple_value is not None and (not isinstance(tuple_value, dict) or not self.tuple_matches_release(product, targets, tuple_value)):
                 outcome, reason = "failed", "scenario observer tuple differs from authoritative target-aware resolution"
             if tuple_value is None:
                 observed_client_version = find_value(value, {"client_version"}) if value else None
-                tuple_value = None if source_selection else self.evidence_tuple(product, [client], client_version=observed_client_version if isinstance(observed_client_version, str) else None, dependency="repository-owned-fault-observer")
+                tuple_value = None if source_selection else self.evidence_tuple(product, targets, client_version=observed_client_version if isinstance(observed_client_version, str) else None, dependency="repository-owned-fault-observer")
             details = {"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "fixture_contract_present": scenario in self.config["fault_scenarios"], "repository_observer_required": True, "proof": value.get("proof", {}) if value else {}, "command_traces": value.get("command_traces", []) if value else [], "validator_artifact": value.get("validator_artifact") if value else None, "source_identity": value.get("source_identity") if value else None, "resolution": release}
             self.add(scenario, product, client, "materialization", outcome, reason, tuple_value=tuple_value, details=details)
 
@@ -2601,14 +2607,16 @@ class LaunchHarness:
         }
         for scenario in EXPECTED_ACCEPTANCE_SCENARIOS:
             outcome, value, reason = self.driven_scenario(scenario)
+            targets = self.scenario_targets[scenario]
+            client = ",".join(targets)
             proof = value.get("proof", {}) if value else {}
             observations_present = bool(value and isinstance(value.get("before"), dict) and isinstance(value.get("after"), dict))
             if outcome == "passed" and (not observations_present or any(proof.get(key) != expected for key, expected in required[scenario].items())):
                 outcome, reason = "failed", "repository-owned observer omitted the exact independent postcondition"
             self.add(
-                scenario, "context7", "cursor", "materialization", outcome, reason,
-                tuple_value=self.evidence_tuple("context7", ["cursor"], client_version=find_value(value, {"client_version"}) if value else None, dependency="repository-owned-observer"),
-                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "expected_postcondition_id": scenario, "command_traces": value.get("command_traces", []) if value else [], "manager_and_native_before_after": observations_present, "resolution": self.directory_release("context7", ["cursor"])},
+                scenario, "context7", client, "materialization", outcome, reason,
+                tuple_value=self.evidence_tuple("context7", targets, client_version=find_value(value, {"client_version"}) if value else None, dependency="repository-owned-observer"),
+                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "expected_postcondition_id": scenario, "command_traces": value.get("command_traces", []) if value else [], "manager_and_native_before_after": observations_present, "resolution": self.directory_release("context7", targets)},
             )
 
     def native_platform_matrix(self) -> None:
@@ -2736,8 +2744,9 @@ class LaunchHarness:
             "binary_windows_arm64": {"os": "windows", "architecture": "arm64", "checksum_verified": True},
             "npm_install_node22": {"node_major": 22, "npm_install_verified": True, "binary_checksum_verified": True},
         }
-        if scenario.startswith("repair_"):
-            expected_values = {"fault_injected_once": True, "repair_succeeded": True, "client": scenario.removeprefix("repair_")}
+        if scenario in {"repair_codex", "repair_cursor", "repair_kiro"}:
+            client, = scenario_client_targets(scenario)
+            expected_values = {"fault_injected_once": True, "repair_succeeded": True, "client": client}
         else:
             expected_values = expected.get(scenario)
         return bool(expected_values) and all(value.get(key) == expected_value for key, expected_value in expected_values.items())

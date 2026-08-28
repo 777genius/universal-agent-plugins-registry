@@ -55,28 +55,58 @@ EXPECTED_SCENARIOS = frozenset(
     ["context7_grouped_lifecycle", "shared_copilot_vscode_backend"] +
     [f"hero_lifecycle_{plugin}_{client}" for plugin in _CONFIG["heroes"] for client in _CONFIG["runtime_clients"]]
 )
+SCENARIO_TARGET_ORDER = ("codex", "cursor", "copilot", "vscode", "kiro", "chatgpt")
+
+
+def validate_scenario_target_contract(config: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    """Validate and freeze the exhaustive scenario-to-argv target contract."""
+    raw = config.get("scenario_targets")
+    if not isinstance(raw, dict) or set(raw) != EXPECTED_SCENARIOS:
+        raise ValueError("scenario target contract must contain every immutable scenario exactly once")
+    order = {client: index for index, client in enumerate(SCENARIO_TARGET_ORDER)}
+    targets: dict[str, tuple[str, ...]] = {}
+    for scenario, value in raw.items():
+        if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"scenario target contract entry is empty or malformed: {scenario}")
+        frozen = tuple(value)
+        if len(set(frozen)) != len(frozen) or any(item not in CLIENTS for item in frozen):
+            raise ValueError(f"scenario target contract entry has duplicate or unsupported targets: {scenario}")
+        if frozen != tuple(sorted(frozen, key=order.__getitem__)):
+            raise ValueError(f"scenario target contract entry is not in exact argv order: {scenario}")
+        targets[scenario] = frozen
+    return targets
+
+
+SCENARIO_CLIENT_TARGETS = validate_scenario_target_contract(_CONFIG)
 
 
 def scenario_client_targets(scenario: str) -> tuple[str, ...]:
-    """Return the client set fixed by the repository-owned scenario contract."""
-    if scenario not in EXPECTED_SCENARIOS:
+    """Return the exact ordered argv targets fixed by the scenario contract."""
+    try:
+        return SCENARIO_CLIENT_TARGETS[scenario]
+    except KeyError:
         raise ValueError("scenario is not in the immutable acceptance postcondition set")
-    if scenario == "context7_grouped_lifecycle":
-        targets = tuple(_CONFIG["context7_targets"])
-    elif scenario == "shared_copilot_vscode_backend":
-        targets = tuple(_CONFIG["shared_backend_targets"])
-    elif scenario.startswith("hero_lifecycle_"):
-        targets = (scenario.rsplit("_", 1)[1],)
-    elif scenario.startswith("repair_"):
-        targets = (scenario.removeprefix("repair_"),)
-    else:
-        # Every remaining immutable execution plan dispatches its release-bound
-        # operation to Cursor. Fault plans may additionally probe a client that
-        # must be rejected, but that probe is not a selected release target.
-        targets = ("cursor",)
-    if not targets or len(set(targets)) != len(targets) or any(target not in CLIENTS for target in targets):
-        raise ValueError("scenario contract client targets are invalid")
-    return targets
+
+
+def scenario_target_argument(scenario: str) -> str:
+    """Render the one exact --target value authorized for a scenario."""
+    return ",".join(scenario_client_targets(scenario))
+
+
+def validate_scenario_command_targets(scenario: str, traces: list[dict[str, Any]]) -> None:
+    """Fail closed if any target-bearing execution drifts from the contract."""
+    expected = scenario_target_argument(scenario)
+    for trace in traces:
+        argv = trace.get("argv")
+        if not isinstance(argv, list) or "--target" not in argv:
+            continue
+        positions = [index for index, item in enumerate(argv) if item == "--target"]
+        if len(positions) != 1 or positions[0] + 1 >= len(argv):
+            raise ValueError("scenario command has malformed target argv")
+        if trace.get("non_contract_target_probe") is True:
+            continue
+        if argv[positions[0] + 1] != expected:
+            raise ValueError("scenario command targets drift from the immutable contract")
 
 
 NATIVE_ROOTS = (".codex", ".cursor", ".kiro", ".copilot", ".config/Code/User")
@@ -338,7 +368,7 @@ def validate_scenario_challenge_context(value: Any, scenario: str) -> dict[str, 
     """Bind an authenticated release selection to its immutable scenario targets."""
     value = validate_challenge_context(value)
     required_targets = scenario_client_targets(scenario)
-    if set(value["release"]["resolved_targets"]) != set(required_targets):
+    if tuple(value["release"]["resolved_targets"]) != required_targets:
         raise ValueError("challenge resolved targets do not match the requested scenario")
     return value
 
@@ -3534,7 +3564,10 @@ def shared_backend_lifecycle(
     previous_receipts = manager_facts(manager, "context7")["committed_receipts"]
     for operation in ("add", "info", "remove"):
         before = {"state": observe(home, manager), "manager": manager_facts(manager, "context7")}
-        completed, trace = traced(binary, [operation, "context7", "--target", "copilot,vscode", "--format", "json"], root, challenge)
+        completed, trace = traced(binary, [
+            operation, "context7", "--target",
+            scenario_target_argument("shared_copilot_vscode_backend"), "--format", "json",
+        ], root, challenge)
         traces.append(trace)
         value = json_output(completed, operation)
         after = {"state": observe(home, manager), "manager": manager_facts(manager, "context7")}
@@ -4178,12 +4211,13 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     manager_relative = manager.relative_to(isolated_root).as_posix()
     before = filesystem_snapshot(isolated_root)
     traces: list[dict[str, Any]] = []
-    read, trace = traced(binary, ["info", product, "--target", "codex", "--format", "json"], root, challenge)
+    target = scenario_target_argument("state_schema_2_migration")
+    read, trace = traced(binary, ["info", product, "--target", target, "--format", "json"], root, challenge)
     traces.append(trace)
     read_value = json_output(read, "info")
     after_read = filesystem_snapshot(isolated_root)
     before_hidden = filesystem_snapshot(isolated_root)
-    hidden, trace = traced(binary, ["add", product, "--target", "codex", "--format", "json"], root, challenge)
+    hidden, trace = traced(binary, ["add", product, "--target", target, "--format", "json"], root, challenge)
     traces.append(trace)
     after_hidden = filesystem_snapshot(isolated_root)
     hidden_diagnostic = hidden.stdout + "\n" + hidden.stderr
@@ -4316,7 +4350,8 @@ def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     started = now()
-    argv = ["add", "context7", "--target", "codex,cursor,kiro", "--format", "json"]
+    target = scenario_target_argument("managed_rollback")
+    argv = ["add", "context7", "--target", target, "--format", "json"]
     process = subprocess.Popen([str(binary), *argv], cwd=root, env=os.environ.copy(), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     injected = False
     kiro = home / ".kiro"
@@ -4343,7 +4378,7 @@ def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple
     rolled_back = all(materialized_product_mentions(home, manager, "context7", (client,))[client] == 0 for client in ("codex", "cursor", "kiro"))
     state_restored = manager_facts(manager, "context7")["installation_records"] == 0
     if process.returncode == 0:
-        cleanup, cleanup_trace = traced(binary, ["remove", "context7", "--target", "codex,cursor,kiro", "--format", "json"], root, challenge)
+        cleanup, cleanup_trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge)
         trace_list = [trace, cleanup_trace]
     else:
         trace_list = [trace]
@@ -4359,13 +4394,14 @@ def sticky_scenario(
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
-    add, trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    target = scenario_target_argument(scenario)
+    add, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge)
     traces.append(trace)
     original = manager_identity(manager, "context7")
     if scenario == "readd_sticky_distribution":
-        middle, trace = traced(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+        middle, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge)
         traces.append(trace)
-        final, trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+        final, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge)
         traces.append(trace)
     else:
         cursor = Path(os.environ["HOME"]) / ".cursor"
@@ -4373,10 +4409,10 @@ def sticky_scenario(
             if path.is_file() and not path.is_symlink() and "context7" in (path.as_posix() + path.read_text(errors="ignore")):
                 path.unlink()
         middle = subprocess.CompletedProcess([], 0)
-        final, trace = traced(binary, ["repair", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+        final, trace = traced(binary, ["repair", "context7", "--target", target, "--format", "json"], root, challenge)
         traces.append(trace)
     observed = manager_identity(manager, "context7")
-    remove, trace = traced(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    remove, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge)
     traces.append(trace)
     after = observe(home, manager)
     proof = {
@@ -6278,27 +6314,35 @@ def revoked_boundary_scenario(
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
 
-    def execute(argv: list[str], environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def execute(
+        argv: list[str], environment: dict[str, str], *, non_contract_target_probe: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         completed, trace = traced_with_environment(binary, argv, root, challenge, environment)
+        if non_contract_target_probe:
+            trace["non_contract_target_probe"] = True
         traces.append(trace)
         return completed
 
-    installed = execute(["add", "context7", "--target", "cursor", "--format", "json"], active_env)
+    target = scenario_target_argument("revoked_operations_boundary")
+    installed = execute(["add", "context7", "--target", target, "--format", "json"], active_env)
     identity_before = manager_identity(manager, "context7")
-    new_target = execute(["add", "context7", "--target", "codex", "--format", "json"], revoked_env)
-    repair = execute(["repair", "context7", "--target", "cursor", "--format", "json"], revoked_env)
+    new_target = execute(
+        ["add", "context7", "--target", "codex", "--format", "json"], revoked_env,
+        non_contract_target_probe=True,
+    )
+    repair = execute(["repair", "context7", "--target", target, "--format", "json"], revoked_env)
     identity_after_blocks = manager_identity(manager, "context7")
-    update = execute(["update", "context7", "--target", "cursor", "--format", "json"], safe_env)
+    update = execute(["update", "context7", "--target", target, "--format", "json"], safe_env)
     update_value = json_output(update, "update")
     identity_after_update = manager_identity(manager, "context7")
-    remove = execute(["remove", "context7", "--target", "cursor", "--format", "json"], safe_env)
+    remove = execute(["remove", "context7", "--target", target, "--format", "json"], safe_env)
 
     fresh = root / "revoked-fresh-install"
     fresh_home, fresh_manager, fresh_workspace = fresh / "home", fresh / "manager", fresh / "workspace"
     fresh_workspace.mkdir(parents=True)
     fresh_env = dict(revoked_env)
     fresh_env.update({"HOME": str(fresh_home), "USERPROFILE": str(fresh_home), "XDG_CONFIG_HOME": str(fresh / "config"), "XDG_CACHE_HOME": str(fresh / "cache"), "AGENTPLUGINS_HOME": str(fresh_manager), "AGENTPLUGINS_EVIDENCE_ROOT": str(fresh / "evidence")})
-    blocked_install, trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], fresh_workspace, challenge, fresh_env)
+    blocked_install, trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], fresh_workspace, challenge, fresh_env)
     traces.append(trace)
     after = observe(home, manager)
     identity_unchanged = all(identity_before.get(field) == identity_after_blocks.get(field) for field in ("distribution_id", "resolved_revision", "desired_release_sequence"))
@@ -6382,13 +6426,16 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         before, after = revoked_value["before"], revoked_value["after"]
         reason = "revoked exposure/repair blocked while safe update/removal remained" if passed else "revocation operation boundary was not observed"
     elif scenario.startswith("hero_lifecycle_"):
-        product, client = scenario.removeprefix("hero_lifecycle_").rsplit("_", 1)
-        passed, lifecycle_value = lifecycle(binary, product, (client,), root, challenge, challenge_context, include_repair=False)
+        product, _ = scenario.removeprefix("hero_lifecycle_").rsplit("_", 1)
+        passed, lifecycle_value = lifecycle(
+            binary, product, scenario_client_targets(scenario), root, challenge,
+            challenge_context, include_repair=False,
+        )
         traces.extend(lifecycle_value["command_traces"])
         proof = lifecycle_value
         reason = "disposable lifecycle and materialization postconditions passed; native discovery was not claimed" if passed else "disposable lifecycle materialization was incomplete"
     elif scenario == "context7_grouped_lifecycle":
-        clients = ("codex", "cursor", "kiro")
+        clients = scenario_client_targets(scenario)
         passed, lifecycle_value = lifecycle(binary, "context7", clients, root, challenge, challenge_context, include_repair=True)
         traces.extend(lifecycle_value["command_traces"])
         values = lifecycle_value["values"]
@@ -6446,8 +6493,9 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "managed package tamper was detected and required repair" if passed else "managed package tamper boundary was not observed"
-    elif scenario.startswith("repair_"):
-        passed, fault_value = repair_fault_scenario(binary, scenario.removeprefix("repair_"), root, challenge)
+    elif scenario in _CONFIG["adapter_repair_faults"]:
+        client, = scenario_client_targets(scenario)
+        passed, fault_value = repair_fault_scenario(binary, client, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
@@ -6531,6 +6579,7 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
 
     if scenario not in {"schema_1_0_0_accepted", "schema_draft_rejected", "schema_unknown_rejected", "project_scope_zero_mutation", "direct_full_sha_immutable", "missing_runtime_exact_guidance", "readd_sticky_distribution", "repair_sticky_distribution", "plugin_data_lifecycle_boundary", "retained_data_readd_before_changed_default", "signed_sequence_not_semver", "revoked_operations_boundary"}:
         after = observe(home, manager)
+    validate_scenario_command_targets(scenario, traces)
     result = {
         "schema_version": 1, "scenario_id": scenario, "challenge": challenge,
         "started_at": traces[0]["started_at"] if traces else now(), "observed_at": now(),

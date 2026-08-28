@@ -51,6 +51,80 @@ PUBLICATION = ROOT / "tests/fixtures/directory-publication"
 
 
 class LaunchEvidenceE2ETests(unittest.TestCase):
+    def test_scenario_target_contract_is_exhaustive_exact_and_ordered(self) -> None:
+        config = json.loads((ROOT / "tests/e2e/launch-scenarios.json").read_text())
+        targets = observer.validate_scenario_target_contract(config)
+        self.assertEqual(set(targets), observer.EXPECTED_SCENARIOS)
+        self.assertEqual(len(targets), 53)
+        order = {client: index for index, client in enumerate(observer.SCENARIO_TARGET_ORDER)}
+        for scenario, value in targets.items():
+            with self.subTest(scenario=scenario):
+                self.assertTrue(value)
+                self.assertEqual(len(value), len(set(value)))
+                self.assertTrue(set(value) <= observer.CLIENTS)
+                self.assertEqual(value, tuple(sorted(value, key=order.__getitem__)))
+
+        self.assertEqual(targets["state_schema_2_migration"], ("codex",))
+        self.assertEqual(targets["managed_rollback"], ("codex", "cursor", "kiro"))
+        self.assertEqual(targets["repair_sticky_distribution"], ("cursor",))
+        self.assertEqual(targets["repair_codex"], ("codex",))
+        self.assertEqual(targets["repair_cursor"], ("cursor",))
+        self.assertEqual(targets["repair_kiro"], ("kiro",))
+        self.assertEqual(targets["shared_copilot_vscode_backend"], ("copilot", "vscode"))
+        for plugin in config["heroes"]:
+            for client in config["runtime_clients"]:
+                self.assertEqual(targets[f"hero_lifecycle_{plugin}_{client}"], (client,))
+
+    def test_invalid_scenario_target_contracts_fail_before_effects(self) -> None:
+        base = json.loads((ROOT / "tests/e2e/launch-scenarios.json").read_text())
+        mutations = {
+            "missing": lambda value: value["scenario_targets"].pop("directory_offline"),
+            "extra": lambda value: value["scenario_targets"].update(unknown_scenario=["cursor"]),
+            "empty": lambda value: value["scenario_targets"].update(directory_offline=[]),
+            "duplicate": lambda value: value["scenario_targets"].update(directory_offline=["cursor", "cursor"]),
+            "unsupported": lambda value: value["scenario_targets"].update(directory_offline=["unknown"]),
+            "order": lambda value: value["scenario_targets"].update(managed_rollback=["kiro", "cursor", "codex"]),
+        }
+        for label, mutate in mutations.items():
+            config = json.loads(json.dumps(base))
+            mutate(config)
+            with self.subTest(label=label), mock.patch.object(observer, "observe") as observe_effect, mock.patch.object(
+                observer.subprocess, "run",
+            ) as process_effect, self.assertRaises(ValueError):
+                observer.validate_scenario_target_contract(config)
+            observe_effect.assert_not_called()
+            process_effect.assert_not_called()
+
+    def test_harness_and_observer_resolve_every_scenario_from_same_contract(self) -> None:
+        harness = self.fixture_harness()
+        self.assertEqual(harness.scenario_targets, observer.SCENARIO_CLIENT_TARGETS)
+        for scenario in observer.EXPECTED_SCENARIOS:
+            self.assertEqual(harness.scenario_targets[scenario], observer.scenario_client_targets(scenario))
+
+    def test_scenario_target_argv_guard_rejects_drift(self) -> None:
+        observer.validate_scenario_command_targets("state_schema_2_migration", [{
+            "argv": ["info", "context7", "--target", "codex", "--format", "json"],
+        }])
+        with self.assertRaisesRegex(ValueError, "drift"):
+            observer.validate_scenario_command_targets("state_schema_2_migration", [{
+                "argv": ["info", "context7", "--target", "cursor", "--format", "json"],
+            }])
+
+    def test_managed_rollback_constructs_argv_from_exact_contract_tuple(self) -> None:
+        process = mock.Mock(returncode=1)
+        process.poll.return_value = 1
+        process.communicate.return_value = ("", "fault")
+        with mock.patch.object(observer.subprocess, "Popen", return_value=process) as popen, mock.patch.object(
+            observer, "observe", return_value={},
+        ), mock.patch.object(observer, "manager_facts", return_value={"installation_records": 0}), mock.patch.object(
+            observer, "materialized_product_mentions", return_value={"codex": 0, "cursor": 0, "kiro": 0},
+        ), mock.patch.dict(os.environ, {"HOME": "/tmp/contract-home", "AGENTPLUGINS_HOME": "/tmp/contract-manager"}, clear=False):
+            observer.managed_rollback_scenario(Path("binary"), Path("root"), "challenge")
+        self.assertEqual(
+            popen.call_args.args[0][1:],
+            ["add", "context7", "--target", "codex,cursor,kiro", "--format", "json"],
+        )
+
     def test_authenticated_linux_binary_pin_matches_immutable_0_1_18_release(self) -> None:
         self.assertEqual(observer.RELEASED_AGENTPLUGINS_0_1_18_SIZE, 11_677_880)
         self.assertEqual(
@@ -3340,6 +3414,14 @@ else:
                 passed, value = observer.migration_scenario(binary, workspace, "challenge")
         self.assertTrue(passed, value)
         self.assertTrue(all(value["proof"].values()))
+        target_commands = [trace["argv"] for trace in value["command_traces"] if "--target" in trace["argv"]]
+        self.assertEqual(
+            target_commands,
+            [
+                ["info", "demo", "--target", "codex", "--format", "json"],
+                ["add", "demo", "--target", "codex", "--format", "json"],
+            ],
+        )
         self.assertEqual(
             value["sandbox_transformation"]["algorithm"],
             "agentplugins-sanitized-placeholder-to-sandbox-v1",

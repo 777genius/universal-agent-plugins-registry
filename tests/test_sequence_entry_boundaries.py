@@ -329,6 +329,28 @@ class LaunchContextBoundaryTests(unittest.TestCase):
             )
             dispatch.assert_called_once()
 
+        sticky_value = {
+            "command_traces": [{
+                "argv": ["repair", "context7", "--target", "cursor", "--format", "json"],
+                "started_at": "2026-08-28T00:00:00Z",
+            }],
+            "before": {}, "after": {},
+            "proof": {
+                "recorded_distribution_retained": True,
+                "recorded_revision_retained": True,
+            },
+        }
+        with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(
+            launch_observer, "observe", return_value={},
+        ), mock.patch.object(
+            launch_observer, "sticky_scenario", return_value=(True, sticky_value),
+        ) as sticky_dispatch:
+            result = launch_observer.run(
+                Path("binary"), "repair_sticky_distribution", Path("root"), challenge_context(),
+            )
+            self.assertEqual(result["outcome"], "passed")
+            sticky_dispatch.assert_called_once()
+
         multi = challenge_context()
         policy = multi["directory_distribution"]["release_policies"][0]
         policy["targets"].append({**copy.deepcopy(policy["targets"][0]), "client": "kiro"})
