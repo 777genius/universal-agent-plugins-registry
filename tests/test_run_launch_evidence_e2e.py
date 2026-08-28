@@ -183,11 +183,41 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             )
             root, bindings = observer.revoked_probe_scenario_root(workspace, environment)
             before = observer.filesystem_snapshot(root)
+            expected_binary = scenario_root / "release" / "agentplugins"
+
+            identity = {
+                "device": 1, "inode": 2, "mode": 0o100755, "uid": 3, "gid": 4,
+                "links": 1, "size": observer.RELEASED_AGENTPLUGINS_0_1_18_SIZE,
+                "mtime_ns": 5, "ctime_ns": 6,
+            }
+            parent_identity = {"device": 1, "inode": 7, "mode": 0o40755, "uid": 3, "gid": 4}
+
+            def issued_binding():
+                path = str(expected_binary)
+                observation = {
+                    "path": path, "descriptor_identity": copy.deepcopy(identity),
+                    "path_identity": copy.deepcopy(identity),
+                    "parent_identity": copy.deepcopy(parent_identity),
+                    "sha256": "sha256:" + observer.RELEASED_AGENTPLUGINS_0_1_18_SHA256,
+                    "size": observer.RELEASED_AGENTPLUGINS_0_1_18_SIZE,
+                }
+                return observer.AuthenticatedBinaryExecutionBinding({
+                    "mechanism": "linux-raw-execveat-at-empty-path-authenticated-fd",
+                    "syscall_number": observer._execveat_syscall_number(),
+                    "empty_path": True, "at_empty_path": True,
+                    "authenticated_fd_direct_child_only": True,
+                    "descriptor_inheritable_in_observer": False,
+                    "argv": ["<authenticated-binary-fd>", *probe.target_argv],
+                    "path": path, "parent_path": str(Path(path).parent),
+                    "pre": {"stage": "command_1_pre", **copy.deepcopy(observation)},
+                    "post": {"stage": "command_1_post", **copy.deepcopy(observation)},
+                }, authority=observer._EXECUTION_BINDING_AUTHORITY)
 
             def verify(
                 returncode=probe.expected_exit_code, stdout=probe.expected_stdout,
                 stderr=probe.expected_stderr, candidate_probe=probe,
-                process_argv=("binary", *observer.REVOKED_TARGET_PROBE_ARGV),
+                process_argv=("<authenticated-binary-fd>", *observer.REVOKED_TARGET_PROBE_ARGV),
+                execution_binding=None,
             ):
                 completed = subprocess.CompletedProcess(
                     list(process_argv), returncode, stdout=stdout, stderr=stderr,
@@ -196,6 +226,8 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                     completed, candidate_probe, argv=list(probe.target_argv), environment=environment,
                     scenario_root=root, writable_bindings=bindings, before=before,
                     after=observer.filesystem_snapshot(root),
+                    execution_binding=issued_binding() if execution_binding is None else execution_binding,
+                    binary=expected_binary,
                 )
 
             valid = verify()
@@ -211,7 +243,9 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             )
             near_misses = {
                 "different exit": verify(returncode=42),
-                "extra process argv": verify(process_argv=("binary", "--verbose", *probe.target_argv)),
+                "extra process argv": verify(process_argv=("<authenticated-binary-fd>", "--verbose", *probe.target_argv)),
+                "fake executable exact output": verify(process_argv=("/tmp/fake-agentplugins", *probe.target_argv)),
+                "correct result without binding": verify(execution_binding={}),
                 "unexpected stdout": verify(stdout="{}\n"),
                 "omitted progress": verify(stderr=probe.expected_stderr.split("\n", 1)[1]),
                 "wrong selector": verify(stderr=probe.expected_stderr.replace('"context7"', '"other"')),
@@ -231,11 +265,73 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 with self.subTest(label=label):
                     self.assertFalse(result["verified"])
 
+            def substitute_every_path(value):
+                replacement = "/tmp/substitute/agentplugins"
+                value["path"] = replacement
+                value["parent_path"] = str(Path(replacement).parent)
+                value["pre"]["path"] = replacement
+                value["post"]["path"] = replacement
+
+            binding_mutations = {
+                "wrong mechanism": lambda value: value.__setitem__("mechanism", "path-subprocess-run"),
+                "wrong argv": lambda value: value.__setitem__("argv", ["agentplugins", *probe.target_argv]),
+                "wrong digest": lambda value: value["post"].__setitem__("sha256", "sha256:" + "0" * 64),
+                "wrong size": lambda value: value["pre"].__setitem__("size", identity["size"] + 1),
+                "descriptor drift": lambda value: value["post"]["descriptor_identity"].__setitem__("inode", 99),
+                "path identity drift": lambda value: value["post"]["path_identity"].__setitem__("inode", 99),
+                "parent identity drift": lambda value: value["post"]["parent_identity"].__setitem__("inode", 99),
+                "path substitution": lambda value: value["post"].__setitem__("path", "/tmp/substitute"),
+                "coherent path substitution": substitute_every_path,
+                "missing post": lambda value: value.pop("post"),
+            }
+            for label, mutate in binding_mutations.items():
+                candidate = issued_binding()
+                mutate(candidate)
+                with self.subTest(label=label):
+                    self.assertFalse(verify(execution_binding=candidate)["verified"])
+            self.assertFalse(verify(execution_binding=dict(issued_binding()))["verified"])
+
             (workspace / "mutation").write_text("changed")
             self.assertFalse(verify()["verified"])
             (workspace / "mutation").unlink()
             (scenario_root / "cache" / "mutation").write_text("changed")
             self.assertFalse(verify()["verified"])
+
+    def test_authenticated_binary_one_command_revoked_probe_plan_is_descriptor_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "agentplugins"
+            expected_stderr = "exact revoked probe rejection\n"
+            body = (
+                "#!/usr/bin/python3\n"
+                "import sys\n"
+                "if sys.argv[1:] == ['version']:\n"
+                " print('agentplugins 0.1.18')\n"
+                "else:\n"
+                f" sys.stderr.write({expected_stderr!r})\n"
+                " raise SystemExit(1)\n"
+            ).encode()
+            binary.write_bytes(body); binary.chmod(0o700)
+            with (
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SIZE", len(body)),
+                mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SHA256", hashlib.sha256(body).hexdigest()),
+            ):
+                session = observer.AuthenticatedBinaryExecutionSession(
+                    binary.resolve(), cwd=root,
+                    command_plan=(observer.REVOKED_TARGET_PROBE_ARGV,),
+                )
+                completed, binding = session.execute(
+                    binary.resolve(), list(observer.REVOKED_TARGET_PROBE_ARGV),
+                    cwd=root, write_authority=None,
+                )
+            self.assertEqual(completed.args, ["<authenticated-binary-fd>", *observer.REVOKED_TARGET_PROBE_ARGV])
+            self.assertEqual((completed.returncode, completed.stdout, completed.stderr), (1, "", expected_stderr))
+            self.assertIs(type(binding), observer.AuthenticatedBinaryExecutionBinding)
+            self.assertEqual(binding["mechanism"], "linux-raw-execveat-at-empty-path-authenticated-fd")
+            self.assertEqual(binding["pre"]["descriptor_identity"], binding["post"]["descriptor_identity"])
+            self.assertEqual(binding["pre"]["path_identity"], binding["post"]["path_identity"])
+            self.assertEqual(binding["pre"]["parent_identity"], binding["post"]["parent_identity"])
+            self.assertTrue(session._closed)
 
     def test_revoked_probe_rejects_outside_unbound_and_aliased_writable_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

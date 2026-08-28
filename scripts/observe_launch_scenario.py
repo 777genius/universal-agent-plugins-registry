@@ -199,6 +199,23 @@ CONFORMANCE_KEY_ID = "launch-conformance-only"
 CONFORMANCE_SEED = hashlib.sha256(b"UAP launch evidence conformance key; never production").digest()
 RELEASED_AGENTPLUGINS_0_1_18_SIZE = 11_677_880
 RELEASED_AGENTPLUGINS_0_1_18_SHA256 = "9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779"
+_EXECUTION_BINDING_AUTHORITY = object()
+
+
+class AuthenticatedBinaryExecutionBinding(dict[str, Any]):
+    """In-process proof emitted only around one authenticated descriptor exec."""
+
+    def __init__(self, evidence: dict[str, Any], *, authority: object):
+        if authority is not _EXECUTION_BINDING_AUTHORITY:
+            raise TypeError("authenticated execution bindings are session-issued")
+        super().__init__(evidence)
+        self._authority = authority
+        self._consumed = False
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> AuthenticatedBinaryExecutionBinding:
+        duplicate = type(self)(copy.deepcopy(dict(self), memo), authority=self._authority)
+        duplicate._consumed = self._consumed
+        return duplicate
 
 
 def exact_plugin_data_lifecycle_argv(scenario_targets: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
@@ -1634,16 +1651,81 @@ def verify_revoked_target_probe_result(
     completed: subprocess.CompletedProcess[str], probe: RevokedTargetProbe, *,
     argv: list[str], environment: dict[str, str], scenario_root: Path,
     writable_bindings: dict[str, str], before: dict[str, dict[str, Any]],
-    after: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]], execution_binding: dict[str, Any] | None,
+    binary: Path,
 ) -> dict[str, Any]:
     """Verify the full pinned process result and whole-root zero-mutation proof."""
     process_argv = list(completed.args) if isinstance(completed.args, (list, tuple)) else []
+    displayed_argv = ["<authenticated-binary-fd>", *argv]
     argv_bound = bool(
         argv == list(probe.target_argv)
-        and len(process_argv) == len(argv) + 1
-        and process_argv[1:] == argv
+        and process_argv == displayed_argv
     )
-    descriptor_bound = probe.authorizes(argv, environment)
+    expected_digest = "sha256:" + RELEASED_AGENTPLUGINS_0_1_18_SHA256
+    file_identity_fields = {"device", "inode", "mode", "uid", "gid", "links", "size", "mtime_ns", "ctime_ns"}
+    parent_identity_fields = {"device", "inode", "mode", "uid", "gid"}
+
+    def exact_identity(value: Any, fields: set[str]) -> bool:
+        return bool(
+            isinstance(value, dict) and set(value) == fields
+            and all(type(item) is int for item in value.values())
+        )
+
+    authentic_binding = bool(
+        type(execution_binding) is AuthenticatedBinaryExecutionBinding
+        and execution_binding._authority is _EXECUTION_BINDING_AUTHORITY
+        and execution_binding._consumed is False
+    )
+    binding = execution_binding if authentic_binding else {}
+    if authentic_binding:
+        execution_binding._consumed = True
+    pre = binding.get("pre") if isinstance(binding.get("pre"), dict) else {}
+    post = binding.get("post") if isinstance(binding.get("post"), dict) else {}
+    identities_bound = bool(
+        exact_identity(pre.get("descriptor_identity"), file_identity_fields)
+        and exact_identity(pre.get("path_identity"), file_identity_fields)
+        and exact_identity(pre.get("parent_identity"), parent_identity_fields)
+        and exact_identity(post.get("descriptor_identity"), file_identity_fields)
+        and exact_identity(post.get("path_identity"), file_identity_fields)
+        and exact_identity(post.get("parent_identity"), parent_identity_fields)
+        and pre["descriptor_identity"] == pre["path_identity"]
+        and post["descriptor_identity"] == post["path_identity"]
+        and pre["descriptor_identity"] == post["descriptor_identity"]
+        and pre["path_identity"] == post["path_identity"]
+        and pre["parent_identity"] == post["parent_identity"]
+        and pre["descriptor_identity"]["size"] == RELEASED_AGENTPLUGINS_0_1_18_SIZE
+        and stat.S_ISREG(pre["descriptor_identity"]["mode"])
+        and stat.S_ISDIR(pre["parent_identity"]["mode"])
+    )
+    observations_bound = bool(
+        pre.get("stage") == "command_1_pre" and post.get("stage") == "command_1_post"
+        and type(pre.get("path")) is str and pre.get("path") == post.get("path")
+        and type(binding.get("path")) is str
+        and binding.get("path") == pre.get("path") == str(binary)
+        and type(binding.get("parent_path")) is str
+        and str(Path(binary).parent) == binding.get("parent_path")
+        and pre.get("sha256") == expected_digest and post.get("sha256") == expected_digest
+        and pre.get("size") == RELEASED_AGENTPLUGINS_0_1_18_SIZE
+        and post.get("size") == RELEASED_AGENTPLUGINS_0_1_18_SIZE
+        and identities_bound
+    )
+    mechanism_bound = bool(
+        binding.get("mechanism") == "linux-raw-execveat-at-empty-path-authenticated-fd"
+        and binding.get("syscall_number") == _execveat_syscall_number()
+        and binding.get("empty_path") is True and binding.get("at_empty_path") is True
+        and binding.get("authenticated_fd_direct_child_only") is True
+        and binding.get("descriptor_inheritable_in_observer") is False
+        and binding.get("argv") == displayed_argv
+        and set(binding) == {
+            "mechanism", "syscall_number", "empty_path", "at_empty_path",
+            "authenticated_fd_direct_child_only", "descriptor_inheritable_in_observer",
+            "argv", "path", "parent_path", "pre", "post",
+        }
+    )
+    descriptor_bound = bool(
+        probe.authorizes(argv, environment) and authentic_binding
+        and mechanism_bound and observations_bound
+    )
     exit_bound = completed.returncode == probe.expected_exit_code
     output_bound = completed.stdout == probe.expected_stdout and completed.stderr == probe.expected_stderr
     if output_bound:
@@ -1664,6 +1746,13 @@ def verify_revoked_target_probe_result(
     return {
         "verified": verified,
         "descriptor_bound": descriptor_bound,
+        "execution_binding": {
+            "present": bool(binding), "authentic": authentic_binding,
+            "mechanism_bound": mechanism_bound,
+            "observations_bound": observations_bound, "identities_bound": identities_bound,
+            "expected_sha256": expected_digest,
+            "expected_size": RELEASED_AGENTPLUGINS_0_1_18_SIZE,
+        },
         "argv_bound": argv_bound,
         "exit": {"expected": probe.expected_exit_code, "observed": completed.returncode, "bound": exit_bound},
         "rejection": {
@@ -2937,7 +3026,10 @@ class AuthenticatedBinaryExecutionSession:
     _EVENT = struct.Struct("iIII")
     _EXECUTION_TIMEOUT_SECONDS = 180
 
-    def __init__(self, binary: Path, *, cwd: Path):
+    def __init__(
+        self, binary: Path, *, cwd: Path,
+        command_plan: tuple[tuple[str, ...], ...] = EXACT_PLUGIN_DATA_LIFECYCLE_ARGV,
+    ):
         self._execveat_syscall = _execveat_syscall_number()
         if getattr(_LIBC, "syscall", None) is None:
             raise OSError(errno.ENOTSUP, "raw execveat syscall entry is unavailable")
@@ -2958,6 +3050,17 @@ class AuthenticatedBinaryExecutionSession:
         self._child_pid: int | None = None
         self._last_child_pid: int | None = None
         self.command_observations: list[dict[str, Any]] = []
+        if type(command_plan) is not tuple or any(
+            type(command) is not tuple or not command
+            or any(type(argument) is not str or not argument for argument in command)
+            for command in command_plan
+        ):
+            raise ValueError("authenticated binary command plan must be an immutable argv tuple")
+        if command_plan not in (
+            EXACT_PLUGIN_DATA_LIFECYCLE_ARGV, (REVOKED_TARGET_PROBE_ARGV,),
+        ):
+            raise ValueError("authenticated binary command plan is not an authorized exact plan")
+        self._command_plan = command_plan
         try:
             self._inotify_fd = self._open_monitor()
             self._parent_watch = self._add_watch(
@@ -3270,9 +3373,9 @@ class AuthenticatedBinaryExecutionSession:
         try:
             if Path(binary) != self.path:
                 raise ValueError("authenticated binary session used with the wrong path")
-            if self._finalized or self._closed or self._next_command >= len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
+            if self._finalized or self._closed or self._next_command >= len(self._command_plan):
                 raise ValueError("authenticated binary session cannot be reused")
-            if tuple(argv) != EXACT_PLUGIN_DATA_LIFECYCLE_ARGV[self._next_command]:
+            if tuple(argv) != self._command_plan[self._next_command]:
                 raise ValueError("authenticated binary session received an incomplete or out-of-order command set")
             pre = self._observe(f"command_{self._next_command + 1}_pre")
             completed = self._run_descriptor(argv, cwd=cwd, write_authority=write_authority)
@@ -3287,15 +3390,17 @@ class AuthenticatedBinaryExecutionSession:
                     os.close(descriptor)
                 except OSError:
                     pass
-        binding = {
+        binding = AuthenticatedBinaryExecutionBinding({
             "mechanism": "linux-raw-execveat-at-empty-path-authenticated-fd",
             "syscall_number": self._execveat_syscall,
             "empty_path": True,
             "at_empty_path": True,
             "authenticated_fd_direct_child_only": True,
             "descriptor_inheritable_in_observer": os.get_inheritable(self._fd),
+            "argv": list(completed.args), "path": str(self.path),
+            "parent_path": str(self.parent_path),
             "pre": pre, "post": post,
-        }
+        }, authority=_EXECUTION_BINDING_AUTHORITY)
         self.command_observations.append(copy.deepcopy(binding))
         self._next_command += 1
         if completed.returncode != 0:
@@ -3307,7 +3412,9 @@ class AuthenticatedBinaryExecutionSession:
         try:
             if self._finalized or self._closed:
                 raise ValueError("authenticated binary session cannot be reused")
-            if self._next_command != len(EXACT_PLUGIN_DATA_LIFECYCLE_ARGV):
+            if self._command_plan != EXACT_PLUGIN_DATA_LIFECYCLE_ARGV:
+                raise ValueError("only the exact lifecycle plan can be finalized")
+            if self._next_command != len(self._command_plan):
                 raise ValueError("authenticated binary session has an incomplete command set")
             final = self._observe("final_barrier")
             self._finalized = True
@@ -3521,6 +3628,7 @@ def bound_lifecycle_evidence(
 def traced_with_environment(
     binary: Path, argv: list[str], cwd: Path, challenge: str, environment: dict[str, str],
     *, scenario_targets: tuple[str, ...] = (), revoked_probe: RevokedTargetProbe | None = None,
+    binary_session: AuthenticatedBinaryExecutionSession | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     original = os.environ.copy()
     try:
@@ -3529,6 +3637,7 @@ def traced_with_environment(
         return traced(
             binary, argv, cwd, challenge, scenario_targets=scenario_targets,
             target_environment=environment, revoked_probe=revoked_probe,
+            binary_session=binary_session,
         )
     finally:
         os.environ.clear()
@@ -6582,15 +6691,21 @@ def revoked_boundary_scenario(
     safe_env, safe_digest = conformance_directory(root, context, sequence=sequence + 2, revoked=True, safe_successor=True)
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
+    probe_execution_binding: dict[str, Any] | None = None
 
     def execute(
         argv: list[str], environment: dict[str, str], *, probe: RevokedTargetProbe | None = None,
+        binary_session: AuthenticatedBinaryExecutionSession | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        nonlocal probe_execution_binding
         completed, trace = traced_with_environment(
             binary, argv, root, challenge, environment,
-            scenario_targets=scenario_targets, revoked_probe=probe,
+            scenario_targets=scenario_targets, revoked_probe=probe, binary_session=binary_session,
         )
         traces.append(trace)
+        if probe is not None:
+            candidate = trace.get("binary_execution")
+            probe_execution_binding = candidate if isinstance(candidate, dict) else None
         return completed
 
     target = contract_target_argument(scenario_targets)
@@ -6611,15 +6726,23 @@ def revoked_boundary_scenario(
     )
     probe_root, writable_bindings = revoked_probe_scenario_root(root, revoked_env)
     before_probe_root = filesystem_snapshot(probe_root)
-    new_target = execute(
-        list(REVOKED_TARGET_PROBE_ARGV), revoked_env, probe=probe,
+    probe_binary_session = AuthenticatedBinaryExecutionSession(
+        binary, cwd=root, command_plan=(REVOKED_TARGET_PROBE_ARGV,),
     )
+    try:
+        new_target = execute(
+            list(REVOKED_TARGET_PROBE_ARGV), revoked_env, probe=probe,
+            binary_session=probe_binary_session,
+        )
+    finally:
+        probe_binary_session.abort()
     after_probe_root = filesystem_snapshot(probe_root)
     after_probe = observe(home, manager)
     probe_verifier = verify_revoked_target_probe_result(
         new_target, probe, argv=list(REVOKED_TARGET_PROBE_ARGV), environment=revoked_env,
         scenario_root=probe_root, writable_bindings=writable_bindings,
         before=before_probe_root, after=after_probe_root,
+        execution_binding=probe_execution_binding, binary=binary,
     )
     probe_verified = probe_verifier["verified"] and before_probe == after_probe
     repair = execute(["repair", "context7", "--target", target, "--format", "json"], revoked_env)
