@@ -115,8 +115,24 @@ def reject_policy_scenario_before_effect(scenario_id: str) -> None:
         )
 
 
-def validate_released_binary_evidence(value: dict[str, Any], *, uap_sha: str) -> str:
+def validate_released_binary_evidence(
+    value: dict[str, Any], *, uap_sha: str, directory_ledger_sha: str,
+    publication_id: str, publication_sequence: int,
+    publication_snapshot_digest: str, publication_source_commit: str,
+) -> str:
     uap_sha = require_uap_sha(uap_sha)
+    if not isinstance(directory_ledger_sha, str) or SHA.fullmatch(directory_ledger_sha) is None:
+        raise TwoLaneEvidenceError("Directory ledger SHA must be one explicit canonical 40-hex commit")
+    if (
+        not isinstance(publication_id, str) or not publication_id
+        or type(publication_sequence) is not int
+        or not 1 <= publication_sequence <= 9_007_199_254_740_991
+        or not isinstance(publication_snapshot_digest, str)
+        or DIGEST.fullmatch(publication_snapshot_digest) is None
+        or not isinstance(publication_source_commit, str)
+        or SHA.fullmatch(publication_source_commit) is None
+    ):
+        raise TwoLaneEvidenceError("Directory publication identity is incomplete or invalid")
     validate_launch_schema(value)
     if value.get("evidence_class") != "released_binary":
         raise TwoLaneEvidenceError("runtime evidence_class must be released_binary")
@@ -139,9 +155,12 @@ def validate_released_binary_evidence(value: dict[str, Any], *, uap_sha: str) ->
         and release.get("manifest_digest") == RELEASE_MANIFEST_DIGEST
         and release.get("checksums_digest") == RELEASE_CHECKSUMS_DIGEST
         and run.get("github_sha") == uap_sha
-        and directory.get("origin") == f"https://raw.githubusercontent.com/777genius/universal-agent-plugins/{uap_sha}/registry/schemas/1/"
-        and type(directory.get("sequence")) is int and directory["sequence"] > 0
-        and DIGEST.fullmatch(str(directory.get("snapshot_digest", "")))
+        and directory.get("origin") == f"https://raw.githubusercontent.com/777genius/universal-agent-plugins/{directory_ledger_sha}/registry/schemas/1/"
+        and directory.get("ledger_commit") == directory_ledger_sha
+        and directory.get("publication_id") == publication_id
+        and directory.get("source_commit") == publication_source_commit
+        and directory.get("sequence") == publication_sequence
+        and directory.get("snapshot_digest") == publication_snapshot_digest
         and DIGEST.fullmatch(str(directory.get("trust_root_digest", "")))
     ):
         raise TwoLaneEvidenceError("released binary/release/UAP/Directory identity mismatch")
@@ -260,9 +279,17 @@ def validate_source_policy_evidence(
 
 def build_readiness_envelope(runtime: dict[str, Any], policy: dict[str, Any], *,
                              scenario_digest: str, harness_digest: str,
-                             overlay_digest: str, uap_sha: str) -> dict[str, Any]:
+                             overlay_digest: str, uap_sha: str,
+                             directory_ledger_sha: str, publication_id: str,
+                             publication_sequence: int, publication_snapshot_digest: str,
+                             publication_source_commit: str) -> dict[str, Any]:
     uap_sha = require_uap_sha(uap_sha)
-    runtime_digest = validate_released_binary_evidence(runtime, uap_sha=uap_sha)
+    runtime_digest = validate_released_binary_evidence(
+        runtime, uap_sha=uap_sha, directory_ledger_sha=directory_ledger_sha,
+        publication_id=publication_id, publication_sequence=publication_sequence,
+        publication_snapshot_digest=publication_snapshot_digest,
+        publication_source_commit=publication_source_commit,
+    )
     policy_digest = validate_source_policy_evidence(
         policy, scenario_digest=scenario_digest, harness_digest=harness_digest,
         overlay_digest=overlay_digest, uap_sha=uap_sha,
@@ -273,6 +300,11 @@ def build_readiness_envelope(runtime: dict[str, Any], policy: dict[str, Any], *,
         "runtime_evidence_digest": runtime_digest,
         "source_policy_evidence_digest": policy_digest,
         "uap_sha": uap_sha,
+        "directory_ledger_sha": directory_ledger_sha,
+        "publication_id": publication_id,
+        "publication_sequence": publication_sequence,
+        "publication_snapshot_digest": publication_snapshot_digest,
+        "publication_source_commit": publication_source_commit,
         "runtime_results": RUNTIME_RESULT_COUNT,
         "policy_results": POLICY_RESULT_COUNT,
         "readiness_gate_complete": True,
@@ -280,7 +312,7 @@ def build_readiness_envelope(runtime: dict[str, Any], policy: dict[str, Any], *,
 
 
 def validate_completed_readiness(envelope: dict[str, Any], runtime: dict[str, Any],
-                                 policy: dict[str, Any], **identity: str) -> None:
+                                 policy: dict[str, Any], **identity: Any) -> None:
     expected = build_readiness_envelope(runtime, policy, **identity)
     if envelope != expected:
         raise TwoLaneEvidenceError("completed readiness replay differs from either canonical evidence digest")

@@ -42,6 +42,23 @@ def pinned_requirements(body: str) -> set[str]:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_every_launch_harness_invocation_supplies_the_explicit_uap_sha(self) -> None:
+        command = re.compile(r"run_launch_evidence_e2e\.py(?:[^\n]*\\\n)*[^\n]*")
+        observed = []
+        for path in (LAUNCH, LIVE):
+            workflow = load(path)
+            body = "\n".join(commands(job) for job in workflow["jobs"].values() if "steps" in job)
+            matches = command.findall(body)
+            observed.extend((path, invocation) for invocation in matches)
+            for invocation in matches:
+                with self.subTest(path=path.name, invocation=invocation):
+                    self.assertIn("--uap-sha", invocation)
+        documentation = ROOT / "tests/e2e/LAUNCH_EVIDENCE.md"
+        for invocation in command.findall(documentation.read_text()):
+            observed.append((documentation, invocation))
+            self.assertIn("--uap-sha", invocation)
+        self.assertEqual(len(observed), 4)
+
     def test_two_lane_evidence_is_independent_until_canonical_readiness(self) -> None:
         launch = load(LAUNCH)
         runtime = launch["jobs"]["enforced-stable-gate"]
@@ -60,6 +77,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("DIRECTORY_SIGNING", yaml.safe_dump(policy))
         readiness_body = commands(readiness)
         self.assertIn("build_two_lane_readiness.py", readiness_body)
+        for argument in (
+            "--uap-sha", "--directory-ledger-sha", "--publication-id",
+            "--publication-sequence", "--publication-snapshot-digest",
+            "--publication-source-commit",
+        ):
+            self.assertIn(argument, readiness_body)
         self.assertIn("two-lane-readiness.schema.json", readiness_body)
 
     def test_source_policy_transport_contains_no_released_executable(self) -> None:

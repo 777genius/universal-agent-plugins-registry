@@ -921,6 +921,11 @@ jobs:
             --runtime released-runtime/launch-evidence.json \
             --policy source-policy/source-policy-conformance.json \
             --uap-sha "$GITHUB_SHA" \
+            --directory-ledger-sha "${{ inputs.publication_ledger_commit }}" \
+            --publication-id "${{ inputs.publication_id }}" \
+            --publication-sequence "${{ inputs.publication_sequence }}" \
+            --publication-snapshot-digest "${{ inputs.publication_snapshot_digest }}" \
+            --publication-source-commit "${{ inputs.publication_source_commit }}" \
             --output two-lane-readiness/two-lane-readiness.json
           check-jsonschema --schemafile schemas/e2e/two-lane-readiness.schema.json two-lane-readiness/two-lane-readiness.json
           artifact_name="two-lane-readiness-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

@@ -222,6 +222,7 @@ jobs:
         run: |
           run_root="/tmp/uap-live-contract-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           python scripts/run_launch_evidence_e2e.py --mode fixture-only \
+            --uap-sha "$GITHUB_SHA" \
             --consent tests/e2e/fixtures/fixture-only-consent.json \
             --run-root "$run_root" \
             --output "$run_root/evidence/launch-evidence.json"

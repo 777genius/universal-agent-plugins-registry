@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from two_lane_evidence import (
     build_readiness_envelope, canonical_json, require_uap_sha, sha256_file,
@@ -19,12 +20,17 @@ HARNESS = ROOT / "tests/e2e/source-policy-tests.json"
 OVERLAY = ROOT / "tests/e2e/source-policy-overlay.json"
 
 
-def identities(uap_sha: str) -> dict[str, str]:
+def identities(args: argparse.Namespace, uap_sha: str) -> dict[str, Any]:
     return {
         "scenario_digest": sha256_file(SCENARIOS),
         "harness_digest": sha256_file(HARNESS),
         "overlay_digest": sha256_file(OVERLAY),
         "uap_sha": uap_sha,
+        "directory_ledger_sha": args.directory_ledger_sha,
+        "publication_id": args.publication_id,
+        "publication_sequence": args.publication_sequence,
+        "publication_snapshot_digest": args.publication_snapshot_digest,
+        "publication_source_commit": args.publication_source_commit,
     }
 
 
@@ -35,6 +41,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--completed", type=Path)
     parser.add_argument("--uap-sha", required=True)
+    parser.add_argument("--directory-ledger-sha", required=True)
+    parser.add_argument("--publication-id", required=True)
+    parser.add_argument("--publication-sequence", type=int, required=True)
+    parser.add_argument("--publication-snapshot-digest", required=True)
+    parser.add_argument("--publication-source-commit", required=True)
     args = parser.parse_args()
     uap_sha = require_uap_sha(args.uap_sha)
     runtime_body = args.runtime.read_bytes()
@@ -50,9 +61,9 @@ def main() -> int:
         completed = json.loads(completed_body)
         if completed_body != canonical_json(completed):
             raise ValueError("completed readiness must use canonical bytes")
-        validate_completed_readiness(completed, runtime, policy, **identities(uap_sha))
+        validate_completed_readiness(completed, runtime, policy, **identities(args, uap_sha))
     else:
-        value = build_readiness_envelope(runtime, policy, **identities(uap_sha))
+        value = build_readiness_envelope(runtime, policy, **identities(args, uap_sha))
         if args.output.exists() or args.output.is_symlink():
             raise ValueError("readiness output must not already exist")
         args.output.parent.mkdir(parents=True, exist_ok=True)

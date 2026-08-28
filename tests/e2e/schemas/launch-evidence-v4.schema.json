@@ -56,9 +56,12 @@
       }, "additionalProperties": false
     },
     "directory": {
-      "type": "object", "required": ["origin", "snapshot_digest", "sequence", "trust_root_digest"],
+      "type": "object", "required": ["origin", "snapshot_digest", "sequence", "trust_root_digest", "ledger_commit", "publication_id", "source_commit"],
       "properties": {
         "origin": {"type": ["string", "null"], "pattern": "^https://"},
+        "ledger_commit": {"type": ["string", "null"], "pattern": "^[a-f0-9]{40}$"},
+        "publication_id": {"type": ["string", "null"], "minLength": 1},
+        "source_commit": {"type": ["string", "null"], "pattern": "^[a-f0-9]{40}$"},
         "snapshot_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
         "sequence": {"type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991},
         "trust_root_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"}
@@ -254,7 +257,7 @@
       ]},
       "summary": {"properties": {"hero_runtime_results": {"const": 15}}},
       "release": {"properties": {"repository": {"type": "string"}, "tag": {"type": "string"}, "tag_commit": {"type": "string"}, "release_id": {"type": "integer"}, "immutable": {"const": true}, "manifest_digest": {"type": "string"}, "checksums_digest": {"type": "string"}}},
-      "directory": {"properties": {"origin": {"type": "string"}, "snapshot_digest": {"type": "string"}, "sequence": {"type": "integer"}, "trust_root_digest": {"type": "string"}}}
+      "directory": {"properties": {"origin": {"type": "string"}, "ledger_commit": {"type": "string"}, "publication_id": {"type": "string"}, "source_commit": {"type": "string"}, "snapshot_digest": {"type": "string"}, "sequence": {"type": "integer"}, "trust_root_digest": {"type": "string"}}}
     }}},
     {"if": {"properties": {"run": {"properties": {"mode": {"const": "fixture-only"}}}}}, "then": {"properties": {"evidence_class": {"const": "fixture_contract"}}}},
     {"not": {"properties": {"matrix": {"contains": {"type": "object", "properties": {"client": {"const": "chatgpt"}, "plugin": {"not": {"const": "cloudflare-docs"}}}, "required": ["client", "plugin"]}}}, "required": ["matrix"]}}

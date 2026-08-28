@@ -534,7 +534,10 @@ def attach_attestation_bundle(files: Mapping[str, bytes], body: bytes) -> dict[s
 
 
 def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
-                             readiness_body: bytes, *, uap_sha: str) -> dict[str, bytes]:
+                             readiness_body: bytes, *, uap_sha: str,
+                             directory_ledger_sha: str, publication_id: str,
+                             publication_sequence: int, publication_snapshot_digest: str,
+                             publication_source_commit: str) -> dict[str, bytes]:
     """Validate and add gate-only sidecars without projecting policy rows."""
     result = dict(files)
     result.pop("SHA256SUMS", None)
@@ -552,6 +555,11 @@ def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
         harness_digest=policy_sha256_file(ROOT / "tests/e2e/source-policy-tests.json"),
         overlay_digest=policy_sha256_file(ROOT / "tests/e2e/source-policy-overlay.json"),
         uap_sha=uap_sha,
+        directory_ledger_sha=directory_ledger_sha,
+        publication_id=publication_id,
+        publication_sequence=publication_sequence,
+        publication_snapshot_digest=publication_snapshot_digest,
+        publication_source_commit=publication_source_commit,
     )
     result[POLICY_EVIDENCE_NAME] = policy_body
     result[READINESS_EVIDENCE_NAME] = readiness_body
@@ -881,6 +889,11 @@ def verify_completed_state(
             derived = attach_two_lane_evidence(
                 derived, files[POLICY_EVIDENCE_NAME], files[READINESS_EVIDENCE_NAME],
                 uap_sha=source_digest,
+                directory_ledger_sha=ledger_parents[0],
+                publication_id=expected_run_id,
+                publication_sequence=index["publication_sequence"],
+                publication_snapshot_digest=index["publication_snapshot_digest"],
+                publication_source_commit=main_parent,
             )
         write_bundle(bundle, derived)
     if files != derived:
@@ -1053,6 +1066,11 @@ def main() -> int:
                     read_bytes_bounded(args.policy_evidence, MAX_FILE_BYTES),
                     read_bytes_bounded(args.readiness_evidence, MAX_FILE_BYTES),
                     uap_sha=args.uap_sha,
+                    directory_ledger_sha=args.ledger_parent,
+                    publication_id=args.expected_publication_id,
+                    publication_sequence=args.expected_publication_sequence,
+                    publication_snapshot_digest=args.expected_publication_snapshot_digest,
+                    publication_source_commit=args.expected_publication_source_commit,
                 )
                 values = materialize_commits(
                     args.source_repo, args.ledger_repo, args.artifact_dir, files,

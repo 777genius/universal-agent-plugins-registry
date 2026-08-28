@@ -23,6 +23,9 @@ def digest(character: str = "a") -> str:
 
 
 FIXTURE_UAP_SHA = "b" * 40
+FIXTURE_LEDGER_SHA = "a" * 40
+FIXTURE_PUBLICATION_ID = "fixture-publication"
+FIXTURE_SOURCE_COMMIT = "c" * 40
 
 
 def runtime_evidence(passed: int = 15) -> dict:
@@ -63,8 +66,10 @@ def runtime_evidence(passed: int = 15) -> dict:
                     "tag_commit": lanes.PLUGIN_KIT_COMMIT, "release_id": 1, "immutable": True,
                     "manifest_digest": lanes.RELEASE_MANIFEST_DIGEST,
                     "checksums_digest": lanes.RELEASE_CHECKSUMS_DIGEST},
-        "directory": {"origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins/" + FIXTURE_UAP_SHA + "/registry/schemas/1/",
-                      "sequence": 1, "snapshot_digest": digest("a"), "trust_root_digest": digest("b")},
+        "directory": {"origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins/" + FIXTURE_LEDGER_SHA + "/registry/schemas/1/",
+                      "ledger_commit": FIXTURE_LEDGER_SHA, "publication_id": FIXTURE_PUBLICATION_ID,
+                      "source_commit": FIXTURE_SOURCE_COMMIT, "sequence": 1,
+                      "snapshot_digest": digest("a"), "trust_root_digest": digest("b")},
         "scenario_contract": {"id": "acceptance-26.1-stable-release-v2", "digest": digest("c"),
             "expected_ids": [f"acceptance-{i}" for i in range(10)],
             "required_singleton_ids": [f"singleton-{i}" for i in range(27)],
@@ -137,15 +142,25 @@ def policy_evidence(passed: int = 11) -> dict:
 
 
 class TwoLaneEvidenceTests(unittest.TestCase):
-    def identity(self) -> dict[str, str]:
+    def identity(self) -> dict[str, object]:
         return {
             "scenario_digest": digest("3"), "harness_digest": digest("4"),
             "overlay_digest": digest("5"), "uap_sha": FIXTURE_UAP_SHA,
+            "directory_ledger_sha": FIXTURE_LEDGER_SHA,
+            "publication_id": FIXTURE_PUBLICATION_ID, "publication_sequence": 1,
+            "publication_snapshot_digest": digest("a"),
+            "publication_source_commit": FIXTURE_SOURCE_COMMIT,
+        }
+
+    def policy_identity(self) -> dict[str, str]:
+        return {
+            key: value for key, value in self.identity().items()
+            if key in {"scenario_digest", "harness_digest", "overlay_digest", "uap_sha"}
         }
 
     def test_exact_policy_set_rejects_missing_duplicate_renamed_and_extra(self) -> None:
         baseline = policy_evidence()
-        lanes.validate_source_policy_evidence(baseline, **self.identity())
+        lanes.validate_source_policy_evidence(baseline, **self.policy_identity())
         mutations = []
         missing = copy.deepcopy(baseline); missing["results"].pop(); mutations.append(missing)
         duplicate = copy.deepcopy(baseline); duplicate["results"][-1]["id"] = duplicate["results"][0]["id"]; mutations.append(duplicate)
@@ -154,7 +169,7 @@ class TwoLaneEvidenceTests(unittest.TestCase):
         for value in mutations:
             with self.subTest(ids=[row["id"] for row in value["results"]]):
                 with self.assertRaises(lanes.TwoLaneEvidenceError):
-                    lanes.validate_source_policy_evidence(value, **self.identity())
+                    lanes.validate_source_policy_evidence(value, **self.policy_identity())
 
     def test_readiness_requires_15_runtime_and_11_policy(self) -> None:
         complete = lanes.build_readiness_envelope(runtime_evidence(), policy_evidence(), **self.identity())
@@ -162,6 +177,29 @@ class TwoLaneEvidenceTests(unittest.TestCase):
         for runtime, policy in ((runtime_evidence(), policy_evidence(10)), (runtime_evidence(14), policy_evidence())):
             with self.assertRaises(lanes.TwoLaneEvidenceError):
                 lanes.build_readiness_envelope(runtime, policy, **self.identity())
+
+    def test_uap_and_directory_publication_identities_are_distinct_and_exact(self) -> None:
+        runtime = runtime_evidence()
+        complete = lanes.build_readiness_envelope(runtime, policy_evidence(), **self.identity())
+        self.assertNotEqual(complete["uap_sha"], complete["directory_ledger_sha"])
+        substitutions = (
+            {"directory_ledger_sha": FIXTURE_UAP_SHA},
+            {"publication_id": "substituted"},
+            {"publication_sequence": 2},
+            {"publication_snapshot_digest": digest("f")},
+            {"publication_source_commit": FIXTURE_UAP_SHA},
+        )
+        for replacement in substitutions:
+            identity = {**self.identity(), **replacement}
+            with self.subTest(replacement=replacement), self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.build_readiness_envelope(runtime, policy_evidence(), **identity)
+        forged = copy.deepcopy(runtime)
+        forged["directory"]["origin"] = (
+            "https://raw.githubusercontent.com/777genius/universal-agent-plugins/"
+            + FIXTURE_UAP_SHA + "/registry/schemas/1/"
+        )
+        with self.assertRaises(lanes.TwoLaneEvidenceError):
+            lanes.build_readiness_envelope(forged, policy_evidence(), **self.identity())
 
     def test_runtime_rejects_arbitrary_fifteen_rows_and_identity_forgery(self) -> None:
         baseline = runtime_evidence()
@@ -197,12 +235,14 @@ class TwoLaneEvidenceTests(unittest.TestCase):
                 jsonschema.Draft202012Validator(schema).validate(value)
         for value in mutations:
             with self.assertRaises(lanes.TwoLaneEvidenceError):
-                lanes.validate_source_policy_evidence(value, **self.identity())
+                lanes.validate_source_policy_evidence(value, **self.policy_identity())
 
     def test_schema_versions_route_without_reinterpreting_v3(self) -> None:
         v3 = runtime_evidence()
         v3["schema_version"] = 3
         v3.pop("evidence_class")
+        for field in ("ledger_commit", "publication_id", "source_commit"):
+            v3["directory"].pop(field)
         v3["scenario_contract"]["expected_ids"] = [f"acceptance-{i}" for i in range(13)]
         v3["scenario_contract"]["required_singleton_ids"] = [f"singleton-{i}" for i in range(38)]
         v3["summary"].pop("released_binary_gate_complete")
@@ -253,7 +293,7 @@ class TwoLaneEvidenceTests(unittest.TestCase):
         ):
             value = policy_evidence(); value["identities"][field] = replacement
             with self.subTest(field=field), self.assertRaises(lanes.TwoLaneEvidenceError):
-                lanes.validate_source_policy_evidence(value, **self.identity())
+                lanes.validate_source_policy_evidence(value, **self.policy_identity())
 
     def test_policy_preflight_has_no_path_or_process_effect(self) -> None:
         harness = object.__new__(launch.LaunchHarness)

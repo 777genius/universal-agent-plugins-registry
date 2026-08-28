@@ -1619,6 +1619,7 @@ class LaunchHarness:
         directory_snapshot: Path | None = None,
         directory_envelope: Path | None = None,
         directory_trust: Path | None = None,
+        directory_identity: dict[str, Any] | None = None,
         run_root: Path | None = None,
         consent: Path | None = None,
         notion_oauth: Path | None = None,
@@ -1669,6 +1670,7 @@ class LaunchHarness:
         self.directory_environment: dict[str, str] = {}
         self.snapshot: dict[str, Any] = {}
         self.snapshot_digest: str | None = None
+        self.directory_identity = directory_identity or {}
         self.run_root = run_root.resolve() if run_root else None
         self._sandbox_counter = 0
         self.observed_at = utc_now()
@@ -1683,6 +1685,18 @@ class LaunchHarness:
             self.directory_environment, self.snapshot, self.snapshot_digest = validated_directory_environment(
                 str(directory_origin), Path(directory_snapshot), Path(directory_envelope), Path(directory_trust)
             )
+        if mode == "enforced" and self.directory_identity:
+            ledger_commit = self.directory_identity.get("ledger_commit")
+            expected_origin = f"https://raw.githubusercontent.com/{TRUSTED_CATALOG_REPOSITORY}/{ledger_commit}/registry/schemas/1/"
+            if (
+                not FULL_SHA.fullmatch(str(ledger_commit))
+                or self.directory_environment.get("AGENTPLUGINS_DIRECTORY_ORIGIN") != expected_origin
+                or self.directory_identity.get("publication_id") != self.snapshot.get("publication_id")
+                or self.directory_identity.get("sequence") != self.snapshot.get("sequence")
+                or self.directory_identity.get("source_commit") != self.snapshot.get("source_commit")
+                or self.directory_identity.get("digest") != self.snapshot_digest
+            ):
+                raise ValueError("released runtime Directory identity differs from the exact publication tuple")
         self.challenge = challenge
         if mode == "enforced" and self.challenge is None and self.run_root and self.release_manifest_digest and self.snapshot_digest:
             self.challenge = make_challenge(
@@ -2932,7 +2946,7 @@ class LaunchHarness:
             "evidence_class": "released_binary" if self.mode == "enforced" else "fixture_contract",
             "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": exported_root_id(self.challenge), "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "caller_event_name": self.caller_event_name, "caller_ref": self.caller_ref, "caller_workflow_ref": self.caller_workflow_ref, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
             "release": {"repository": read_production_config()["cli_release_repository"] if self.mode == "enforced" else None, "tag": self.release_tag, "tag_commit": self.release_manifest.get("commit"), "release_id": self.release_identity.get("release_id"), "immutable": self.release_identity.get("immutable") if self.mode == "enforced" else None, "manifest_digest": self.release_manifest_digest, "checksums_digest": self.release_checksums_digest},
-            "directory": {"origin": self.directory_environment.get("AGENTPLUGINS_DIRECTORY_ORIGIN"), "snapshot_digest": self.snapshot_digest, "sequence": self.snapshot.get("sequence"), "trust_root_digest": sha256_file(PRODUCTION_DIRECTORY_TRUST) if self.mode == "enforced" else None},
+            "directory": {"origin": self.directory_environment.get("AGENTPLUGINS_DIRECTORY_ORIGIN"), "ledger_commit": self.directory_identity.get("ledger_commit"), "publication_id": self.snapshot.get("publication_id"), "source_commit": self.snapshot.get("source_commit"), "snapshot_digest": self.snapshot_digest, "sequence": self.snapshot.get("sequence"), "trust_root_digest": sha256_file(PRODUCTION_DIRECTORY_TRUST) if self.mode == "enforced" else None},
             "scenario_contract": {"id": self.config["contract_id"], "digest": sha256_file(SCENARIOS), "expected_ids": list(EXPECTED_ACCEPTANCE_SCENARIOS), "required_singleton_ids": required_ids, "expected_counts": EXPECTED_COUNTS},
             "matrix": self.rows,
             "summary": {**{name: counts[name] for name in ("passed", "failed", "inconclusive", "not_applicable")}, "required_gates_complete": complete, "released_binary_gate_complete": complete, "hero_runtime_results": sum(row["scenario"] == "hero_5x3_runtime" and row["outcome"] == "passed" for row in self.rows)},
@@ -3228,6 +3242,7 @@ def main() -> int:
         binary_digest=args.binary_digest, expected_version=args.expected_version,
         directory_origin=args.directory_origin, directory_snapshot=args.directory_snapshot,
         directory_envelope=args.directory_envelope, directory_trust=args.directory_trust,
+        directory_identity=prepared.get("directory"),
         run_root=args.run_root, consent=args.consent, notion_oauth=args.notion_oauth_attestation,
         chatgpt_attestation=args.chatgpt_attestation,
         release_manifest=release_manifest, release_identity=release_identity, release_manifest_digest=release_manifest_digest,
