@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+import copy
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import materialize_launch_evidence as materialize
+import run_launch_evidence_e2e as launch
+import run_source_policy_conformance as producer
+import two_lane_evidence as lanes
+
+
+def digest(character: str = "a") -> str:
+    return "sha256:" + character * 64
+
+
+def runtime_evidence(passed: int = 15) -> dict:
+    return {
+        "evidence_class": "released_binary",
+        "run": {"mode": "enforced", "runtime_claims": True, "github_sha": "b" * 40,
+                "cli": {"version": "0.1.18", "binary_digest": lanes.RELEASED_LINUX_AMD64_DIGEST}},
+        "release": {"repository": lanes.PLUGIN_KIT_REPOSITORY, "tag": lanes.PLUGIN_KIT_TAG,
+                    "tag_commit": lanes.PLUGIN_KIT_COMMIT, "immutable": True,
+                    "manifest_digest": lanes.RELEASE_MANIFEST_DIGEST,
+                    "checksums_digest": lanes.RELEASE_CHECKSUMS_DIGEST},
+        "directory": {"origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins/" + "c" * 40 + "/registry/schemas/1/",
+                      "sequence": 1, "snapshot_digest": digest("a"), "trust_root_digest": digest("b")},
+        "summary": {
+            "released_binary_gate_complete": passed == 15,
+            "hero_runtime_results": passed,
+        },
+        "matrix": [
+            {"scenario": "hero_5x3_runtime", "outcome": "passed"}
+            for _ in range(passed)
+        ],
+    }
+
+
+def policy_evidence(passed: int = 11) -> dict:
+    identities = {
+        "plugin_kit_repository": lanes.PLUGIN_KIT_REPOSITORY,
+        "plugin_kit_tag": lanes.PLUGIN_KIT_TAG,
+        "plugin_kit_commit": lanes.PLUGIN_KIT_COMMIT,
+        "release_manifest_digest": lanes.RELEASE_MANIFEST_DIGEST,
+        "release_checksums_digest": lanes.RELEASE_CHECKSUMS_DIGEST,
+        "uap_sha": lanes.UAP_COMMIT,
+        "scenario_digest": digest("3"),
+        "harness_digest": digest("4"),
+        "overlay_digest": digest("5"),
+    }
+    results = []
+    for index, scenario_id in enumerate(lanes.POLICY_SCENARIO_IDS):
+        proof = {"runtime_evidence_eligible": False}
+        if scenario_id == "revoked_operations_boundary":
+            stderr = (
+                "Resolving and validating one Agent Plugin package for every selected target...\n"
+                "agentplugins: no eligible directory release for \"context7\": "
+                "upstash/context7: release 1 is revoked\n"
+            )
+            proof["unit_oracle"] = {
+                "argv": ["add", "context7", "--target", "codex", "--format", "json"],
+                "exit_code": 1, "stdout_digest": lanes.sha256(b""),
+                "stderr_digest": lanes.sha256(stderr.encode()), "zero_mutation": True,
+                "runtime_evidence_eligible": False,
+            }
+        results.append({
+            "id": scenario_id,
+            "outcome": "passed" if index < passed else "failed",
+            "test": {"passed": index < passed},
+            "proof": proof,
+            "proof_digest": lanes.sha256(lanes.canonical_json(proof)),
+        })
+    return {
+        "schema_version": 1,
+        "evidence_class": "source_policy_conformance",
+        "runtime_claims": False,
+        "released_binary_executed": False,
+        "fixture_key_id": lanes.FIXTURE_KEY_ID,
+        "identities": identities,
+        "results": results,
+        "production_source_unchanged": True,
+        "policy_conformance_gate_complete": passed == 11,
+    }
+
+
+class TwoLaneEvidenceTests(unittest.TestCase):
+    def identity(self) -> dict[str, str]:
+        return {
+            "scenario_digest": digest("3"), "harness_digest": digest("4"),
+            "overlay_digest": digest("5"), "uap_sha": lanes.UAP_COMMIT,
+        }
+
+    def test_exact_policy_set_rejects_missing_duplicate_renamed_and_extra(self) -> None:
+        baseline = policy_evidence()
+        lanes.validate_source_policy_evidence(baseline, **self.identity())
+        mutations = []
+        missing = copy.deepcopy(baseline); missing["results"].pop(); mutations.append(missing)
+        duplicate = copy.deepcopy(baseline); duplicate["results"][-1]["id"] = duplicate["results"][0]["id"]; mutations.append(duplicate)
+        renamed = copy.deepcopy(baseline); renamed["results"][0]["id"] += "_renamed"; mutations.append(renamed)
+        extra = copy.deepcopy(baseline); extra["results"].append(copy.deepcopy(extra["results"][0])); extra["results"][-1]["id"] = "extra"; mutations.append(extra)
+        for value in mutations:
+            with self.subTest(ids=[row["id"] for row in value["results"]]):
+                with self.assertRaises(lanes.TwoLaneEvidenceError):
+                    lanes.validate_source_policy_evidence(value, **self.identity())
+
+    def test_readiness_requires_15_runtime_and_11_policy(self) -> None:
+        complete = lanes.build_readiness_envelope(runtime_evidence(), policy_evidence(), **self.identity())
+        self.assertTrue(complete["readiness_gate_complete"])
+        for runtime, policy in ((runtime_evidence(), policy_evidence(10)), (runtime_evidence(14), policy_evidence())):
+            with self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.build_readiness_envelope(runtime, policy, **self.identity())
+
+    def test_completed_replay_rejects_either_digest_mutation(self) -> None:
+        runtime, policy = runtime_evidence(), policy_evidence()
+        complete = lanes.build_readiness_envelope(runtime, policy, **self.identity())
+        lanes.validate_completed_readiness(complete, runtime, policy, **self.identity())
+        runtime_changed = copy.deepcopy(runtime); runtime_changed["matrix"][0]["note"] = "changed"
+        policy_changed = copy.deepcopy(policy); policy_changed["results"][0]["proof_digest"] = digest("7")
+        for left, right in ((runtime_changed, policy), (runtime, policy_changed)):
+            with self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.validate_completed_readiness(complete, left, right, **self.identity())
+
+    def test_wrong_source_identities_and_digests_reject(self) -> None:
+        for field, replacement in (
+            ("plugin_kit_repository", "attacker/repo"), ("plugin_kit_tag", "agentplugins-v0.1.17"),
+            ("plugin_kit_commit", "0" * 40), ("release_manifest_digest", "bad"),
+            ("release_checksums_digest", "bad"), ("uap_sha", "0" * 40),
+            ("scenario_digest", digest("8")), ("harness_digest", digest("8")),
+            ("overlay_digest", digest("8")),
+        ):
+            value = policy_evidence(); value["identities"][field] = replacement
+            with self.subTest(field=field), self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.validate_source_policy_evidence(value, **self.identity())
+
+    def test_policy_preflight_has_no_path_or_process_effect(self) -> None:
+        harness = object.__new__(launch.LaunchHarness)
+        with mock.patch.object(launch.LaunchHarness, "fresh_sandbox") as sandbox, \
+             mock.patch.object(launch.subprocess, "run") as process:
+            for scenario_id in lanes.POLICY_SCENARIO_IDS:
+                with self.assertRaises(lanes.TwoLaneEvidenceError):
+                    harness.driven_scenario(scenario_id)
+        sandbox.assert_not_called()
+        process.assert_not_called()
+
+    def test_invalid_caller_directory_overrides_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = Path(temporary) / "run"
+            source = Path(temporary) / "verified"
+            source.mkdir()
+            paths = {}
+            for name in ("snapshot", "envelope", "trust"):
+                path = source / f"{name}.json"; path.write_text("{}")
+                paths[name] = str(path)
+            supplied = {
+                "AGENTPLUGINS_DIRECTORY_ORIGIN": "https://raw.githubusercontent.com/777genius/universal-agent-plugins/" + "a" * 40 + "/registry/schemas/1/",
+                "AGENTPLUGINS_DIRECTORY_SNAPSHOT": paths["snapshot"],
+                "AGENTPLUGINS_DIRECTORY_ENVELOPE": paths["envelope"],
+                "AGENTPLUGINS_DIRECTORY_TRUST": paths["trust"],
+            }
+            poison = {
+                "AGENTPLUGINS_DIRECTORY_SNAPSHOT": "/caller/invalid-snapshot",
+                "AGENTPLUGINS_DIRECTORY_TRUST": "/caller/invalid-trust",
+                "AGENTPLUGINS_DIRECTORY_CACHE": "/caller/invalid-cache",
+            }
+            with mock.patch.dict(launch.os.environ, poison, clear=False):
+                environment = launch.isolated_environment(sandbox, ("cursor",), supplied)
+            self.assertEqual(environment["AGENTPLUGINS_DIRECTORY_ORIGIN"], supplied["AGENTPLUGINS_DIRECTORY_ORIGIN"])
+            self.assertFalse(set(poison) & set(environment))
+            for key in ("HOME", "AGENTPLUGINS_HOME", "XDG_CACHE_HOME", "TMPDIR"):
+                self.assertIn(sandbox.resolve(), Path(environment[key]).resolve().parents)
+
+    def test_directory_rejects_policy_artifacts_and_rows(self) -> None:
+        with self.assertRaisesRegex(materialize.EvidenceError, "released-binary"):
+            materialize.selected_rows({"evidence_class": "source_policy_conformance", "matrix": []})
+        value = runtime_evidence()
+        value["matrix"] = [{"scenario": lanes.POLICY_SCENARIO_IDS[0]}]
+        with self.assertRaisesRegex(materialize.EvidenceError, "source-policy"):
+            materialize.selected_rows(value)
+
+    def test_count_contract_is_derived_from_7_plus_3_plus_11(self) -> None:
+        config = json.loads((ROOT / "tests/e2e/launch-scenarios.json").read_text())
+        self.assertEqual([len(config[key]) for key in ("fault_scenarios", "adapter_repair_faults", "advanced_scenarios")], [7, 3, 11])
+        self.assertEqual(len(lanes.classified_runtime_lists(config)["fault_adapter_advanced"]), 13)
+        self.assertEqual(config["expected_counts"]["fault_rows"], 13)
+
+    def test_source_producer_binds_exact_clean_source_without_modifying_it(self) -> None:
+        source = ROOT / ".runtime-reference/plugin-kit-ai"
+        if not source.is_dir():
+            self.skipTest("exact read-only plugin-kit source checkout is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = Path(temporary) / "release-manifest.json"
+            checksums = Path(temporary) / "checksums.txt"
+            manifest.write_text(json.dumps({
+                "repository": lanes.PLUGIN_KIT_REPOSITORY, "tag": lanes.PLUGIN_KIT_TAG,
+                "commit": lanes.PLUGIN_KIT_COMMIT, "version": "0.1.18",
+            }))
+            checksums.write_text("9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779  agentplugins_0.1.18_linux_amd64\n")
+            fake = lambda source, package, name, go, **kwargs: {
+                "package": package, "name": name, "passed": True,
+                "transcript_digest": digest("d"),
+            }
+            with mock.patch.object(producer, "run_test", side_effect=fake), mock.patch.object(
+                producer, "validate_release_identity",
+                return_value=(lanes.RELEASE_MANIFEST_DIGEST, lanes.RELEASE_CHECKSUMS_DIGEST),
+            ):
+                value = producer.produce(source, manifest, checksums, go="go")
+        self.assertTrue(value["production_source_unchanged"])
+        self.assertEqual([row["id"] for row in value["results"]], list(lanes.POLICY_SCENARIO_IDS))
+        self.assertEqual(
+            value["identities"]["production_source_tree_before"],
+            value["identities"]["production_source_tree_after"],
+        )
+
+    def test_new_json_schemas_accept_canonical_complete_artifacts(self) -> None:
+        import jsonschema
+        policy = policy_evidence()
+        for row in policy["results"]:
+            row["test"].update({
+                "package": "./package", "name": "TestPolicy",
+                "transcript_digest": digest("e"),
+            })
+            row["proof"].update({
+                "id": row["id"], "source_test": row["test"],
+                "fixture_key_id": lanes.FIXTURE_KEY_ID,
+                "overlay_digest": digest("5"),
+            })
+            row["proof_digest"] = lanes.sha256(lanes.canonical_json(row["proof"]))
+        policy["identities"].update({
+            "production_source_tree_before": digest("f"),
+            "production_source_tree_after": digest("f"),
+        })
+        policy_schema = json.loads((ROOT / "schemas/e2e/source-policy-conformance.schema.json").read_text())
+        readiness_schema = json.loads((ROOT / "schemas/e2e/two-lane-readiness.schema.json").read_text())
+        jsonschema.Draft202012Validator(policy_schema).validate(policy)
+        readiness = lanes.build_readiness_envelope(runtime_evidence(), policy_evidence(), **self.identity())
+        jsonschema.Draft202012Validator(readiness_schema).validate(readiness)
+
+
+if __name__ == "__main__":
+    unittest.main()

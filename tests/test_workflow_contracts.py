@@ -42,6 +42,26 @@ def pinned_requirements(body: str) -> set[str]:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_two_lane_evidence_is_independent_until_canonical_readiness(self) -> None:
+        launch = load(LAUNCH)
+        runtime = launch["jobs"]["enforced-stable-gate"]
+        policy = launch["jobs"]["source-policy-conformance"]
+        readiness = launch["jobs"]["two-lane-readiness"]
+        self.assertNotIn("source-policy-conformance", runtime["needs"])
+        self.assertEqual(set(readiness["needs"]), {"attest-stable-evidence", "source-policy-conformance"})
+        self.assertIn("needs.attest-stable-evidence.result == 'success'", readiness["if"])
+        self.assertIn("needs.source-policy-conformance.result == 'success'", readiness["if"])
+        for job in (policy, readiness):
+            self.assertEqual(job["steps"][0]["name"], "Validate the unmodified canonical publication sequence")
+        policy_body = commands(policy)
+        self.assertIn("74a3790ee15d92afda8e8e3dd8f903c04811cfc7", yaml.safe_dump(policy))
+        self.assertIn("agentplugins-v0.1.18", policy_body)
+        self.assertIn("run_source_policy_conformance.py", policy_body)
+        self.assertNotIn("DIRECTORY_SIGNING", yaml.safe_dump(policy))
+        readiness_body = commands(readiness)
+        self.assertIn("build_two_lane_readiness.py", readiness_body)
+        self.assertIn("two-lane-readiness.schema.json", readiness_body)
+
     def test_public_sequence_inputs_stay_canonical_strings_across_reusable_edges(self) -> None:
         launch = load(LAUNCH)
         live = load(LIVE)
@@ -1088,6 +1108,8 @@ class WorkflowContractTests(unittest.TestCase):
             {
                 "STABLE_E2E_RESULT": "${{ needs.required-stable-launch-evidence.result }}",
                 "PUBLIC_READ_RESULT": "${{ needs.public-read-flows.result }}",
+                "READINESS_DIGEST": "${{ needs.required-stable-launch-evidence.outputs.readiness_evidence_digest }}",
+                "POLICY_DIGEST": "${{ needs.required-stable-launch-evidence.outputs.source_policy_evidence_digest }}",
             },
         )
         body = commands(gate)
@@ -1247,6 +1269,8 @@ class WorkflowContractTests(unittest.TestCase):
         expected_outputs = {
             "evidence_artifact_name", "launch_evidence_digest", "workflow_source_digest",
             "evidence_run_attempt", "attestation_artifact_name",
+            "source_policy_artifact_name", "source_policy_evidence_digest",
+            "readiness_artifact_name", "readiness_evidence_digest",
         }
         self.assertEqual(set(launch["on"]["workflow_call"]["outputs"]), expected_outputs)
         self.assertEqual(set(live["on"]["workflow_call"]["outputs"]), expected_outputs)

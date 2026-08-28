@@ -46,6 +46,18 @@ on:
       attestation_artifact_name:
         description: Exact offline GitHub provenance transport artifact
         value: ${{ jobs.required-live-e2e.outputs.attestation_artifact_name }}
+      source_policy_artifact_name:
+        description: Exact source-policy conformance artifact
+        value: ${{ jobs.required-live-e2e.outputs.source_policy_artifact_name }}
+      source_policy_evidence_digest:
+        description: SHA-256 of canonical source-policy evidence
+        value: ${{ jobs.required-live-e2e.outputs.source_policy_evidence_digest }}
+      readiness_artifact_name:
+        description: Exact two-lane readiness artifact
+        value: ${{ jobs.required-live-e2e.outputs.readiness_artifact_name }}
+      readiness_evidence_digest:
+        description: SHA-256 of canonical readiness envelope
+        value: ${{ jobs.required-live-e2e.outputs.readiness_evidence_digest }}
   workflow_dispatch:
     inputs:
       run_scheduled_regression:
@@ -172,14 +184,22 @@ jobs:
       workflow_source_digest: ${{ needs.required-stable-launch-evidence.outputs.workflow_source_digest }}
       evidence_run_attempt: ${{ needs.required-stable-launch-evidence.outputs.evidence_run_attempt }}
       attestation_artifact_name: ${{ needs.required-stable-launch-evidence.outputs.attestation_artifact_name }}
+      source_policy_artifact_name: ${{ needs.required-stable-launch-evidence.outputs.source_policy_artifact_name }}
+      source_policy_evidence_digest: ${{ needs.required-stable-launch-evidence.outputs.source_policy_evidence_digest }}
+      readiness_artifact_name: ${{ needs.required-stable-launch-evidence.outputs.readiness_artifact_name }}
+      readiness_evidence_digest: ${{ needs.required-stable-launch-evidence.outputs.readiness_evidence_digest }}
     steps:
       - name: Reject skipped or failed nested evidence
         env:
           STABLE_E2E_RESULT: ${{ needs.required-stable-launch-evidence.result }}
           PUBLIC_READ_RESULT: ${{ needs.public-read-flows.result }}
+          READINESS_DIGEST: ${{ needs.required-stable-launch-evidence.outputs.readiness_evidence_digest }}
+          POLICY_DIGEST: ${{ needs.required-stable-launch-evidence.outputs.source_policy_evidence_digest }}
         run: |
           test "$STABLE_E2E_RESULT" = success
           test "$PUBLIC_READ_RESULT" = success
+          case "$READINESS_DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          case "$POLICY_DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
 
   scheduled-fixture-contract:
     needs: [validate-publication-sequence]

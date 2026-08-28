@@ -2,9 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Redacted stable-launch E2E evidence",
   "type": "object",
-  "required": ["schema_version", "run", "release", "directory", "scenario_contract", "matrix", "summary", "privacy"],
+  "required": ["schema_version", "evidence_class", "run", "release", "directory", "scenario_contract", "matrix", "summary", "privacy"],
   "properties": {
     "schema_version": {"const": 3},
+    "evidence_class": {"enum": ["released_binary", "fixture_contract"]},
     "run": {
       "type": "object",
       "required": ["id", "mode", "runtime_claims", "observed_at", "platform", "architecture", "disposable", "root_id", "github_sha", "github_run_id", "github_run_attempt", "caller_event_name", "caller_ref", "caller_workflow_ref", "challenge", "observer_bundle_digest", "cli"],
@@ -68,8 +69,8 @@
       "properties": {
         "id": {"const": "acceptance-26.1-stable-release-v2"},
         "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-        "expected_ids": {"type": "array", "minItems": 13, "maxItems": 13, "uniqueItems": true, "items": {"type": "string"}},
-        "required_singleton_ids": {"type": "array", "minItems": 38, "maxItems": 38, "uniqueItems": true, "items": {"type": "string"}},
+        "expected_ids": {"type": "array", "minItems": 10, "maxItems": 10, "uniqueItems": true, "items": {"type": "string"}},
+        "required_singleton_ids": {"type": "array", "minItems": 27, "maxItems": 27, "uniqueItems": true, "items": {"type": "string"}},
         "expected_counts": {"type": "object", "minProperties": 9, "additionalProperties": {"type": "integer", "minimum": 1}}
       }, "additionalProperties": false
     },
@@ -126,13 +127,14 @@
     },
     "summary": {
       "type": "object",
-      "required": ["passed", "failed", "inconclusive", "not_applicable", "required_gates_complete", "hero_runtime_results"],
+      "required": ["passed", "failed", "inconclusive", "not_applicable", "required_gates_complete", "released_binary_gate_complete", "hero_runtime_results"],
       "properties": {
         "passed": {"type": "integer", "minimum": 0},
         "failed": {"type": "integer", "minimum": 0},
         "inconclusive": {"type": "integer", "minimum": 0},
         "not_applicable": {"type": "integer", "minimum": 0},
         "required_gates_complete": {"type": "boolean"},
+        "released_binary_gate_complete": {"type": "boolean"},
         "hero_runtime_results": {"type": "integer", "minimum": 0, "maximum": 15}
       },
       "additionalProperties": false
@@ -219,10 +221,12 @@
   },
   "allOf": [
     {"if": {"properties": {"run": {"properties": {"mode": {"const": "enforced"}}}}}, "then": {"properties": {
+      "evidence_class": {"const": "released_binary"},
       "summary": {"properties": {"hero_runtime_results": {"const": 15}}},
       "release": {"properties": {"repository": {"type": "string"}, "tag": {"type": "string"}, "tag_commit": {"type": "string"}, "release_id": {"type": "integer"}, "immutable": {"const": true}, "manifest_digest": {"type": "string"}, "checksums_digest": {"type": "string"}}},
       "directory": {"properties": {"origin": {"type": "string"}, "snapshot_digest": {"type": "string"}, "sequence": {"type": "integer"}, "trust_root_digest": {"type": "string"}}}
     }}},
+    {"if": {"properties": {"run": {"properties": {"mode": {"const": "fixture-only"}}}}}, "then": {"properties": {"evidence_class": {"const": "fixture_contract"}}}},
     {"not": {"properties": {"matrix": {"contains": {"type": "object", "properties": {"client": {"const": "chatgpt"}, "plugin": {"not": {"const": "cloudflare-docs"}}}, "required": ["client", "plugin"]}}}, "required": ["matrix"]}}
   ],
   "additionalProperties": false

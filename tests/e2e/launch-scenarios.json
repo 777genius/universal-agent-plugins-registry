@@ -9,9 +9,9 @@
     "context7_grouped_rows": 4,
     "chatgpt_rows": 1,
     "shared_backend_rows": 1,
-    "acceptance_postcondition_rows": 13,
+    "acceptance_postcondition_rows": 10,
     "native_platform_rows": 7,
-    "fault_rows": 23,
+    "fault_rows": 13,
     "journey_rows": 3
   },
   "directory_contract": "signed-snapshot-v1",

@@ -84,6 +84,7 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
     def launch(self, observer: bytes) -> dict:
         return {
             "schema_version": 3,
+            "evidence_class": "released_binary",
             "run": {
                 "mode": "enforced", "runtime_claims": True,
                 "github_sha": "a" * 40, "github_run_id": "123",
@@ -99,7 +100,7 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
             "directory": {"sequence": 7, "snapshot_digest": "sha256:" + "b" * 64},
             "scenario_contract": {"digest": "sha256:" + "9" * 64},
             "matrix": authoritative_rows(),
-            "summary": {"required_gates_complete": True, "hero_runtime_results": 15},
+            "summary": {"required_gates_complete": True, "released_binary_gate_complete": True, "hero_runtime_results": 15},
         }
 
     def build(self, root: Path):
@@ -121,7 +122,7 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
     def test_selects_only_exact_authoritative_runtime_and_oauth_matrix(self) -> None:
         rows = authoritative_rows()
         rows.append({"scenario": "hero_5x3_lifecycle", "level": "materialization"})
-        selected = evidence.selected_rows({"matrix": rows})
+        selected = evidence.selected_rows({"evidence_class": "released_binary", "matrix": rows})
         self.assertEqual(len(selected), 16)
         self.assertEqual(sum(row["level"] == "runtime" for row in selected), 16)
         self.assertEqual(sum(row["client"] == "chatgpt" and row["level"] == "runtime" for row in selected), 1)
@@ -228,7 +229,7 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         rows[-1] = dict(rows[-1], id="different")
         rows.append(dict(rows[-1]))
         with self.assertRaisesRegex(evidence.EvidenceError, "expected 16|duplicate"):
-            evidence.selected_rows({"matrix": rows})
+            evidence.selected_rows({"evidence_class": "released_binary", "matrix": rows})
 
     def test_wrong_attempt_event_or_caller_is_rejected(self) -> None:
         observer = evidence.canonical_json({"schema_version": 1, "signed": True})
@@ -392,6 +393,8 @@ class PermanentCommitTests(unittest.TestCase):
             "records": index["records"],
         })
         files[evidence.ATTESTATION_BUNDLE_NAME] = b'{"bundle":true}\n'
+        files[evidence.POLICY_EVIDENCE_NAME] = b'{"policy":true}\n'
+        files[evidence.READINESS_EVIDENCE_NAME] = b'{"readiness":true}\n'
         files["SHA256SUMS"] = evidence.checksum_bytes(files)
         return digest, files
 
@@ -446,9 +449,17 @@ class PermanentCommitTests(unittest.TestCase):
         base_files.pop(evidence.ATTESTATION_BUNDLE_NAME)
         base_files.pop("SHA256SUMS")
         base_files["SHA256SUMS"] = evidence.checksum_bytes(base_files)
+        def attach_sidecars(value, policy, readiness):
+            result = dict(value)
+            result.pop("SHA256SUMS", None)
+            result[evidence.POLICY_EVIDENCE_NAME] = policy
+            result[evidence.READINESS_EVIDENCE_NAME] = readiness
+            result["SHA256SUMS"] = evidence.checksum_bytes(result)
+            return result
+
         with mock.patch.object(evidence, "build_bundle", return_value=(digest, base_files)) as build_bundle, mock.patch.object(
             evidence, "verify_attestation",
-        ) as verify_attestation:
+        ) as verify_attestation, mock.patch.object(evidence, "attach_two_lane_evidence", side_effect=attach_sidecars):
             evidence.verify_completed_state(
                 self.repo, self.repo, repository="owner/repository",
                 main_commit=result["main_commit"], main_parent=self.parent,
