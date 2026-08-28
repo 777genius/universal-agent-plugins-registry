@@ -39,7 +39,7 @@ is promoted, install the exact no-account package that passed Codex, Cursor, and
 Kiro runtime E2E:
 
 ```bash
-npx universal-agent-plugins@0.1.19 add \
+npx universal-agent-plugins add \
   777genius/universal-agent-plugins@dcd94db0bfafe5ff5c4b1f1154ee1f7c656c19e4//plugins/context7
 ```
 
