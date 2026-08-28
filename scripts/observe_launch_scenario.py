@@ -85,6 +85,38 @@ GO_UNICODE_WHITE_SPACE = frozenset(
     "\u2028\u2029\u202f\u205f\u3000"
 )
 JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
+CHALLENGE_DOMAIN = b"UAP-STABLE-LAUNCH-CHALLENGE-V1\0"
+CHALLENGE_CONTEXT_FIELDS = frozenset({
+    "value", "nonce", "github_sha", "run_id", "run_attempt",
+    "release_manifest_digest", "directory_digest", "scenario_contract_digest", "root_id",
+    "binary_digest", "expected_version", "snapshot_sequence", "release", "catalog_repository",
+    "directory_product", "directory_distribution", "source_identity",
+})
+CHALLENGE_RELEASE_FIELDS = frozenset({
+    "product_id", "distribution_id", "distribution_kind", "release_sequence", "package_version",
+    "tree_digest", "manifest_digest", "source_repository", "source_revision", "source_path",
+    "compatible_clients", "resolved_targets", "fallback_reason",
+})
+CHALLENGE_SOURCE_IDENTITY_FIELDS = frozenset({
+    "product_id", "distribution_id", "distribution_kind", "release_sequence", "source_revision",
+    "source_repository", "source_path", "canonical_source", "tree_digest", "manifest_digest",
+})
+CHALLENGE_PRODUCT_FIELDS = frozenset({
+    "aliases", "categories", "default_distribution", "description", "display_name", "distributions",
+    "id", "manifest_name", "minimum_capabilities", "reserved_aliases", "schema_version",
+})
+CHALLENGE_DISTRIBUTION_FIELDS = frozenset({
+    "id", "kind", "packager", "product_id", "release_policies", "releases", "schema_version", "status",
+})
+CONFORMANCE_SEQUENCE = {
+    "retained_default": 10_000,
+    "signed_sequence": 11_000,
+    "revoked_boundary": 12_000,
+    "directory_fault": 20_000,
+    "sticky_update": 30_000,
+    "source_kind": 32_000,
+    "external_activation": 34_000,
+}
 
 
 class DuplicateKeyError(ValueError):
@@ -157,6 +189,100 @@ def _uint64(value: Any) -> bool:
 def _safe_sequence(value: Any) -> bool:
     """Accept only public Directory identities exact in every supported runtime."""
     return type(value) in {int, _StateInteger} and 1 <= value <= JSON_SAFE_INTEGER_MAX
+
+
+def _context_public_sequences_are_safe(value: Any) -> bool:
+    if isinstance(value, list):
+        return all(_context_public_sequences_are_safe(child) for child in value)
+    if not isinstance(value, dict):
+        return True
+    return all(
+        (not (key == "sequence" or key.endswith("_sequence")) or type(child) is int and 1 <= child <= JSON_SAFE_INTEGER_MAX)
+        and _context_public_sequences_are_safe(child)
+        for key, child in value.items()
+    )
+
+
+def validate_challenge_context(value: Any) -> dict[str, Any]:
+    """Validate the complete existing observer challenge before any observation."""
+    if not isinstance(value, dict) or set(value) != CHALLENGE_CONTEXT_FIELDS:
+        raise ValueError("challenge context fields are invalid")
+    string_fields = {
+        "value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest",
+        "directory_digest", "scenario_contract_digest", "root_id", "binary_digest",
+        "expected_version", "catalog_repository",
+    }
+    if not all(isinstance(value[field], str) for field in string_fields):
+        raise ValueError("challenge context string fields are invalid")
+    if not _context_public_sequences_are_safe(value):
+        raise ValueError("challenge context contains an unsafe public sequence")
+    if (
+        FULL_SHA.fullmatch(value["github_sha"]) is None
+        or not value["run_id"].isdigit() or not value["run_attempt"].isdigit()
+        or any(DIGEST.fullmatch(value[field]) is None for field in (
+            "release_manifest_digest", "directory_digest", "scenario_contract_digest", "binary_digest",
+        ))
+        or re.fullmatch(r"[a-f0-9]{64}", value["nonce"]) is None
+        or re.fullmatch(r"[a-f0-9]{64}", value["root_id"]) is None
+        or GITHUB_REPOSITORY.fullmatch(value["catalog_repository"]) is None
+        or not value["expected_version"]
+    ):
+        raise ValueError("challenge context identity fields are invalid")
+    framed = json.dumps({
+        "github_sha": value["github_sha"], "run_id": value["run_id"], "run_attempt": value["run_attempt"],
+        "release_manifest_digest": value["release_manifest_digest"], "directory_digest": value["directory_digest"],
+        "scenario_contract_digest": value["scenario_contract_digest"], "root_id": value["root_id"],
+        "nonce": value["nonce"],
+    }, sort_keys=True, separators=(",", ":")).encode()
+    if value["value"] != hashlib.sha256(CHALLENGE_DOMAIN + framed).hexdigest():
+        raise ValueError("challenge context binding is invalid")
+    release = value["release"]
+    identity = value["source_identity"]
+    product = value["directory_product"]
+    distribution = value["directory_distribution"]
+    if not isinstance(release, dict) or set(release) != CHALLENGE_RELEASE_FIELDS:
+        raise ValueError("challenge release fields are invalid")
+    if not isinstance(identity, dict) or set(identity) != CHALLENGE_SOURCE_IDENTITY_FIELDS:
+        raise ValueError("challenge source identity fields are invalid")
+    if (
+        not isinstance(product, dict) or set(product) != CHALLENGE_PRODUCT_FIELDS
+        or not isinstance(distribution, dict) or set(distribution) != CHALLENGE_DISTRIBUTION_FIELDS
+    ):
+        raise ValueError("challenge Directory objects are invalid")
+    required_strings = (
+        "product_id", "distribution_id", "distribution_kind", "package_version", "tree_digest",
+        "manifest_digest", "source_repository", "source_revision", "source_path",
+    )
+    if (
+        any(not isinstance(release.get(field), str) or not release[field] for field in required_strings)
+        or DIGEST.fullmatch(release["tree_digest"]) is None
+        or DIGEST.fullmatch(release["manifest_digest"]) is None
+        or GITHUB_REPOSITORY.fullmatch(release["source_repository"]) is None
+        or FULL_SHA.fullmatch(release["source_revision"]) is None
+        or not isinstance(release["compatible_clients"], list)
+        or not isinstance(release["resolved_targets"], list)
+        or any(not isinstance(item, str) or not item for item in release["compatible_clients"] + release["resolved_targets"])
+        or release["fallback_reason"] is not None and not isinstance(release["fallback_reason"], str)
+        or any(identity.get(field) != release[field] for field in CHALLENGE_SOURCE_IDENTITY_FIELDS - {"canonical_source"})
+        or not isinstance(identity["canonical_source"], str)
+        or parse_canonical_github_source(identity["canonical_source"]) != {
+            "source_repository": release["source_repository"],
+            "source_revision": release["source_revision"],
+            "source_path": release["source_path"],
+        }
+        or product.get("id") != release["product_id"]
+        or distribution.get("id") != release["distribution_id"]
+        or distribution.get("product_id") != release["product_id"]
+        or release["distribution_id"] not in product.get("distributions", [])
+        or not any(
+            isinstance(item, dict) and item.get("sequence") == release["release_sequence"]
+            and item.get("tree_digest") == release["tree_digest"]
+            and item.get("manifest_digest") == release["manifest_digest"]
+            for item in distribution.get("releases", [])
+        )
+    ):
+        raise ValueError("challenge context release binding is invalid")
+    return value
 
 
 def _state_public_sequences_are_safe(value: Any) -> bool:
@@ -3082,6 +3208,8 @@ def conformance_directory(
     target_delivery: str = "managed",
 ) -> tuple[dict[str, str], str]:
     """Create a visibly non-production signed policy fixture from authenticated release bytes."""
+    if type(sequence) is not int or not 1 <= sequence <= JSON_SAFE_INTEGER_MAX:
+        raise ValueError("conformance fixture sequence is outside the exact public range")
     product = copy.deepcopy(context["directory_product"])
     source_distribution = copy.deepcopy(context["directory_distribution"])
     selected_sequence = context["release"]["release_sequence"]
@@ -3175,7 +3303,7 @@ def directory_fault_scenario(
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
-    base_sequence = int(context["snapshot_sequence"]) + 2000
+    base_sequence = CONFORMANCE_SEQUENCE["directory_fault"]
     traces: list[dict[str, Any]] = []
     before = observe(home, manager)
 
@@ -5760,7 +5888,7 @@ def explicit_switch_scenario(binary: Path, root: Path, challenge: str) -> tuple[
 def sticky_update_scenario(binary: Path, root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
-    sequence = int(context["snapshot_sequence"]) + 3000
+    sequence = CONFORMANCE_SEQUENCE["sticky_update"]
     initial_env, _ = conformance_directory(root, context, sequence=sequence)
     update_env, fixture_digest = conformance_directory(root, context, sequence=sequence + 1, safe_successor=True)
     before = observe(home, manager)
@@ -5784,7 +5912,7 @@ def sticky_update_scenario(binary: Path, root: Path, challenge: str, context: di
 def source_kind_scenario(binary: Path, kind: str, root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
-    environment, fixture_digest = conformance_directory(root, context, sequence=int(context["snapshot_sequence"]) + 3200)
+    environment, fixture_digest = conformance_directory(root, context, sequence=CONFORMANCE_SEQUENCE["source_kind"])
     product = context["release"]["product_id"]
     before = observe(home, manager)
     add, add_trace = traced_with_environment(binary, ["add", product, "--target", "cursor", "--format", "json"], root, challenge, environment)
@@ -5980,7 +6108,7 @@ def external_activation_scenario(binary: Path, root: Path, challenge: str, conte
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     environment, fixture_digest = conformance_directory(
-        root, context, sequence=int(context["snapshot_sequence"]) + 3400, target_delivery="manual_activation",
+        root, context, sequence=CONFORMANCE_SEQUENCE["external_activation"], target_delivery="manual_activation",
     )
     before = observe(home, manager)
     add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
@@ -6040,7 +6168,7 @@ def retained_default_scenario(
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
-    sequence = int(context["snapshot_sequence"]) + 1000
+    sequence = CONFORMANCE_SEQUENCE["retained_default"]
     initial_env, initial_digest = conformance_directory(root, context, sequence=sequence)
     changed_env, changed_digest = conformance_directory(root, context, sequence=sequence + 1, default_alternate=True)
     before = observe(home, manager)
@@ -6070,7 +6198,7 @@ def signed_sequence_scenario(
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
-    environment, fixture_digest = conformance_directory(root, context, sequence=int(context["snapshot_sequence"]) + 1100, sequence_over_semver=True)
+    environment, fixture_digest = conformance_directory(root, context, sequence=CONFORMANCE_SEQUENCE["signed_sequence"], sequence_over_semver=True)
     before = observe(home, manager)
     add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
     identity = manager_identity(manager, "context7")
@@ -6085,7 +6213,7 @@ def revoked_boundary_scenario(
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
-    sequence = int(context["snapshot_sequence"]) + 1200
+    sequence = CONFORMANCE_SEQUENCE["revoked_boundary"]
     active_env, _ = conformance_directory(root, context, sequence=sequence)
     revoked_env, revoked_digest = conformance_directory(root, context, sequence=sequence + 1, revoked=True)
     safe_env, safe_digest = conformance_directory(root, context, sequence=sequence + 2, revoked=True, safe_successor=True)
@@ -6130,7 +6258,8 @@ def revoked_boundary_scenario(
     return installed.returncode == 0 and all(proof.values()), {"command_traces": traces, "before": before, "after": after, "proof": proof, "revoked_fixture_digest": revoked_digest, "safe_successor_fixture_digest": safe_digest}
 
 
-def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, str]) -> dict[str, Any]:
+def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, Any]) -> dict[str, Any]:
+    challenge_context = validate_challenge_context(challenge_context)
     if scenario not in EXPECTED_SCENARIOS:
         raise ValueError("scenario is not in the immutable acceptance postcondition set")
     challenge = challenge_context["value"]
@@ -6374,7 +6503,8 @@ def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--challenge-context", type=Path, required=True)
     args = parser.parse_args()
-    value = run(args.binary.resolve(), args.scenario, args.root.resolve(), json.loads(args.challenge_context.read_text()))
+    context = validate_challenge_context(strict_json_loads(args.challenge_context.read_bytes()))
+    value = run(args.binary.resolve(), args.scenario, args.root.resolve(), context)
     print(json.dumps(value, sort_keys=True))
     return 0 if value["outcome"] == "passed" else 2
 

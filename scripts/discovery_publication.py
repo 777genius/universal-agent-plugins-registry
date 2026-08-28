@@ -28,6 +28,7 @@ from scripts.directory_publication import (
     sha256_digest,
     validate_with_schema,
 )
+from scripts.sequence_boundaries import JSON_SAFE_INTEGER_MAX, next_public_sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,6 @@ MAX_SNAPSHOT_BYTES = 16 << 20
 MAX_SEARCH_BYTES = 10 << 20
 MAX_ENVELOPE_BYTES = 16 << 10
 MAX_LATEST_BYTES = 16 << 10
-JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
 
 
 def signature_message(snapshot: bytes) -> bytes:
@@ -164,14 +164,10 @@ def publish(candidate_path: Path, feed: Path, trusted_keys: Path, private_seed: 
     require(candidate.get("mode") in {"refresh", "discover", "reconcile"}, "Discovery candidate mode is invalid")
     require(isinstance(candidate.get("records"), list), "Discovery candidate records are invalid")
     previous = load_latest(feed, trusted_keys)
-    if previous is None:
-        sequence = 1
-    else:
-        require(
-            previous[0]["sequence"] < JSON_SAFE_INTEGER_MAX,
-            "Discovery sequence exhausted the public safe-integer range",
-        )
-        sequence = previous[0]["sequence"] + 1
+    try:
+        sequence = next_public_sequence(None if previous is None else previous[0]["sequence"])
+    except ValueError as error:
+        raise PublicationError(str(error)) from error
     generated = parse_timestamp(candidate["generated_at"], "Discovery generated_at")
     stem = f"{sequence:020d}"
     search_path = f"search/{stem}.json"
