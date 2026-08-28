@@ -335,7 +335,10 @@ jobs:
           test -z "$(git tag --list "${tag}")"
           git tag "${tag}"
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
+          local_commit="$(git rev-parse HEAD)"
+          base_commit="$(git rev-parse HEAD^)"
           push_log="$(mktemp)"
+          remote_log="$(mktemp)"
           for attempt in 1 2 3; do
             set +e
             GIT_CONFIG_COUNT=1 \
@@ -349,9 +352,36 @@ jobs:
             if test "${status}" -eq 0; then
               exit 0
             fi
-            if test "${attempt}" -eq 3 || ! grep -Eqi \
+            if ! grep -Eqi \
               'HTTP (429|5[0-9]{2})|error: (429|5[0-9]{2})|Could not resolve host|Connection (reset|timed out)|remote end hung up unexpectedly' \
               "${push_log}"; then
+              exit "${status}"
+            fi
+
+            set +e
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="${auth_header}" \
+            git ls-remote --refs origin \
+              "refs/heads/${LEDGER_BRANCH}" "refs/tags/${tag}" >"${remote_log}" 2>&1
+            remote_status=$?
+            set -e
+            cat "${remote_log}"
+            if test "${remote_status}" -ne 0; then
+              echo "Unable to reconcile the remote atomic publication; refusing an uncertain retry." >&2
+              exit "${status}"
+            fi
+            branch_commit="$(awk -v ref="refs/heads/${LEDGER_BRANCH}" '$2 == ref { print $1 }' "${remote_log}")"
+            tag_commit="$(awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }' "${remote_log}")"
+            if test "${branch_commit}" = "${local_commit}" && test "${tag_commit}" = "${local_commit}"; then
+              echo "The exact atomic publication is already present remotely."
+              exit 0
+            fi
+            if ! { test "${branch_commit}" = "${base_commit}" && test -z "${tag_commit}"; }; then
+              echo "Remote branch/tag state is partial or divergent; refusing an uncertain retry." >&2
+              exit 1
+            fi
+            if test "${attempt}" -eq 3; then
               exit "${status}"
             fi
             sleep "$((attempt * 2))"
