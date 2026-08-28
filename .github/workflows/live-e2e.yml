@@ -188,12 +188,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: directory-publication-ledger
-          path: _production-ledger
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Resolve the exact deployed production ledger
+        run: |
+          marker_ref="$(python3 -c 'import json; print(json.load(open("registry/publication/production-marker.json"))["marker_ref"])')"
+          production_commit="$(git ls-remote --refs origin "${marker_ref}" | awk '{ print $1 }')"
+          if test -z "${production_commit}"; then
+            bootstrap_sequence="$(python3 -c 'import json; print(json.load(open("registry/publication/production-marker.json"))["bootstrap_sequence"])')"
+            tag_prefix="$(python3 -c 'import json; print(json.load(open("registry/publication/production-marker.json"))["sequence_tag_prefix"])')"
+            bootstrap_ref="${tag_prefix}$(printf '%020d' "${bootstrap_sequence}")"
+            production_commit="$(git ls-remote --refs origin "${bootstrap_ref}" | awk '{ print $1 }')"
+          fi
+          [[ "${production_commit}" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "${production_commit}"
+          git worktree add --detach _production-ledger "${production_commit}"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
