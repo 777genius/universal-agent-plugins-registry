@@ -55,6 +55,30 @@ EXPECTED_SCENARIOS = frozenset(
     ["context7_grouped_lifecycle", "shared_copilot_vscode_backend"] +
     [f"hero_lifecycle_{plugin}_{client}" for plugin in _CONFIG["heroes"] for client in _CONFIG["runtime_clients"]]
 )
+
+
+def scenario_client_targets(scenario: str) -> tuple[str, ...]:
+    """Return the client set fixed by the repository-owned scenario contract."""
+    if scenario not in EXPECTED_SCENARIOS:
+        raise ValueError("scenario is not in the immutable acceptance postcondition set")
+    if scenario == "context7_grouped_lifecycle":
+        targets = tuple(_CONFIG["context7_targets"])
+    elif scenario == "shared_copilot_vscode_backend":
+        targets = tuple(_CONFIG["shared_backend_targets"])
+    elif scenario.startswith("hero_lifecycle_"):
+        targets = (scenario.rsplit("_", 1)[1],)
+    elif scenario.startswith("repair_"):
+        targets = (scenario.removeprefix("repair_"),)
+    else:
+        # Every remaining immutable execution plan dispatches its release-bound
+        # operation to Cursor. Fault plans may additionally probe a client that
+        # must be rejected, but that probe is not a selected release target.
+        targets = ("cursor",)
+    if not targets or len(set(targets)) != len(targets) or any(target not in CLIENTS for target in targets):
+        raise ValueError("scenario contract client targets are invalid")
+    return targets
+
+
 NATIVE_ROOTS = (".codex", ".cursor", ".kiro", ".copilot", ".config/Code/User")
 EXTERNAL_PACKAGE = Path(__file__).resolve().parents[1] / "tests/e2e/fixtures/external-package"
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "tests/fixtures"
@@ -256,10 +280,11 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         item for item in distribution["release_policies"]
         if item["release_sequence"] == release.get("release_sequence")
     ]
-    policy_clients = sorted({
+    policy_client_entries = [
         target["client"] for policy in selected_policies for target in policy["targets"]
         if "user" in target["scopes"]
-    })
+    ]
+    policy_clients = sorted(policy_client_entries)
     required_strings = (
         "product_id", "distribution_id", "distribution_kind", "package_version", "tree_digest",
         "manifest_digest", "source_repository", "source_revision", "source_path",
@@ -276,7 +301,9 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         or any(item not in CLIENTS for item in release["compatible_clients"] + release["resolved_targets"])
         or len(set(release["compatible_clients"])) != len(release["compatible_clients"])
         or len(set(release["resolved_targets"])) != len(release["resolved_targets"])
-        or not set(release["resolved_targets"]) <= set(release["compatible_clients"])
+        or not release["resolved_targets"]
+        or len(set(policy_client_entries)) != len(policy_client_entries)
+        or not set(release["resolved_targets"]) <= set(policy_clients)
         or release["compatible_clients"] != policy_clients
         or release["fallback_reason"] is not None and (not isinstance(release["fallback_reason"], str) or not release["fallback_reason"])
         or any(identity.get(field) != release[field] for field in CHALLENGE_SOURCE_IDENTITY_FIELDS - {"canonical_source"})
@@ -293,6 +320,7 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         or release["distribution_id"] not in product.get("distributions", [])
         or product.get("default_distribution") not in product.get("distributions", [])
         or len(selected_releases) != 1 or len(selected_policies) != 1
+        or selected_policies[0].get("status") != "active"
         or selected_releases[0].get("package_version") != release["package_version"]
         or selected_releases[0].get("tree_digest") != release["tree_digest"]
         or selected_releases[0].get("manifest_digest") != release["manifest_digest"]
@@ -303,6 +331,15 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         }
     ):
         raise ValueError("challenge context release binding is invalid")
+    return value
+
+
+def validate_scenario_challenge_context(value: Any, scenario: str) -> dict[str, Any]:
+    """Bind an authenticated release selection to its immutable scenario targets."""
+    value = validate_challenge_context(value)
+    required_targets = scenario_client_targets(scenario)
+    if set(value["release"]["resolved_targets"]) != set(required_targets):
+        raise ValueError("challenge resolved targets do not match the requested scenario")
     return value
 
 
@@ -6280,9 +6317,7 @@ def revoked_boundary_scenario(
 
 
 def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, Any]) -> dict[str, Any]:
-    challenge_context = validate_challenge_context(challenge_context)
-    if scenario not in EXPECTED_SCENARIOS:
-        raise ValueError("scenario is not in the immutable acceptance postcondition set")
+    challenge_context = validate_scenario_challenge_context(challenge_context, scenario)
     challenge = challenge_context["value"]
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -6524,7 +6559,9 @@ def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--challenge-context", type=Path, required=True)
     args = parser.parse_args()
-    context = validate_challenge_context(strict_json_loads(args.challenge_context.read_bytes()))
+    context = validate_scenario_challenge_context(
+        strict_json_loads(args.challenge_context.read_bytes()), args.scenario,
+    )
     value = run(args.binary.resolve(), args.scenario, args.root.resolve(), context)
     print(json.dumps(value, sort_keys=True))
     return 0 if value["outcome"] == "passed" else 2

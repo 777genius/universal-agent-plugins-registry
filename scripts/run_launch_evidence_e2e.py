@@ -58,6 +58,7 @@ from observe_launch_scenario import (  # noqa: E402
     grouped_acquisition_closure_digest,
     installation_receipts,
     selected_manager_installation,
+    scenario_client_targets,
     strict_json_loads,
     validate_cli_envelope,
 )
@@ -2158,17 +2159,7 @@ class LaunchHarness:
             product_id = source_selection["product_id"]
         if scenario.startswith("hero_lifecycle_"):
             product_id = scenario.removeprefix("hero_lifecycle_").rsplit("_", 1)[0]
-        targets: tuple[str, ...]
-        if scenario == "context7_grouped_lifecycle":
-            targets = tuple(self.config["context7_targets"])
-        elif scenario == "shared_copilot_vscode_backend":
-            targets = tuple(self.config["shared_backend_targets"])
-        elif scenario.startswith("hero_lifecycle_"):
-            targets = (scenario.rsplit("_", 1)[1],)
-        elif scenario.startswith("repair_"):
-            targets = (scenario.removeprefix("repair_"),)
-        else:
-            targets = ("cursor",)
+        targets = scenario_client_targets(scenario)
         env = isolated_environment(sandbox, targets, self.directory_environment)
         if "copilot" in targets:
             if not self.copilot_executable:

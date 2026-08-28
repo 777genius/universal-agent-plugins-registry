@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(SCRIPTS))
 
 from scripts import observe_discovery_index, sequence_boundaries, verify_discovery_index
+from directory_publication import PublicationError
 import verify_directory_publication
 import prepare_directory_publication
 import prepare_launch_evidence
@@ -226,6 +227,15 @@ class FloorBeforeIOTests(unittest.TestCase):
 
 
 class LaunchContextBoundaryTests(unittest.TestCase):
+    def assert_launch_rejected_before_effects(self, context: dict[str, object], scenario: str = "directory_offline") -> None:
+        with mock.patch.object(launch_observer, "observe") as observe, mock.patch.object(
+            launch_observer, "directory_fault_scenario",
+        ) as dispatch:
+            with self.assertRaises((ValueError, PublicationError)):
+                launch_observer.run(Path("binary"), scenario, Path("root"), context)
+            observe.assert_not_called()
+            dispatch.assert_not_called()
+
     def test_dispatch_accepts_maximum_and_rejects_aliases_without_observation(self) -> None:
         environment = {"HOME": "/tmp/launch-home", "AGENTPLUGINS_HOME": "/tmp/launch-manager"}
         with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(launch_observer, "observe", return_value={}) as observe, mock.patch.object(
@@ -280,6 +290,80 @@ class LaunchContextBoundaryTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 launch_observer.main()
             run.assert_not_called()
+
+    def test_duplicate_user_policy_client_rejects_before_effects(self) -> None:
+        context = challenge_context()
+        policy = context["directory_distribution"]["release_policies"][0]
+        policy["targets"].append(copy.deepcopy(policy["targets"][1]))
+        self.assert_launch_rejected_before_effects(context)
+
+    def test_non_active_selected_policy_rejects_before_effects(self) -> None:
+        for status in ("revoked", "superseded", "suspended"):
+            context = challenge_context()
+            context["directory_distribution"]["release_policies"][0]["status"] = status
+            with self.subTest(status=status):
+                self.assert_launch_rejected_before_effects(context)
+
+    def test_empty_resolved_targets_rejects_before_effects(self) -> None:
+        context = challenge_context()
+        context["release"]["resolved_targets"] = []
+        self.assert_launch_rejected_before_effects(context)
+
+    def test_different_known_compatible_target_rejects_before_effects(self) -> None:
+        context = challenge_context()
+        context["release"]["resolved_targets"] = ["codex"]
+        self.assert_launch_rejected_before_effects(context)
+
+    def test_one_and_multi_target_scenario_bindings_are_accepted(self) -> None:
+        environment = {"HOME": "/tmp/launch-home", "AGENTPLUGINS_HOME": "/tmp/launch-manager"}
+        one = challenge_context()
+        with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(
+            launch_observer, "observe", return_value={},
+        ), mock.patch.object(
+            launch_observer, "directory_fault_scenario",
+            return_value=(True, {"command_traces": [], "before": {}, "after": {}, "proof": {}}),
+        ) as dispatch:
+            self.assertEqual(
+                launch_observer.run(Path("binary"), "directory_offline", Path("root"), one)["outcome"],
+                "passed",
+            )
+            dispatch.assert_called_once()
+
+        multi = challenge_context()
+        policy = multi["directory_distribution"]["release_policies"][0]
+        policy["targets"].append({**copy.deepcopy(policy["targets"][0]), "client": "kiro"})
+        multi["release"]["compatible_clients"] = ["codex", "cursor", "kiro"]
+        multi["release"]["resolved_targets"] = ["codex", "cursor", "kiro"]
+        lifecycle_value = {
+            "command_traces": [], "values": {}, "operation_observations": [],
+            "operation_outcomes": {}, "identities": {}, "tuple": {},
+        }
+        with mock.patch.dict(os.environ, environment, clear=False), mock.patch.object(
+            launch_observer, "observe", return_value={},
+        ), mock.patch.object(
+            launch_observer, "lifecycle", return_value=(False, lifecycle_value),
+        ) as dispatch:
+            launch_observer.run(Path("binary"), "context7_grouped_lifecycle", Path("root"), multi)
+            dispatch.assert_called_once()
+
+    def test_direct_run_and_cli_share_scenario_target_guard(self) -> None:
+        context = challenge_context()
+        context["release"]["resolved_targets"] = ["codex"]
+        self.assert_launch_rejected_before_effects(context)
+
+        argv = [
+            "observe", "--binary", "binary", "--scenario", "directory_offline",
+            "--root", "root", "--challenge-context", "challenge",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            Path, "read_bytes", return_value=json.dumps(context).encode(),
+        ), mock.patch.object(launch_observer, "run") as run, mock.patch.object(
+            launch_observer, "observe",
+        ) as observe:
+            with self.assertRaisesRegex(ValueError, "requested scenario"):
+                launch_observer.main()
+            run.assert_not_called()
+            observe.assert_not_called()
 
 
 class PrivilegedTupleBoundaryTests(unittest.TestCase):
