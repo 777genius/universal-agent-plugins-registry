@@ -556,6 +556,32 @@ def validate_receipts(value, entries: list[dict]) -> None:
             raise ValueError("profile seed receipt does not bind native projection evidence")
 
 
+def validate_source_profile_tuple(source_fd: int, client: str) -> None:
+    """Authenticate the privileged tuple through the immutable seed descriptor."""
+    proof_fd = os.open(PROOF_SEED_NAME, OPEN_DIRECTORY, dir_fd=source_fd)
+    try:
+        proof_info = os.fstat(proof_fd)
+        if not stat.S_ISDIR(proof_info.st_mode) or proof_info.st_uid != 0 or proof_info.st_mode & 0o022:
+            raise ValueError("profile seed tuple directory differs")
+        values = []
+        for name in ("native-projection.json", "receipts.json"):
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=proof_fd)
+            try:
+                info = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or info.st_mode & 0o022 or info.st_nlink != 1
+                ):
+                    raise ValueError("profile seed tuple descriptor differs")
+                values.append(strict_json_loads(read_bounded_regular(descriptor, info, 4 << 20)))
+            finally:
+                os.close(descriptor)
+        entries = validate_native_projection(values[0], client)
+        validate_receipts(values[1], entries)
+    finally:
+        os.close(proof_fd)
+
+
 def read_bounded_regular(descriptor: int, info: os.stat_result, limit: int) -> bytes:
     if info.st_size < 0 or info.st_size > limit:
         raise ValueError("profile seed native projection content exceeds its bound")
@@ -873,6 +899,11 @@ def main() -> int:
     if not args.seed_digest.startswith("sha256:") or digest != args.seed_digest:
         os.close(source_fd)
         raise ValueError("profile seed digest differs")
+    try:
+        validate_source_profile_tuple(source_fd, args.client)
+    except Exception:
+        os.close(source_fd)
+        raise
     profile_root_fd = open_root_owned_directory(PROFILE_ROOT, final_mode=0o711)
     proof_root_fd = open_root_owned_directory(PROOF_ROOT, final_mode=0o711)
     staging_name = f".{args.client}.new"

@@ -42,6 +42,7 @@ from directory_publication import (
     validate_with_schema,
 )
 from directory_publication_cas import CasError, validate_marker
+from sequence_boundaries import parse_public_sequence
 from publication_trust_policy import (
     load_publication_trust_config,
     validate_publication_eligibility_trust,
@@ -952,7 +953,7 @@ def main() -> int:
     parser.add_argument("--trusted-keys", type=Path)
     parser.add_argument("--initialize-ledger", action="store_true")
     parser.add_argument("--ledger-seed-commit")
-    parser.add_argument("--ledger-sequence-floor", type=int)
+    parser.add_argument("--ledger-sequence-floor", type=parse_public_sequence)
     parser.add_argument("--external-repository", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--digest-output", type=Path, required=True)

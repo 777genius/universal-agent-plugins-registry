@@ -34,7 +34,16 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from directory_publication import canonical_json, sha256_digest, signature_message, validate_snapshot_semantics, verify_envelope
+from directory_publication import (
+    CLIENTS,
+    _validate_distribution,
+    _validate_product,
+    canonical_json,
+    sha256_digest,
+    signature_message,
+    validate_snapshot_semantics,
+    verify_envelope,
+)
 from build_registry import directory_tree_digest
 
 
@@ -100,13 +109,6 @@ CHALLENGE_RELEASE_FIELDS = frozenset({
 CHALLENGE_SOURCE_IDENTITY_FIELDS = frozenset({
     "product_id", "distribution_id", "distribution_kind", "release_sequence", "source_revision",
     "source_repository", "source_path", "canonical_source", "tree_digest", "manifest_digest",
-})
-CHALLENGE_PRODUCT_FIELDS = frozenset({
-    "aliases", "categories", "default_distribution", "description", "display_name", "distributions",
-    "id", "manifest_name", "minimum_capabilities", "reserved_aliases", "schema_version",
-})
-CHALLENGE_DISTRIBUTION_FIELDS = frozenset({
-    "id", "kind", "packager", "product_id", "release_policies", "releases", "schema_version", "status",
 })
 CONFORMANCE_SEQUENCE = {
     "retained_default": 10_000,
@@ -244,11 +246,20 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         raise ValueError("challenge release fields are invalid")
     if not isinstance(identity, dict) or set(identity) != CHALLENGE_SOURCE_IDENTITY_FIELDS:
         raise ValueError("challenge source identity fields are invalid")
-    if (
-        not isinstance(product, dict) or set(product) != CHALLENGE_PRODUCT_FIELDS
-        or not isinstance(distribution, dict) or set(distribution) != CHALLENGE_DISTRIBUTION_FIELDS
-    ):
-        raise ValueError("challenge Directory objects are invalid")
+    _validate_product(product, "challenge directory product")
+    _validate_distribution(distribution, "challenge directory distribution", snapshot=True)
+    selected_releases = [
+        item for item in distribution["releases"]
+        if item["sequence"] == release.get("release_sequence")
+    ]
+    selected_policies = [
+        item for item in distribution["release_policies"]
+        if item["release_sequence"] == release.get("release_sequence")
+    ]
+    policy_clients = sorted({
+        target["client"] for policy in selected_policies for target in policy["targets"]
+        if "user" in target["scopes"]
+    })
     required_strings = (
         "product_id", "distribution_id", "distribution_kind", "package_version", "tree_digest",
         "manifest_digest", "source_repository", "source_revision", "source_path",
@@ -262,7 +273,12 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         or not isinstance(release["compatible_clients"], list)
         or not isinstance(release["resolved_targets"], list)
         or any(not isinstance(item, str) or not item for item in release["compatible_clients"] + release["resolved_targets"])
-        or release["fallback_reason"] is not None and not isinstance(release["fallback_reason"], str)
+        or any(item not in CLIENTS for item in release["compatible_clients"] + release["resolved_targets"])
+        or len(set(release["compatible_clients"])) != len(release["compatible_clients"])
+        or len(set(release["resolved_targets"])) != len(release["resolved_targets"])
+        or not set(release["resolved_targets"]) <= set(release["compatible_clients"])
+        or release["compatible_clients"] != policy_clients
+        or release["fallback_reason"] is not None and (not isinstance(release["fallback_reason"], str) or not release["fallback_reason"])
         or any(identity.get(field) != release[field] for field in CHALLENGE_SOURCE_IDENTITY_FIELDS - {"canonical_source"})
         or not isinstance(identity["canonical_source"], str)
         or parse_canonical_github_source(identity["canonical_source"]) != {
@@ -273,13 +289,18 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         or product.get("id") != release["product_id"]
         or distribution.get("id") != release["distribution_id"]
         or distribution.get("product_id") != release["product_id"]
+        or distribution.get("kind") != release["distribution_kind"]
         or release["distribution_id"] not in product.get("distributions", [])
-        or not any(
-            isinstance(item, dict) and item.get("sequence") == release["release_sequence"]
-            and item.get("tree_digest") == release["tree_digest"]
-            and item.get("manifest_digest") == release["manifest_digest"]
-            for item in distribution.get("releases", [])
-        )
+        or product.get("default_distribution") not in product.get("distributions", [])
+        or len(selected_releases) != 1 or len(selected_policies) != 1
+        or selected_releases[0].get("package_version") != release["package_version"]
+        or selected_releases[0].get("tree_digest") != release["tree_digest"]
+        or selected_releases[0].get("manifest_digest") != release["manifest_digest"]
+        or selected_releases[0].get("package_source") != {
+            "repository": release["source_repository"],
+            "revision": release["source_revision"],
+            "path": release["source_path"],
+        }
     ):
         raise ValueError("challenge context release binding is invalid")
     return value

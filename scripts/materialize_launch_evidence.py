@@ -30,6 +30,7 @@ from launch_observer_signatures import (  # noqa: E402
     validate_evidence_redaction,
     verify_observer_bundle,
 )
+from sequence_boundaries import parse_public_sequence  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -892,7 +893,7 @@ def common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--expected-caller-ref", required=True)
     parser.add_argument("--expected-caller-workflow-ref", required=True)
     parser.add_argument("--expected-publication-id", required=True)
-    parser.add_argument("--expected-publication-sequence", type=int, required=True)
+    parser.add_argument("--expected-publication-sequence", type=parse_public_sequence, required=True)
     parser.add_argument("--expected-publication-snapshot-digest", required=True)
     parser.add_argument("--expected-publication-source-commit", required=True)
     parser.add_argument("--verify-observer", action="store_true")

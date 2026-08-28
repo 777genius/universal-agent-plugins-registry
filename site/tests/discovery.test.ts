@@ -135,6 +135,24 @@ describe('signed public Discovery Index', () => {
     }
   })
 
+  it('rejects each unsafe sequence field independently before alias comparison or path use', async () => {
+    const aliases = [9_007_199_254_740_992, 9_007_199_254_740_993]
+    for (const artifact of ['pointer', 'envelope', 'snapshot', 'search'] as const) {
+      for (const unsafe of aliases) {
+        const data = fixture(7)
+        const bytes = structuredClone(data.bytes)
+        const value = JSON.parse(new TextDecoder().decode(bytes[artifact])) as Record<string, unknown>
+        value.sequence = unsafe
+        bytes[artifact] = canonical(value)
+        await assert.rejects(
+          verifyDiscovery(bytes, data.trust, {}, now),
+          /sequence is invalid|non-integer number/,
+          `${artifact} must reject unsafe sequence ${unsafe} independently`,
+        )
+      }
+    }
+  })
+
   it('verifies exact bytes and maps one unreviewed package to a publisher-qualified command', async () => {
     const data = fixture()
     const bundle = await verifyDiscovery(data.bytes, data.trust, {}, now)

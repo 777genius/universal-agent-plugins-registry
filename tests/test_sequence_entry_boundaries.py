@@ -4,7 +4,9 @@ import hashlib
 import importlib.util
 import json
 import os
+import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,6 +19,11 @@ sys.path.insert(0, str(SCRIPTS))
 
 from scripts import observe_discovery_index, sequence_boundaries, verify_discovery_index
 import verify_directory_publication
+import prepare_directory_publication
+import prepare_launch_evidence
+import materialize_launch_evidence
+import observe_production_latest
+import sign_directory_publication
 
 OBSERVER_SPEC = importlib.util.spec_from_file_location(
     "sequence_boundary_launch_observer", SCRIPTS / "observe_launch_scenario.py",
@@ -24,6 +31,13 @@ OBSERVER_SPEC = importlib.util.spec_from_file_location(
 assert OBSERVER_SPEC and OBSERVER_SPEC.loader
 launch_observer = importlib.util.module_from_spec(OBSERVER_SPEC)
 OBSERVER_SPEC.loader.exec_module(launch_observer)
+
+PROVISION_SPEC = importlib.util.spec_from_file_location(
+    "sequence_boundary_profile_provisioner", ROOT / "deploy/uap-observer-provision-profile.py",
+)
+assert PROVISION_SPEC and PROVISION_SPEC.loader
+profile_provisioner = importlib.util.module_from_spec(PROVISION_SPEC)
+PROVISION_SPEC.loader.exec_module(profile_provisioner)
 
 MAXIMUM = sequence_boundaries.JSON_SAFE_INTEGER_MAX
 ALIASES = (MAXIMUM + 1, MAXIMUM + 2)
@@ -81,9 +95,102 @@ class ExactSequenceHelperTests(unittest.TestCase):
         self.assertEqual(sequence_boundaries.next_public_sequence(MAXIMUM - 1), MAXIMUM)
         with self.assertRaises(ValueError):
             sequence_boundaries.next_public_sequence(MAXIMUM)
+        self.assertEqual(sequence_boundaries.parse_padded_public_sequence(f"{MAXIMUM:020d}"), MAXIMUM)
+        for text in ("1", "0" * 20, str(MAXIMUM + 1).zfill(20)):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                sequence_boundaries.parse_padded_public_sequence(text)
+
+    def test_successor_cli_emits_no_sequence_at_maximum(self) -> None:
+        with mock.patch.object(sys, "argv", ["sequence", "successor", "--current", str(MAXIMUM)]), mock.patch.object(
+            sys, "stdout",
+        ) as stdout:
+            self.assertEqual(sequence_boundaries.main(), 1)
+            stdout.write.assert_not_called()
 
 
 class FloorBeforeIOTests(unittest.TestCase):
+    def test_launch_preparer_rejects_sequence_before_filesystem_or_network_seams(self) -> None:
+        base = [
+            "prepare", "--asset-name", "asset", "--run-root", "run", "--output", "out",
+            "--publication-id", "id", "--publication-snapshot-digest", "sha256:" + "a" * 64,
+            "--publication-source-commit", "b" * 40, "--publication-ledger-commit", "c" * 40,
+            "--caller-event-name", "workflow_call", "--caller-ref", "refs/heads/main",
+            "--caller-workflow-ref", "owner/repo/.github/workflows/test.yml@refs/heads/main",
+            "--publication-sequence",
+        ]
+        for text in ("01", "+1", str(MAXIMUM + 1)):
+            with self.subTest(text=text), mock.patch.object(sys, "argv", [*base, text]), mock.patch.object(
+                Path, "exists",
+            ) as exists, mock.patch.object(prepare_launch_evidence, "read_production_config") as config, mock.patch.object(
+                prepare_launch_evidence, "resolve_github_release",
+            ) as network:
+                with self.assertRaises(SystemExit):
+                    prepare_launch_evidence.main()
+                exists.assert_not_called()
+                config.assert_not_called()
+                network.assert_not_called()
+
+    def test_directory_floor_clis_reject_before_candidate_key_ledger_or_output(self) -> None:
+        invalid = ("01", "+1", str(MAXIMUM + 1))
+        prepare_base = [
+            "prepare", "--directory", "directory", "--config", "config", "--source-commit", "a" * 40,
+            "--publication-id", "id", "--output", "candidate", "--digest-output", "digest",
+            "--ledger-sequence-floor",
+        ]
+        sign_base = [
+            "sign", "--candidate", "candidate", "--candidate-digest", "sha256:" + "a" * 64,
+            "--config", "config", "--ledger", "ledger", "--trusted-keys", "keys", "--key-id", "key",
+            "--now", "2026-08-28T00:00:00Z", "--result", "result", "--ledger-sequence-floor",
+        ]
+        for text in invalid:
+            with self.subTest(tool="prepare", text=text), mock.patch.object(sys, "argv", [*prepare_base, text]), mock.patch.object(
+                prepare_directory_publication.subprocess, "check_output",
+            ) as process, mock.patch.object(prepare_directory_publication, "atomic_write") as output:
+                with self.assertRaises(SystemExit):
+                    prepare_directory_publication.main()
+                process.assert_not_called()
+                output.assert_not_called()
+            with self.subTest(tool="sign", text=text), mock.patch.object(sys, "argv", [*sign_base, text]), mock.patch.object(
+                sign_directory_publication, "read_bytes_bounded",
+            ) as candidate, mock.patch.object(sign_directory_publication, "load_public_keys") as keys, mock.patch.object(
+                sign_directory_publication, "atomic_write",
+            ) as output:
+                with self.assertRaises(SystemExit):
+                    sign_directory_publication.main()
+                candidate.assert_not_called()
+                keys.assert_not_called()
+                output.assert_not_called()
+
+    def test_remaining_directory_flow_sequence_clis_reject_before_io(self) -> None:
+        observe_base = [
+            "observe", "--publication-id", "id", "--publication-snapshot-digest", "sha256:" + "a" * 64,
+            "--publication-source-commit", "b" * 40, "--publication-ledger-commit", "c" * 40,
+            "--output", "output", "--publication-sequence",
+        ]
+        materialize_base = [
+            "materialize", "prepare-bundle", "--artifact-dir", "artifacts", "--repository", "owner/repo",
+            "--workflow", "owner/repo/.github/workflows/test.yml", "--source-ref", "refs/heads/main",
+            "--source-digest", "a" * 40, "--expected-run-id", "1", "--expected-run-attempt", "1",
+            "--expected-caller-event-name", "workflow_call", "--expected-caller-ref", "refs/heads/main",
+            "--expected-caller-workflow-ref", "owner/repo/.github/workflows/test.yml@refs/heads/main",
+            "--expected-publication-id", "id", "--expected-publication-snapshot-digest", "sha256:" + "b" * 64,
+            "--expected-publication-source-commit", "c" * 40, "--expected-publication-sequence",
+        ]
+        for text in ("01", "+1", str(MAXIMUM + 1)):
+            with self.subTest(tool="observe", text=text), mock.patch.object(sys, "argv", [*observe_base, text]), mock.patch.object(
+                observe_production_latest.tempfile, "TemporaryDirectory",
+            ) as temporary, mock.patch.object(observe_production_latest, "fetch_production_directory") as network:
+                with self.assertRaises(SystemExit):
+                    observe_production_latest.main()
+                temporary.assert_not_called()
+                network.assert_not_called()
+            with self.subTest(tool="materialize", text=text), mock.patch.object(sys, "argv", [*materialize_base, text]), mock.patch.object(
+                materialize_launch_evidence, "build_bundle",
+            ) as build, mock.patch.object(materialize_launch_evidence, "write_outputs") as output:
+                with self.assertRaises(SystemExit):
+                    materialize_launch_evidence.main()
+                build.assert_not_called()
+                output.assert_not_called()
     def test_observer_callable_rejects_before_opener_and_accepts_maximum(self) -> None:
         for value in (True, 0, *ALIASES):
             with self.subTest(value=value), mock.patch.object(observe_discovery_index.urllib.request, "build_opener") as opener:
@@ -143,6 +250,84 @@ class LaunchContextBoundaryTests(unittest.TestCase):
             launch_observer.validate_challenge_context(context)
         with self.assertRaises(launch_observer.DuplicateKeyError):
             launch_observer.strict_json_loads('{"value":"a","value":"b"}')
+
+    def test_malformed_nested_directory_values_reject_before_observation_or_dispatch(self) -> None:
+        mutations = {
+            "product wrong type": lambda value: value["directory_product"].update(description=7),
+            "product extra": lambda value: value["directory_product"].update(extra="no"),
+            "distribution missing": lambda value: value["directory_distribution"].pop("status"),
+            "release source extra": lambda value: value["directory_distribution"]["releases"][0]["package_source"].update(extra="no"),
+            "policy wrong type": lambda value: value["directory_distribution"]["release_policies"][0].update(targets="cursor"),
+        }
+        for label, mutate in mutations.items():
+            context = copy.deepcopy(challenge_context())
+            mutate(context)
+            with self.subTest(label=label), mock.patch.object(launch_observer, "observe") as observe, mock.patch.object(
+                launch_observer, "directory_fault_scenario",
+            ) as dispatch:
+                with self.assertRaises(Exception):
+                    launch_observer.run(Path("binary"), "directory_offline", Path("root"), context)
+                observe.assert_not_called()
+                dispatch.assert_not_called()
+
+    def test_cli_authenticates_nested_directory_before_run_boundary(self) -> None:
+        context = challenge_context()
+        context["directory_distribution"]["releases"][0]["package_source"].pop("revision")
+        argv = ["observe", "--binary", "binary", "--scenario", "directory_offline", "--root", "root", "--challenge-context", "challenge"]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(Path, "read_bytes", return_value=json.dumps(context).encode()), mock.patch.object(
+            launch_observer, "run",
+        ) as run:
+            with self.assertRaises(Exception):
+                launch_observer.main()
+            run.assert_not_called()
+
+
+class PrivilegedTupleBoundaryTests(unittest.TestCase):
+    def test_unsafe_source_tuple_rejects_before_mutable_profile_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            seed = Path(temporary) / "seed"
+            proof = seed / profile_provisioner.PROOF_SEED_NAME
+            proof.mkdir(parents=True)
+            release_tuple = {
+                field: "value" for field in profile_provisioner.TUPLE_FIELDS
+                if field not in {"release_sequence", "snapshot_sequence", "client_version"}
+            }
+            release_tuple.update({
+                "product_id": "context7", "release_sequence": MAXIMUM + 1,
+                "snapshot_sequence": 1, "client_version": None,
+                "source_revision": "a" * 40, "source_repository": "owner/repo", "source_path": "plugin",
+                **{field: "sha256:" + "b" * 64 for field in profile_provisioner.TUPLE_DIGEST_FIELDS},
+            })
+            digest = "sha256:" + "c" * 64
+            entry = {
+                "plugin": "context7", "component_kind": "mcp", "tuple": release_tuple,
+                "native_config": {"path": "/var/lib/uap-observer/proofs/codex/native/context7.blob", "sha256": digest},
+                "client_config": {"path": "/var/lib/uap-observer/profiles/codex/context7.json", "sha256": digest},
+                "manager_add_sha256": digest, "manager_info_sha256": digest, "post_add_doctor_sha256": digest,
+            }
+            (proof / "native-projection.json").write_text(json.dumps({
+                "schema_version": 2, "client_id": "codex", "entries": [entry],
+            }))
+            (proof / "receipts.json").write_text("{}")
+            framed = hashlib.sha256(b"uap-observer-profile-seed-v1\0")
+            source_fd = os.open(seed, profile_provisioner.OPEN_DIRECTORY)
+            try:
+                profile_provisioner.copy_tree(source_fd, None, framed)
+            finally:
+                os.close(source_fd)
+            expected_digest = "sha256:" + framed.hexdigest()
+            main_source_fd = os.open(seed, profile_provisioner.OPEN_DIRECTORY)
+            argv = ["provision", "--client", "codex", "--root-owned-seed", str(seed), "--seed-digest", expected_digest]
+            account = mock.Mock(pw_uid=123, pw_gid=456)
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(profile_provisioner.os, "geteuid", return_value=0), mock.patch.object(
+                profile_provisioner.pwd, "getpwnam", return_value=account,
+            ), mock.patch.object(profile_provisioner, "open_root_owned_directory", return_value=main_source_fd) as open_root, mock.patch.object(
+                profile_provisioner, "write_transaction",
+            ) as transaction:
+                with self.assertRaisesRegex(ValueError, "sequence"):
+                    profile_provisioner.main()
+                open_root.assert_called_once_with(seed)
+                transaction.assert_not_called()
 
 
 class WorkflowSequenceContractTests(unittest.TestCase):

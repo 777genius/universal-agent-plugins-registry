@@ -173,11 +173,16 @@ jobs:
             seed_commit="$(python3 -c 'import json; print(json.load(open("_publication-ledger/registry/schemas/1/ledger-contract.json"))["seed_commit"])')"
             [[ "${seed_commit}" =~ ^[0-9a-f]{40}$ ]]
             git -C _publication-ledger merge-base --is-ancestor "${seed_commit}" HEAD
-            sequence_floor=0
+            sequence_floor=
             for tag in "${tags[@]}"; do
               [[ "${tag}" =~ ^${tag_prefix}([0-9]{20})$ ]]
-              tag_sequence="$((10#${BASH_REMATCH[1]}))"
-              test "${tag_sequence}" -eq "$((sequence_floor + 1))"
+              tag_sequence="$(python3 scripts/sequence_boundaries.py tag-value "${BASH_REMATCH[1]}")"
+              successor_args=()
+              if test -n "${sequence_floor}"; then
+                successor_args+=(--current "${sequence_floor}")
+              fi
+              expected_sequence="$(python3 scripts/sequence_boundaries.py successor "${successor_args[@]}")"
+              test "${tag_sequence}" = "${expected_sequence}"
               git -C _publication-ledger merge-base --is-ancestor "refs/tags/${tag}" HEAD
               sequence_floor="${tag_sequence}"
             done

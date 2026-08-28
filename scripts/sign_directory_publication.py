@@ -45,6 +45,7 @@ from publication_trust_policy import (
     load_publication_trust_config,
     validate_publication_eligibility_trust,
 )
+from sequence_boundaries import next_public_sequence, parse_public_sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -179,7 +180,7 @@ def main() -> int:
     parser.add_argument("--result", type=Path, required=True)
     parser.add_argument("--initialize-ledger", action="store_true")
     parser.add_argument("--ledger-seed-commit")
-    parser.add_argument("--ledger-sequence-floor", type=int)
+    parser.add_argument("--ledger-sequence-floor", type=parse_public_sequence)
     args = parser.parse_args()
     try:
         candidate_body = read_bytes_bounded(args.candidate, MAX_CANDIDATE_BYTES)
@@ -243,7 +244,7 @@ def main() -> int:
             require(int(candidate["publication_id"]) > int(previous["publication_id"]), "publication run ID is older than current latest")
         require(not args.initialize_ledger or previous is None, "initialization rerun publication ID differs from the original sequence 1 publication")
 
-        sequence = 1 if previous is None else previous["sequence"] + 1
+        sequence = next_public_sequence(None if previous is None else previous["sequence"])
         snapshot = {
             "snapshot_schema_version": candidate["snapshot_schema_version"],
             "sequence": sequence,
