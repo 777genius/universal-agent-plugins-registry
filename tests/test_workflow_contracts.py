@@ -824,14 +824,21 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("inputs.caller_ref == 'refs/heads/main'", required["if"])
         self.assertIn("directory-publication.yml@refs/heads/main", required["if"])
         scheduled = {
-            name: job
-            for name, job in workflow["jobs"].items()
-            if job.get("if") == "github.event_name == 'schedule'"
+            name: workflow["jobs"][name]
+            for name in (
+                "scheduled-fixture-contract",
+                "scheduled-production-directory-observation",
+            )
         }
         self.assertEqual(
             set(scheduled),
             {"scheduled-fixture-contract", "scheduled-production-directory-observation"},
         )
+        for job in scheduled.values():
+            self.assertEqual(
+                job["if"],
+                "github.event_name == 'schedule' || inputs.run_scheduled_regression",
+            )
         scheduled_body = yaml.safe_dump(scheduled)
         self.assertNotIn("inputs.publication_", scheduled_body)
         self.assertNotIn("launch-evidence-e2e.yml", scheduled_body)
@@ -870,7 +877,8 @@ class WorkflowContractTests(unittest.TestCase):
         ))
         public_reads = workflow["jobs"]["public-read-flows"]
         self.assertEqual(
-            public_reads["if"], "github.event_name == 'schedule' || inputs.consent"
+            public_reads["if"],
+            "github.event_name == 'schedule' || inputs.consent || inputs.run_scheduled_regression",
         )
 
     def test_reusable_protected_jobs_gate_on_caller_inputs_not_event_name(self) -> None:

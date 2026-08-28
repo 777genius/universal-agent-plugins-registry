@@ -48,6 +48,11 @@ on:
         value: ${{ jobs.required-live-e2e.outputs.attestation_artifact_name }}
   workflow_dispatch:
     inputs:
+      run_scheduled_regression:
+        description: Run the credential-free scheduled regression jobs now
+        required: false
+        default: false
+        type: boolean
       consent:
         description: Approve disposable live launch checks
         required: true
@@ -103,7 +108,7 @@ jobs:
       id-token: write
 
   public-read-flows:
-    if: github.event_name == 'schedule' || inputs.consent
+    if: github.event_name == 'schedule' || inputs.consent || inputs.run_scheduled_regression
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -154,7 +159,7 @@ jobs:
           test "$PUBLIC_READ_RESULT" = success
 
   scheduled-fixture-contract:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || inputs.run_scheduled_regression
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -179,7 +184,7 @@ jobs:
           python -m unittest tests.test_run_launch_evidence_e2e tests.test_materialize_launch_evidence tests.test_workflow_contracts
 
   scheduled-production-directory-observation:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || inputs.run_scheduled_regression
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
