@@ -155,7 +155,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
                 "kind": "github_actions",
                 "workflow": "example/evidence/.github/workflows/evidence.yml",
                 "source_ref": "refs/heads/main",
-                "source_digest": "b" * 40,
+                "source_digest": "a" * 40,
                 "bundle_manifest": {"must": "not leak"},
             },
         }

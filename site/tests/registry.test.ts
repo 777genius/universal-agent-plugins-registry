@@ -9,6 +9,10 @@ import { pluginCommands } from '../utils/commands.ts'
 const fixture = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/registry.valid.json', import.meta.url)), 'utf8')) as unknown
 const snapshotFixture = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/directory.snapshot.json', import.meta.url)), 'utf8')) as unknown
 const blockedNewestFixture = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/directory.blocked-newest.snapshot.json', import.meta.url)), 'utf8')) as unknown
+const protectedWorkflowProjection = JSON.parse(readFileSync(fileURLToPath(new URL('../../tests/fixtures/directory-publication/protected-workflow-projection.json', import.meta.url)), 'utf8')) as {
+  private_source_digest: string
+  public_evidence: SnapshotFixture['evidence'][number]
+}
 const resolverGolden = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/resolver-golden.json', import.meta.url)), 'utf8')) as {
   vectors: Array<{ id: string, changes: string[], targets: Array<'codex' | 'cursor' | 'kiro'>, expected: { distribution_id: string | null, release_sequence: number | null, fallback_reason: string | null, unavailable_reason?: string } }>
 }
@@ -177,6 +181,25 @@ describe('registry parsing', () => {
       const plugin = parseDirectoryData(raw, 'published_snapshot').plugins[0]!
       assert.equal(expectedDistribution(plugin, ['codex'])?.id, 'example/demo-bridge', mutation)
     }
+  })
+
+  it('accepts the artifact-bound projection of authenticated protected-workflow evidence', () => {
+    const raw = signedFixture()
+    const projected = structuredClone(protectedWorkflowProjection.public_evidence)
+    assert.notEqual(protectedWorkflowProjection.private_source_digest, projected.artifact.revision)
+    assert.equal(projected.trust.source_digest, projected.artifact.revision)
+    raw.evidence = raw.evidence.filter(item => item.id !== 'materialization-demo-codex')
+    raw.evidence.push(projected)
+    const policy = raw.distributions[0]!.release_policies[0]!
+    policy.current_evidence = policy.current_evidence.map(id =>
+      id === 'materialization-demo-codex' ? projected.id : id,
+    )
+    const plugin = parseDirectoryData(raw, 'published_snapshot').plugins[0]!
+    assert.equal(expectedDistribution(plugin, ['codex'])?.id, 'example/demo')
+    assert.equal(
+      plugin.evidence.find(item => item.id === projected.id)?.trusted_for_eligibility,
+      true,
+    )
   })
 
   it('never trusts review-preview observations for distribution eligibility', () => {

@@ -548,6 +548,44 @@ class ProtectedWorkflowChainTests(unittest.TestCase):
         self.assertIn(source_digest, command)
         self.assertNotEqual(source_digest, ledger_revision)
 
+        authenticated = {
+            **record,
+            "artifact": pointer["artifact"],
+            "trust": pointer["trust"],
+        }
+        projected = prepare.public_evidence_projection(authenticated)
+        self.assertEqual(projected["trust"], {
+            "kind": "github_actions",
+            "workflow": workflow,
+            "source_ref": "refs/heads/main",
+            "source_digest": ledger_revision,
+        })
+        self.assertNotIn("bundle_manifest", projected["trust"])
+        product = {
+            "id": record["product_id"],
+            "default_distribution": record["distribution_id"],
+            "minimum_capabilities": {"mcp": "optional"},
+        }
+        distribution = {
+            "id": record["distribution_id"],
+            "kind": "community_bridge",
+            "status": "active",
+            "releases": [{
+                "sequence": record["release_sequence"],
+                "tree_digest": record["package_tree_digest"],
+                "components": ["mcp"],
+            }],
+            "release_policies": [{
+                "release_sequence": record["release_sequence"],
+                "status": "active",
+                "targets": [{"client": record["client"]}],
+                "current_evidence": [projected["id"]],
+            }],
+        }
+        prepare.validate_upstream_default_evidence(
+            [product], [distribution], [projected], config,
+        )
+
 
 class RealDirectoryValidationTests(unittest.TestCase):
     def test_real_domain_validator_accepts_exact_release_and_rejects_unreviewed_target(self) -> None:

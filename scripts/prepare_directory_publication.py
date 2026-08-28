@@ -83,8 +83,13 @@ def public_evidence_projection(record: dict[str, Any]) -> dict[str, Any]:
     trust = record["trust"]
     if trust["kind"] == "github_actions":
         projected["trust"] = {
-            field: trust[field]
-            for field in ("kind", "workflow", "source_ref", "source_digest")
+            "kind": trust["kind"],
+            "workflow": trust["workflow"],
+            "source_ref": trust["source_ref"],
+            # The private pointer's digest authenticates the protected workflow
+            # source.  The public contract instead binds the signer-vouched
+            # projection to the immutable artifact revision materialized above.
+            "source_digest": projected["artifact"]["revision"],
         }
     else:
         projected["trust"] = {"kind": "reviewed_external"}

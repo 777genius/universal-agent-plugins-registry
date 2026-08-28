@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 import shutil
@@ -18,6 +19,8 @@ SCRIPTS = ROOT / "scripts"
 FIXTURES = ROOT / "tests" / "fixtures" / "directory-publication"
 sys.path.insert(0, str(SCRIPTS))
 import directory_publication as publication
+import prepare_directory_publication as prepare
+import sign_directory_publication as signer
 
 
 class OpenSSLParityTests(unittest.TestCase):
@@ -37,7 +40,7 @@ class OpenSSLParityTests(unittest.TestCase):
 
 
 class LedgerFailureTests(unittest.TestCase):
-    def run_signer(self, root: Path, publication_id: str, *ledger_args: str, mutate=None, key_id: str = "test-current", trusted_keys: Path | None = None, config: Path | None = None) -> subprocess.CompletedProcess[str]:
+    def run_signer(self, root: Path, publication_id: str, *ledger_args: str, mutate=None, key_id: str = "test-current", trusted_keys: Path | None = None, config: Path | None = None, now: str | None = None) -> subprocess.CompletedProcess[str]:
         candidate = root / "candidate.json"
         value = json.loads((FIXTURES / "candidate.json").read_bytes())
         value["publication_id"] = publication_id
@@ -59,7 +62,7 @@ class LedgerFailureTests(unittest.TestCase):
                 "--config", str(config or ROOT / "registry" / "publication" / "config.json"),
                 "--ledger", str(root),
                 "--trusted-keys", str(trusted_keys or FIXTURES / "trusted-keys.json"),
-                "--key-id", key_id, "--now", f"2026-08-{day}T00:00:00Z",
+                "--key-id", key_id, "--now", now or f"2026-08-{day}T00:00:00Z",
                 "--result", str(root / "result.json"), *ledger_args,
             ],
             cwd=ROOT, env=environment, text=True, stdout=subprocess.PIPE,
@@ -155,6 +158,74 @@ class LedgerFailureTests(unittest.TestCase):
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("must name the trusted-source publication config", rejected.stderr)
             self.assertFalse((root / "registry").exists())
+
+    def test_projected_protected_workflow_digest_reaches_actual_signer(self) -> None:
+        regression = json.loads(
+            (FIXTURES / "protected-workflow-projection.json").read_bytes()
+        )
+        expected = regression["public_evidence"]
+        private_source_digest = regression["private_source_digest"]
+        self.assertNotEqual(private_source_digest, expected["artifact"]["revision"])
+
+        def projected_candidate(value: dict[str, object]) -> None:
+            self.eligible_upstream(value)
+            distribution = value["distributions"][0]  # type: ignore[index]
+            source = copy.deepcopy(value["evidence"][0])  # type: ignore[index]
+            source["id"] = "runtime-demo-codex"
+            source["trust"] = {
+                "kind": "github_actions",
+                "workflow": expected["trust"]["workflow"],
+                "source_ref": expected["trust"]["source_ref"],
+                "source_digest": private_source_digest,
+                "bundle_manifest": {"private": "authentication-chain"},
+            }
+            projected = prepare.public_evidence_projection(source)
+            self.assertEqual(projected, expected)
+            value["evidence"] = [projected]
+            distribution["release_policies"][0]["current_evidence"] = [projected["id"]]
+
+        candidate = json.loads((FIXTURES / "candidate.json").read_bytes())
+        projected_candidate(candidate)
+        publication.validate_with_schema(candidate, publication.CANDIDATE_SCHEMA)
+        signer.validate_bound_candidate(candidate)
+        config = prepare.load_config(ROOT / "registry" / "publication" / "config.json")
+        prepare.validate_upstream_default_evidence(
+            candidate["products"], candidate["distributions"], candidate["evidence"], config,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for sequence in range(1, publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE):
+                def precutover(value: dict[str, object], sequence: int = sequence) -> None:
+                    self.eligible_upstream(value)
+                    evidence = value["evidence"][0]  # type: ignore[index]
+                    evidence["id"] = f"precutover-materialization-{sequence}"
+                    value["distributions"][0]["release_policies"][0]["current_evidence"] = [  # type: ignore[index]
+                        evidence["id"]
+                    ]
+
+                ledger_args = (
+                    ("--initialize-ledger", "--ledger-seed-commit", "0" * 40)
+                    if sequence == 1 else
+                    ("--ledger-seed-commit", "0" * 40, "--ledger-sequence-floor", str(sequence - 1))
+                )
+                seeded = self.run_signer(
+                    root, f"projection-seed-{sequence}", *ledger_args,
+                    mutate=precutover, now=f"2026-09-{sequence:02d}T00:00:00Z",
+                )
+                self.assertEqual(seeded.returncode, 0, seeded.stderr)
+            signed = self.run_signer(
+                root, "projection-regression", "--ledger-seed-commit", "0" * 40,
+                "--ledger-sequence-floor", str(publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE - 1),
+                mutate=projected_candidate,
+                now=f"2026-09-{publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE:02d}T00:00:00Z",
+            )
+            self.assertEqual(signed.returncode, 0, signed.stderr)
+            snapshot = json.loads(
+                (root / "registry" / "schemas" / "1" / "snapshots" /
+                 f"{publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE:020d}.json").read_bytes()
+            )
+            self.assertEqual(snapshot["evidence"], [expected])
 
     def test_direct_signer_preserves_no_eligible_release_safety_publication(self) -> None:
         def terminally_revoke_upstream(value: dict[str, object]) -> None:
