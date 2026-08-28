@@ -145,13 +145,13 @@ SKILL_PROBE_PROMPT = (
     "beginning UAP_SKILL_SECRET_ in this workspace. Return that exact line only."
 )
 MCP_PROBE_HINTS = {
-    "context7": " with libraryName React",
+    "context7": " with libraryName React and query React library",
     "cloudflare-docs": " with query Cloudflare Durable Objects SQLite storage API",
     "chrome-devtools": "",
     "notion": " with query UAP read-only probe",
 }
 MCP_PROBE_INPUTS = {
-    "context7": {"libraryName": "React"},
+    "context7": {"libraryName": "React", "query": "React library"},
     "cloudflare-docs": {"query": "Cloudflare Durable Objects SQLite storage API"},
     "chrome-devtools": {},
     "notion": {"query": "UAP read-only probe"},
