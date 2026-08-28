@@ -101,7 +101,7 @@ jobs:
           LC_ALL: C
         run: |
           value="$PUBLICATION_SEQUENCE"
-          case "$value" in [1-9]|[1-9][0-9]*) ;; *) exit 1 ;; esac
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
           maximum=9007199254740991
           test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
 

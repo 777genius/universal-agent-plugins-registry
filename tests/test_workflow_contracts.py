@@ -58,7 +58,7 @@ class WorkflowContractTests(unittest.TestCase):
             accepted = ("1", "9007199254740991")
             rejected = (
                 "", "0", "+1", "-1", " 1", "1 ", "01", "1e3", "1.0",
-                "9007199254740992", "9007199254740993",
+                "9007199254740992", "9007199254740993", "12x", "12_", "12 ", "12/evil",
             )
             for value in accepted + rejected:
                 completed = subprocess.run(
