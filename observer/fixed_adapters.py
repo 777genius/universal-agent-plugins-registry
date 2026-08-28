@@ -173,6 +173,7 @@ def kiro_probe_input(plugin: str) -> dict[str, Any]:
 CURSOR_MAX_THINKING_EVENTS = 32
 KIRO_PROTOCOL_VERSION = 1
 KIRO_CLI_SHA256 = "sha256:14d835aff3772afb9ffb71e395b433df516c091dea8c43daef46e7cb66368358"
+KIRO_DIRECT_MCP_PROMPT = "Use the installed MCP tool directly. Do not list or activate Kiro Powers. "
 KIRO_CHAT_SHA256 = "sha256:59f47eb75928fa158df1cea31382cb39a4eb0d8ec7afbcfc4c6e75693d35163e"
 KIRO_MAX_LINE = 256 << 10
 KIRO_MAX_OUTPUT = 1 << 20
@@ -2615,7 +2616,7 @@ def run_kiro_acp(
                     prompt = (
                         SKILL_PROBE_PROMPT
                         if skill_path is not None else
-                        mcp_probe_prompt(plugin, tool, marker)
+                        KIRO_DIRECT_MCP_PROMPT + mcp_probe_prompt(plugin, tool, marker)
                     )
                     process.stdin.write(_acp_request(2, "session/prompt", {"sessionId": contract.session_id, "prompt": [{"type": "text", "text": prompt}]})); process.stdin.flush(); sent_prompt = True
                 # The exact successful prompt response is the framing boundary.

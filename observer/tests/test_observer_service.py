@@ -5228,6 +5228,11 @@ class FixedAdapterContractTests(unittest.TestCase):
             self.assertEqual(seen[0]["params"]["protocolVersion"], 1)
             self.assertEqual(seen[1]["params"], {"cwd": str(root), "mcpServers": []})
             self.assertEqual(seen[2]["params"]["sessionId"], "opaque-session")
+            self.assertTrue(
+                seen[2]["params"]["prompt"][0]["text"].startswith(
+                    fixed_adapters.KIRO_DIRECT_MCP_PROMPT,
+                ),
+            )
             self.assertEqual(seen[3]["result"]["outcome"], {"outcome": "selected", "optionId": "once"})
             self.assertEqual(summary["target_chain"], ["pending", "in_progress", "completed"])
 
