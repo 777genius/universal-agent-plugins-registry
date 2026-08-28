@@ -84,6 +84,7 @@ GO_UNICODE_WHITE_SPACE = frozenset(
     "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
     "\u2028\u2029\u202f\u205f\u3000"
 )
+JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
 
 
 class DuplicateKeyError(ValueError):
@@ -153,6 +154,26 @@ def _uint64(value: Any) -> bool:
     )
 
 
+def _safe_sequence(value: Any) -> bool:
+    """Accept only public Directory identities exact in every supported runtime."""
+    return type(value) in {int, _StateInteger} and 1 <= value <= JSON_SAFE_INTEGER_MAX
+
+
+def _state_public_sequences_are_safe(value: Any) -> bool:
+    """Reject unsafe Directory identities before state validation compares them."""
+    if isinstance(value, list):
+        return all(_state_public_sequences_are_safe(child) for child in value)
+    if not isinstance(value, dict):
+        return True
+    for key, child in value.items():
+        if key in {"desired_release_sequence", "snapshot_sequence", "release_sequence"}:
+            if type(child) in {int, _StateInteger} and child > JSON_SAFE_INTEGER_MAX:
+                return False
+        if not _state_public_sequences_are_safe(child):
+            return False
+    return True
+
+
 def _nonempty(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -201,7 +222,7 @@ def _directory_snapshot_coherent(value: dict[str, Any]) -> bool:
     present = any(value.get(name) not in (None, "", 0) for name in fields)
     return not present or bool(
         _exact_int(value.get("snapshot_schema")) and value["snapshot_schema"] > 0
-        and _uint64(value.get("snapshot_sequence")) and value["snapshot_sequence"] > 0
+        and _safe_sequence(value.get("snapshot_sequence"))
         and _digest(value.get("snapshot_digest"))
     )
 
@@ -217,7 +238,7 @@ def _released_directory_snapshot_coherent(value: dict[str, Any]) -> bool:
     if not _exact_int(schema) or not _uint64(sequence) or not isinstance(digest, str):
         return False
     present = sequence > 0 or schema > 0 or digest != ""
-    return not present or (sequence >= 1 and schema >= 1 and _go_nonempty(digest))
+    return not present or (_safe_sequence(sequence) and schema >= 1 and _go_nonempty(digest))
 
 
 def _released_state_v4_decodes(value: Any) -> bool:
@@ -355,7 +376,12 @@ def validate_released_state_v4(value: Any) -> bool:
     after this check; those constraints are not represented as State.Validate
     parity.
     """
-    if not _released_state_v4_decodes(value) or not isinstance(value, dict) or not _exact_int(value.get("schema_version"), 4):
+    if (
+        not _released_state_v4_decodes(value)
+        or not isinstance(value, dict)
+        or not _state_public_sequences_are_safe(value)
+        or not _exact_int(value.get("schema_version"), 4)
+    ):
         return False
     installations = value.get("installations")
     if installations is None:
@@ -397,8 +423,7 @@ def validate_released_state_v4(value: Any) -> bool:
         elif origin == "directory":
             if not isinstance(directory, dict) or not (
                 _go_nonempty(directory.get("product_id")) and _go_nonempty(directory.get("distribution_id"))
-                and _uint64(directory.get("desired_release_sequence"))
-                and directory["desired_release_sequence"] >= 1
+                and _safe_sequence(directory.get("desired_release_sequence"))
                 and directory.get("distribution_kind") in {"upstream", "community_bridge", "community"}
                 and FULL_SHA.fullmatch(str(source.get("resolved_revision", ""))) is not None
                 and _released_directory_snapshot_coherent(directory)
@@ -461,7 +486,7 @@ def validate_released_state_v4(value: Any) -> bool:
                 return False
             if origin == "directory" and not (
                 isinstance(revision, dict) and revision.get("distribution_id") == directory.get("distribution_id")
-                and _uint64(revision.get("release_sequence"))
+                and _safe_sequence(revision.get("release_sequence"))
                 and 1 <= revision["release_sequence"] <= directory["desired_release_sequence"]
                 and FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is not None
             ):
@@ -608,7 +633,7 @@ def _validate_directory_evidence(value: Any) -> bool:
         and FULL_SHA.fullmatch(str(artifact["revision"])) is not None
         and GITHUB_SOURCE_PATH.fullmatch(str(artifact["path"])) is not None
         and _digest(artifact["digest"])
-        and _uint64(value["release_sequence"]) and value["release_sequence"] > 0
+        and _safe_sequence(value["release_sequence"])
         and _digest(value["package_tree_digest"])
         and type(value["trusted_for_eligibility"]) is bool
         and all(_nonempty(value[name]) for name in ("id", "distribution_id", "level", "outcome"))
@@ -655,12 +680,12 @@ def _validate_installed_directory(value: Any) -> bool:
         return False
     if not (
         all(_nonempty(value[name]) for name in ("product_id", "recorded_distribution", "recorded_revision"))
-        and _uint64(value["recorded_release_sequence"]) and value["recorded_release_sequence"] > 0
+        and _safe_sequence(value["recorded_release_sequence"])
         and all(_optional_string(value, name) for name in (
             "current_distribution", "reviewed_default_distribution", "current_revision",
             "current_repository", "current_package_path",
         ))
-        and all(name not in value or (_uint64(value[name]) and value[name] > 0) for name in (
+        and all(name not in value or _safe_sequence(value[name]) for name in (
             "current_release_sequence", "recorded_snapshot_sequence", "current_snapshot_sequence",
         ))
     ):
@@ -675,7 +700,7 @@ def _validate_safety_warning(value: Any) -> bool:
     return bool(
         _nonempty(value["code"]) and _nonempty(value["message"])
         and all(_optional_string(value, name) for name in ("action", "distribution_id"))
-        and ("release_sequence" not in value or (_uint64(value["release_sequence"]) and value["release_sequence"] > 0))
+        and ("release_sequence" not in value or _safe_sequence(value["release_sequence"]))
         and ("clients" not in value or _string_list(value["clients"], nonempty=True))
     )
 
@@ -830,8 +855,7 @@ def _validate_grouped(value: dict[str, Any], command: str, *, verify_acquisition
             and directory["product_id"] == data["plugin"]
             and _nonempty(directory["distribution_id"])
             and directory["distribution_kind"] in {"upstream", "community_bridge", "community"}
-            and _uint64(directory["desired_release_sequence"])
-            and directory["desired_release_sequence"] > 0
+            and _safe_sequence(directory["desired_release_sequence"])
             and _directory_snapshot_coherent(directory)
             and FULL_SHA.fullmatch(str(data.get("revision", ""))) is not None
         ):
@@ -945,7 +969,7 @@ def validate_cli_envelope(
                     _keys(revision, revision_required, revision_optional)
                     and _digest(revision["tree_digest"]) and _digest(revision["manifest_digest"])
                     and all(_optional_string(revision, name) for name in ("version", "resolved_revision", "distribution_id"))
-                    and ("release_sequence" not in revision or (_uint64(revision["release_sequence"]) and revision["release_sequence"] > 0))
+                    and ("release_sequence" not in revision or _safe_sequence(revision["release_sequence"]))
                     and ("evidence" not in revision or (
                         isinstance(revision["evidence"], list)
                         and all(_validate_directory_evidence(item) for item in revision["evidence"])
@@ -1550,7 +1574,7 @@ def manager_state(
             and _nonempty(directory["product_id"])
             and _nonempty(directory["distribution_id"])
             and directory["distribution_kind"] in {"upstream", "community_bridge", "community"}
-            and _uint64(directory["desired_release_sequence"]) and directory["desired_release_sequence"] > 0
+            and _safe_sequence(directory["desired_release_sequence"])
             and _directory_snapshot_coherent(directory)
             # Evidence-only strengthening: released State.Validate does not
             # bind this product ID to the enclosing installation identity.
@@ -1628,7 +1652,7 @@ def manager_state(
             if origin_mode == "directory" and not (
                 isinstance(revision, dict)
                 and revision.get("distribution_id") == directory["distribution_id"]
-                and _uint64(revision.get("release_sequence"))
+                and _safe_sequence(revision.get("release_sequence"))
                 and 1 <= revision["release_sequence"] <= directory["desired_release_sequence"]
                 and FULL_SHA.fullmatch(str(revision.get("resolved_revision", ""))) is not None
             ):

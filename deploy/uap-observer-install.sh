@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 7ee4e83230b6a6144ff706e2ca98ac39eeb1ece00e09dc4ce8d22bfd1c4197bf
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 93857eb0b7f46765728b5f312e94a3d310bddfad77cc1bf0888dac0717172929
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256 EGRESS_ALLOWLIST EGRESS_ALLOWLIST_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=1a0164d39c1fcac8b8ac92196c1c6ad1fd8cd5cb89c6d8a23c14dba5317eeb53
+runtime_manifest_digest=dfd87ee4694100f892b90278e41bd89345d430053f73c32f3052a5ae2e6fa0d8
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -52,7 +52,7 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" "$untrusted_egress_allowlist" \
     13bf75448f9ada79a34dfeb9343adb47b8bb78d7e9cf3a010788718ea86a363e \
-    44d4b2765eb7b9d72b6482bc76df63636f3e799a89aa68ef3ffd6b92c529a4c3 \
+    4cf09a36ba1ef4e6aed31864dc4c411ca88988cfeb7f8ff9021519b8436b51f0 \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state "$installed_closure"
   observer_validate_protected_inputs "$installed_closure"
@@ -114,7 +114,7 @@ runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
 egress_proxy_source="$source_root/deploy/uap-observer-egress-proxy.py"
 runner_digest=13bf75448f9ada79a34dfeb9343adb47b8bb78d7e9cf3a010788718ea86a363e
-adapter_digest=44d4b2765eb7b9d72b6482bc76df63636f3e799a89aa68ef3ffd6b92c529a4c3
+adapter_digest=4cf09a36ba1ef4e6aed31864dc4c411ca88988cfeb7f8ff9021519b8436b51f0
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
 test -f "$runner_source"

@@ -123,6 +123,18 @@ class MemoryCache implements DiscoveryCache {
 }
 
 describe('signed public Discovery Index', () => {
+  it('accepts the safe sequence maximum and rejects both JSON/Number aliases', async () => {
+    const maximum = 9_007_199_254_740_991
+    const boundary = fixture(maximum)
+    assert.equal((await verifyDiscovery(boundary.bytes, boundary.trust, {}, now)).snapshot.sequence, maximum)
+    const aliases = JSON.parse('[9007199254740992,9007199254740993]') as number[]
+    assert.equal(aliases[0], aliases[1], 'the regression requires the known JSON/Number alias')
+    for (const unsafe of [9_007_199_254_740_992, 9_007_199_254_740_993]) {
+      const data = fixture(unsafe)
+      await assert.rejects(verifyDiscovery(data.bytes, data.trust, {}, now), /non-integer number|invalid/)
+    }
+  })
+
   it('verifies exact bytes and maps one unreviewed package to a publisher-qualified command', async () => {
     const data = fixture()
     const bundle = await verifyDiscovery(data.bytes, data.trust, {}, now)

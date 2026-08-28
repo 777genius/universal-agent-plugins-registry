@@ -33,6 +33,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from directory_publication import (  # noqa: E402
+    JSON_SAFE_INTEGER_MAX,
     MAX_ENVELOPE_BYTES,
     MAX_LATEST_BYTES,
     MAX_SNAPSHOT_BYTES,
@@ -1221,7 +1222,8 @@ def production_identity_from_materialized_ledger(root: Path) -> dict[str, Any]:
     }
     if (
         not isinstance(identity["publication_id"], str) or not identity["publication_id"]
-        or type(identity["sequence"]) is not int or identity["sequence"] < 1
+        or type(identity["sequence"]) is not int
+        or not 1 <= identity["sequence"] <= JSON_SAFE_INTEGER_MAX
         or not DIGEST.fullmatch(identity["snapshot_digest"])
         or not FULL_SHA.fullmatch(str(identity["source_commit"]))
     ):
@@ -1238,7 +1240,13 @@ def fetch_production_directory(
     The trust root is deliberately never fetched. It is copied from the exact
     checked-out repository revision after real Ed25519 verification.
     """
-    if expected_sequence < 1 or not expected_publication_id or not FULL_SHA.fullmatch(expected_source_commit) or not DIGEST.fullmatch(expected_snapshot_digest):
+    if (
+        type(expected_sequence) is not int
+        or not 1 <= expected_sequence <= JSON_SAFE_INTEGER_MAX
+        or not expected_publication_id
+        or not FULL_SHA.fullmatch(expected_source_commit)
+        or not DIGEST.fullmatch(expected_snapshot_digest)
+    ):
         raise ValueError("caller publication identity is incomplete or invalid")
     config = read_production_config()
     origin = config["production_origin"].rstrip("/") + "/"
@@ -1288,7 +1296,13 @@ def fetch_staged_directory(
     """Reacquire and verify one publication from an immutable ledger commit."""
     if repository != TRUSTED_CATALOG_REPOSITORY or not FULL_SHA.fullmatch(ledger_commit):
         raise ValueError("staged publication ledger identity is invalid")
-    if expected_sequence < 1 or not expected_publication_id or not FULL_SHA.fullmatch(expected_source_commit) or not DIGEST.fullmatch(expected_snapshot_digest):
+    if (
+        type(expected_sequence) is not int
+        or not 1 <= expected_sequence <= JSON_SAFE_INTEGER_MAX
+        or not expected_publication_id
+        or not FULL_SHA.fullmatch(expected_source_commit)
+        or not DIGEST.fullmatch(expected_snapshot_digest)
+    ):
         raise ValueError("caller publication identity is incomplete or invalid")
     origin = f"https://raw.githubusercontent.com/{repository}/{ledger_commit}/registry/schemas/1/"
 
@@ -1502,6 +1516,11 @@ def external_pr_evidence_valid(
     }
     if not isinstance(binding, dict) or set(binding) != binding_fields:
         return False, "external-fork PR capture binding is non-canonical"
+    if (
+        type(binding.get("directory_sequence")) is not int
+        or not 1 <= binding["directory_sequence"] <= JSON_SAFE_INTEGER_MAX
+    ):
+        return False, "external-fork PR capture Directory sequence is unsafe"
     expected_binding = {
         "catalog_repository": catalog_repository,
         "catalog_sha": catalog_sha,

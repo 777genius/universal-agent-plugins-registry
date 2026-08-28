@@ -31,6 +31,7 @@ TUPLE_FIELDS = {
     "adapter_version", "client_version", "os", "architecture", "observed_at",
 }
 TUPLE_DIGEST_FIELDS = {"tree_digest", "manifest_digest", "snapshot_digest", "binary_digest"}
+JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
 
 
 def strict_json_loads(encoded: bytes | str):
@@ -61,7 +62,10 @@ def strict_json_loads(encoded: bytes | str):
 def validate_release_tuple(value, plugin: str) -> None:
     if not isinstance(value, dict) or set(value) != TUPLE_FIELDS or value.get("product_id") != plugin:
         raise ValueError("profile seed release tuple is invalid")
-    if any(type(value.get(field)) is not int or value[field] < 1 for field in ("release_sequence", "snapshot_sequence")):
+    if any(
+        type(value.get(field)) is not int or not 1 <= value[field] <= JSON_SAFE_INTEGER_MAX
+        for field in ("release_sequence", "snapshot_sequence")
+    ):
         raise ValueError("profile seed release tuple sequence is invalid")
     strings = TUPLE_FIELDS - {"release_sequence", "snapshot_sequence", "client_version"}
     if any(type(value.get(field)) is not str or not value[field] for field in strings) or value.get("client_version") is not None:

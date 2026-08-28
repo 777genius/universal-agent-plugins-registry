@@ -94,6 +94,9 @@ class WorkflowContractTests(unittest.TestCase):
         for rejected in ("API.GITHUB.COM", "127.0.0.1", "*.github.com", "github.com.", "localhost"):
             self.assertIsNone(pattern.fullmatch(rejected))
         client = schema["$defs"]["client"]
+        release_tuple = schema["$defs"]["tuple"]["properties"]
+        self.assertEqual(release_tuple["release_sequence"]["maximum"], 9_007_199_254_740_991)
+        self.assertEqual(release_tuple["snapshot_sequence"]["maximum"], 9_007_199_254_740_991)
         self.assertIn("native_projection", client["required"])
         self.assertEqual(set(client["properties"]["native_projection"]["required"]), {"path", "sha256"})
         codex_rule = client["allOf"][0]["then"]
@@ -186,6 +189,21 @@ class WorkflowContractTests(unittest.TestCase):
             validate(json.dumps(valid).encode(), "codex", Path("/profile/codex"), Path("/proof/codex")),
             valid,
         )
+        boundary = json.loads(json.dumps(valid))
+        boundary["entries"][0]["tuple"].update(
+            release_sequence=9_007_199_254_740_991,
+            snapshot_sequence=9_007_199_254_740_991,
+        )
+        self.assertEqual(
+            validate(json.dumps(boundary).encode(), "codex", Path("/profile/codex"), Path("/proof/codex")),
+            boundary,
+        )
+        for field in ("release_sequence", "snapshot_sequence"):
+            for unsafe in (9_007_199_254_740_992, 9_007_199_254_740_993):
+                forged = json.loads(json.dumps(valid))
+                forged["entries"][0]["tuple"][field] = unsafe
+                with self.subTest(field=field, unsafe=unsafe), self.assertRaises(SystemExit):
+                    validate(json.dumps(forged).encode(), "codex", Path("/profile/codex"), Path("/proof/codex"))
         kiro_entries = [{
             **item,
             "native_config": {

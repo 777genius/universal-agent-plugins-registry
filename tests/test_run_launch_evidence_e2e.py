@@ -2874,32 +2874,39 @@ print((fixtures / name).read_text(), end="")
         uint_fixture = json.loads(json.dumps(absent_snapshot_nulls))
         directory = uint_fixture["installations"][0]["directory"]
         client = next(iter(uint_fixture["installations"][0]["clients"].values()))
-        directory["desired_release_sequence"] = (1 << 64) - 1
-        directory["snapshot_sequence"] = (1 << 64) - 1
+        safe_maximum = 9_007_199_254_740_991
+        directory["desired_release_sequence"] = safe_maximum
+        directory["snapshot_sequence"] = safe_maximum
         directory["snapshot_schema"] = 1
         directory["snapshot_digest"] = "snapshot"
-        client["package_revision"]["release_sequence"] = (1 << 64) - 1
-        self.assertTrue(observer.validate_released_state_v4(uint_fixture), "uint64 max is representable")
+        client["package_revision"]["release_sequence"] = safe_maximum
+        self.assertTrue(observer.validate_released_state_v4(uint_fixture), "safe maximum is representable")
         for field, value in (
+            ("desired_release_sequence", 9_007_199_254_740_992),
+            ("desired_release_sequence", 9_007_199_254_740_993),
             ("desired_release_sequence", 1 << 64),
             ("desired_release_sequence", -1),
             ("desired_release_sequence", True),
             ("snapshot_sequence", 1 << 64),
+            ("snapshot_sequence", 9_007_199_254_740_992),
+            ("snapshot_sequence", 9_007_199_254_740_993),
         ):
             invalid = json.loads(json.dumps(uint_fixture)); invalid["installations"][0]["directory"][field] = value
             self.assertFalse(observer.validate_released_state_v4(invalid), (field, value))
-        overflow_revision = json.loads(json.dumps(uint_fixture))
-        next(iter(overflow_revision["installations"][0]["clients"].values()))["package_revision"]["release_sequence"] = 1 << 64
-        self.assertFalse(observer.validate_released_state_v4(overflow_revision))
+        for unsafe in (9_007_199_254_740_992, 9_007_199_254_740_993, 1 << 64):
+            overflow_revision = json.loads(json.dumps(uint_fixture))
+            next(iter(overflow_revision["installations"][0]["clients"].values()))["package_revision"]["release_sequence"] = unsafe
+            self.assertFalse(observer.validate_released_state_v4(overflow_revision))
         catalog_uint = json.loads(json.dumps(fixture))
         catalog_revision = next(iter(catalog_uint["installations"][0]["clients"].values()))["package_revision"]
         catalog_revision["catalog_evidence"] = {
-            "current_evidence": [{"release_sequence": (1 << 64) - 1}],
-            "compatibility": {"cursor": {"evidence": [{"release_sequence": (1 << 64) - 1}]}},
+            "current_evidence": [{"release_sequence": safe_maximum}],
+            "compatibility": {"cursor": {"evidence": [{"release_sequence": safe_maximum}]}},
         }
         self.assertTrue(observer.validate_released_state_v4(catalog_uint))
-        catalog_revision["catalog_evidence"]["compatibility"]["cursor"]["evidence"][0]["release_sequence"] = 1 << 64
-        self.assertFalse(observer.validate_released_state_v4(catalog_uint))
+        for unsafe in (9_007_199_254_740_992, 9_007_199_254_740_993):
+            catalog_revision["catalog_evidence"]["compatibility"]["cursor"]["evidence"][0]["release_sequence"] = unsafe
+            self.assertFalse(observer.validate_released_state_v4(catalog_uint))
         null_catalog = json.loads(json.dumps(fixture))
         null_revision = next(iter(null_catalog["installations"][0]["clients"].values()))["package_revision"]
         null_revision["catalog_evidence"] = {
@@ -2931,9 +2938,13 @@ print((fixtures / name).read_text(), end="")
 
         directory_vector = json.loads(json.dumps(uint_fixture))
         raw = json.dumps(directory_vector, separators=(",", ":"))
-        token = str((1 << 64) - 1)
+        token = str(safe_maximum)
         parsed_max = observer.strict_state_json_loads(raw)
         self.assertTrue(observer.validate_released_state_v4(parsed_max))
+        raw_uint64 = raw.replace(token, str((1 << 64) - 1), 1)
+        decoded_uint64 = observer.strict_state_json_loads(raw_uint64)
+        self.assertTrue(observer._released_state_v4_decodes(decoded_uint64))
+        self.assertFalse(observer.validate_released_state_v4(decoded_uint64))
         self.assertFalse(observer.validate_released_state_v4(
             observer.strict_state_json_loads(raw.replace(token, "18446744073709551616", 1)),
         ))
@@ -4815,6 +4826,8 @@ else: raise SystemExit(2)
             "invalid_capture_challenge": {**record, "challenge": "not-a-challenge"},
             "wrong_release": {**record, "binding": {**binding, "release_tag": "v0.1.13"}},
             "wrong_directory": {**record, "binding": {**binding, "directory_sequence": 8}},
+            "unsafe_directory_alias_low": {**record, "binding": {**binding, "directory_sequence": 9_007_199_254_740_992}},
+            "unsafe_directory_alias_high": {**record, "binding": {**binding, "directory_sequence": 9_007_199_254_740_993}},
             "base_binding_mismatch": {**record, "binding": {**binding, "catalog_sha": "4" * 40}},
             "wrong_base": {**record, "base_sha": "4" * 40},
             "unexpected_merge": {**record, "merge_commit_sha": "4" * 40},
@@ -4830,9 +4843,25 @@ else: raise SystemExit(2)
                 self.assertFalse(verify(value)[0])
 
         schema_path = ROOT / "tests/e2e/schemas/external-pr-evidence.schema.json"
-        jsonschema.Draft202012Validator(json.loads(schema_path.read_text())).validate(record)
+        validator = jsonschema.Draft202012Validator(json.loads(schema_path.read_text()))
+        boundary_record = {**record, "binding": {**binding, "directory_sequence": 9_007_199_254_740_991}}
+        boundary_snapshot = {**snapshot, "sequence": 9_007_199_254_740_991}
+        validator.validate(boundary_record)
+        self.assertTrue(e2e.external_pr_evidence_valid(
+            boundary_record, catalog_repository=e2e.TRUSTED_CATALOG_REPOSITORY,
+            catalog_sha="c" * 40, snapshot=boundary_snapshot,
+            snapshot_digest="sha256:" + "d" * 64,
+            release_repository=e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
+            release_tag=e2e.TRUSTED_CLI_RELEASE_TAG, release_commit="e" * 40,
+            release_manifest_digest="sha256:" + "f" * 64,
+            now=now + timedelta(days=365),
+        )[0])
+        validator.validate(record)
         with self.assertRaises(jsonschema.ValidationError):
-            jsonschema.Draft202012Validator(json.loads(schema_path.read_text())).validate(negatives["failed_check"])
+            validator.validate(negatives["failed_check"])
+        for name in ("unsafe_directory_alias_low", "unsafe_directory_alias_high"):
+            with self.subTest(schema=name), self.assertRaises(jsonschema.ValidationError):
+                validator.validate(negatives[name])
 
     def test_authoritative_resolver_preserves_complete_targets_and_exact_fallback_reason(self) -> None:
         harness = self.fixture_harness()
@@ -4977,6 +5006,33 @@ print("accepted")
                     Path(tmp) / "directory", expected_publication_id="fixture-1", expected_sequence=16,
                     expected_snapshot_digest="sha256:" + "b" * 64, expected_source_commit="d" * 40,
                 )
+
+    def test_public_directory_sequence_is_capped_before_any_network_access(self) -> None:
+        arguments = {
+            "expected_publication_id": "fixture-1",
+            "expected_snapshot_digest": "sha256:" + "b" * 64,
+            "expected_source_commit": "d" * 40,
+        }
+        for fetcher in (e2e.fetch_production_directory, e2e.fetch_staged_directory):
+            for unsafe in (9_007_199_254_740_992, 9_007_199_254_740_993):
+                with self.subTest(fetcher=fetcher.__name__, unsafe=unsafe), \
+                     tempfile.TemporaryDirectory() as tmp, \
+                     mock.patch.object(e2e, "bounded_https_get") as network:
+                    call = {**arguments, "expected_sequence": unsafe}
+                    if fetcher is e2e.fetch_staged_directory:
+                        call.update(repository=e2e.TRUSTED_CATALOG_REPOSITORY,
+                                    ledger_commit="e" * 40)
+                    with self.assertRaisesRegex(ValueError, "identity is incomplete or invalid"):
+                        fetcher(Path(tmp) / "directory", **call)
+                    network.assert_not_called()
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(e2e, "bounded_https_get", side_effect=RuntimeError("network seam")) as network:
+            with self.assertRaisesRegex(RuntimeError, "network seam"):
+                e2e.fetch_production_directory(
+                    Path(tmp) / "directory", expected_sequence=9_007_199_254_740_991,
+                    **arguments,
+                )
+            network.assert_called_once()
 
     def test_production_n_minus_one_does_not_block_valid_staged_n(self) -> None:
         latest = json.loads((PUBLICATION / "latest.json").read_bytes())
