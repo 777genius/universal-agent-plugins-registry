@@ -212,10 +212,11 @@ class AuthenticatedBinaryExecutionBinding(dict[str, Any]):
         self._authority = authority
         self._consumed = False
 
-    def __deepcopy__(self, memo: dict[int, Any]) -> AuthenticatedBinaryExecutionBinding:
-        duplicate = type(self)(copy.deepcopy(dict(self), memo), authority=self._authority)
-        duplicate._consumed = self._consumed
-        return duplicate
+    def __copy__(self) -> dict[str, Any]:
+        return dict(self)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> dict[str, Any]:
+        return copy.deepcopy(dict(self), memo)
 
 
 def exact_plugin_data_lifecycle_argv(scenario_targets: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
@@ -3401,7 +3402,7 @@ class AuthenticatedBinaryExecutionSession:
             "parent_path": str(self.parent_path),
             "pre": pre, "post": post,
         }, authority=_EXECUTION_BINDING_AUTHORITY)
-        self.command_observations.append(copy.deepcopy(binding))
+        self.command_observations.append(copy.deepcopy(dict(binding)))
         self._next_command += 1
         if completed.returncode != 0:
             self._compromised = True

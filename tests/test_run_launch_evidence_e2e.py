@@ -291,6 +291,26 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                     self.assertFalse(verify(execution_binding=candidate)["verified"])
             self.assertFalse(verify(execution_binding=dict(issued_binding()))["verified"])
 
+            original = issued_binding()
+            pre_consumption_copies = (
+                copy.copy(original), copy.deepcopy(original), dict(original),
+                json.loads(json.dumps(original)),
+            )
+            self.assertTrue(verify(execution_binding=original)["verified"])
+            self.assertFalse(verify(execution_binding=original)["verified"])
+            for candidate in (*pre_consumption_copies, copy.copy(original), copy.deepcopy(original)):
+                with self.subTest(copy_type=type(candidate).__name__):
+                    self.assertIs(type(candidate), dict)
+                    self.assertFalse(verify(execution_binding=candidate)["verified"])
+            forged = dict(original)
+            forged["_authority"] = observer._EXECUTION_BINDING_AUTHORITY
+            forged["_consumed"] = False
+            self.assertFalse(verify(execution_binding=forged)["verified"])
+            with self.assertRaisesRegex(TypeError, "session-issued"):
+                observer.AuthenticatedBinaryExecutionBinding(
+                    dict(original), authority=object(),
+                )
+
             (workspace / "mutation").write_text("changed")
             self.assertFalse(verify()["verified"])
             (workspace / "mutation").unlink()
@@ -331,6 +351,9 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             self.assertEqual(binding["pre"]["descriptor_identity"], binding["post"]["descriptor_identity"])
             self.assertEqual(binding["pre"]["path_identity"], binding["post"]["path_identity"])
             self.assertEqual(binding["pre"]["parent_identity"], binding["post"]["parent_identity"])
+            self.assertEqual(session.command_observations, [dict(binding)])
+            self.assertIs(type(session.command_observations[0]), dict)
+            self.assertIs(type(copy.deepcopy(session.command_observations[0])), dict)
             self.assertTrue(session._closed)
 
     def test_revoked_probe_rejects_outside_unbound_and_aliased_writable_roots(self) -> None:
@@ -646,6 +669,10 @@ import run_launch_evidence_e2e
                     execution_session._inotify_fd,
                 )
                 binary_execution = execution_session.finalize()
+                self.assertEqual(binary_execution["commands"], execution_session.command_observations)
+                self.assertEqual(len(binary_execution["commands"]), 7)
+                self.assertTrue(all(type(command) is dict for command in binary_execution["commands"]))
+                self.assertEqual(json.loads(json.dumps(binary_execution["commands"])), binary_execution["commands"])
                 for descriptor in execution_descriptors:
                     with self.assertRaises(OSError):
                         os.fstat(descriptor)
