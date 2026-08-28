@@ -41,6 +41,14 @@ from directory_publication import (
     validate_latest,
     validate_snapshot_semantics,
 )
+from publication_trust_policy import (
+    load_publication_trust_config,
+    validate_publication_eligibility_trust,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TRUST_CONFIG = ROOT / "registry" / "publication" / "config.json"
 
 
 def snapshot_evidence_for_sequence(
@@ -163,6 +171,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--candidate-digest", required=True)
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--trusted-keys", type=Path, required=True)
     parser.add_argument("--key-id", required=True)
@@ -179,6 +188,15 @@ def main() -> int:
         validate_bound_candidate(candidate)
         require(canonical_json(candidate) == candidate_body, "candidate is not canonical JSON")
         require(candidate_digest(candidate_body) == args.candidate_digest, "candidate digest mismatch")
+        require(
+            args.config.resolve() == TRUST_CONFIG.resolve(),
+            f"--config must name the trusted-source publication config {TRUST_CONFIG}",
+        )
+        config = load_publication_trust_config(TRUST_CONFIG)
+        validate_publication_eligibility_trust(
+            candidate["products"], candidate["distributions"],
+            candidate["evidence"], config,
+        )
         now = parse_timestamp(args.now, "now")
         trusted = load_public_keys(args.trusted_keys)
         require(args.key_id in trusted, f"active key ID {args.key_id!r} is not trusted")

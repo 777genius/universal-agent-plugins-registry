@@ -29,7 +29,6 @@ from build_registry import (
 )
 from directory_publication import (
     CANDIDATE_SCHEMA,
-    DIGEST_RE,
     PublicationError,
     SHA_RE,
     atomic_write,
@@ -43,19 +42,16 @@ from directory_publication import (
     validate_with_schema,
 )
 from directory_publication_cas import CasError, validate_marker
+from publication_trust_policy import (
+    load_publication_trust_config,
+    validate_publication_eligibility_trust,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SCHEMA = ROOT / "schemas" / "directory-source.schema.json"
 EVIDENCE_ARTIFACT_SCHEMA = ROOT / "schemas" / "directory-evidence-artifact.schema.json"
 LAUNCH_EVIDENCE_SCHEMA = ROOT / "tests" / "e2e" / "schemas" / "launch-evidence.schema.json"
-CONFIG_FIELDS = {"schema_version", "repository", "snapshot_lifetime_days"}
-OPTIONAL_CONFIG_FIELDS = {
-    "local_evidence_main_anchor", "trusted_evidence_workflows", "trusted_external_evidence",
-}
-TRUSTED_WORKFLOW_FIELDS = {
-    "workflow", "protected_source_ref", "source_digest_policy", "allow_self_hosted_runners",
-}
 GIT = "/usr/bin/git"
 GH = "/usr/bin/gh"
 ACQUISITION_TIMEOUT_SECONDS = 180
@@ -119,51 +115,7 @@ def repository_override(overrides: dict[str, Path], repository: str) -> Path | N
     return next((path for name, path in overrides.items() if name.casefold() == identity), None)
 
 
-def load_config(path: Path) -> dict[str, Any]:
-    value = read_json(path, max_bytes=64 << 10)
-    require(
-        isinstance(value, dict)
-        and CONFIG_FIELDS <= set(value) <= CONFIG_FIELDS | OPTIONAL_CONFIG_FIELDS,
-        f"{path}: invalid publication config fields",
-    )
-    require(value["schema_version"] == 1, f"{path}: schema_version must be 1")
-    require(isinstance(value["repository"], str) and "/" in value["repository"], f"{path}: invalid repository")
-    require(isinstance(value["snapshot_lifetime_days"], int) and 1 <= value["snapshot_lifetime_days"] <= 30, f"{path}: invalid lifetime")
-    anchor = value.get("local_evidence_main_anchor")
-    require(
-        anchor is None or isinstance(anchor, str) and SHA_RE.fullmatch(anchor) is not None,
-        f"{path}: invalid local evidence main anchor",
-    )
-    workflows = value.setdefault("trusted_evidence_workflows", [])
-    require(isinstance(workflows, list), f"{path}: invalid trusted evidence workflows")
-    workflow_names: list[str] = []
-    for item in workflows:
-        require(isinstance(item, dict) and set(item) == TRUSTED_WORKFLOW_FIELDS, f"{path}: invalid trusted evidence workflow policy")
-        require(
-            isinstance(item["workflow"], str) and "/.github/workflows/" in item["workflow"]
-            and isinstance(item["protected_source_ref"], str) and item["protected_source_ref"].startswith("refs/heads/")
-            and item["source_digest_policy"] in {"artifact_revision", "protected_workflow_source"}
-            and type(item["allow_self_hosted_runners"]) is bool,
-            f"{path}: invalid trusted evidence workflow policy",
-        )
-        workflow_names.append(item["workflow"])
-    require(len(workflow_names) == len(set(workflow_names)), f"{path}: duplicate trusted evidence workflow")
-    external = value.setdefault("trusted_external_evidence", [])
-    require(isinstance(external, list), f"{path}: invalid trusted external evidence")
-    for item in external:
-        require(
-            isinstance(item, dict) and set(item) == {"repository", "revision", "path", "digest"},
-            f"{path}: invalid trusted external evidence entry",
-        )
-        require(
-            isinstance(item["repository"], str) and item["repository"].count("/") == 1
-            and isinstance(item["revision"], str) and SHA_RE.fullmatch(item["revision"]) is not None
-            and isinstance(item["path"], str) and item["path"]
-            and not item["path"].startswith("/") and "\\" not in item["path"] and ".." not in Path(item["path"]).parts
-            and isinstance(item["digest"], str) and DIGEST_RE.fullmatch(item["digest"]) is not None,
-            f"{path}: invalid trusted external evidence identity",
-        )
-    return value
+load_config = load_publication_trust_config
 
 
 def validate_local_evidence_anchor(
@@ -607,54 +559,7 @@ def selected_evidence(
     return projected
 
 
-def validate_upstream_default_evidence(
-    products: list[dict[str, Any]], distributions: list[dict[str, Any]],
-    evidence: list[dict[str, Any]],
-) -> None:
-    distributions_by_id = {item["id"]: item for item in distributions}
-    evidence_by_id = {item["id"]: item for item in evidence}
-    for product in products:
-        distribution = distributions_by_id[product["default_distribution"]]
-        if distribution["kind"] != "upstream" or distribution["status"] != "active":
-            continue
-        policies = policy_map(distribution)
-        required = {
-            component for component, state in product["minimum_capabilities"].items()
-            if state == "required"
-        }
-        eligible = [
-            release for release in distribution["releases"]
-            if policies[release["sequence"]]["status"] == "active"
-            and required.issubset(release["components"])
-        ]
-        # A safety publication must be able to leave a product with no eligible
-        # release. Resolution remains fail-closed because only an active
-        # distribution with an active release is selectable.
-        if not eligible:
-            continue
-        release = eligible[-1]
-        policy = policies[release["sequence"]]
-        passed = {
-            observation.get("client")
-            for evidence_id in policy["current_evidence"]
-            for observation in [evidence_by_id[evidence_id]]
-            if observation.get("distribution_id") == distribution["id"]
-            and observation.get("release_sequence") == release["sequence"]
-            and observation.get("package_tree_digest") == release["tree_digest"]
-            and observation.get("level") == "materialization"
-            and observation.get("outcome") == "passed"
-            and observation.get("trust", {}).get("kind") == "github_actions"
-            and observation["trust"].get("workflow", "").startswith(
-                observation.get("artifact", {}).get("repository", "") + "/.github/workflows/"
-            )
-            and observation["trust"].get("source_digest")
-            == observation.get("artifact", {}).get("revision")
-        }
-        missing = sorted(target["client"] for target in policy["targets"] if target["client"] not in passed)
-        require(
-            not missing,
-            f"{product['id']}: upstream default {distribution['id']}@{release['sequence']} lacks exact passed materialization evidence for {','.join(missing)}",
-        )
+validate_upstream_default_evidence = validate_publication_eligibility_trust
 
 
 def validate_reproduced_bridges(
@@ -997,7 +902,9 @@ def build_candidate(
                 public_evidence_id(evidence_id)
                 for evidence_id in policy["current_evidence"]
             ]
-    validate_upstream_default_evidence(products, output_distributions, evidence)
+    validate_publication_eligibility_trust(
+        products, output_distributions, evidence, config,
+    )
     revocations = [
         {"distribution_id": distribution["id"], "release_sequence": policy["release_sequence"]}
         for distribution in output_distributions for policy in distribution["release_policies"]

@@ -12,6 +12,7 @@ on:
       - "scripts/directory_publication_cas.py"
       - "scripts/materialize_launch_evidence.py"
       - "scripts/prepare_directory_publication.py"
+      - "scripts/publication_trust_policy.py"
       - "scripts/sign_directory_publication.py"
       - ".github/workflows/directory-publication.yml"
   schedule:
@@ -352,6 +353,7 @@ jobs:
           /usr/bin/python3 -I scripts/sign_directory_publication.py \
             --candidate ../candidate/candidate.json \
             --candidate-digest "${EXPECTED_CANDIDATE_DIGEST}" \
+            --config registry/publication/config.json \
             --ledger ../ledger \
             --trusted-keys registry/publication/trusted-keys.json \
             --key-id "${DIRECTORY_SIGNING_KEY_ID}" \

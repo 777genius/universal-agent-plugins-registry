@@ -639,10 +639,21 @@ class PublicationLifecycleTests(unittest.TestCase):
             "trust": {
                 "kind": "github_actions",
                 "workflow": "example/evidence/.github/workflows/evidence.yml",
+                "source_ref": "refs/heads/main",
                 "source_digest": "a" * 40,
             },
         }
-        prepare.validate_upstream_default_evidence([product], [distribution], [observation])
+        trust_config = {
+            "trusted_evidence_workflows": [{
+                "workflow": "example/evidence/.github/workflows/evidence.yml",
+                "protected_source_ref": "refs/heads/main",
+                "source_digest_policy": "artifact_revision",
+                "allow_self_hosted_runners": False,
+            }],
+        }
+        prepare.validate_upstream_default_evidence(
+            [product], [distribution], [observation], trust_config,
+        )
         for field, value in (
             ("distribution_id", "other/demo"),
             ("release_sequence", 8),
@@ -653,25 +664,35 @@ class PublicationLifecycleTests(unittest.TestCase):
         ):
             changed = copy.deepcopy(observation)
             changed[field] = value
-            with self.subTest(field=field), self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
-                prepare.validate_upstream_default_evidence([product], [distribution], [changed])
+            expected = (
+                "evidence release/tree identity mismatch"
+                if field in {"distribution_id", "release_sequence", "package_tree_digest"}
+                else "lacks exact passed materialization evidence for codex"
+            )
+            with self.subTest(field=field), self.assertRaisesRegex(publication.PublicationError, expected):
+                prepare.validate_upstream_default_evidence(
+                    [product], [distribution], [changed], trust_config,
+                )
 
         reviewed_external = copy.deepcopy(observation)
         reviewed_external["trust"] = {"kind": "reviewed_external"}
         with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
             prepare.validate_upstream_default_evidence(
                 [product], [distribution], [reviewed_external],
+                trust_config,
             )
         repository_mismatch = copy.deepcopy(observation)
         repository_mismatch["artifact"]["repository"] = "other/evidence"
-        with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
+        with self.assertRaisesRegex(publication.PublicationError, "workflow and artifact repositories differ"):
             prepare.validate_upstream_default_evidence(
                 [product], [distribution], [repository_mismatch],
+                trust_config,
             )
 
     def signer(self, root: Path, candidate: Path, publication_id: str, now: str) -> subprocess.CompletedProcess[str]:
         value = json.loads(candidate.read_bytes())
         value["publication_id"] = publication_id
+        value["distributions"][0]["status"] = "suspended"
         candidate.write_bytes(publication.canonical_json(value))
         digest = publication.candidate_digest(candidate.read_bytes())
         seed = fixture_json("test-private-seeds.json")["test-current"]
@@ -685,6 +706,7 @@ class PublicationLifecycleTests(unittest.TestCase):
             "sign_directory_publication.py",
             "--candidate", str(candidate),
             "--candidate-digest", digest,
+            "--config", str(ROOT / "registry" / "publication" / "config.json"),
             "--ledger", str(root),
             "--trusted-keys", str(FIXTURES / "trusted-keys.json"),
             "--key-id", "test-current",
