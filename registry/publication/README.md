@@ -91,7 +91,7 @@ Before enabling `.github/workflows/directory-publication.yml`:
    The production marker gate targets only
    `directory-publication-schema-1-production`, restricts creations and updates,
    and names only the installed App as an always-allowed bypass actor. Its
-   deletion guard blocks deletion with no bypass actor. Unlike sequence and
+   deletion guard blocks deletion with **no bypass actors**. Unlike sequence and
    launch-approval tags, this marker is intentionally advanced after each
    successful Pages deployment and never before it.
    In addition, split `main` protection into two rulesets before enabling
