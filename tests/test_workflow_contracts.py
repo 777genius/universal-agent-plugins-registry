@@ -62,11 +62,22 @@ class WorkflowContractTests(unittest.TestCase):
             )
             for value in accepted + rejected:
                 completed = subprocess.run(
-                    ["/bin/bash", "-c", script], env={"PATH": "/usr/bin:/bin:/usr/local/bin", "PUBLICATION_SEQUENCE": value},
+                    ["/bin/bash", "-c", script], env={
+                        "PATH": "/usr/bin:/bin:/usr/local/bin", "EVENT_NAME": "workflow_dispatch",
+                        "PUBLICATION_SEQUENCE": value,
+                    },
                     text=True, capture_output=True,
                 )
                 with self.subTest(workflow=workflow["name"], value=value):
                     self.assertEqual(completed.returncode == 0, value in accepted, completed.stderr)
+            if workflow is live:
+                scheduled = subprocess.run(
+                    ["/bin/bash", "-c", script], env={
+                        "PATH": "/usr/bin:/bin:/usr/local/bin", "EVENT_NAME": "schedule",
+                        "PUBLICATION_SEQUENCE": "",
+                    }, text=True, capture_output=True,
+                )
+                self.assertEqual(scheduled.returncode, 0, scheduled.stderr)
         for name in (
             "native-release", "node22-npm-facade", "aggregate-one-release",
             "protected-observer-inputs", "enforced-stable-gate", "attest-stable-evidence",
@@ -1017,6 +1028,22 @@ class WorkflowContractTests(unittest.TestCase):
             "github.event_name == 'schedule' || inputs.consent || inputs.run_scheduled_regression",
         )
 
+    def test_live_sequence_gate_dominates_every_effectful_job(self) -> None:
+        workflow = load(LIVE)
+        gate_name = "validate-publication-sequence"
+        gate = workflow["jobs"][gate_name]
+        self.assertNotIn("if", gate)
+        self.assertEqual(gate["steps"][0]["env"]["EVENT_NAME"], "${{ github.event_name }}")
+        effectful = set(workflow["jobs"]) - {gate_name}
+        for name in effectful:
+            job = workflow["jobs"][name]
+            needs = job.get("needs", [])
+            needs = {needs} if isinstance(needs, str) else set(needs)
+            with self.subTest(job=name):
+                self.assertIn(gate_name, needs)
+                if "always()" in job.get("if", ""):
+                    self.assertIn("needs.validate-publication-sequence.result == 'success'", job["if"])
+
     def test_reusable_protected_jobs_gate_on_caller_inputs_not_event_name(self) -> None:
         launch = load(LAUNCH)
         protected_jobs = {
@@ -1046,12 +1073,14 @@ class WorkflowContractTests(unittest.TestCase):
     def test_live_terminal_gate_rejects_skipped_or_failed_nested_evidence(self) -> None:
         workflow = load(LIVE)
         gate = workflow["jobs"]["required-live-e2e"]
-        self.assertIn("always() && inputs.consent", gate["if"])
+        self.assertIn("always()", gate["if"])
+        self.assertIn("needs.validate-publication-sequence.result == 'success'", gate["if"])
+        self.assertIn("inputs.consent", gate["if"])
         self.assertIn("inputs.caller_ref == 'refs/heads/main'", gate["if"])
         self.assertIn("directory-publication.yml@refs/heads/main", gate["if"])
         self.assertEqual(
             set(gate["needs"]),
-            {"required-stable-launch-evidence", "public-read-flows"},
+            {"validate-publication-sequence", "required-stable-launch-evidence", "public-read-flows"},
         )
         step = gate["steps"][0]
         self.assertEqual(

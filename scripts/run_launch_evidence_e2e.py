@@ -2623,7 +2623,7 @@ class LaunchHarness:
             self.add(
                 scenario, "context7", client, "materialization", outcome, reason,
                 tuple_value=self.evidence_tuple("context7", targets, client_version=find_value(value, {"client_version"}) if value else None, dependency="repository-owned-observer"),
-                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "expected_postcondition_id": scenario, "command_traces": value.get("command_traces", []) if value else [], "manager_and_native_before_after": observations_present, "resolution": self.directory_release("context7", targets)},
+                details={"evidence_basis": "repository_owned_disposable_observer", "runtime_proof": False, "native_discovery_proof": False, "expected_postcondition_id": scenario, "proof": proof, "command_traces": value.get("command_traces", []) if value else [], "manager_and_native_before_after": observations_present, "resolution": self.directory_release("context7", targets)},
             )
 
     def native_platform_matrix(self) -> None:

@@ -130,12 +130,20 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             )
             probe = observer.RevokedTargetProbe(
                 "revoked_operations_boundary", "add", "context7", context["release"]["distribution_id"],
-                observer.REVOKED_TARGET_PROBE_ARGV, digest, 1, "revoked-release", "revoked", True,
+                observer.REVOKED_TARGET_PROBE_ARGV, digest, 1,
+                observer.REVOKED_TARGET_PROBE_EXIT_CODE,
+                observer.REVOKED_TARGET_PROBE_REJECTION_CLASS,
+                observer.REVOKED_TARGET_PROBE_REJECTION_REASON,
+                "", observer.revoked_target_probe_stderr(context["release"]["distribution_id"], 1), True,
             )
             argv = list(observer.REVOKED_TARGET_PROBE_ARGV)
             observer.authorize_scenario_command_target(argv, ("cursor",), environment=environment, revoked_probe=probe)
             near_misses = (
                 (argv, ("cursor",), environment, probe._replace(operation="remove")),
+                (argv, ("cursor",), environment, probe._replace(expected_exit_code=42)),
+                (argv, ("cursor",), environment, probe._replace(expected_rejection_class="timeout")),
+                (argv, ("cursor",), environment, probe._replace(expected_rejection_reason="revoked")),
+                (argv, ("cursor",), environment, probe._replace(expected_stderr="revoked")),
                 (["remove", "context7", "--target", "codex", "--format", "json"], ("cursor",), environment, probe),
                 (argv, ("cursor",), {**environment, "AGENTPLUGINS_DIRECTORY_SNAPSHOT": "missing"}, probe),
                 (argv, ("cursor",), environment, probe._replace(scenario_id="directory_offline")),
@@ -145,6 +153,122 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                     observer.authorize_scenario_command_target(
                         candidate, targets, environment=candidate_environment, revoked_probe=candidate_probe,
                     )
+
+    def test_revoked_probe_verifier_binds_exact_result_and_complete_disposable_root(self) -> None:
+        context = self.complete_scenario_context()
+        with tempfile.TemporaryDirectory() as temporary:
+            scenario_root = Path(temporary) / "scenario"
+            workspace = scenario_root / "workspace"
+            for relative in ("workspace", "home", "manager", "config", "cache", "evidence", "tmp"):
+                (scenario_root / relative).mkdir(parents=True)
+            environment, digest = observer.conformance_directory(
+                workspace, context, sequence=12_001, revoked=True,
+            )
+            environment.update({
+                "HOME": str(scenario_root / "home"), "USERPROFILE": str(scenario_root / "home"),
+                "AGENTPLUGINS_HOME": str(scenario_root / "manager"),
+                "XDG_CONFIG_HOME": str(scenario_root / "config"),
+                "XDG_CACHE_HOME": str(scenario_root / "cache"),
+                "AGENTPLUGINS_EVIDENCE_ROOT": str(scenario_root / "evidence"),
+                "TMPDIR": str(scenario_root / "tmp"), "TMP": str(scenario_root / "tmp"),
+                "TEMP": str(scenario_root / "tmp"), "GIT_CONFIG_GLOBAL": str(scenario_root / "gitconfig"),
+            })
+            probe = observer.RevokedTargetProbe(
+                "revoked_operations_boundary", "add", "context7", context["release"]["distribution_id"],
+                observer.REVOKED_TARGET_PROBE_ARGV, digest, 1,
+                observer.REVOKED_TARGET_PROBE_EXIT_CODE,
+                observer.REVOKED_TARGET_PROBE_REJECTION_CLASS,
+                observer.REVOKED_TARGET_PROBE_REJECTION_REASON,
+                "", observer.revoked_target_probe_stderr(context["release"]["distribution_id"], 1), True,
+            )
+            root, bindings = observer.revoked_probe_scenario_root(workspace, environment)
+            before = observer.filesystem_snapshot(root)
+
+            def verify(
+                returncode=probe.expected_exit_code, stdout=probe.expected_stdout,
+                stderr=probe.expected_stderr, candidate_probe=probe,
+                process_argv=("binary", *observer.REVOKED_TARGET_PROBE_ARGV),
+            ):
+                completed = subprocess.CompletedProcess(
+                    list(process_argv), returncode, stdout=stdout, stderr=stderr,
+                )
+                return observer.verify_revoked_target_probe_result(
+                    completed, candidate_probe, argv=list(probe.target_argv), environment=environment,
+                    scenario_root=root, writable_bindings=bindings, before=before,
+                    after=observer.filesystem_snapshot(root),
+                )
+
+            valid = verify()
+            self.assertTrue(valid["verified"])
+            self.assertEqual(valid["exit"], {"expected": 1, "observed": 1, "bound": True})
+            self.assertEqual(valid["rejection"]["observed_class"], "revoked-release")
+            self.assertEqual(valid["rejection"]["observed_reason"], "revoked Directory release")
+            self.assertEqual(
+                probe.expected_stderr,
+                "Resolving and validating one Agent Plugin package for every selected target...\n"
+                "agentplugins: no eligible directory release for \"context7\": "
+                f"{context['release']['distribution_id']}: release 1 is revoked\n",
+            )
+            near_misses = {
+                "different exit": verify(returncode=42),
+                "extra process argv": verify(process_argv=("binary", "--verbose", *probe.target_argv)),
+                "unexpected stdout": verify(stdout="{}\n"),
+                "omitted progress": verify(stderr=probe.expected_stderr.split("\n", 1)[1]),
+                "wrong selector": verify(stderr=probe.expected_stderr.replace('"context7"', '"other"')),
+                "wrong distribution": verify(stderr=probe.expected_stderr.replace(
+                    context["release"]["distribution_id"], "fixture/wrong-distribution",
+                )),
+                "wrong sequence": verify(stderr=probe.expected_stderr.replace("release 1", "release 2")),
+                "wrong reason": verify(stderr=probe.expected_stderr.replace("is revoked", "is suspended")),
+                "reversed lines": verify(stderr="\n".join(
+                    reversed(probe.expected_stderr.removesuffix("\n").splitlines()),
+                ) + "\n"),
+                "extra output": verify(stderr=probe.expected_stderr + "unexpected\n"),
+                "wrong class descriptor": verify(candidate_probe=probe._replace(expected_rejection_class="timeout")),
+                "wrong reason descriptor": verify(candidate_probe=probe._replace(expected_rejection_reason="revoked")),
+            }
+            for label, result in near_misses.items():
+                with self.subTest(label=label):
+                    self.assertFalse(result["verified"])
+
+            (workspace / "mutation").write_text("changed")
+            self.assertFalse(verify()["verified"])
+            (workspace / "mutation").unlink()
+            (scenario_root / "cache" / "mutation").write_text("changed")
+            self.assertFalse(verify()["verified"])
+
+    def test_revoked_probe_rejects_outside_unbound_and_aliased_writable_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            scenario_root = Path(temporary) / "scenario"
+            workspace = scenario_root / "workspace"
+            roots = {
+                "HOME": scenario_root / "home", "USERPROFILE": scenario_root / "home",
+                "AGENTPLUGINS_HOME": scenario_root / "manager", "XDG_CONFIG_HOME": scenario_root / "config",
+                "XDG_CACHE_HOME": scenario_root / "cache", "AGENTPLUGINS_EVIDENCE_ROOT": scenario_root / "evidence",
+                "TMPDIR": scenario_root / "tmp", "TMP": scenario_root / "tmp", "TEMP": scenario_root / "tmp",
+            }
+            for path in {workspace, *roots.values()}:
+                path.mkdir(parents=True, exist_ok=True)
+            environment = {name: str(path) for name, path in roots.items()}
+            directory = workspace / "directory"
+            directory.mkdir()
+            for filename in ("snapshot.json", "envelope.json", "trust.json"):
+                (directory / filename).write_text("{}")
+            environment.update({
+                "AGENTPLUGINS_DIRECTORY_CACHE": str(workspace / "directory-cache"),
+                "AGENTPLUGINS_DIRECTORY_SNAPSHOT": str(directory / "snapshot.json"),
+                "AGENTPLUGINS_DIRECTORY_ENVELOPE": str(directory / "envelope.json"),
+                "AGENTPLUGINS_DIRECTORY_TRUST": str(directory / "trust.json"),
+                "GIT_CONFIG_GLOBAL": str(scenario_root / "gitconfig"),
+            })
+            observer.revoked_probe_scenario_root(workspace, environment)
+            for mutation in (
+                {**environment, "TMPDIR": ""},
+                {**environment, "XDG_CACHE_HOME": str(Path(temporary))},
+                {**environment, "AGENTPLUGINS_EVIDENCE_ROOT": environment["XDG_CONFIG_HOME"]},
+            ):
+                with self.subTest(environment=mutation), self.assertRaisesRegex(ValueError, "unbound|outside|aliased|exactly bound"):
+                    observer.revoked_probe_scenario_root(workspace, mutation)
 
     def test_managed_rollback_constructs_argv_from_exact_contract_tuple(self) -> None:
         process = mock.Mock(returncode=1)

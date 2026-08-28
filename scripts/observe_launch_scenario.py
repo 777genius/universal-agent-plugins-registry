@@ -79,6 +79,18 @@ def validate_scenario_target_contract(config: dict[str, Any]) -> dict[str, tuple
 
 SCENARIO_CLIENT_TARGETS = validate_scenario_target_contract(_CONFIG)
 REVOKED_TARGET_PROBE_ARGV = ("add", "context7", "--target", "codex", "--format", "json")
+REVOKED_TARGET_PROBE_EXIT_CODE = 1
+REVOKED_TARGET_PROBE_REJECTION_CLASS = "revoked-release"
+REVOKED_TARGET_PROBE_REJECTION_REASON = "revoked Directory release"
+
+
+def revoked_target_probe_stderr(distribution_id: str, release_sequence: int) -> str:
+    """Return the complete diagnostic emitted by the pinned 0.1.18 binary."""
+    return (
+        "Resolving and validating one Agent Plugin package for every selected target...\n"
+        "agentplugins: no eligible directory release for \"context7\": "
+        f"{distribution_id}: release {release_sequence} is revoked\n"
+    )
 
 
 def scenario_client_targets(scenario: str) -> tuple[str, ...]:
@@ -110,8 +122,11 @@ class RevokedTargetProbe(NamedTuple):
     target_argv: tuple[str, ...]
     revoked_snapshot_digest: str
     revoked_release_sequence: int
+    expected_exit_code: int
     expected_rejection_class: str
     expected_rejection_reason: str
+    expected_stdout: str
+    expected_stderr: str
     zero_mutation_required: bool
 
     def authorizes(self, argv: list[str], environment: dict[str, str] | None) -> bool:
@@ -132,8 +147,13 @@ class RevokedTargetProbe(NamedTuple):
             and policy.get("release_sequence") == self.revoked_release_sequence
             and policy.get("status") == "revoked"
             and sha256_digest(canonical_json(snapshot)) == self.revoked_snapshot_digest
-            and self.expected_rejection_class == "revoked-release"
-            and self.expected_rejection_reason == "revoked"
+            and self.expected_exit_code == REVOKED_TARGET_PROBE_EXIT_CODE
+            and self.expected_rejection_class == REVOKED_TARGET_PROBE_REJECTION_CLASS
+            and self.expected_rejection_reason == REVOKED_TARGET_PROBE_REJECTION_REASON
+            and self.expected_stdout == ""
+            and self.expected_stderr == revoked_target_probe_stderr(
+                self.source_distribution, self.revoked_release_sequence,
+            )
             and self.zero_mutation_required is True
         )
 
@@ -1537,6 +1557,138 @@ def filesystem_snapshot(root: Path) -> dict[str, dict[str, Any]]:
     """Capture a complete stable no-follow proof, including empty directories."""
     snapshot, _ = _stable_tree_snapshot(root)
     return snapshot
+
+
+def revoked_probe_scenario_root(cwd: Path, environment: dict[str, str]) -> tuple[Path, dict[str, str]]:
+    """Bind every probe write surface to one real, non-aliased disposable root."""
+    required = {
+        "home": "HOME",
+        "userprofile": "USERPROFILE",
+        "manager": "AGENTPLUGINS_HOME",
+        "config": "XDG_CONFIG_HOME",
+        "cache": "XDG_CACHE_HOME",
+        "evidence": "AGENTPLUGINS_EVIDENCE_ROOT",
+        "temporary": "TMPDIR",
+    }
+    try:
+        lexical_cwd = cwd.absolute()
+        resolved_cwd = cwd.resolve(strict=True)
+        scenario_root = lexical_cwd.parent
+        resolved_root = scenario_root.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("revoked probe has an unbound writable root") from error
+    if lexical_cwd != resolved_cwd or scenario_root != resolved_root:
+        raise ValueError("revoked probe writable root is aliased")
+
+    bindings: dict[str, str] = {"workspace": str(resolved_cwd)}
+    resolved: dict[str, Path] = {"workspace": resolved_cwd}
+    for label, variable in required.items():
+        raw = environment.get(variable)
+        if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
+            raise ValueError("revoked probe has an unbound writable root")
+        path = Path(raw)
+        try:
+            canonical = path.resolve(strict=True)
+        except OSError as error:
+            raise ValueError("revoked probe has an unbound writable root") from error
+        if path.absolute() != canonical:
+            raise ValueError("revoked probe writable root is aliased")
+        if canonical == resolved_root or resolved_root not in canonical.parents:
+            raise ValueError("revoked probe writable root is outside the disposable scenario root")
+        bindings[label] = str(canonical)
+        resolved[label] = canonical
+
+    if resolved["home"] != resolved["userprofile"]:
+        raise ValueError("revoked probe HOME and USERPROFILE are not exactly bound")
+    distinct = (
+        resolved["workspace"], resolved["home"], resolved["manager"], resolved["config"],
+        resolved["cache"], resolved["evidence"], resolved["temporary"],
+    )
+    if len(set(distinct)) != len(distinct):
+        raise ValueError("revoked probe writable roots are aliased")
+    for alias in ("TMP", "TEMP"):
+        if environment.get(alias) != environment["TMPDIR"]:
+            raise ValueError("revoked probe temporary roots are not exactly bound")
+    contained_paths = {
+        "directory_cache": "AGENTPLUGINS_DIRECTORY_CACHE",
+        "directory_snapshot": "AGENTPLUGINS_DIRECTORY_SNAPSHOT",
+        "directory_envelope": "AGENTPLUGINS_DIRECTORY_ENVELOPE",
+        "directory_trust": "AGENTPLUGINS_DIRECTORY_TRUST",
+        "git_config": "GIT_CONFIG_GLOBAL",
+    }
+    for label, variable in contained_paths.items():
+        raw = environment.get(variable)
+        if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
+            raise ValueError("revoked probe has an unbound writable root")
+        path = Path(raw)
+        canonical = path.resolve(strict=False)
+        if path.absolute() != canonical:
+            raise ValueError("revoked probe writable root is aliased")
+        if canonical == resolved_root or resolved_root not in canonical.parents:
+            raise ValueError("revoked probe writable root is outside the disposable scenario root")
+        bindings[label] = str(canonical)
+    return resolved_root, bindings
+
+
+def verify_revoked_target_probe_result(
+    completed: subprocess.CompletedProcess[str], probe: RevokedTargetProbe, *,
+    argv: list[str], environment: dict[str, str], scenario_root: Path,
+    writable_bindings: dict[str, str], before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Verify the full pinned process result and whole-root zero-mutation proof."""
+    process_argv = list(completed.args) if isinstance(completed.args, (list, tuple)) else []
+    argv_bound = bool(
+        argv == list(probe.target_argv)
+        and len(process_argv) == len(argv) + 1
+        and process_argv[1:] == argv
+    )
+    descriptor_bound = probe.authorizes(argv, environment)
+    exit_bound = completed.returncode == probe.expected_exit_code
+    output_bound = completed.stdout == probe.expected_stdout and completed.stderr == probe.expected_stderr
+    if output_bound:
+        observed_class = REVOKED_TARGET_PROBE_REJECTION_CLASS
+        observed_reason = REVOKED_TARGET_PROBE_REJECTION_REASON
+    else:
+        observed_class = "unrecognized-process-output"
+        observed_reason = "process output did not match the pinned revoked-release contract"
+    class_bound = observed_class == probe.expected_rejection_class
+    reason_bound = observed_reason == probe.expected_rejection_reason
+    zero_mutation = before == after
+    before_digest = sha256_digest(canonical_json(before))
+    after_digest = sha256_digest(canonical_json(after))
+    verified = bool(
+        descriptor_bound and argv_bound and exit_bound and output_bound and class_bound
+        and reason_bound and probe.zero_mutation_required and zero_mutation
+    )
+    return {
+        "verified": verified,
+        "descriptor_bound": descriptor_bound,
+        "argv_bound": argv_bound,
+        "exit": {"expected": probe.expected_exit_code, "observed": completed.returncode, "bound": exit_bound},
+        "rejection": {
+            "expected_class": probe.expected_rejection_class, "observed_class": observed_class,
+            "class_bound": class_bound, "expected_reason": probe.expected_rejection_reason,
+            "observed_reason": observed_reason, "reason_bound": reason_bound,
+        },
+        "output": {
+            "bound": output_bound,
+            "expected_stdout_digest": sha256_digest(probe.expected_stdout.encode()),
+            "observed_stdout_digest": sha256_digest(completed.stdout.encode()),
+            "expected_stderr_digest": sha256_digest(probe.expected_stderr.encode()),
+            "observed_stderr_digest": sha256_digest(completed.stderr.encode()),
+        },
+        "snapshot": {
+            "digest": probe.revoked_snapshot_digest,
+            "release_sequence": probe.revoked_release_sequence,
+            "distribution_id": probe.source_distribution,
+        },
+        "zero_mutation": {
+            "required": probe.zero_mutation_required, "verified": zero_mutation,
+            "scenario_root": str(scenario_root), "writable_bindings": writable_bindings,
+            "before_digest": before_digest, "after_digest": after_digest,
+        },
+    }
 
 
 def find_value(value: Any, names: set[str]) -> Any:
@@ -6450,18 +6602,26 @@ def revoked_boundary_scenario(
         source_distribution=context["release"]["distribution_id"],
         target_argv=REVOKED_TARGET_PROBE_ARGV,
         revoked_snapshot_digest=revoked_digest, revoked_release_sequence=1,
-        expected_rejection_class="revoked-release", expected_rejection_reason="revoked",
+        expected_exit_code=REVOKED_TARGET_PROBE_EXIT_CODE,
+        expected_rejection_class=REVOKED_TARGET_PROBE_REJECTION_CLASS,
+        expected_rejection_reason=REVOKED_TARGET_PROBE_REJECTION_REASON,
+        expected_stdout="",
+        expected_stderr=revoked_target_probe_stderr(context["release"]["distribution_id"], 1),
         zero_mutation_required=True,
     )
+    probe_root, writable_bindings = revoked_probe_scenario_root(root, revoked_env)
+    before_probe_root = filesystem_snapshot(probe_root)
     new_target = execute(
         list(REVOKED_TARGET_PROBE_ARGV), revoked_env, probe=probe,
     )
+    after_probe_root = filesystem_snapshot(probe_root)
     after_probe = observe(home, manager)
-    probe_diagnostic = (new_target.stdout + "\n" + new_target.stderr).lower()
-    probe_verified = bool(
-        new_target.returncode != 0 and probe.expected_rejection_reason in probe_diagnostic
-        and before_probe == after_probe
+    probe_verifier = verify_revoked_target_probe_result(
+        new_target, probe, argv=list(REVOKED_TARGET_PROBE_ARGV), environment=revoked_env,
+        scenario_root=probe_root, writable_bindings=writable_bindings,
+        before=before_probe_root, after=after_probe_root,
     )
+    probe_verified = probe_verifier["verified"] and before_probe == after_probe
     repair = execute(["repair", "context7", "--target", target, "--format", "json"], revoked_env)
     identity_after_blocks = manager_identity(manager, "context7")
     update = execute(["update", "context7", "--target", target, "--format", "json"], safe_env)
@@ -6482,6 +6642,7 @@ def revoked_boundary_scenario(
         "install_blocked": blocked_install.returncode != 0 and manager_facts(fresh_manager, "context7")["installation_records"] == 0 and materialized_product_mentions(fresh_home, fresh_manager, "context7", ("cursor",))["cursor"] == 0,
         "new_target_blocked": probe_verified and identity_unchanged,
         "exact_revoked_target_probe_verified": probe_verified,
+        "revoked_target_verifier": probe_verifier,
         "repair_blocked": repair.returncode != 0 and identity_unchanged,
         "remove_available": remove.returncode == 0,
         "safe_update_available": update.returncode == 0 and identity_after_update.get("desired_release_sequence") == 2 and find_value(update_value, {"mutated"}) is True,
