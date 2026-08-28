@@ -44,7 +44,7 @@ MAXIMUM = sequence_boundaries.JSON_SAFE_INTEGER_MAX
 ALIASES = (MAXIMUM + 1, MAXIMUM + 2)
 
 
-def challenge_context(snapshot_sequence: int = MAXIMUM) -> dict[str, object]:
+def challenge_context(snapshot_sequence: int = MAXIMUM, scenario_id: str = "directory_offline") -> dict[str, object]:
     snapshot = json.loads((ROOT / "tests/fixtures/directory-publication/snapshot.json").read_text())
     product = snapshot["products"][0]
     distribution = next(item for item in snapshot["distributions"] if item["id"] == product["default_distribution"])
@@ -70,13 +70,14 @@ def challenge_context(snapshot_sequence: int = MAXIMUM) -> dict[str, object]:
         "expected_version": "0.1.18", "snapshot_sequence": snapshot_sequence,
         "release": release, "catalog_repository": "777genius/universal-agent-plugins",
         "directory_product": product, "directory_distribution": distribution,
-        "source_identity": identity,
+        "source_identity": identity, "scenario_id": scenario_id,
     }
     framed = json.dumps({key: context[key] for key in (
         "github_sha", "run_id", "run_attempt", "release_manifest_digest", "directory_digest",
         "scenario_contract_digest", "root_id", "nonce",
     )}, sort_keys=True, separators=(",", ":")).encode()
     context["value"] = hashlib.sha256(launch_observer.CHALLENGE_DOMAIN + framed).hexdigest()
+    context["context_digest"] = launch_observer.scenario_challenge_context_digest(context)
     return context
 
 
@@ -283,7 +284,7 @@ class LaunchContextBoundaryTests(unittest.TestCase):
     def test_cli_authenticates_nested_directory_before_run_boundary(self) -> None:
         context = challenge_context()
         context["directory_distribution"]["releases"][0]["package_source"].pop("revision")
-        argv = ["observe", "--binary", "binary", "--scenario", "directory_offline", "--root", "root", "--challenge-context", "challenge"]
+        argv = ["observe", "--binary", "binary", "--scenario", "directory_offline", "--root", "root", "--challenge-context", "challenge", "--expected-context-digest", context["context_digest"]]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(Path, "read_bytes", return_value=json.dumps(context).encode()), mock.patch.object(
             launch_observer, "run",
         ) as run:
@@ -346,7 +347,7 @@ class LaunchContextBoundaryTests(unittest.TestCase):
             launch_observer, "sticky_scenario", return_value=(True, sticky_value),
         ) as sticky_dispatch:
             result = launch_observer.run(
-                Path("binary"), "repair_sticky_distribution", Path("root"), challenge_context(),
+                Path("binary"), "repair_sticky_distribution", Path("root"), challenge_context(scenario_id="repair_sticky_distribution"),
             )
             self.assertEqual(result["outcome"], "passed")
             sticky_dispatch.assert_called_once()
@@ -356,6 +357,8 @@ class LaunchContextBoundaryTests(unittest.TestCase):
         policy["targets"].append({**copy.deepcopy(policy["targets"][0]), "client": "kiro"})
         multi["release"]["compatible_clients"] = ["codex", "cursor", "kiro"]
         multi["release"]["resolved_targets"] = ["codex", "cursor", "kiro"]
+        multi["scenario_id"] = "context7_grouped_lifecycle"
+        multi["context_digest"] = launch_observer.scenario_challenge_context_digest(multi)
         lifecycle_value = {
             "command_traces": [], "values": {}, "operation_observations": [],
             "operation_outcomes": {}, "identities": {}, "tuple": {},
@@ -371,11 +374,13 @@ class LaunchContextBoundaryTests(unittest.TestCase):
     def test_direct_run_and_cli_share_scenario_target_guard(self) -> None:
         context = challenge_context()
         context["release"]["resolved_targets"] = ["codex"]
+        context["context_digest"] = launch_observer.scenario_challenge_context_digest(context)
         self.assert_launch_rejected_before_effects(context)
 
         argv = [
             "observe", "--binary", "binary", "--scenario", "directory_offline",
             "--root", "root", "--challenge-context", "challenge",
+            "--expected-context-digest", context["context_digest"],
         ]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(
             Path, "read_bytes", return_value=json.dumps(context).encode(),

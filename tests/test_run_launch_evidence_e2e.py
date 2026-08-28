@@ -5,6 +5,7 @@ import base64
 import ctypes
 import errno
 import hashlib
+import copy
 import json
 import os
 import platform
@@ -97,6 +98,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
 
     def test_harness_and_observer_resolve_every_scenario_from_same_contract(self) -> None:
         harness = self.fixture_harness()
+        self.assertEqual(len(observer.EXPECTED_SCENARIOS), 53)
         self.assertEqual(harness.scenario_targets, observer.SCENARIO_CLIENT_TARGETS)
         for scenario in observer.EXPECTED_SCENARIOS:
             self.assertEqual(harness.scenario_targets[scenario], observer.scenario_client_targets(scenario))
@@ -110,6 +112,40 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 "argv": ["info", "context7", "--target", "cursor", "--format", "json"],
             }])
 
+    def test_target_boundary_rejects_contract_change_and_old_blanket_bypass_before_process(self) -> None:
+        counterexamples = (
+            (["add", "context7", "--target", "cursor", "--format", "json"], ("codex",)),
+            (["remove", "context7", "--target", "codex", "--format", "json"], ("cursor",)),
+        )
+        for argv, targets in counterexamples:
+            with self.subTest(argv=argv), mock.patch.object(observer.subprocess, "run") as process, self.assertRaisesRegex(ValueError, "drift"):
+                observer.traced(Path("binary"), argv, Path("root"), "challenge", scenario_targets=targets)
+            process.assert_not_called()
+
+    def test_exact_revoked_probe_descriptor_is_accepted_and_near_misses_rejected(self) -> None:
+        context = self.complete_scenario_context()
+        with tempfile.TemporaryDirectory() as temporary:
+            environment, digest = observer.conformance_directory(
+                Path(temporary), context, sequence=12_001, revoked=True,
+            )
+            probe = observer.RevokedTargetProbe(
+                "revoked_operations_boundary", "add", "context7", context["release"]["distribution_id"],
+                observer.REVOKED_TARGET_PROBE_ARGV, digest, 1, "revoked-release", "revoked", True,
+            )
+            argv = list(observer.REVOKED_TARGET_PROBE_ARGV)
+            observer.authorize_scenario_command_target(argv, ("cursor",), environment=environment, revoked_probe=probe)
+            near_misses = (
+                (argv, ("cursor",), environment, probe._replace(operation="remove")),
+                (["remove", "context7", "--target", "codex", "--format", "json"], ("cursor",), environment, probe),
+                (argv, ("cursor",), {**environment, "AGENTPLUGINS_DIRECTORY_SNAPSHOT": "missing"}, probe),
+                (argv, ("cursor",), environment, probe._replace(scenario_id="directory_offline")),
+            )
+            for candidate, targets, candidate_environment, candidate_probe in near_misses:
+                with self.subTest(candidate=candidate, probe=candidate_probe), self.assertRaisesRegex(ValueError, "drift"):
+                    observer.authorize_scenario_command_target(
+                        candidate, targets, environment=candidate_environment, revoked_probe=candidate_probe,
+                    )
+
     def test_managed_rollback_constructs_argv_from_exact_contract_tuple(self) -> None:
         process = mock.Mock(returncode=1)
         process.poll.return_value = 1
@@ -119,7 +155,7 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
         ), mock.patch.object(observer, "manager_facts", return_value={"installation_records": 0}), mock.patch.object(
             observer, "materialized_product_mentions", return_value={"codex": 0, "cursor": 0, "kiro": 0},
         ), mock.patch.dict(os.environ, {"HOME": "/tmp/contract-home", "AGENTPLUGINS_HOME": "/tmp/contract-manager"}, clear=False):
-            observer.managed_rollback_scenario(Path("binary"), Path("root"), "challenge")
+            observer.managed_rollback_scenario(Path("binary"), ("codex", "cursor", "kiro"), Path("root"), "challenge")
         self.assertEqual(
             popen.call_args.args[0][1:],
             ["add", "context7", "--target", "codex,cursor,kiro", "--format", "json"],
@@ -430,7 +466,8 @@ import run_launch_evidence_e2e
         inherited_home = os.environ.get("HOME")
         observed: dict[str, object] = {}
 
-        def lifecycle(binary: Path, root: Path, challenge: str, *, binary_session):
+        def lifecycle(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, *, binary_session):
+            self.assertEqual(scenario_targets, ("cursor",))
             observed.update({
                 "binary": binary, "root": root, "challenge": challenge,
                 "home": os.environ.get("HOME"), "manager": os.environ.get("AGENTPLUGINS_HOME"),
@@ -1089,6 +1126,83 @@ with tempfile.TemporaryDirectory() as temporary:
         )
         self.assertTrue(e2e.challenge_context_valid(first))
         self.assertFalse(e2e.challenge_context_valid({**first, "directory_digest": "sha256:" + "d" * 64}))
+
+    def complete_scenario_context(self) -> dict:
+        snapshot = json.loads((ROOT / "tests/fixtures/directory-publication/snapshot.json").read_text())
+        product = snapshot["products"][0]
+        distribution = snapshot["distributions"][0]
+        selected = distribution["releases"][0]
+        policy = distribution["release_policies"][0]
+        challenge = e2e.make_challenge(
+            "a" * 40, "12", "3", "push", "refs/heads/main",
+            "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main",
+            "sha256:" + "b" * 64, "sha256:" + "c" * 64, e2e.sha256_file(e2e.SCENARIOS), Path("/tmp/unused"),
+        )
+        release = {
+            "product_id": product["id"], "distribution_id": distribution["id"],
+            "distribution_kind": distribution["kind"], "release_sequence": selected["sequence"],
+            "package_version": selected["package_version"], "tree_digest": selected["tree_digest"],
+            "manifest_digest": selected["manifest_digest"],
+            "source_repository": selected["package_source"]["repository"],
+            "source_revision": selected["package_source"]["revision"],
+            "source_path": selected["package_source"]["path"],
+            "compatible_clients": sorted(target["client"] for target in policy["targets"]),
+            "resolved_targets": ["codex"], "fallback_reason": None,
+        }
+        identity = {
+            **{key: release[key] for key in observer.CHALLENGE_SOURCE_IDENTITY_FIELDS if key != "canonical_source"},
+            "canonical_source": f'https://github.com/{release["source_repository"]}@{release["source_revision"]}//{release["source_path"]}',
+        }
+        context = {
+            **challenge, "binary_digest": "sha256:" + "d" * 64, "expected_version": "0.1.18",
+            "snapshot_sequence": snapshot["sequence"], "release": release,
+            "catalog_repository": "777genius/universal-agent-plugins",
+            "directory_product": product, "directory_distribution": distribution,
+            "source_identity": identity, "scenario_id": "state_schema_2_migration",
+        }
+        context["context_digest"] = observer.scenario_challenge_context_digest(context)
+        return context
+
+    def test_complete_scenario_digest_rejects_replay_mutation_and_substitution_before_effects(self) -> None:
+        valid = self.complete_scenario_context()
+        self.assertEqual(observer.validate_scenario_challenge_context(valid, "state_schema_2_migration"), valid)
+        cases = {}
+        nested = copy.deepcopy(valid); nested["release"]["source_path"] = "plugins/other"; cases["nested_mutation"] = nested
+        cases["digest_substitution"] = {**valid, "context_digest": "sha256:" + "f" * 64}
+        replay = copy.deepcopy(valid); replay["scenario_id"] = "repair_codex"; replay["context_digest"] = observer.scenario_challenge_context_digest(replay); cases["another_scenario_replay"] = replay
+        for label, context in cases.items():
+            with self.subTest(label=label), mock.patch.object(observer, "observe") as observation, mock.patch.object(
+                observer.subprocess, "run",
+            ) as process, mock.patch.object(observer.subprocess, "Popen") as popen, self.assertRaises(ValueError):
+                observer.validate_scenario_challenge_context(context, "state_schema_2_migration")
+            observation.assert_not_called(); process.assert_not_called(); popen.assert_not_called()
+
+    def test_coherent_source_and_digest_substitution_differs_from_retained_digest(self) -> None:
+        retained = self.complete_scenario_context()
+        attack = copy.deepcopy(retained)
+        source = {"repository": "attacker/packages", "revision": "e" * 40, "path": "plugins/demo"}
+        selected = attack["directory_distribution"]["releases"][0]
+        selected["package_source"] = source
+        attack["release"].update(source_repository=source["repository"], source_revision=source["revision"], source_path=source["path"])
+        attack["source_identity"].update(
+            source_repository=source["repository"], source_revision=source["revision"], source_path=source["path"],
+            canonical_source=f'https://github.com/{source["repository"]}@{source["revision"]}//{source["path"]}',
+        )
+        attack["context_digest"] = observer.scenario_challenge_context_digest(attack)
+        self.assertEqual(observer.validate_scenario_challenge_context(attack, "state_schema_2_migration"), attack)
+        self.assertNotEqual(attack["context_digest"], retained["context_digest"])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "challenge.json"; path.write_text(json.dumps(attack))
+            argv = [
+                "observe_launch_scenario.py", "--binary", str(Path(temporary) / "binary"),
+                "--scenario", "state_schema_2_migration", "--root", temporary,
+                "--challenge-context", str(path), "--expected-context-digest", retained["context_digest"],
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(observer, "run") as dispatch, mock.patch.object(
+                observer, "observe",
+            ) as observation, mock.patch.object(observer.subprocess, "run") as process, self.assertRaisesRegex(ValueError, "retained"):
+                observer.main()
+            dispatch.assert_not_called(); observation.assert_not_called(); process.assert_not_called()
 
     def test_exported_root_identity_is_logical_not_temporary_path_derived(self) -> None:
         challenge = {
@@ -1776,17 +1890,20 @@ with tempfile.TemporaryDirectory() as temporary:
                 "manager_observer": {}, "native_observer": {},
             }
             completed = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+            def observed(*args, **kwargs):
+                context_path = Path(args[0][args[0].index("--challenge-context") + 1])
+                payload["challenge_context_digest"] = json.loads(context_path.read_text())["context_digest"]
+                return subprocess.CompletedProcess([], 0, json.dumps(payload), "")
             with mock.patch.object(harness, "directory_release", return_value=release), mock.patch.object(
-                e2e.subprocess, "run", return_value=completed,
+                e2e.subprocess, "run", side_effect=observed,
             ) as run:
                 outcome, _, _ = harness.driven_scenario("shared_copilot_vscode_backend")
             self.assertEqual(outcome, "passed")
             self.assertEqual(run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0], str(copilot.parent))
 
             payload["scenario_id"] = "missing_runtime_zero_mutation"
-            completed = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
             with mock.patch.object(harness, "directory_release", return_value=release), mock.patch.object(
-                e2e.subprocess, "run", return_value=completed,
+                e2e.subprocess, "run", side_effect=observed,
             ) as run:
                 harness.driven_scenario("missing_runtime_zero_mutation")
             self.assertNotEqual(run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0], str(copilot.parent))
@@ -2206,7 +2323,7 @@ with tempfile.TemporaryDirectory() as temporary:
                     binding["native_objects"][0]["managed_digest"] = managed
                     binding["receipts"][0]["after_digest"] = managed
 
-            def invoke(binary: Path, argv: list[str], cwd: Path, challenge: str):
+            def invoke(binary: Path, argv: list[str], cwd: Path, challenge: str, **kwargs):
                 del binary, cwd
                 command = argv[0]
                 if command == "add":
@@ -3372,7 +3489,7 @@ else: raise SystemExit(2)
             root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
             workspace = root / "workspace"; workspace.mkdir()
             with mock.patch.dict(os.environ, {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager")}, clear=False):
-                passed, value = observer.migration_scenario(binary, workspace, "challenge")
+                passed, value = observer.migration_scenario(binary, ("codex",), workspace, "challenge")
         self.assertFalse(passed, value)
         self.assertFalse(value["proof"]["migration_applied"])
 
@@ -3411,7 +3528,7 @@ else:
             with mock.patch.dict(os.environ, {
                 "HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager"),
             }, clear=False):
-                passed, value = observer.migration_scenario(binary, workspace, "challenge")
+                passed, value = observer.migration_scenario(binary, ("codex",), workspace, "challenge")
         self.assertTrue(passed, value)
         self.assertTrue(all(value["proof"].values()))
         target_commands = [trace["argv"] for trace in value["command_traces"] if "--target" in trace["argv"]]
@@ -3437,7 +3554,7 @@ print(json.dumps({"schema_version": 1, "command": sys.argv[1], "result": "succes
             root = Path(tmp); binary = root / "agentplugins"; binary.write_text(fake); binary.chmod(0o700)
             workspace = root / "workspace"; workspace.mkdir()
             with mock.patch.dict(os.environ, {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager")}, clear=False):
-                passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+                passed, value = observer.plugin_data_scenario(binary, ("cursor",), workspace, "challenge")
         self.assertFalse(passed, value)
         self.assertIsNone(value["initial_data_receipt"])
 
@@ -4245,7 +4362,7 @@ print("{{}}")
                 if mode == "extra-replacement": environment["EXTRA_REPLACEMENT_EPOCH"] = "1"
                 if mode == "symlink-excursion": environment["SYMLINK_STATE_EXCURSION"] = "1"
                 with mock.patch.dict(os.environ, environment, clear=False):
-                    passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+                    passed, value = observer.plugin_data_scenario(binary, ("cursor",), workspace, "challenge")
                 expected = mode == "atomic-state"
                 self.assertEqual(passed, expected, value)
                 self.assertEqual(value["proof"]["explicit_owned_purge_deleted"], expected)
@@ -4262,7 +4379,7 @@ print("{{}}")
                         "ATTACK_MODE": attack_mode, "OUTSIDE": str(outside),
                     }
                     with mock.patch.dict(os.environ, environment, clear=False):
-                        passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+                        passed, value = observer.plugin_data_scenario(binary, ("cursor",), workspace, "challenge")
                     self.assertFalse(passed, value)
                     if attacked_command == "info":
                         self.assertNotEqual(value["command_traces"][1]["exit_code"], 0, value)
@@ -4278,7 +4395,7 @@ print("{{}}")
                 "PYTHONDONTWRITEBYTECODE": "1", "DETACHED_PROOF": str(detached_proof),
             }
             with mock.patch.dict(os.environ, environment, clear=False):
-                passed, value = observer.plugin_data_scenario(binary, workspace, "challenge")
+                passed, value = observer.plugin_data_scenario(binary, ("cursor",), workspace, "challenge")
             time.sleep(0.5)
             self.assertTrue(passed, value)
             self.assertEqual(detached_proof.read_text(), "denied")
@@ -4424,7 +4541,7 @@ else: raise SystemExit(2)
                 if adversarial:
                     environment["MUTATE_DURING_REFUSAL"] = "1"
                 with mock.patch.dict(os.environ, environment, clear=False):
-                    passed, value = observer.direct_full_sha_scenario(binary, workspace, "challenge", context)
+                    passed, value = observer.direct_full_sha_scenario(binary, ("cursor",), workspace, "challenge", context)
                 self.assertEqual(passed, not adversarial, value)
                 self.assertEqual(value["proof"]["direct_update_refused_requires_switch"], not adversarial)
     def test_evidence_boundary_rejects_incomplete_or_forged_acquisition(self) -> None:
@@ -5050,7 +5167,7 @@ print("accepted")
             workspace = root / "workspace"
             workspace.mkdir()
             with mock.patch.dict(os.environ, {"HOME": str(root / "home"), "AGENTPLUGINS_HOME": str(root / "manager")}, clear=False):
-                passed, value = observer.no_hidden_yes_scenario(binary, workspace, "a" * 64)
+                passed, value = observer.no_hidden_yes_scenario(binary, ("cursor",), workspace, "a" * 64)
         self.assertFalse(passed)
         self.assertFalse(value["proof"]["manager_unchanged"])
         self.assertFalse(value["proof"]["unknown_option_reported"])

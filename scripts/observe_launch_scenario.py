@@ -29,7 +29,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, NamedTuple
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -78,6 +78,7 @@ def validate_scenario_target_contract(config: dict[str, Any]) -> dict[str, tuple
 
 
 SCENARIO_CLIENT_TARGETS = validate_scenario_target_contract(_CONFIG)
+REVOKED_TARGET_PROBE_ARGV = ("add", "context7", "--target", "codex", "--format", "json")
 
 
 def scenario_client_targets(scenario: str) -> tuple[str, ...]:
@@ -93,6 +94,67 @@ def scenario_target_argument(scenario: str) -> str:
     return ",".join(scenario_client_targets(scenario))
 
 
+def contract_target_argument(scenario_targets: tuple[str, ...]) -> str:
+    if not scenario_targets or tuple(scenario_targets) != tuple(dict.fromkeys(scenario_targets)):
+        raise ValueError("scenario target tuple is empty or duplicated")
+    if any(target not in CLIENTS for target in scenario_targets):
+        raise ValueError("scenario target tuple contains an unsupported client")
+    return ",".join(scenario_targets)
+
+
+class RevokedTargetProbe(NamedTuple):
+    scenario_id: str
+    operation: str
+    product: str
+    source_distribution: str
+    target_argv: tuple[str, ...]
+    revoked_snapshot_digest: str
+    revoked_release_sequence: int
+    expected_rejection_class: str
+    expected_rejection_reason: str
+    zero_mutation_required: bool
+
+    def authorizes(self, argv: list[str], environment: dict[str, str] | None) -> bool:
+        if environment is None:
+            return False
+        snapshot_path = environment.get("AGENTPLUGINS_DIRECTORY_SNAPSHOT")
+        try:
+            snapshot = strict_json_loads(Path(snapshot_path).read_bytes()) if snapshot_path else None
+            distribution = snapshot["distributions"][0]
+            policy = distribution["release_policies"][0]
+        except (OSError, KeyError, IndexError, TypeError, ValueError):
+            return False
+        return bool(
+            self.scenario_id == "revoked_operations_boundary"
+            and argv == list(self.target_argv)
+            and argv[:2] == [self.operation, self.product]
+            and distribution.get("id") == self.source_distribution
+            and policy.get("release_sequence") == self.revoked_release_sequence
+            and policy.get("status") == "revoked"
+            and sha256_digest(canonical_json(snapshot)) == self.revoked_snapshot_digest
+            and self.expected_rejection_class == "revoked-release"
+            and self.expected_rejection_reason == "revoked"
+            and self.zero_mutation_required is True
+        )
+
+
+def authorize_scenario_command_target(
+    argv: list[str], scenario_targets: tuple[str, ...], *,
+    environment: dict[str, str] | None = None, revoked_probe: RevokedTargetProbe | None = None,
+) -> None:
+    """Enforce the exact contract target immediately before process creation."""
+    if "--target" not in argv:
+        return
+    positions = [index for index, item in enumerate(argv) if item == "--target"]
+    if len(positions) != 1 or positions[0] + 1 >= len(argv):
+        raise ValueError("scenario command has malformed target argv")
+    if argv[positions[0] + 1] == contract_target_argument(scenario_targets):
+        return
+    if revoked_probe is not None and revoked_probe.authorizes(argv, environment):
+        return
+    raise ValueError("scenario command targets drift from the immutable contract")
+
+
 def validate_scenario_command_targets(scenario: str, traces: list[dict[str, Any]]) -> None:
     """Fail closed if any target-bearing execution drifts from the contract."""
     expected = scenario_target_argument(scenario)
@@ -103,7 +165,7 @@ def validate_scenario_command_targets(scenario: str, traces: list[dict[str, Any]
         positions = [index for index, item in enumerate(argv) if item == "--target"]
         if len(positions) != 1 or positions[0] + 1 >= len(argv):
             raise ValueError("scenario command has malformed target argv")
-        if trace.get("non_contract_target_probe") is True:
+        if scenario == "revoked_operations_boundary" and tuple(argv) == REVOKED_TARGET_PROBE_ARGV:
             continue
         if argv[positions[0] + 1] != expected:
             raise ValueError("scenario command targets drift from the immutable contract")
@@ -117,14 +179,23 @@ CONFORMANCE_KEY_ID = "launch-conformance-only"
 CONFORMANCE_SEED = hashlib.sha256(b"UAP launch evidence conformance key; never production").digest()
 RELEASED_AGENTPLUGINS_0_1_18_SIZE = 11_677_880
 RELEASED_AGENTPLUGINS_0_1_18_SHA256 = "9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779"
-EXACT_PLUGIN_DATA_LIFECYCLE_ARGV = (
-    ("add", "./package-plugin-data", "--target", "cursor", "--format", "json"),
-    ("info", "e2e-external-package", "--target", "cursor", "--format", "json"),
-    ("update", "e2e-external-package", "--target", "cursor", "--format", "json"),
-    ("repair", "e2e-external-package", "--target", "cursor", "--format", "json"),
-    ("switch", "e2e-external-package", "--to", "./package-plugin-data-alternate", "--format", "json"),
-    ("remove", "e2e-external-package", "--target", "cursor", "--format", "json"),
-    ("remove", "e2e-external-package", "--purge-data", "--format", "json"),
+
+
+def exact_plugin_data_lifecycle_argv(scenario_targets: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    target = contract_target_argument(scenario_targets)
+    return (
+        ("add", "./package-plugin-data", "--target", target, "--format", "json"),
+        ("info", "e2e-external-package", "--target", target, "--format", "json"),
+        ("update", "e2e-external-package", "--target", target, "--format", "json"),
+        ("repair", "e2e-external-package", "--target", target, "--format", "json"),
+        ("switch", "e2e-external-package", "--to", "./package-plugin-data-alternate", "--format", "json"),
+        ("remove", "e2e-external-package", "--target", target, "--format", "json"),
+        ("remove", "e2e-external-package", "--purge-data", "--format", "json"),
+    )
+
+
+EXACT_PLUGIN_DATA_LIFECYCLE_ARGV = exact_plugin_data_lifecycle_argv(
+    scenario_client_targets("plugin_data_lifecycle_boundary")
 )
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_REPOSITORY = re.compile(
@@ -154,6 +225,7 @@ CHALLENGE_CONTEXT_FIELDS = frozenset({
     "release_manifest_digest", "directory_digest", "scenario_contract_digest", "root_id",
     "binary_digest", "expected_version", "snapshot_sequence", "release", "catalog_repository",
     "directory_product", "directory_distribution", "source_identity",
+    "scenario_id", "context_digest",
 })
 CHALLENGE_RELEASE_FIELDS = frozenset({
     "product_id", "distribution_id", "distribution_kind", "release_sequence", "package_version",
@@ -259,6 +331,12 @@ def _context_public_sequences_are_safe(value: Any) -> bool:
     )
 
 
+def scenario_challenge_context_digest(value: dict[str, Any]) -> str:
+    """Digest the complete scenario context without its digest field."""
+    framed = canonical_json({key: child for key, child in value.items() if key != "context_digest"})
+    return "sha256:" + hashlib.sha256(b"UAP-STABLE-LAUNCH-SCENARIO-CONTEXT-V1\0" + framed).hexdigest()
+
+
 def validate_challenge_context(value: Any) -> dict[str, Any]:
     """Validate the complete existing observer challenge before any observation."""
     if not isinstance(value, dict) or set(value) != CHALLENGE_CONTEXT_FIELDS:
@@ -267,6 +345,7 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         "value", "nonce", "github_sha", "run_id", "run_attempt", "release_manifest_digest",
         "directory_digest", "scenario_contract_digest", "root_id", "binary_digest",
         "expected_version", "catalog_repository",
+        "scenario_id", "context_digest",
     }
     if not all(isinstance(value[field], str) for field in string_fields):
         raise ValueError("challenge context string fields are invalid")
@@ -282,6 +361,8 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         or re.fullmatch(r"[a-f0-9]{64}", value["root_id"]) is None
         or GITHUB_REPOSITORY.fullmatch(value["catalog_repository"]) is None
         or not value["expected_version"]
+        or value["scenario_id"] not in EXPECTED_SCENARIOS
+        or DIGEST.fullmatch(value["context_digest"]) is None
     ):
         raise ValueError("challenge context identity fields are invalid")
     framed = json.dumps({
@@ -361,12 +442,16 @@ def validate_challenge_context(value: Any) -> dict[str, Any]:
         }
     ):
         raise ValueError("challenge context release binding is invalid")
+    if value["context_digest"] != scenario_challenge_context_digest(value):
+        raise ValueError("challenge complete scenario context digest is invalid")
     return value
 
 
 def validate_scenario_challenge_context(value: Any, scenario: str) -> dict[str, Any]:
     """Bind an authenticated release selection to its immutable scenario targets."""
     value = validate_challenge_context(value)
+    if value["scenario_id"] != scenario:
+        raise ValueError("challenge context belongs to another scenario")
     required_targets = scenario_client_targets(scenario)
     if tuple(value["release"]["resolved_targets"]) != required_targets:
         raise ValueError("challenge resolved targets do not match the requested scenario")
@@ -2538,7 +2623,13 @@ def traced(
     binary: Path, argv: list[str], cwd: Path, challenge: str,
     *, write_authority: tuple[int, ...] | None = None, deny_process_creation: bool = False,
     binary_session: AuthenticatedBinaryExecutionSession | None = None,
+    scenario_targets: tuple[str, ...] = (),
+    target_environment: dict[str, str] | None = None,
+    revoked_probe: RevokedTargetProbe | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+    authorize_scenario_command_target(
+        argv, scenario_targets, environment=target_environment, revoked_probe=revoked_probe,
+    )
     started = now()
     if binary_session is not None:
         completed, execution_binding = binary_session.execute(
@@ -3277,12 +3368,16 @@ def bound_lifecycle_evidence(
 
 def traced_with_environment(
     binary: Path, argv: list[str], cwd: Path, challenge: str, environment: dict[str, str],
+    *, scenario_targets: tuple[str, ...] = (), revoked_probe: RevokedTargetProbe | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     original = os.environ.copy()
     try:
         os.environ.clear()
         os.environ.update(environment)
-        return traced(binary, argv, cwd, challenge)
+        return traced(
+            binary, argv, cwd, challenge, scenario_targets=scenario_targets,
+            target_environment=environment, revoked_probe=revoked_probe,
+        )
     finally:
         os.environ.clear()
         os.environ.update(original)
@@ -3387,16 +3482,19 @@ def conformance_directory(
 
 
 def directory_fault_scenario(
-    binary: Path, scenario: str, root: Path, challenge: str, context: dict[str, Any],
+    binary: Path, scenario: str, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     base_sequence = CONFORMANCE_SEQUENCE["directory_fault"]
     traces: list[dict[str, Any]] = []
     before = observe(home, manager)
+    target = contract_target_argument(scenario_targets)
 
     def execute(argv: list[str], environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
-        completed, trace = traced_with_environment(binary, argv, root, challenge, environment)
+        completed, trace = traced_with_environment(
+            binary, argv, root, challenge, environment, scenario_targets=scenario_targets,
+        )
         traces.append(trace)
         return completed
 
@@ -3404,35 +3502,35 @@ def directory_fault_scenario(
         environment, fixture_digest = conformance_directory(
             root, context, sequence=base_sequence, generated_offset=timedelta(hours=-4), lifetime=timedelta(hours=1),
         )
-        rejected = execute(["add", "context7", "--target", "cursor", "--format", "json"], environment)
+        rejected = execute(["add", "context7", "--target", target, "--format", "json"], environment)
         after = observe(home, manager)
         proof = {"expired_snapshot_rejected": rejected.returncode != 0, "zero_mutation": before == after}
     elif scenario == "directory_tampered":
         environment, fixture_digest = conformance_directory(root, context, sequence=base_sequence)
         snapshot_path = Path(environment["AGENTPLUGINS_DIRECTORY_SNAPSHOT"])
         snapshot_path.write_bytes(snapshot_path.read_bytes() + b"\n")
-        rejected = execute(["add", "context7", "--target", "cursor", "--format", "json"], environment)
+        rejected = execute(["add", "context7", "--target", target, "--format", "json"], environment)
         after = observe(home, manager)
         proof = {"tampered_snapshot_rejected": rejected.returncode != 0, "zero_mutation": before == after}
     elif scenario == "directory_sequence_rollback":
         high, _ = conformance_directory(root, context, sequence=base_sequence + 1)
         low, fixture_digest = conformance_directory(root, context, sequence=base_sequence)
-        installed = execute(["add", "context7", "--target", "cursor", "--format", "json"], high)
+        installed = execute(["add", "context7", "--target", target, "--format", "json"], high)
         before_rejected = observe(home, manager)
-        rejected = execute(["update", "context7", "--target", "cursor", "--format", "json"], low)
+        rejected = execute(["update", "context7", "--target", target, "--format", "json"], low)
         after_rejected = observe(home, manager)
-        cleanup = execute(["remove", "context7", "--target", "cursor", "--format", "json"], high)
+        cleanup = execute(["remove", "context7", "--target", target, "--format", "json"], high)
         after = observe(home, manager)
         proof = {"lower_sequence_rejected": installed.returncode == 0 and rejected.returncode != 0 and cleanup.returncode == 0, "zero_mutation": before_rejected == after_rejected}
     elif scenario == "directory_offline":
         online, fixture_digest = conformance_directory(root, context, sequence=base_sequence)
-        installed = execute(["add", "context7", "--target", "cursor", "--format", "json"], online)
+        installed = execute(["add", "context7", "--target", target, "--format", "json"], online)
         offline = dict(online)
         offline["AGENTPLUGINS_DIRECTORY_ORIGIN"] = "https://offline.invalid/registry/schemas/1/"
         for key in ("AGENTPLUGINS_DIRECTORY_SNAPSHOT", "AGENTPLUGINS_DIRECTORY_ENVELOPE", "AGENTPLUGINS_DIRECTORY_TRUST"):
             offline.pop(key, None)
-        updated = execute(["update", "context7", "--target", "cursor", "--format", "json"], offline)
-        cleanup = execute(["remove", "context7", "--target", "cursor", "--format", "json"], online)
+        updated = execute(["update", "context7", "--target", target, "--format", "json"], offline)
+        cleanup = execute(["remove", "context7", "--target", target, "--format", "json"], online)
         after = observe(home, manager)
         proof = {"offline_cache_used": installed.returncode == updated.returncode == cleanup.returncode == 0, "signature_verified": Path(online["AGENTPLUGINS_DIRECTORY_CACHE"]).exists()}
     else:
@@ -3460,7 +3558,7 @@ def lifecycle(
         before_receipts = installation_receipts(manager, product) or []
         before = {"state": observe(home, manager), "manager": manager_facts(manager, product), "installation_receipts": before_receipts, "materialized_mentions": materialized_product_mentions(home, manager, product, clients)}
         argv = [operation, product, "--target", target, "--format", "json"]
-        completed, trace = traced(binary, argv, root, challenge)
+        completed, trace = traced(binary, argv, root, challenge, scenario_targets=clients)
         traces.append(trace)
         value = json_output(completed, operation)
         after_receipts = installation_receipts(manager, product) or []
@@ -3552,7 +3650,7 @@ def lifecycle(
 
 
 def shared_backend_lifecycle(
-    binary: Path, root: Path, challenge: str, context: dict[str, Any],
+    binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -3566,8 +3664,8 @@ def shared_backend_lifecycle(
         before = {"state": observe(home, manager), "manager": manager_facts(manager, "context7")}
         completed, trace = traced(binary, [
             operation, "context7", "--target",
-            scenario_target_argument("shared_copilot_vscode_backend"), "--format", "json",
-        ], root, challenge)
+            contract_target_argument(scenario_targets), "--format", "json",
+        ], root, challenge, scenario_targets=scenario_targets)
         traces.append(trace)
         value = json_output(completed, operation)
         after = {"state": observe(home, manager), "manager": manager_facts(manager, "context7")}
@@ -3606,7 +3704,7 @@ def shared_backend_lifecycle(
 
 
 def schema_scenario(
-    binary: Path, scenario: str, root: Path, challenge: str,
+    binary: Path, scenario: str, scenario_targets: tuple[str, ...], root: Path, challenge: str,
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -3621,13 +3719,14 @@ def schema_scenario(
         manifest["$schema"] = "https://agent-plugins.org/schemas/2.0.0/plugin.schema.json"
     manifest_path.write_text(json.dumps(manifest, sort_keys=True))
     before = observe(home, manager)
-    argv = ["add", "./" + package.name, "--target", "cursor", "--format", "json"]
-    completed, trace = traced(binary, argv, root, challenge)
+    target = contract_target_argument(scenario_targets)
+    argv = ["add", "./" + package.name, "--target", target, "--format", "json"]
+    completed, trace = traced(binary, argv, root, challenge, scenario_targets=scenario_targets)
     after_add = observe(home, manager)
     traces = [trace]
     if scenario == "schema_1_0_0_accepted":
         accepted = completed.returncode == 0 and before != after_add and manifest["$schema"] == exact
-        removed, remove_trace = traced(binary, ["remove", manifest["name"], "--target", "cursor", "--format", "json"], root, challenge)
+        removed, remove_trace = traced(binary, ["remove", manifest["name"], "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
         traces.append(remove_trace)
         after = observe(home, manager)
         proof = {"exact_schema": manifest["$schema"], "accepted": accepted and removed.returncode == 0}
@@ -3638,11 +3737,11 @@ def schema_scenario(
     return all(proof.values()), {"command_traces": traces, "before": before, "after": after_add, "proof": proof}
 
 
-def project_scope_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def project_scope_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
-    completed, trace = traced(binary, ["add", "context7", "--target", "cursor", "--scope", "project", "--format", "json"], root, challenge)
+    completed, trace = traced(binary, ["add", "context7", "--target", contract_target_argument(scenario_targets), "--scope", "project", "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     after = observe(home, manager)
     diagnostic = (completed.stdout + "\n" + completed.stderr).lower()
     proof = {
@@ -3653,20 +3752,21 @@ def project_scope_scenario(binary: Path, root: Path, challenge: str) -> tuple[bo
     return all(proof.values()), {"command_traces": [trace], "before": before, "after": after, "proof": proof}
 
 
-def no_hidden_yes_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def no_hidden_yes_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     """Prove the removed option is rejected by mutating parsers before any write."""
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
+    target = contract_target_argument(scenario_targets)
     commands = (
-        ["add", "context7", "--target", "cursor", "--yes", "--format", "json"],
-        ["update", "context7", "--target", "cursor", "--yes", "--format", "json"],
-        ["remove", "context7", "--target", "cursor", "--yes", "--format", "json"],
+        ["add", "context7", "--target", target, "--yes", "--format", "json"],
+        ["update", "context7", "--target", target, "--yes", "--format", "json"],
+        ["remove", "context7", "--target", target, "--yes", "--format", "json"],
     )
     for argv in commands:
-        completed, trace = traced(binary, argv, root, challenge)
+        completed, trace = traced(binary, argv, root, challenge, scenario_targets=scenario_targets)
         traces.append(trace)
         diagnostic = (completed.stdout + "\n" + completed.stderr).lower()
         attempts.append({
@@ -4020,7 +4120,7 @@ def direct_package_identity_matches(
 
 
 def direct_full_sha_scenario(
-    binary: Path, root: Path, challenge: str, context: dict[str, Any],
+    binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -4030,13 +4130,14 @@ def direct_full_sha_scenario(
     selector = f"{repository}@{revision}//{package_path}"
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
-    add, trace = traced(binary, ["add", selector, "--target", "cursor", "--format", "json"], root, challenge)
+    target = contract_target_argument(scenario_targets)
+    add, trace = traced(binary, ["add", selector, "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     add_value = json_output(add, "add")
     installed_identity = manager_identity(manager, "e2e-external-package")
     stable_root = Path(os.path.commonpath((home, manager, root)))
     before_update = filesystem_snapshot(stable_root)
-    update, trace = traced(binary, ["update", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
+    update, trace = traced(binary, ["update", "e2e-external-package", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     after_update = filesystem_snapshot(stable_root)
     try:
@@ -4044,7 +4145,7 @@ def direct_full_sha_scenario(
     except (json.JSONDecodeError, DuplicateKeyError, ValueError):
         update_failure = None
     updated_identity = manager_identity(manager, "e2e-external-package")
-    remove, trace = traced(binary, ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
+    remove, trace = traced(binary, ["remove", "e2e-external-package", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     after = observe(home, manager)
     required_identity_fields = (
@@ -4061,7 +4162,7 @@ def direct_full_sha_scenario(
         installed_exact and updated_exact
         and all(installed_identity.get(field) == updated_identity.get(field) for field in required_identity_fields)
     )
-    add_acquisition = command_acquisition_proof(add_value, ("cursor",), command="add")
+    add_acquisition = command_acquisition_proof(add_value, scenario_targets, command="add")
     acquisition_bound = bool(
         add_acquisition
         and add_acquisition["tree_digest"] == installed_identity.get("tree_digest")
@@ -4072,8 +4173,8 @@ def direct_full_sha_scenario(
     failure_valid = validate_full_sha_update_failure(
         update_failure, update.stderr, plugin="e2e-external-package",
         source=installed_identity.get("canonical_source", "").removeprefix("https://github.com/").split("@", 1)[0] + "//" + package_path,
-        revision=revision, tree_digest=installed_identity.get("tree_digest", ""), expected_targets=("cursor",),
-        requested_argv=["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        revision=revision, tree_digest=installed_identity.get("tree_digest", ""), expected_targets=scenario_targets,
+        requested_argv=["update", "e2e-external-package", "--target", target, "--format", "json"],
     )
     proof = {
         "full_sha": installed_exact and updated_exact,
@@ -4086,7 +4187,7 @@ def direct_full_sha_scenario(
     return all((proof["full_sha"], proof["direct_update_refused_requires_switch"], not proof["mutable_ref_followed"], remove.returncode == 0)), {"command_traces": traces, "before": before, "after": after, "before_update": before_update, "after_update": after_update, "proof": proof, "installed_identity": installed_identity, "updated_identity": updated_identity, "update_failure": update_failure, "add_acquisition": add_acquisition}
 
 
-def missing_runtime_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def missing_runtime_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     package = root / "package-missing-runtime"
@@ -4097,7 +4198,7 @@ def missing_runtime_scenario(binary: Path, root: Path, challenge: str) -> tuple[
         "mcpServers": {"demo": {"type": "stdio", "command": command}},
     }, sort_keys=True))
     before = observe(home, manager)
-    completed, trace = traced(binary, ["add", "./" + package.name, "--target", "cursor", "--format", "json"], root, challenge)
+    completed, trace = traced(binary, ["add", "./" + package.name, "--target", contract_target_argument(scenario_targets), "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     after = observe(home, manager)
     diagnostic = completed.stdout + "\n" + completed.stderr
     proof = {
@@ -4108,12 +4209,13 @@ def missing_runtime_scenario(binary: Path, root: Path, challenge: str) -> tuple[
     return completed.returncode != 0 and proof["zero_mutation"] and not proof["dependency_installed"] and proof["guidance_exact"], {"command_traces": [trace], "before": before, "after": after, "proof": proof}
 
 
-def repair_fault_scenario(binary: Path, client: str, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def repair_fault_scenario(binary: Path, client: str, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
-    add, trace = traced(binary, ["add", "context7", "--target", client, "--format", "json"], root, challenge)
+    target = contract_target_argument(scenario_targets)
+    add, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     roots = {"codex": home / ".codex", "cursor": home / ".cursor", "kiro": home / ".kiro"}
     fault_injected = False
@@ -4121,22 +4223,23 @@ def repair_fault_scenario(binary: Path, client: str, root: Path, challenge: str)
         if path.is_file() and not path.is_symlink() and "context7" in (path.as_posix() + path.read_text(errors="ignore")):
             path.unlink()
             fault_injected = True
-    repair, trace = traced(binary, ["repair", "context7", "--target", client, "--format", "json"], root, challenge)
+    repair, trace = traced(binary, ["repair", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     repaired = materialized_product_mentions(home, manager, "context7", (client,))[client] > 0
-    remove, trace = traced(binary, ["remove", "context7", "--target", client, "--format", "json"], root, challenge)
+    remove, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     after = observe(home, manager)
     proof = {"fault_injected_once": fault_injected, "repair_succeeded": add.returncode == repair.returncode == remove.returncode == 0 and repaired, "client": client}
     return all((proof["fault_injected_once"], proof["repair_succeeded"])), {"command_traces": traces, "before": before, "after": after, "proof": proof, **proof}
 
 
-def managed_tamper_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def managed_tamper_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
-    add, trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    target = contract_target_argument(scenario_targets)
+    add, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     tampered = False
     for path in sorted((home / ".cursor").rglob("*")) if (home / ".cursor").exists() else ():
@@ -4144,21 +4247,21 @@ def managed_tamper_scenario(binary: Path, root: Path, challenge: str) -> tuple[b
             path.write_bytes(path.read_bytes() + b"\nlaunch-tamper")
             tampered = True
             break
-    info, trace = traced(binary, ["info", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    info, trace = traced(binary, ["info", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     diagnostic = (info.stdout + "\n" + info.stderr).lower()
     detected = tampered and any(word in diagnostic for word in ("tamper", "digest", "drift", "repair"))
     repair_required = "repair" in diagnostic
-    repair, trace = traced(binary, ["repair", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    repair, trace = traced(binary, ["repair", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
-    remove, trace = traced(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    remove, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     after = observe(home, manager)
     proof = {"tamper_detected": add.returncode == 0 and detected, "repair_required": repair_required and repair.returncode == 0 and remove.returncode == 0}
     return all(proof.values()), {"command_traces": traces, "before": before, "after": after, "proof": proof, **proof}
 
 
-def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def migration_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     home.mkdir(parents=True, exist_ok=True)
@@ -4211,13 +4314,13 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     manager_relative = manager.relative_to(isolated_root).as_posix()
     before = filesystem_snapshot(isolated_root)
     traces: list[dict[str, Any]] = []
-    target = scenario_target_argument("state_schema_2_migration")
-    read, trace = traced(binary, ["info", product, "--target", target, "--format", "json"], root, challenge)
+    target = contract_target_argument(scenario_targets)
+    read, trace = traced(binary, ["info", product, "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     read_value = json_output(read, "info")
     after_read = filesystem_snapshot(isolated_root)
     before_hidden = filesystem_snapshot(isolated_root)
-    hidden, trace = traced(binary, ["add", product, "--target", target, "--format", "json"], root, challenge)
+    hidden, trace = traced(binary, ["add", product, "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     after_hidden = filesystem_snapshot(isolated_root)
     hidden_diagnostic = hidden.stdout + "\n" + hidden.stderr
@@ -4311,13 +4414,16 @@ def migration_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, 
     }
 
 
-def crash_recovery_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def crash_recovery_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     started = now()
+    target = contract_target_argument(scenario_targets)
+    argv = ["add", "context7", "--target", target, "--format", "json"]
+    authorize_scenario_command_target(argv, scenario_targets)
     process = subprocess.Popen(
-        [str(binary), "add", "context7", "--target", "cursor", "--format", "json"],
+        [str(binary), *argv],
         cwd=root, env=os.environ.copy(), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     killed = False
@@ -4331,27 +4437,28 @@ def crash_recovery_scenario(binary: Path, root: Path, challenge: str) -> tuple[b
         time.sleep(0.01)
     stdout, stderr = process.communicate(timeout=10)
     crash_trace = {
-        "challenge": challenge, "argv": ["add", "context7", "--target", "cursor", "--format", "json"],
+        "challenge": challenge, "argv": argv,
         "started_at": started, "ended_at": now(), "exit_code": process.returncode,
         "stdout_digest": "sha256:" + hashlib.sha256(stdout.encode()).hexdigest(),
         "stderr_digest": "sha256:" + hashlib.sha256(stderr.encode()).hexdigest(),
     }
-    retry, retry_trace = traced(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    retry, retry_trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     identity = manager_identity(manager, "context7")
-    reconciled = retry.returncode == 0 and bool(identity) and materialized_product_mentions(home, manager, "context7", ("cursor",))["cursor"] > 0
-    remove, remove_trace = traced(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge)
+    reconciled = retry.returncode == 0 and bool(identity) and all(materialized_product_mentions(home, manager, "context7", (client,))[client] > 0 for client in scenario_targets)
+    remove, remove_trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     after = observe(home, manager)
     proof = {"crash_injected": killed and process.returncode != 0, "journal_recovered": reconciled, "ownership_reconciled": reconciled and remove.returncode == 0}
     return all(proof.values()), {"command_traces": [crash_trace, retry_trace, remove_trace], "before": before, "after": after, "proof": proof, **proof}
 
 
-def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def managed_rollback_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     started = now()
-    target = scenario_target_argument("managed_rollback")
+    target = contract_target_argument(scenario_targets)
     argv = ["add", "context7", "--target", target, "--format", "json"]
+    authorize_scenario_command_target(argv, scenario_targets)
     process = subprocess.Popen([str(binary), *argv], cwd=root, env=os.environ.copy(), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     injected = False
     kiro = home / ".kiro"
@@ -4375,10 +4482,10 @@ def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple
     if kiro.is_file():
         kiro.unlink()
         kiro.mkdir()
-    rolled_back = all(materialized_product_mentions(home, manager, "context7", (client,))[client] == 0 for client in ("codex", "cursor", "kiro"))
+    rolled_back = all(materialized_product_mentions(home, manager, "context7", (client,))[client] == 0 for client in scenario_targets)
     state_restored = manager_facts(manager, "context7")["installation_records"] == 0
     if process.returncode == 0:
-        cleanup, cleanup_trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge)
+        cleanup, cleanup_trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
         trace_list = [trace, cleanup_trace]
     else:
         trace_list = [trace]
@@ -4388,20 +4495,20 @@ def managed_rollback_scenario(binary: Path, root: Path, challenge: str) -> tuple
 
 
 def sticky_scenario(
-    binary: Path, scenario: str, root: Path, challenge: str,
+    binary: Path, scenario: str, scenario_targets: tuple[str, ...], root: Path, challenge: str,
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
-    target = scenario_target_argument(scenario)
-    add, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge)
+    target = contract_target_argument(scenario_targets)
+    add, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     original = manager_identity(manager, "context7")
     if scenario == "readd_sticky_distribution":
-        middle, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge)
+        middle, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
         traces.append(trace)
-        final, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge)
+        final, trace = traced(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
         traces.append(trace)
     else:
         cursor = Path(os.environ["HOME"]) / ".cursor"
@@ -4409,10 +4516,10 @@ def sticky_scenario(
             if path.is_file() and not path.is_symlink() and "context7" in (path.as_posix() + path.read_text(errors="ignore")):
                 path.unlink()
         middle = subprocess.CompletedProcess([], 0)
-        final, trace = traced(binary, ["repair", "context7", "--target", target, "--format", "json"], root, challenge)
+        final, trace = traced(binary, ["repair", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
         traces.append(trace)
     observed = manager_identity(manager, "context7")
-    remove, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge)
+    remove, trace = traced(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     traces.append(trace)
     after = observe(home, manager)
     proof = {
@@ -5665,7 +5772,7 @@ def plugin_data_update_proof(
 
 
 def plugin_data_scenario(
-    binary: Path, root: Path, challenge: str,
+    binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str,
     *, binary_session: AuthenticatedBinaryExecutionSession | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
@@ -5691,6 +5798,7 @@ def plugin_data_scenario(
     (alternate / "plugin.json").write_text(json.dumps(alternate_manifest, sort_keys=True))
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
+    target = contract_target_argument(scenario_targets)
 
     def execute(
         argv: list[str], *, write_authority: tuple[int, ...] | None = None,
@@ -5698,11 +5806,12 @@ def plugin_data_scenario(
         completed, trace = traced(
             binary, argv, root, challenge, write_authority=write_authority,
             deny_process_creation=True, binary_session=binary_session,
+            scenario_targets=scenario_targets,
         )
         traces.append(trace)
         return completed
 
-    add = execute(["add", "./" + package.name, "--target", "cursor", "--format", "json"])
+    add = execute(["add", "./" + package.name, "--target", target, "--format", "json"])
     initial_identity = manager_identity(manager, "e2e-external-package")
     initial_installation = selected_manager_installation(manager, "e2e-external-package")
     initial_receipt = data_receipt(manager, "e2e-external-package")
@@ -5718,7 +5827,7 @@ def plugin_data_scenario(
     safe_locator = safe_locator and retained_lifetime is not None and marker is not None and marker.verify()
     info_authority = released_lifecycle_write_authority(initial_installation, manager, read_only=True)
     info = execute(
-        ["info", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["info", "e2e-external-package", "--target", target, "--format", "json"],
         write_authority=info_authority,
     )
     info_preserved = marker is not None and marker.verify()
@@ -5730,7 +5839,7 @@ def plugin_data_scenario(
     expected_updated_identity = package_identity(package)
     update_authority = released_lifecycle_write_authority(initial_installation, manager)
     update = execute(
-        ["update", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["update", "e2e-external-package", "--target", target, "--format", "json"],
         write_authority=update_authority if update_authority is not None else (),
     )
     updated_identity = manager_identity(manager, "e2e-external-package")
@@ -5750,7 +5859,7 @@ def plugin_data_scenario(
         shutil.rmtree(repair_candidates[0])
     repair_authority = released_lifecycle_write_authority(updated_installation, manager)
     repair = execute(
-        ["repair", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["repair", "e2e-external-package", "--target", target, "--format", "json"],
         write_authority=repair_authority if repair_authority is not None else (),
     )
     repair_preserved = marker is not None and marker.verify()
@@ -5785,7 +5894,7 @@ def plugin_data_scenario(
         pre_remove_installation, removal_authority, state_path, manager,
     ) if removal_authority is not None else ()
     remove = execute(
-        ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"],
+        ["remove", "e2e-external-package", "--target", target, "--format", "json"],
         write_authority=removal_write_authority or (),
     )
     try:
@@ -5931,7 +6040,8 @@ def run_bound_plugin_data_evidence(binary: Path, root: Path, challenge: str) -> 
         })
         binary_session = AuthenticatedBinaryExecutionSession(binary, cwd=repository)
         passed, lifecycle = plugin_data_scenario(
-            binary, workspace, challenge, binary_session=binary_session,
+            binary, scenario_client_targets("plugin_data_lifecycle_boundary"), workspace, challenge,
+            binary_session=binary_session,
         )
         if not passed:
             raise ValueError("exact public seven-command lifecycle did not pass")
@@ -5947,7 +6057,7 @@ def run_bound_plugin_data_evidence(binary: Path, root: Path, challenge: str) -> 
         os.environ.update(inherited)
 
 
-def explicit_switch_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def explicit_switch_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     first, second = root / "switch-first", root / "switch-second"
@@ -5958,19 +6068,20 @@ def explicit_switch_scenario(binary: Path, root: Path, challenge: str) -> tuple[
     (second / "plugin.json").write_text(json.dumps(manifest, sort_keys=True))
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
+    target = contract_target_argument(scenario_targets)
 
     def execute(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        completed, trace = traced(binary, argv, root, challenge)
+        completed, trace = traced(binary, argv, root, challenge, scenario_targets=scenario_targets)
         traces.append(trace)
         return completed
 
-    add = execute(["add", "./switch-first", "--target", "cursor", "--format", "json"])
+    add = execute(["add", "./switch-first", "--target", target, "--format", "json"])
     initial = manager_identity(manager, "e2e-external-package")
     switched = execute(["switch", "e2e-external-package", "--to", "./switch-second", "--format", "json"])
     alternate = manager_identity(manager, "e2e-external-package")
     rolled_back = execute(["switch", "e2e-external-package", "--to", "./switch-first", "--format", "json"])
     restored = manager_identity(manager, "e2e-external-package")
-    remove = execute(["remove", "e2e-external-package", "--target", "cursor", "--format", "json"])
+    remove = execute(["remove", "e2e-external-package", "--target", target, "--format", "json"])
     after = observe(home, manager)
     proof = {
         "switch_applied": switched.returncode == 0 and initial.get("tree_digest") != alternate.get("tree_digest"),
@@ -5979,19 +6090,20 @@ def explicit_switch_scenario(binary: Path, root: Path, challenge: str) -> tuple[
     return all(proof.values()), {"command_traces": traces, "before": before, "after": after, "proof": proof, **proof}
 
 
-def sticky_update_scenario(binary: Path, root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+def sticky_update_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     sequence = CONFORMANCE_SEQUENCE["sticky_update"]
     initial_env, _ = conformance_directory(root, context, sequence=sequence)
     update_env, fixture_digest = conformance_directory(root, context, sequence=sequence + 1, safe_successor=True)
     before = observe(home, manager)
-    add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, initial_env)
+    target = contract_target_argument(scenario_targets)
+    add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, initial_env, scenario_targets=scenario_targets)
     initial = manager_identity(manager, "context7")
-    update, update_trace = traced_with_environment(binary, ["update", "context7", "--target", "cursor", "--format", "json"], root, challenge, update_env)
+    update, update_trace = traced_with_environment(binary, ["update", "context7", "--target", target, "--format", "json"], root, challenge, update_env, scenario_targets=scenario_targets)
     update_value = json_output(update, "update")
     updated = manager_identity(manager, "context7")
-    remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, update_env)
+    remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, update_env, scenario_targets=scenario_targets)
     after = observe(home, manager)
     proof = {
         "distribution_unchanged": bool(initial.get("distribution_id")) and initial.get("distribution_id") == updated.get("distribution_id"),
@@ -6003,15 +6115,16 @@ def sticky_update_scenario(binary: Path, root: Path, challenge: str, context: di
     return add.returncode == update.returncode == remove.returncode == 0 and all(proof.values()), {"command_traces": [add_trace, update_trace, remove_trace], "before": before, "after": after, "proof": proof, **proof, "fixture_digest": fixture_digest}
 
 
-def source_kind_scenario(binary: Path, kind: str, root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+def source_kind_scenario(binary: Path, kind: str, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     environment, fixture_digest = conformance_directory(root, context, sequence=CONFORMANCE_SEQUENCE["source_kind"])
     product = context["release"]["product_id"]
     before = observe(home, manager)
-    add, add_trace = traced_with_environment(binary, ["add", product, "--target", "cursor", "--format", "json"], root, challenge, environment)
+    target = contract_target_argument(scenario_targets)
+    add, add_trace = traced_with_environment(binary, ["add", product, "--target", target, "--format", "json"], root, challenge, environment, scenario_targets=scenario_targets)
     identity = manager_identity(manager, product)
-    remove, remove_trace = traced_with_environment(binary, ["remove", product, "--target", "cursor", "--format", "json"], root, challenge, environment)
+    remove, remove_trace = traced_with_environment(binary, ["remove", product, "--target", target, "--format", "json"], root, challenge, environment, scenario_targets=scenario_targets)
     after = observe(home, manager)
     canonical = parse_canonical_github_source(identity.get("canonical_source")) or {}
     source_identity = {
@@ -6198,14 +6311,15 @@ def fork_submission_scenario(scenario: str, root: Path, challenge: str) -> tuple
     return passed, {"command_traces": [trace], "before": before, "after": after, "proof": proof, **proof, "validator_artifact": result, "base_revision": base_revision, "branch_revision": branch_revision, "upstream_revision": upstream_revision}
 
 
-def external_activation_scenario(binary: Path, root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+def external_activation_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     environment, fixture_digest = conformance_directory(
         root, context, sequence=CONFORMANCE_SEQUENCE["external_activation"], target_delivery="manual_activation",
     )
     before = observe(home, manager)
-    add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
+    target = contract_target_argument(scenario_targets)
+    add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, environment, scenario_targets=scenario_targets)
     combined = add.stdout + "\n" + add.stderr
     try:
         candidate = strict_json_loads(add.stdout)
@@ -6214,16 +6328,16 @@ def external_activation_scenario(binary: Path, root: Path, challenge: str, conte
         result = {}
     rendered = json.dumps(result, sort_keys=True).lower() + combined.lower()
     identity = manager_identity(manager, "context7")
-    materialized = bool(identity) and materialized_product_mentions(home, manager, "context7", ("cursor",))["cursor"] > 0
+    materialized = bool(identity) and all(materialized_product_mentions(home, manager, "context7", (client,))[client] > 0 for client in scenario_targets)
     activation_visible = "activation" in rendered and any(word in rendered for word in ("pending", "manual", "failed", "repair"))
     repair_action = "repair" in rendered or "activation" in rendered
-    remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
+    remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, environment, scenario_targets=scenario_targets)
     after = observe(home, manager)
     proof = {"materialization_retained": add.returncode == 0 and materialized and activation_visible, "repair_action_recorded": repair_action and remove.returncode == 0}
     return all(proof.values()), {"command_traces": [add_trace, remove_trace], "before": before, "after": after, "proof": proof, **proof, "fixture_digest": fixture_digest}
 
 
-def stdio_containment_scenario(binary: Path, root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
+def stdio_containment_scenario(binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     package = root / "stdio-containment-package"
@@ -6235,7 +6349,8 @@ def stdio_containment_scenario(binary: Path, root: Path, challenge: str) -> tupl
     (package / "run.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "run.sh").chmod(0o700)
     before = observe(home, manager)
-    add, add_trace = traced(binary, ["add", "./stdio-containment-package", "--target", "cursor", "--format", "json"], root, challenge)
+    target = contract_target_argument(scenario_targets)
+    add, add_trace = traced(binary, ["add", "./stdio-containment-package", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     locator = data_locator(manager, "e2e-external-package")
     projected = []
     for path in (home / ".cursor").rglob("*") if (home / ".cursor").exists() else ():
@@ -6251,14 +6366,14 @@ def stdio_containment_scenario(binary: Path, root: Path, challenge: str) -> tupl
         marker.write_text("ok")
         writable = marker.read_text() == "ok"
     contained = managed_root_visible and data_visible and "${PLUGIN_ROOT}" not in projection and "${PLUGIN_DATA}" not in projection
-    remove, remove_trace = traced(binary, ["remove", "e2e-external-package", "--target", "cursor", "--format", "json"], root, challenge)
+    remove, remove_trace = traced(binary, ["remove", "e2e-external-package", "--target", target, "--format", "json"], root, challenge, scenario_targets=scenario_targets)
     after = observe(home, manager)
     proof = {"plugin_root_verified": add.returncode == 0 and managed_root_visible, "plugin_data_verified": data_visible, "writable": writable, "contained": contained and remove.returncode == 0}
     return all(proof.values()), {"command_traces": [add_trace, remove_trace], "before": before, "after": after, "proof": proof, **proof}
 
 
 def retained_default_scenario(
-    binary: Path, root: Path, challenge: str, context: dict[str, Any],
+    binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -6267,16 +6382,17 @@ def retained_default_scenario(
     changed_env, changed_digest = conformance_directory(root, context, sequence=sequence + 1, default_alternate=True)
     before = observe(home, manager)
     traces: list[dict[str, Any]] = []
-    add, trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, initial_env)
+    target = contract_target_argument(scenario_targets)
+    add, trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, initial_env, scenario_targets=scenario_targets)
     traces.append(trace)
     original = manager_identity(manager, "context7")
-    remove, trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, initial_env)
+    remove, trace = traced_with_environment(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, initial_env, scenario_targets=scenario_targets)
     traces.append(trace)
     retained = manager_has_flag(manager, "context7", "data_retained", True)
-    readd, trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, changed_env)
+    readd, trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, changed_env, scenario_targets=scenario_targets)
     traces.append(trace)
     observed = manager_identity(manager, "context7")
-    cleanup, trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, changed_env)
+    cleanup, trace = traced_with_environment(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, changed_env, scenario_targets=scenario_targets)
     traces.append(trace)
     after = observe(home, manager)
     proof = {
@@ -6288,22 +6404,23 @@ def retained_default_scenario(
 
 
 def signed_sequence_scenario(
-    binary: Path, root: Path, challenge: str, context: dict[str, Any],
+    binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
     environment, fixture_digest = conformance_directory(root, context, sequence=CONFORMANCE_SEQUENCE["signed_sequence"], sequence_over_semver=True)
     before = observe(home, manager)
-    add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
+    target = contract_target_argument(scenario_targets)
+    add, add_trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], root, challenge, environment, scenario_targets=scenario_targets)
     identity = manager_identity(manager, "context7")
-    remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", "cursor", "--format", "json"], root, challenge, environment)
+    remove, remove_trace = traced_with_environment(binary, ["remove", "context7", "--target", target, "--format", "json"], root, challenge, environment, scenario_targets=scenario_targets)
     after = observe(home, manager)
     proof = {"higher_sequence_selected": identity.get("desired_release_sequence") == 2, "semver_order_ignored": identity.get("desired_release_sequence") == 2}
     return add.returncode == remove.returncode == 0 and all(proof.values()), {"command_traces": [add_trace, remove_trace], "before": before, "after": after, "proof": proof, "fixture_digest": fixture_digest, "observed_identity": identity}
 
 
 def revoked_boundary_scenario(
-    binary: Path, root: Path, challenge: str, context: dict[str, Any],
+    binary: Path, scenario_targets: tuple[str, ...], root: Path, challenge: str, context: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -6315,20 +6432,35 @@ def revoked_boundary_scenario(
     traces: list[dict[str, Any]] = []
 
     def execute(
-        argv: list[str], environment: dict[str, str], *, non_contract_target_probe: bool = False,
+        argv: list[str], environment: dict[str, str], *, probe: RevokedTargetProbe | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        completed, trace = traced_with_environment(binary, argv, root, challenge, environment)
-        if non_contract_target_probe:
-            trace["non_contract_target_probe"] = True
+        completed, trace = traced_with_environment(
+            binary, argv, root, challenge, environment,
+            scenario_targets=scenario_targets, revoked_probe=probe,
+        )
         traces.append(trace)
         return completed
 
-    target = scenario_target_argument("revoked_operations_boundary")
+    target = contract_target_argument(scenario_targets)
     installed = execute(["add", "context7", "--target", target, "--format", "json"], active_env)
     identity_before = manager_identity(manager, "context7")
+    before_probe = observe(home, manager)
+    probe = RevokedTargetProbe(
+        scenario_id="revoked_operations_boundary", operation="add", product="context7",
+        source_distribution=context["release"]["distribution_id"],
+        target_argv=REVOKED_TARGET_PROBE_ARGV,
+        revoked_snapshot_digest=revoked_digest, revoked_release_sequence=1,
+        expected_rejection_class="revoked-release", expected_rejection_reason="revoked",
+        zero_mutation_required=True,
+    )
     new_target = execute(
-        ["add", "context7", "--target", "codex", "--format", "json"], revoked_env,
-        non_contract_target_probe=True,
+        list(REVOKED_TARGET_PROBE_ARGV), revoked_env, probe=probe,
+    )
+    after_probe = observe(home, manager)
+    probe_diagnostic = (new_target.stdout + "\n" + new_target.stderr).lower()
+    probe_verified = bool(
+        new_target.returncode != 0 and probe.expected_rejection_reason in probe_diagnostic
+        and before_probe == after_probe
     )
     repair = execute(["repair", "context7", "--target", target, "--format", "json"], revoked_env)
     identity_after_blocks = manager_identity(manager, "context7")
@@ -6342,13 +6474,14 @@ def revoked_boundary_scenario(
     fresh_workspace.mkdir(parents=True)
     fresh_env = dict(revoked_env)
     fresh_env.update({"HOME": str(fresh_home), "USERPROFILE": str(fresh_home), "XDG_CONFIG_HOME": str(fresh / "config"), "XDG_CACHE_HOME": str(fresh / "cache"), "AGENTPLUGINS_HOME": str(fresh_manager), "AGENTPLUGINS_EVIDENCE_ROOT": str(fresh / "evidence")})
-    blocked_install, trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], fresh_workspace, challenge, fresh_env)
+    blocked_install, trace = traced_with_environment(binary, ["add", "context7", "--target", target, "--format", "json"], fresh_workspace, challenge, fresh_env, scenario_targets=scenario_targets)
     traces.append(trace)
     after = observe(home, manager)
     identity_unchanged = all(identity_before.get(field) == identity_after_blocks.get(field) for field in ("distribution_id", "resolved_revision", "desired_release_sequence"))
     proof = {
         "install_blocked": blocked_install.returncode != 0 and manager_facts(fresh_manager, "context7")["installation_records"] == 0 and materialized_product_mentions(fresh_home, fresh_manager, "context7", ("cursor",))["cursor"] == 0,
-        "new_target_blocked": new_target.returncode != 0 and identity_unchanged,
+        "new_target_blocked": probe_verified and identity_unchanged,
+        "exact_revoked_target_probe_verified": probe_verified,
         "repair_blocked": repair.returncode != 0 and identity_unchanged,
         "remove_available": remove.returncode == 0,
         "safe_update_available": update.returncode == 0 and identity_after_update.get("desired_release_sequence") == 2 and find_value(update_value, {"mutated"}) is True,
@@ -6362,6 +6495,7 @@ def revoked_boundary_scenario(
 
 def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, Any]) -> dict[str, Any]:
     challenge_context = validate_scenario_challenge_context(challenge_context, scenario)
+    scenario_targets = scenario_client_targets(scenario)
     challenge = challenge_context["value"]
     home = Path(os.environ["HOME"])
     manager = Path(os.environ["AGENTPLUGINS_HOME"])
@@ -6372,55 +6506,55 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
     reason = "repository-owned observer could not establish the postcondition"
 
     if scenario in {"schema_1_0_0_accepted", "schema_draft_rejected", "schema_unknown_rejected"}:
-        passed, schema_value = schema_scenario(binary, scenario, root, challenge)
+        passed, schema_value = schema_scenario(binary, scenario, scenario_targets, root, challenge)
         traces.extend(schema_value["command_traces"])
         proof = schema_value["proof"]
         before, after = schema_value["before"], schema_value["after"]
         reason = "exact schema behavior was derived from isolated package execution" if passed else "schema behavior or zero-mutation boundary was not observed"
     elif scenario == "project_scope_zero_mutation":
-        passed, scope_value = project_scope_scenario(binary, root, challenge)
+        passed, scope_value = project_scope_scenario(binary, scenario_targets, root, challenge)
         traces.extend(scope_value["command_traces"])
         proof = scope_value["proof"]
         before, after = scope_value["before"], scope_value["after"]
         reason = "unsupported project scope failed before manager/native mutation" if passed else "project scope rejection or zero-mutation boundary was not observed"
     elif scenario == "direct_full_sha_immutable":
-        passed, direct_value = direct_full_sha_scenario(binary, root, challenge, challenge_context)
+        passed, direct_value = direct_full_sha_scenario(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(direct_value["command_traces"])
         proof = direct_value["proof"]
         before, after = direct_value["before"], direct_value["after"]
         reason = "direct source retained its exact full SHA and package identity" if passed else "direct full-SHA identity changed or could not be observed"
     elif scenario == "missing_runtime_exact_guidance":
-        passed, runtime_value = missing_runtime_scenario(binary, root, challenge)
+        passed, runtime_value = missing_runtime_scenario(binary, scenario_targets, root, challenge)
         traces.extend(runtime_value["command_traces"])
         proof = runtime_value["proof"]
         before, after = runtime_value["before"], runtime_value["after"]
         reason = "missing runtime failed before mutation with exact non-installing guidance" if passed else "missing-runtime boundary or exact guidance was not observed"
     elif scenario in {"readd_sticky_distribution", "repair_sticky_distribution"}:
-        passed, sticky_value = sticky_scenario(binary, scenario, root, challenge)
+        passed, sticky_value = sticky_scenario(binary, scenario, scenario_targets, root, challenge)
         traces.extend(sticky_value["command_traces"])
         proof = sticky_value["proof"]
         before, after = sticky_value["before"], sticky_value["after"]
         reason = "recorded distribution and revision remained sticky" if passed else "recorded distribution/revision changed or was not observable"
     elif scenario == "plugin_data_lifecycle_boundary":
-        passed, data_value = plugin_data_scenario(binary, root, challenge)
+        passed, data_value = plugin_data_scenario(binary, scenario_targets, root, challenge)
         traces.extend(data_value["command_traces"])
         proof = data_value["proof"]
         before, after = data_value["before"], data_value["after"]
         reason = "owned PLUGIN_DATA marker survived lifecycle and explicit purge removed it" if passed else "PLUGIN_DATA receipt/preservation/purge boundary was not observed"
     elif scenario == "retained_data_readd_before_changed_default":
-        passed, retained_value = retained_default_scenario(binary, root, challenge, challenge_context)
+        passed, retained_value = retained_default_scenario(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(retained_value["command_traces"])
         proof = retained_value["proof"]
         before, after = retained_value["before"], retained_value["after"]
         reason = "data-retained state won before a changed signed default" if passed else "retained-data/changed-default ordering was not observed"
     elif scenario == "signed_sequence_not_semver":
-        passed, sequence_value = signed_sequence_scenario(binary, root, challenge, challenge_context)
+        passed, sequence_value = signed_sequence_scenario(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(sequence_value["command_traces"])
         proof = sequence_value["proof"]
         before, after = sequence_value["before"], sequence_value["after"]
         reason = "higher signed release sequence won over higher SemVer" if passed else "signed sequence selection was not observed"
     elif scenario == "revoked_operations_boundary":
-        passed, revoked_value = revoked_boundary_scenario(binary, root, challenge, challenge_context)
+        passed, revoked_value = revoked_boundary_scenario(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(revoked_value["command_traces"])
         proof = revoked_value["proof"]
         before, after = revoked_value["before"], revoked_value["after"]
@@ -6464,12 +6598,12 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         }
         reason = "one disposable acquisition and three materializations observed; native discovery was not claimed" if passed else "grouped disposable lifecycle did not prove one acquisition and every target materialization"
     elif scenario == "shared_copilot_vscode_backend":
-        passed, shared_value = shared_backend_lifecycle(binary, root, challenge, challenge_context)
+        passed, shared_value = shared_backend_lifecycle(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(shared_value["command_traces"])
         proof = shared_value
         reason = "Copilot CLI and VS Code resolved to one receipt-backed physical mutation" if passed else "shared backend did not produce one independently observed physical mutation"
     elif scenario == "public_help_no_hidden_yes":
-        passed, yes_value = no_hidden_yes_scenario(binary, root, challenge)
+        passed, yes_value = no_hidden_yes_scenario(binary, scenario_targets, root, challenge)
         traces.extend(yes_value["command_traces"])
         proof = yes_value["proof"]
         before, after = yes_value["before"], yes_value["after"]
@@ -6482,38 +6616,38 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         validator_artifact = fork_value["validator_artifact"]
         reason = "local fork branch command artifacts passed contribution CI validators without side effects" if passed else "fork submission validator boundary was not observed"
     elif scenario in {"directory_offline", "directory_expired", "directory_tampered", "directory_sequence_rollback"}:
-        passed, fault_value = directory_fault_scenario(binary, scenario, root, challenge, challenge_context)
+        passed, fault_value = directory_fault_scenario(binary, scenario, scenario_targets, root, challenge, challenge_context)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "Directory fault was independently injected and the exact boundary observed" if passed else "Directory fault boundary was not observed"
     elif scenario == "managed_package_tamper":
-        passed, fault_value = managed_tamper_scenario(binary, root, challenge)
+        passed, fault_value = managed_tamper_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "managed package tamper was detected and required repair" if passed else "managed package tamper boundary was not observed"
     elif scenario in _CONFIG["adapter_repair_faults"]:
         client, = scenario_client_targets(scenario)
-        passed, fault_value = repair_fault_scenario(binary, client, root, challenge)
+        passed, fault_value = repair_fault_scenario(binary, client, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "one native client fault was injected and repaired" if passed else "adapter repair fault boundary was not observed"
     elif scenario == "state_schema_2_migration":
-        passed, fault_value = migration_scenario(binary, root, challenge)
+        passed, fault_value = migration_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "explicit digest-checked migration preserved provenance and backup" if passed else "explicit migration/backup boundary was not observed"
     elif scenario == "crash_journal_recovery":
-        passed, fault_value = crash_recovery_scenario(binary, root, challenge)
+        passed, fault_value = crash_recovery_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "mid-operation process crash recovered through journal/ownership reconciliation" if passed else "crash recovery boundary was not observed"
     elif scenario == "missing_runtime_zero_mutation":
-        passed, fault_value = missing_runtime_scenario(binary, root, challenge)
+        passed, fault_value = missing_runtime_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         before, after = fault_value["before"], fault_value["after"]
         source = fault_value["proof"]
@@ -6521,7 +6655,7 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         passed = passed and all((proof["zero_mutation"], proof["copy_ready_requirement"], not proof["dependency_installed"]))
         reason = "missing runtime failed with copy-ready guidance and zero mutation" if passed else "missing runtime fault boundary was not observed"
     elif scenario == "plugin_data_update_repair_switch_remove_purge":
-        passed, fault_value = plugin_data_scenario(binary, root, challenge)
+        passed, fault_value = plugin_data_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         before, after = fault_value["before"], fault_value["after"]
         source = fault_value["proof"]
@@ -6529,13 +6663,13 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         passed = passed and all(proof.values())
         reason = "PLUGIN_DATA preservation and explicit purge were observed" if passed else "PLUGIN_DATA lifecycle fault boundary was not observed"
     elif scenario == "explicit_source_switch":
-        passed, fault_value = explicit_switch_scenario(binary, root, challenge)
+        passed, fault_value = explicit_switch_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "explicit source switch and reverse switch restored the original digest" if passed else "explicit switch rollback boundary was not observed"
     elif scenario == "distribution_sticky_update":
-        passed, fault_value = sticky_update_scenario(binary, root, challenge, challenge_context)
+        passed, fault_value = sticky_update_scenario(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
@@ -6549,25 +6683,25 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
         reason = "immutable promotion fixture digest gate produced the required decision" if passed else "promotion digest gate decision was not observed"
     elif scenario in {"upstream_owned_short_name", "community_bridge_short_name"}:
         kind = "upstream" if scenario == "upstream_owned_short_name" else "community_bridge"
-        passed, fault_value = source_kind_scenario(binary, kind, root, challenge, challenge_context)
+        passed, fault_value = source_kind_scenario(binary, kind, scenario_targets, root, challenge, challenge_context)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "short name selected the signed immutable source kind" if passed else "short-name source kind/immutable revision was not observed"
     elif scenario == "external_activation_failure":
-        passed, fault_value = external_activation_scenario(binary, root, challenge, challenge_context)
+        passed, fault_value = external_activation_scenario(binary, scenario_targets, root, challenge, challenge_context)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "manual/external activation failure retained materialization and exposed repair action" if passed else "external activation failure boundary was not observed"
     elif scenario == "stdio_environment_and_containment":
-        passed, fault_value = stdio_containment_scenario(binary, root, challenge)
+        passed, fault_value = stdio_containment_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
         reason = "stdio PLUGIN_ROOT/PLUGIN_DATA projection was writable and contained" if passed else "stdio environment/containment boundary was not observed"
     elif scenario == "managed_rollback":
-        passed, fault_value = managed_rollback_scenario(binary, root, challenge)
+        passed, fault_value = managed_rollback_scenario(binary, scenario_targets, root, challenge)
         traces.extend(fault_value["command_traces"])
         proof = fault_value["proof"]
         before, after = fault_value["before"], fault_value["after"]
@@ -6582,6 +6716,7 @@ def run(binary: Path, scenario: str, root: Path, challenge_context: dict[str, An
     validate_scenario_command_targets(scenario, traces)
     result = {
         "schema_version": 1, "scenario_id": scenario, "challenge": challenge,
+        "challenge_context_digest": challenge_context["context_digest"],
         "started_at": traces[0]["started_at"] if traces else now(), "observed_at": now(),
         # This repository-owned runner proves only disposable lifecycle,
         # materialization, fault, and postcondition behavior. Native discovery
@@ -6607,10 +6742,13 @@ def main() -> int:
     parser.add_argument("--scenario", choices=sorted(EXPECTED_SCENARIOS), required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--challenge-context", type=Path, required=True)
+    parser.add_argument("--expected-context-digest", required=True)
     args = parser.parse_args()
     context = validate_scenario_challenge_context(
         strict_json_loads(args.challenge_context.read_bytes()), args.scenario,
     )
+    if DIGEST.fullmatch(args.expected_context_digest) is None or context["context_digest"] != args.expected_context_digest:
+        raise ValueError("challenge context differs from the harness-retained digest")
     value = run(args.binary.resolve(), args.scenario, args.root.resolve(), context)
     print(json.dumps(value, sort_keys=True))
     return 0 if value["outcome"] == "passed" else 2

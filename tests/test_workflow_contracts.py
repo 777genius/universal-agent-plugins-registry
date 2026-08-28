@@ -21,7 +21,7 @@ UPSTREAM_PROMOTION = ROOT / ".github/workflows/upstream-promotion-readiness.yml"
 OBSERVER_RUNBOOK = ROOT / "docs/OBSERVER_OPERATIONS.md"
 PUBLICATION_INPUTS = {
     "publication_id": "string",
-    "publication_sequence": "number",
+    "publication_sequence": "string",
     "publication_snapshot_digest": "string",
     "publication_source_commit": "string",
     "publication_ledger_commit": "string",
@@ -42,6 +42,43 @@ def pinned_requirements(body: str) -> set[str]:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_public_sequence_inputs_stay_canonical_strings_across_reusable_edges(self) -> None:
+        launch = load(LAUNCH)
+        live = load(LIVE)
+        publication = load(DIRECTORY_PUBLICATION)
+        for workflow in (launch, live):
+            for trigger in ("workflow_call", "workflow_dispatch"):
+                self.assertEqual(workflow["on"][trigger]["inputs"]["publication_sequence"]["type"], "string")
+            gate = workflow["jobs"]["validate-publication-sequence"]
+            first = gate["steps"][0]
+            self.assertNotIn("uses", first)
+            self.assertEqual(first["env"]["PUBLICATION_SEQUENCE"], "${{ inputs.publication_sequence }}")
+            script = first["run"]
+            self.assertNotIn("fromJSON", script)
+            accepted = ("1", "9007199254740991")
+            rejected = (
+                "", "0", "+1", "-1", " 1", "1 ", "01", "1e3", "1.0",
+                "9007199254740992", "9007199254740993",
+            )
+            for value in accepted + rejected:
+                completed = subprocess.run(
+                    ["/bin/bash", "-c", script], env={"PATH": "/usr/bin:/bin:/usr/local/bin", "PUBLICATION_SEQUENCE": value},
+                    text=True, capture_output=True,
+                )
+                with self.subTest(workflow=workflow["name"], value=value):
+                    self.assertEqual(completed.returncode == 0, value in accepted, completed.stderr)
+        for name in (
+            "native-release", "node22-npm-facade", "aggregate-one-release",
+            "protected-observer-inputs", "enforced-stable-gate", "attest-stable-evidence",
+        ):
+            first = launch["jobs"][name]["steps"][0]
+            self.assertEqual(first["env"]["PUBLICATION_SEQUENCE"], "${{ inputs.publication_sequence }}")
+            self.assertNotIn("uses", first)
+        caller = publication["jobs"]["required_stable_launch_evidence"]["with"]["publication_sequence"]
+        self.assertEqual(caller, "${{ needs.sign.outputs.sequence }}")
+        for path in (LAUNCH, LIVE, DIRECTORY_PUBLICATION):
+            self.assertNotRegex(path.read_text(), r"fromJSON\([^)]*(?:publication|snapshot|release|sequence)")
+
     def test_upstream_promotion_readiness_is_manual_and_read_only(self) -> None:
         workflow = load(UPSTREAM_PROMOTION)
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
@@ -919,7 +956,7 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = load(LIVE)
         required = workflow["jobs"]["required-stable-launch-evidence"]
         self.assertIn("inputs.consent", required["if"])
-        self.assertIn("inputs.publication_sequence > 0", required["if"])
+        self.assertIn("inputs.publication_sequence != ''", required["if"])
         self.assertIn("inputs.caller_ref == 'refs/heads/main'", required["if"])
         self.assertIn("directory-publication.yml@refs/heads/main", required["if"])
         scheduled = {
@@ -990,7 +1027,7 @@ class WorkflowContractTests(unittest.TestCase):
             condition = launch["jobs"][name]["if"]
             with self.subTest(job=name):
                 self.assertIn("inputs.consent", condition)
-                self.assertIn("inputs.publication_sequence > 0", condition)
+                self.assertIn("inputs.publication_sequence != ''", condition)
                 self.assertIn("inputs.caller_ref == 'refs/heads/main'", condition)
                 self.assertIn("directory-publication.yml@refs/heads/main", condition)
                 self.assertNotIn("github.event_name", condition)
@@ -1053,7 +1090,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertEqual(live_inputs[name]["required"], "true")
             self.assertEqual(live_call[name], "${{ inputs." + name + " }}")
         self.assertEqual(publication_call["publication_id"], "${{ needs.sign.outputs.publication_id }}")
-        self.assertEqual(publication_call["publication_sequence"], "${{ fromJSON(needs.sign.outputs.sequence) }}")
+        self.assertEqual(publication_call["publication_sequence"], "${{ needs.sign.outputs.sequence }}")
         self.assertEqual(publication_call["publication_snapshot_digest"], "${{ needs.sign.outputs.snapshot_digest }}")
         self.assertEqual(publication_call["publication_source_commit"], "${{ needs.sign.outputs.marker_commit }}")
         self.assertEqual(publication_call["publication_ledger_commit"], "${{ needs.materialize_site.outputs.ledger_commit }}")

@@ -59,6 +59,7 @@ from observe_launch_scenario import (  # noqa: E402
     installation_receipts,
     selected_manager_installation,
     scenario_client_targets,
+    scenario_challenge_context_digest,
     strict_json_loads,
     validate_scenario_target_contract,
     validate_cli_envelope,
@@ -2189,12 +2190,16 @@ class LaunchHarness:
             "directory_product": next(item for item in self.snapshot["products"] if item["id"] == product_id),
             "directory_distribution": next(item for item in self.snapshot["distributions"] if item["id"] == release["distribution_id"]),
             "source_identity": source_identity,
+            "scenario_id": scenario,
         }
+        observer_context["context_digest"] = scenario_challenge_context_digest(observer_context)
+        expected_context_digest = observer_context["context_digest"]
         challenge_path.write_text(json.dumps(observer_context, sort_keys=True))
         completed = subprocess.run([
             sys.executable, str(SCENARIO_OBSERVER), "--scenario", scenario,
             "--binary", str(self.binary), "--root", str(sandbox / "workspace"),
             "--challenge-context", str(challenge_path),
+            "--expected-context-digest", expected_context_digest,
         ], cwd=sandbox / "workspace", env=env, text=True, capture_output=True, timeout=240, check=False)
         try:
             value = strict_json_loads(completed.stdout)
@@ -2205,6 +2210,8 @@ class LaunchHarness:
             return "failed", None, "repository-owned observer returned an invalid outcome"
         if value.get("scenario_id") != scenario or value.get("challenge") != self.challenge["value"]:
             return "failed", None, "repository-owned observer result is not challenge-correlated"
+        if value.get("challenge_context_digest") != expected_context_digest:
+            return "failed", None, "repository-owned observer result changed the retained challenge context"
         traces = value.get("command_traces")
         if not isinstance(traces, list) or not traces or not all(trace.get("challenge") == self.challenge["value"] for trace in traces):
             return "failed", None, "repository-owned observer omitted challenge-bound command traces"

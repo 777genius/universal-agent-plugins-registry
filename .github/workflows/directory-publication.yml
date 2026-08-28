@@ -878,7 +878,7 @@ jobs:
     with:
       consent: true
       publication_id: ${{ needs.sign.outputs.publication_id }}
-      publication_sequence: ${{ fromJSON(needs.sign.outputs.sequence) }}
+      publication_sequence: ${{ needs.sign.outputs.sequence }}
       publication_snapshot_digest: ${{ needs.sign.outputs.snapshot_digest }}
       publication_source_commit: ${{ needs.sign.outputs.marker_commit }}
       publication_ledger_commit: ${{ needs.materialize_site.outputs.ledger_commit }}
