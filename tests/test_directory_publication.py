@@ -77,8 +77,8 @@ def install_fixture_feed(root: Path, envelope: str = "envelope-current.json") ->
     snapshots = feed / "snapshots"
     snapshots.mkdir(parents=True)
     (feed / "latest.json").write_bytes(fixture("latest.json"))
-    (snapshots / "00000000000000000007.json").write_bytes(fixture("snapshot.json"))
-    (snapshots / "00000000000000000007.envelope.json").write_bytes(fixture(envelope))
+    (snapshots / "00000000000000000015.json").write_bytes(fixture("snapshot.json"))
+    (snapshots / "00000000000000000015.envelope.json").write_bytes(fixture(envelope))
     return feed
 
 
@@ -235,8 +235,14 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         with self.assertRaises(publication.PublicationError):
             publication.validate_with_schema(candidate, publication.CANDIDATE_SCHEMA)
 
+        wire_before_cutover = fixture_json("snapshot.json")
+        wire_before_cutover["sequence"] = publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE - 1
+        with self.assertRaises(publication.PublicationError):
+            publication.validate_with_schema(wire_before_cutover, publication.SNAPSHOT_SCHEMA)
+        with self.assertRaises(publication.PublicationError):
+            publication.validate_snapshot_semantics(wire_before_cutover, validate_schema=False)
+
         projected = fixture_json("snapshot.json")
-        projected["sequence"] = publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE
         projected["publication_id"] = "wire-migration"
         projected["generated_at"] = "2026-08-27T00:00:00Z"
         projected["expires_at"] = "2026-09-26T00:00:00Z"
@@ -251,7 +257,9 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         legacy_after_cutover = copy.deepcopy(legacy)
         legacy_after_cutover["sequence"] = publication.WIRE_EVIDENCE_CUTOVER_SEQUENCE
         with self.assertRaises(publication.PublicationError):
-            publication.validate_snapshot_semantics(legacy_after_cutover)
+            publication.validate_with_schema(legacy_after_cutover, publication.SNAPSHOT_SCHEMA)
+        with self.assertRaises(publication.PublicationError):
+            publication.validate_snapshot_semantics(legacy_after_cutover, validate_schema=False)
 
     def test_signature_domain_digest_and_two_key_overlap(self) -> None:
         snapshot = fixture("snapshot.json")
@@ -290,9 +298,9 @@ class ClientContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             feed = install_fixture_feed(Path(tmp))
             common = ("--feed", str(feed), "--trusted-keys", str(FIXTURES / "trusted-keys.json"))
-            valid = run_script("verify_directory_publication.py", *common, "--now", "2026-08-21T00:00:00Z", "--minimum-sequence", "7")
+            valid = run_script("verify_directory_publication.py", *common, "--now", "2026-08-21T00:00:00Z", "--minimum-sequence", "15")
             self.assertEqual(valid.returncode, 0, valid.stderr)
-            rollback = run_script("verify_directory_publication.py", *common, "--now", "2026-08-21T00:00:00Z", "--minimum-sequence", "8")
+            rollback = run_script("verify_directory_publication.py", *common, "--now", "2026-08-21T00:00:00Z", "--minimum-sequence", "16")
             self.assertNotEqual(rollback.returncode, 0)
             self.assertIn("below local floor", rollback.stderr)
             expired = run_script("verify_directory_publication.py", *common, "--now", "2026-09-20T00:00:00Z")
@@ -315,7 +323,7 @@ class ClientContractTests(unittest.TestCase):
     def test_oversized_snapshot_is_rejected_before_signature_processing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             feed = install_fixture_feed(Path(tmp))
-            snapshot_path = feed / "snapshots" / "00000000000000000007.json"
+            snapshot_path = feed / "snapshots" / "00000000000000000015.json"
             snapshot_path.write_bytes(b"x" * (publication.MAX_SNAPSHOT_BYTES + 1))
             result = run_script(
                 "verify_directory_publication.py",
@@ -756,7 +764,7 @@ class PublicationLifecycleTests(unittest.TestCase):
     def test_terminal_revocation_and_historical_removal_fail(self) -> None:
         previous = fixture_json("snapshot.json")
         changed_evidence = copy.deepcopy(previous)
-        changed_evidence["sequence"] = 8
+        changed_evidence["sequence"] = 16
         changed_evidence["publication_id"] = "fixture-evidence-tamper"
         changed_evidence["generated_at"] = "2026-08-27T00:00:00Z"
         changed_evidence["expires_at"] = "2026-09-26T00:00:00Z"
@@ -765,7 +773,7 @@ class PublicationLifecycleTests(unittest.TestCase):
             publication.validate_snapshot_semantics(changed_evidence, previous)
 
         newer = copy.deepcopy(previous)
-        newer["sequence"] = 8
+        newer["sequence"] = 16
         newer["publication_id"] = "fixture-2"
         newer["generated_at"] = "2026-08-27T00:00:00Z"
         newer["expires_at"] = "2026-09-26T00:00:00Z"

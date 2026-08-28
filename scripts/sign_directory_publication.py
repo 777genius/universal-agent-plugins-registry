@@ -17,6 +17,7 @@ from directory_publication import (
     MAX_CANDIDATE_BYTES,
     MAX_SNAPSHOT_BYTES,
     LEDGER_CONTRACT_NAME,
+    WIRE_EVIDENCE_CUTOVER_SEQUENCE,
     PublicationError,
     atomic_write,
     candidate_digest,
@@ -40,6 +41,39 @@ from directory_publication import (
     validate_latest,
     validate_snapshot_semantics,
 )
+
+
+def snapshot_evidence_for_sequence(
+    evidence: list[dict[str, object]], distributions: list[dict[str, object]], sequence: int,
+) -> list[dict[str, object]]:
+    """Project wire-only candidates into the immutable pre-cutover ledger shape."""
+    if sequence >= WIRE_EVIDENCE_CUTOVER_SEQUENCE:
+        return copy.deepcopy(evidence)
+    distribution_map = {distribution["id"]: distribution for distribution in distributions}
+    release_map = {
+        (distribution["id"], release["sequence"]): release
+        for distribution in distributions
+        for release in distribution["releases"]  # type: ignore[index]
+    }
+    projected: list[dict[str, object]] = []
+    for record in evidence:
+        distribution_id = record["distribution_id"]
+        identity = (distribution_id, record["release_sequence"])
+        require(distribution_id in distribution_map, f"{record['id']}: evidence distribution is missing")
+        require(identity in release_map, f"{record['id']}: evidence release is missing")
+        distribution = distribution_map[distribution_id]
+        release = release_map[identity]
+        source = release["package_source"]
+        legacy = {key: copy.deepcopy(value) for key, value in record.items() if key != "trust"}
+        legacy.update({
+            "product_id": distribution["product_id"],
+            "manifest_digest": release["manifest_digest"],
+            "source_repository": source["repository"],
+            "source_revision": source["revision"],
+            "source_path": source["path"],
+        })
+        projected.append(legacy)
+    return projected
 
 
 def assign_release_publication_times(
@@ -179,7 +213,10 @@ def main() -> int:
                 == timedelta(days=candidate["lifetime_days"]),
                 "publication ID was reused with another lifetime",
             )
-            require(matched["products"] == candidate["products"] and matched["distributions"] == distributions and matched["evidence"] == candidate["evidence"] and matched["revocations"] == candidate["revocations"], "publication ID was reused for different candidate content")
+            expected_evidence = snapshot_evidence_for_sequence(
+                candidate["evidence"], distributions, matched["sequence"],  # type: ignore[arg-type]
+            )
+            require(matched["products"] == candidate["products"] and matched["distributions"] == distributions and matched["evidence"] == expected_evidence and matched["revocations"] == candidate["revocations"], "publication ID was reused for different candidate content")
             result = {"reused": True, "sequence": matched["sequence"], "snapshot_digest": sha256_digest(canonical_json(matched))}
             atomic_write(args.result, canonical_json(result))
             print(f"reused sequence {matched['sequence']}")
@@ -198,7 +235,9 @@ def main() -> int:
             "expires_at": format_timestamp(now + timedelta(days=candidate["lifetime_days"])),
             "products": candidate["products"],
             "distributions": distributions,
-            "evidence": candidate["evidence"],
+            "evidence": snapshot_evidence_for_sequence(
+                candidate["evidence"], distributions, sequence,  # type: ignore[arg-type]
+            ),
             "revocations": candidate["revocations"],
         }
         validate_snapshot_semantics(snapshot, previous, historical_evidence, validate_schema=False)

@@ -19,10 +19,7 @@
   "additionalProperties": false,
   "allOf": [{
     "if": {"properties": {"sequence": {"maximum": 14}}, "required": ["sequence"]},
-    "then": {"properties": {"evidence": {"items": {"oneOf": [
-      {"$ref": "directory-publication-candidate.schema.json#/$defs/legacyEvidence"},
-      {"$ref": "directory-publication-candidate.schema.json#/$defs/wireEvidence"}
-    ]}}}},
+    "then": {"properties": {"evidence": {"items": {"$ref": "directory-publication-candidate.schema.json#/$defs/legacyEvidence"}}}},
     "else": {"properties": {"evidence": {"items": {"$ref": "directory-publication-candidate.schema.json#/$defs/wireEvidence"}}}}
   }],
   "$defs": {

@@ -594,7 +594,7 @@ def validate_snapshot_semantics(
         not has_wire_evidence or all("trust" in evidence for evidence in snapshot["evidence"]),
         "snapshot cannot mix legacy and wire evidence shapes",
     )
-    wire_evidence = snapshot["sequence"] >= WIRE_EVIDENCE_CUTOVER_SEQUENCE or has_wire_evidence
+    wire_evidence = snapshot["sequence"] >= WIRE_EVIDENCE_CUTOVER_SEQUENCE
     validate_directory_records(snapshot, snapshot=True, wire_evidence=wire_evidence)
     generated = parse_timestamp(snapshot["generated_at"], "generated_at")
     expires = parse_timestamp(snapshot["expires_at"], "expires_at")

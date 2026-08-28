@@ -1522,7 +1522,7 @@ with tempfile.TemporaryDirectory() as temporary:
             PUBLICATION / "envelope-current.json",
             PUBLICATION / "trusted-keys.json",
         )
-        self.assertEqual(snapshot["sequence"], 7)
+        self.assertEqual(snapshot["sequence"], 15)
         self.assertEqual(digest, json.loads((PUBLICATION / "envelope-current.json").read_text())["snapshot_digest"])
         self.assertNotIn("CATALOG", " ".join(env))
         self.assertIn("AGENTPLUGINS_DIRECTORY_ORIGIN", env)
@@ -4950,8 +4950,8 @@ print("accepted")
             snapshots = root / "snapshots"
             snapshots.mkdir(parents=True)
             shutil.copy2(PUBLICATION / "latest.json", root / "latest.json")
-            snapshot = snapshots / "00000000000000000007.json"
-            envelope = snapshots / "00000000000000000007.envelope.json"
+            snapshot = snapshots / "00000000000000000015.json"
+            envelope = snapshots / "00000000000000000015.envelope.json"
             shutil.copy2(PUBLICATION / "snapshot.json", snapshot)
             shutil.copy2(PUBLICATION / "envelope-current.json", envelope)
             with mock.patch.object(
@@ -4960,8 +4960,8 @@ print("accepted")
                 identity = e2e.production_identity_from_materialized_ledger(root)
                 self.assertEqual(identity, {
                     "publication_id": "fixture-1",
-                    "sequence": 7,
-                    "snapshot_digest": "sha256:82a3c3c0528cdf846304fafccc1428ef0092cdfd47b36e1d8589fbc341ffe5de",
+                    "sequence": 15,
+                    "snapshot_digest": "sha256:a9b4e1ae54fcb3397269ef8aff50df794a7d431fc18ea4ffb3a102fa66a4fd60",
                     "source_commit": "d" * 40,
                 })
                 snapshot.unlink()
@@ -4974,7 +4974,7 @@ print("accepted")
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e, "bounded_https_get", return_value=latest):
             with self.assertRaisesRegex(ValueError, "exact caller publication identity"):
                 e2e.fetch_production_directory(
-                    Path(tmp) / "directory", expected_publication_id="fixture-1", expected_sequence=8,
+                    Path(tmp) / "directory", expected_publication_id="fixture-1", expected_sequence=16,
                     expected_snapshot_digest="sha256:" + "b" * 64, expected_source_commit="d" * 40,
                 )
 
@@ -4982,9 +4982,9 @@ print("accepted")
         latest = json.loads((PUBLICATION / "latest.json").read_bytes())
         production_n_minus_one = e2e.canonical_json({
             **latest,
-            "sequence": 6,
-            "snapshot_path": "snapshots/00000000000000000006.json",
-            "envelope_path": "snapshots/00000000000000000006.envelope.json",
+            "sequence": 14,
+            "snapshot_path": "snapshots/00000000000000000014.json",
+            "envelope_path": "snapshots/00000000000000000014.envelope.json",
         })
         digest = json.loads((PUBLICATION / "envelope-current.json").read_text())["snapshot_digest"]
         ledger_commit = "e" * 40
@@ -4999,24 +4999,24 @@ print("accepted")
         ), mock.patch.object(e2e, "bounded_https_get", return_value=production_n_minus_one):
             with self.assertRaisesRegex(ValueError, "exact caller publication identity"):
                 e2e.fetch_production_directory(
-                    Path(tmp) / "production", expected_publication_id="fixture-1", expected_sequence=7,
+                    Path(tmp) / "production", expected_publication_id="fixture-1", expected_sequence=15,
                     expected_snapshot_digest=digest, expected_source_commit="d" * 40,
                 )
             environment, snapshot, staged_digest = e2e.fetch_staged_directory(
                 Path(tmp) / "staged", repository=e2e.TRUSTED_CATALOG_REPOSITORY,
                 ledger_commit=ledger_commit, expected_publication_id="fixture-1",
-                expected_sequence=7, expected_snapshot_digest=digest,
+                expected_sequence=15, expected_snapshot_digest=digest,
                 expected_source_commit="d" * 40,
                 fixture_fetch=lambda url, _maximum, _accept: staged_bodies[url],
             )
-            self.assertEqual(snapshot["sequence"], 7)
+            self.assertEqual(snapshot["sequence"], 15)
             self.assertEqual(staged_digest, digest)
             self.assertEqual(environment["AGENTPLUGINS_DIRECTORY_ORIGIN"], staged_origin)
             with self.assertRaisesRegex(ValueError, "differs from the exact caller publication identity"):
                 e2e.fetch_staged_directory(
                     Path(tmp) / "mismatched-staged", repository=e2e.TRUSTED_CATALOG_REPOSITORY,
                     ledger_commit=ledger_commit, expected_publication_id="wrong-publication",
-                    expected_sequence=7, expected_snapshot_digest=digest,
+                    expected_sequence=15, expected_snapshot_digest=digest,
                     expected_source_commit="d" * 40,
                     fixture_fetch=lambda url, _maximum, _accept: staged_bodies[url],
                 )
