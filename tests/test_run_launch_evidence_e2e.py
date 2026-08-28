@@ -192,8 +192,6 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             ).encode()
             expected_binary.write_bytes(body)
             expected_binary.chmod(0o700)
-            before = observer.filesystem_snapshot(root)
-
             def issue():
                 session = observer.AuthenticatedBinaryExecutionSession(
                     expected_binary.resolve(), cwd=workspace,
@@ -205,14 +203,42 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 )
                 return session, completed, evidence
 
-            def verify(session, completed, evidence, *, candidate_probe=probe):
+            def verify(session, completed, evidence, *, candidate_probe=probe, before=None, after=None):
+                before = observer.filesystem_snapshot(root) if before is None else before
+                after = before if after is None else after
                 return observer.verify_revoked_target_probe_result(
                     completed, candidate_probe, argv=list(probe.target_argv), environment=environment,
                     scenario_root=root, writable_bindings=bindings, before=before,
-                    after=observer.filesystem_snapshot(root),
+                    after=after,
                     execution_binding=evidence, execution_session=session,
                     binary=expected_binary,
                 )
+
+            def rejected_result(label, mutate):
+                session, completed, evidence = issue()
+                original = (copy.deepcopy(completed.args), completed.returncode, completed.stdout, completed.stderr)
+                mutate(completed)
+                with self.subTest(result=label):
+                    self.assertFalse(verify(session, completed, evidence)["verified"])
+                    completed.args, completed.returncode, completed.stdout, completed.stderr = original
+                    self.assertFalse(verify(session, completed, evidence)["verified"])
+
+            def rejected_evidence(label, mutate):
+                session, completed, evidence = issue()
+                original = copy.deepcopy(evidence)
+                mutate(evidence)
+                with self.subTest(evidence=label):
+                    self.assertFalse(verify(session, completed, evidence)["verified"])
+                    evidence.clear(); evidence.update(original)
+                    self.assertFalse(verify(session, completed, evidence)["verified"])
+
+            def rejected_probe(label, candidate_probe):
+                session, completed, evidence = issue()
+                with self.subTest(probe=label):
+                    self.assertFalse(verify(
+                        session, completed, evidence, candidate_probe=candidate_probe,
+                    )["verified"])
+                    self.assertFalse(verify(session, completed, evidence)["verified"])
             with (
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SIZE", len(body)),
                 mock.patch.object(observer, "RELEASED_AGENTPLUGINS_0_1_18_SHA256", hashlib.sha256(body).hexdigest()),
@@ -222,6 +248,44 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                 self.assertFalse(hasattr(observer, "AuthenticatedBinaryExecutionBinding"))
                 self.assertTrue(verify(session, completed, evidence)["verified"])
                 self.assertFalse(verify(session, completed, evidence)["verified"])
+
+                stderr_lines = probe.expected_stderr.splitlines(keepends=True)
+                result_mutations = {
+                    "wrong exit code": lambda item: setattr(item, "returncode", 42),
+                    "extra argv": lambda item: setattr(item, "args", [*item.args, "extra"]),
+                    "reordered argv": lambda item: setattr(
+                        item, "args", [item.args[0], item.args[2], item.args[1], *item.args[3:]],
+                    ),
+                    "wrong argv": lambda item: setattr(
+                        item, "args", [item.args[0], "remove", *item.args[2:]],
+                    ),
+                    "unexpected stdout": lambda item: setattr(item, "stdout", "unexpected\n"),
+                    "omitted progress line": lambda item: setattr(item, "stderr", "".join(stderr_lines[1:])),
+                    "wrong selector": lambda item: setattr(
+                        item, "stderr", item.stderr.replace('"context7"', '"other"'),
+                    ),
+                    "wrong distribution": lambda item: setattr(
+                        item, "stderr", item.stderr.replace(
+                            context["release"]["distribution_id"], "fixture/wrong-distribution",
+                        ),
+                    ),
+                    "wrong release sequence": lambda item: setattr(
+                        item, "stderr", item.stderr.replace("release 1", "release 2"),
+                    ),
+                    "wrong reason": lambda item: setattr(
+                        item, "stderr", item.stderr.replace("is revoked", "is suspended"),
+                    ),
+                    "reversed stderr lines": lambda item: setattr(item, "stderr", "".join(reversed(stderr_lines))),
+                    "extra stderr output": lambda item: setattr(item, "stderr", item.stderr + "unexpected\n"),
+                }
+                for label, mutate in result_mutations.items():
+                    rejected_result(label, mutate)
+
+                for label, candidate_probe in {
+                    "wrong reason descriptor": probe._replace(expected_rejection_reason="wrong reason"),
+                    "wrong rejection class": probe._replace(expected_rejection_class="timeout"),
+                }.items():
+                    rejected_probe(label, candidate_probe)
 
                 for label, result_factory in {
                     "identical result": lambda item: subprocess.CompletedProcess(
@@ -241,11 +305,70 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
                             candidate_session, candidate_completed, candidate_evidence,
                         )["verified"])
 
-                mutated_session, mutated_completed, mutated_evidence = issue()
-                mutated_evidence["mechanism"] = "path-subprocess-run"
-                self.assertFalse(verify(mutated_session, mutated_completed, mutated_evidence)["verified"])
-                mutated_evidence["mechanism"] = "linux-raw-execveat-at-empty-path-authenticated-fd"
-                self.assertFalse(verify(mutated_session, mutated_completed, mutated_evidence)["verified"])
+                def drift_identity(section, field):
+                    return lambda value: value[section][field].__setitem__(
+                        "device", value[section][field]["device"] + 1,
+                    )
+
+                def coherent_path_substitution(value):
+                    substituted = scenario_root / "substituted" / expected_binary.name
+                    value["path"] = str(substituted)
+                    value["parent_path"] = str(substituted.parent)
+                    value["pre"]["path"] = str(substituted)
+                    value["post"]["path"] = str(substituted)
+
+                evidence_mutations = {
+                    "missing binding": lambda value: value.clear(),
+                    "wrong mechanism": lambda value: value.__setitem__("mechanism", "path-subprocess-run"),
+                    "wrong evidence argv": lambda value: value.__setitem__(
+                        "argv", ["agentplugins", *probe.target_argv],
+                    ),
+                    "wrong descriptor digest": lambda value: value["post"].__setitem__(
+                        "sha256", "sha256:" + "0" * 64,
+                    ),
+                    "wrong descriptor size": lambda value: value["pre"].__setitem__(
+                        "size", value["pre"]["size"] + 1,
+                    ),
+                    "descriptor identity drift": drift_identity("post", "descriptor_identity"),
+                    "path identity drift": drift_identity("post", "path_identity"),
+                    "parent identity drift": drift_identity("post", "parent_identity"),
+                    "path substitution": lambda value: value.__setitem__(
+                        "path", str(scenario_root / "substituted" / expected_binary.name),
+                    ),
+                    "coherent public path substitution": coherent_path_substitution,
+                    "missing pre observation": lambda value: value.pop("pre"),
+                    "missing post observation": lambda value: value.pop("post"),
+                }
+                for label, mutate in evidence_mutations.items():
+                    rejected_evidence(label, mutate)
+
+                mutation_paths = {
+                    "workspace": workspace / "mutation",
+                    "manager": scenario_root / "manager" / "mutation",
+                    "home": scenario_root / "home" / "mutation",
+                    "config": scenario_root / "config" / "mutation",
+                    "cache": scenario_root / "cache" / "mutation",
+                    "evidence": scenario_root / "evidence" / "mutation",
+                    "tmp": scenario_root / "tmp" / "mutation",
+                    "Directory cache": Path(environment["AGENTPLUGINS_DIRECTORY_CACHE"]),
+                    "git config": Path(environment["GIT_CONFIG_GLOBAL"]),
+                }
+                for label, path in mutation_paths.items():
+                    candidate_session, candidate_completed, candidate_evidence = issue()
+                    candidate_before = observer.filesystem_snapshot(root)
+                    path.write_text("mutation\n")
+                    candidate_after = observer.filesystem_snapshot(root)
+                    with self.subTest(root_mutation=label):
+                        self.assertFalse(verify(
+                            candidate_session, candidate_completed, candidate_evidence,
+                            before=candidate_before, after=candidate_after,
+                        )["verified"])
+                        path.unlink()
+                        restored = observer.filesystem_snapshot(root)
+                        self.assertFalse(verify(
+                            candidate_session, candidate_completed, candidate_evidence,
+                            before=restored, after=restored,
+                        )["verified"])
 
                 copy_factories = {
                     "copy": lambda value, _session: copy.copy(value),
