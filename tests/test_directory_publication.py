@@ -676,10 +676,19 @@ class PublicationLifecycleTests(unittest.TestCase):
 
         reviewed_external = copy.deepcopy(observation)
         reviewed_external["trust"] = {"kind": "reviewed_external"}
-        with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
+        with self.assertRaisesRegex(publication.PublicationError, "external evidence artifact is not explicitly trusted"):
             prepare.validate_upstream_default_evidence(
                 [product], [distribution], [reviewed_external],
                 trust_config,
+            )
+        trusted_reviewed_external = copy.deepcopy(trust_config)
+        trusted_reviewed_external["trusted_external_evidence"] = [
+            copy.deepcopy(reviewed_external["artifact"]),
+        ]
+        with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
+            prepare.validate_upstream_default_evidence(
+                [product], [distribution], [reviewed_external],
+                trusted_reviewed_external,
             )
         repository_mismatch = copy.deepcopy(observation)
         repository_mismatch["artifact"]["repository"] = "other/evidence"
@@ -1039,6 +1048,7 @@ class PublicationLifecycleTests(unittest.TestCase):
             source["evidence"] = [{**evidence, "trust": {"kind": "reviewed_external"}}]
             source["distributions"][0]["release_policies"][0]["current_evidence"] = ["schema-demo"]
             verified_evidence = {**evidence, "trust": {"kind": "reviewed_external"}}
+            config["trusted_external_evidence"] = [copy.deepcopy(artifact)]
             with mock.patch.object(prepare, "verified_evidence", return_value=verified_evidence):
                 evidenced = prepare.build_candidate(
                     source, config, source_commit, "prepare-evidence", None,

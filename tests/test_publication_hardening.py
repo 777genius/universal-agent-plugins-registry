@@ -101,6 +101,12 @@ class LedgerFailureTests(unittest.TestCase):
             self.eligible_upstream(value)
             value["evidence"][0]["trust"] = {"kind": "reviewed_external"}  # type: ignore[index]
 
+        def unapproved_workflow(value: dict[str, object]) -> None:
+            self.eligible_upstream(value)
+            value["evidence"][0]["trust"]["workflow"] = (  # type: ignore[index]
+                "777genius/universal-agent-plugins/.github/workflows/unapproved.yml"
+            )
+
         def wrong_tree(value: dict[str, object]) -> None:
             self.eligible_upstream(value)
             value["evidence"][0]["package_tree_digest"] = "sha256:" + "9" * 64  # type: ignore[index]
@@ -119,7 +125,8 @@ class LedgerFailureTests(unittest.TestCase):
 
         for label, mutation, error in (
             ("unprotected", unprotected, "source ref is not trusted"),
-            ("reviewed external", reviewed_external, "lacks exact passed materialization evidence"),
+            ("unapproved workflow", unapproved_workflow, "no reviewed trust policy"),
+            ("reviewed external", reviewed_external, "external evidence artifact is not explicitly trusted"),
             ("wrong release tree", wrong_tree, "evidence release/tree identity mismatch"),
             ("wrong release", wrong_release, "evidence release/tree identity mismatch"),
             ("repository mismatch", repository_mismatch, "not bound to the evidence repository"),

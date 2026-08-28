@@ -129,6 +129,25 @@ describe('registry parsing', () => {
     assert.equal(expectedDistribution(supersededPlugin, ['codex'])?.id, 'example/demo-bridge')
   })
 
+  it('selects the highest active compatible release regardless of source ordering', () => {
+    const raw = signedFixture()
+    const distribution = raw.distributions[0]!
+    const newestRelease = structuredClone(distribution.releases[0]!)
+    const newestPolicy = structuredClone(distribution.release_policies[0]!)
+    const olderRelease = structuredClone(newestRelease)
+    const olderPolicy = structuredClone(newestPolicy)
+    olderRelease.sequence = 1
+    olderRelease.package_version = '9.0.0'
+    olderPolicy.release_sequence = 1
+    distribution.releases = [olderRelease, newestRelease]
+    distribution.release_policies = [olderPolicy, newestPolicy]
+
+    const parsed = parseDirectoryData(raw, 'published_snapshot').plugins[0]!
+    const selected = parsed.distributions.find(item => item.id === distribution.id)!
+    assert.equal(selected.release_sequence, 2)
+    assert.equal(expectedDistribution(parsed, ['codex'])?.release_sequence, 2)
+  })
+
   it('matches authoritative blocking-evidence fallback decisions', () => {
     for (const level of ['materialization', 'discovery', 'runtime']) {
       const raw = signedFixture()

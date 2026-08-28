@@ -127,6 +127,19 @@ def trusted_workflow_policy(
     return policy
 
 
+def trusted_external_artifact_policy(
+    evidence: dict[str, Any], config: dict[str, Any], label: str,
+) -> None:
+    """Require the exact code-owned identity for signer-vouched external evidence."""
+    require(
+        any(
+            evidence["artifact"] == allowed
+            for allowed in config.get("trusted_external_evidence", [])
+        ),
+        f"{label}: external evidence artifact is not explicitly trusted",
+    )
+
+
 def validate_publication_eligibility_trust(
     products: list[dict[str, Any]], distributions: list[dict[str, Any]],
     evidence: list[dict[str, Any]], config: dict[str, Any],
@@ -165,6 +178,8 @@ def validate_publication_eligibility_trust(
                 )
                 if record["trust"]["kind"] == "github_actions":
                     trusted_workflow_policy(record, config, evidence_id)
+                elif record["trust"]["kind"] == "reviewed_external":
+                    trusted_external_artifact_policy(record, config, evidence_id)
 
     for product in products:
         require(
