@@ -156,6 +156,20 @@ MCP_PROBE_INPUTS = {
     "chrome-devtools": {},
     "notion": {"query": "UAP read-only probe"},
 }
+
+
+def kiro_probe_input(plugin: str) -> dict[str, Any]:
+    arguments = MCP_PROBE_INPUTS[plugin]
+    return {
+        **arguments,
+        "_meta": {
+            "_activePath": [],
+            "_completedPaths": [[name] for name in arguments],
+            "_isValid": True,
+        },
+    }
+
+
 CURSOR_MAX_THINKING_EVENTS = 32
 KIRO_PROTOCOL_VERSION = 1
 KIRO_CLI_SHA256 = "sha256:14d835aff3772afb9ffb71e395b433df516c091dea8c43daef46e7cb66368358"
@@ -1874,10 +1888,7 @@ class KiroACPContract:
                 current_fields = legacy_fields | {"kind", "rawInput"}
                 legacy_meta = {"kiro": {"serverName": self.plugin}}
                 current_meta = {"kiro": {"serverName": self.plugin, "toolOrigin": "client"}}
-                current_input = {
-                    **MCP_PROBE_INPUTS[self.plugin],
-                    "_meta": {"_activePath": [], "_completedPaths": [], "_isValid": True},
-                }
+                current_input = kiro_probe_input(self.plugin)
                 if (
                     update.get("status") != "pending" or update.get("title") != expected_title
                     or frozenset(update) not in {frozenset(legacy_fields), frozenset(current_fields)}
@@ -1940,10 +1951,7 @@ class KiroACPContract:
                         and set(update) == {"sessionUpdate", "status", "toolCallId", "_meta"}
                         and update.get("_meta") == {"kiro": {"serverName": self.plugin}}
                     )
-                    current_input = {
-                        **MCP_PROBE_INPUTS[self.plugin],
-                        "_meta": {"_activePath": [], "_completedPaths": [], "_isValid": True},
-                    }
+                    current_input = kiro_probe_input(self.plugin)
                     current = (
                         self.target_shape == "client"
                         and set(update) == {"sessionUpdate", "status", "toolCallId", "rawInput", "_meta"}
@@ -1964,10 +1972,7 @@ class KiroACPContract:
                     expected_title = f"@{self.plugin}/{self.tool}"
                     legacy_fields = {"sessionUpdate", "status", "title", "toolCallId", "content", "rawOutput", "_meta"}
                     current_fields = legacy_fields | {"rawInput"}
-                    current_input = {
-                        **MCP_PROBE_INPUTS[self.plugin],
-                        "_meta": {"_activePath": [], "_completedPaths": [], "_isValid": True},
-                    }
+                    current_input = kiro_probe_input(self.plugin)
                     valid_shape = (
                         (
                             self.target_shape == "legacy" and set(update) == legacy_fields
