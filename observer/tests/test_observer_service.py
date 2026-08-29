@@ -4279,7 +4279,7 @@ class FixedAdapterContractTests(unittest.TestCase):
             fixed_adapters.validate_config(config)
 
     def test_mount_namespace_is_a_kernel_verified_positive_allowlist(self) -> None:
-        root = "10 1 0:1 / / ro - tmpfs tmpfs ro\n"
+        root = "10 1 0:1 / / ro,nosuid,nodev,noexec - tmpfs tmpfs ro\n"
         allowed = root + "11 10 8:1 /usr/bin /usr/bin ro - ext4 /dev/root ro\n"
         fixed_adapters.verify_positive_mount_namespace(allowed)
         fixed_adapters.verify_positive_mount_namespace(
@@ -4336,6 +4336,12 @@ class FixedAdapterContractTests(unittest.TestCase):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /srv/foreign /var/empty/uap-observer-codex ro - ext4 /dev/fixture ro\n",
             )
+        with self.assertRaisesRegex(ValueError, "not read-only"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root
+                + "12 10 8:2 /var/empty/uap-observer-codex "
+                "/var/empty/uap-observer-codex rw - ext4 /dev/fixture rw\n",
+            )
         with self.assertRaisesRegex(ValueError, "foreign mount source"):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /srv/foreign /lib ro - ext4 /dev/fixture ro\n",
@@ -4354,6 +4360,27 @@ class FixedAdapterContractTests(unittest.TestCase):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 0:25 /host/private /tmp rw - tmpfs tmpfs rw\n",
             )
+        for target in (
+            "/usr/bin", "/opt/uap-observer-current",
+            "/var/lib/uap-observer/profiles", "/var/lib/uap-observer/proofs",
+        ):
+            source = (
+                f"/opt/uap-observer-closures/{'a' * 64}"
+                if target == "/opt/uap-observer-current" else target
+            )
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, "not read-only"):
+                fixed_adapters.verify_positive_mount_namespace(
+                    root + f"12 10 8:2 {source} {target} rw - ext4 /dev/fixture rw\n",
+                )
+        for target in (
+            "/var/lib/uap-observer/jobs",
+            "/var/lib/uap-observer/workspaces",
+            "/var/lib/uap-observer/profiles/codex/.auth",
+        ):
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, "not writable"):
+                fixed_adapters.verify_positive_mount_namespace(
+                    root + f"12 10 8:2 {target} {target} ro - ext4 /dev/fixture ro\n",
+                )
         with self.assertRaisesRegex(ValueError, "not inaccessible"):
             fixed_adapters.verify_positive_mount_namespace(
                 root
@@ -4362,6 +4389,8 @@ class FixedAdapterContractTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "synthetic"):
             fixed_adapters.verify_positive_mount_namespace("10 1 8:1 / / ro - ext4 /dev/root ro\n")
+        with self.assertRaisesRegex(ValueError, "synthetic"):
+            fixed_adapters.verify_positive_mount_namespace("10 1 0:1 / / ro - tmpfs tmpfs ro\n")
 
     @requires_disposable_observer_host
     def test_systemd_mount_namespace_keeps_only_auth_and_state_writable(self) -> None:

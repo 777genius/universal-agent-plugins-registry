@@ -103,6 +103,25 @@ SYSTEMD_INACCESSIBLE_PATHS = {
     "/sys/kernel/tracing",
     "/usr/lib/modules",
 }
+READ_ONLY_MOUNT_PATHS = (
+    "/opt/uap-observer-current",
+    "/usr/bin", "/usr/lib", "/usr/lib64", "/lib", "/lib64",
+    "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/hosts",
+    "/etc/ssl", "/etc/pki",
+    "/var/lib/uap-observer/profiles", "/var/lib/uap-observer/proofs",
+)
+WRITABLE_MOUNT_PATHS = (
+    "/var/lib/uap-observer/jobs", "/var/lib/uap-observer/workspaces",
+    "/var/lib/uap-observer-human/pending",
+    "/var/lib/uap-observer-human/reserved",
+    "/var/lib/uap-observer-human/consumed",
+    "/var/lib/uap-observer-consent/pending",
+    "/var/lib/uap-observer-consent/reserved",
+    "/var/lib/uap-observer-consent/consumed",
+    *(f"/var/lib/uap-observer/profiles/{client}/{leaf}"
+      for client in ("codex", "cursor", "kiro")
+      for leaf in (".auth", ".state")),
+)
 PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,
     "credential_material_exported": False, "auth_copied": False,
@@ -602,14 +621,10 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
     if len(mountinfo) > (1 << 20):
         raise ValueError("mount namespace description exceeds size bound")
     fixed_paths = tuple(sorted(FIXED_MOUNT_PATHS))
-    allowed = (
-        "/opt/uap-observer-current", "/usr/bin", "/usr/lib", "/usr/lib64",
-        "/lib", "/lib64",
-        "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/hosts", "/etc/ssl", "/etc/pki",
-        "/var/lib/uap-observer/jobs", "/var/lib/uap-observer/workspaces", "/var/lib/uap-observer/profiles", "/var/lib/uap-observer/proofs",
-        "/var/lib/uap-observer-human/pending", "/var/lib/uap-observer-human/reserved", "/var/lib/uap-observer-human/consumed",
-        "/var/lib/uap-observer-consent/pending", "/var/lib/uap-observer-consent/reserved", "/var/lib/uap-observer-consent/consumed",
-    )
+    allowed = tuple(sorted(
+        READ_ONLY_MOUNT_PATHS + WRITABLE_MOUNT_PATHS,
+        key=len, reverse=True,
+    ))
     kernel_filesystems = {
         "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
         "hugetlbfs", "securityfs", "tracefs", "pstore", "bpf", "autofs", "ramfs",
@@ -626,7 +641,10 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         except (ValueError, IndexError):
             raise ValueError("mount namespace description is malformed") from None
         if target == "/":
-            if filesystem not in {"tmpfs", "ramfs"}:
+            if not (
+                filesystem in {"tmpfs", "ramfs"}
+                and {"ro", "nosuid", "nodev", "noexec"} <= mount_options
+            ):
                 raise ValueError("mount namespace root is not an empty synthetic filesystem")
             root_seen = True
             continue
@@ -665,8 +683,12 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         matched = next((prefix for prefix in allowed if target == prefix or target.startswith(prefix + "/")), None)
         if matched is None and target not in fixed_paths:
             raise ValueError(f"mount namespace exposes a non-allowlisted filesystem at {target}")
-        if target in fixed_paths and source_root != target:
-            raise ValueError(f"fixed runtime input at {target} is an alternate-path bind")
+        if target in fixed_paths:
+            if source_root != target:
+                raise ValueError(f"fixed runtime input at {target} is an alternate-path bind")
+            if "ro" not in mount_options:
+                raise ValueError(f"fixed runtime input at {target} is not read-only")
+            continue
         closure_alias = (
             matched == "/opt/uap-observer-current"
             and CLOSURE_MOUNT_SOURCE.fullmatch(source_root) is not None
@@ -681,6 +703,10 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         )
         if target not in fixed_paths and not same_source and not closure_alias:
             raise ValueError(f"allowlisted runtime path at {target} has a foreign mount source")
+        expected_mode = "rw" if matched in WRITABLE_MOUNT_PATHS else "ro"
+        if expected_mode not in mount_options:
+            state = "writable" if expected_mode == "rw" else "read-only"
+            raise ValueError(f"allowlisted runtime path at {target} is not {state}")
     if not root_seen:
         raise ValueError("mount namespace root was not identified")
 
