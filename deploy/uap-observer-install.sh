@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 93857eb0b7f46765728b5f312e94a3d310bddfad77cc1bf0888dac0717172929
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 34b9d0797954f3b6b05c08e5cf9005002f90ba8a3607d0fa8f4a0a5e7f15eba8
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,7 +13,7 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256 EGRESS_ALLOWLIST EGRESS_ALLOWLIST_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=2f592940dd0ad1d97966fca61ab1f8126e47b8a636b3d99cc653d3f21b46dfeb
+runtime_manifest_digest=72843ab1d85cf0ae42631f135d069d87d3a11da411fc3195ce9920d81f33df76
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 closure_digest=
 closure_stage=
@@ -51,7 +51,7 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" "$untrusted_egress_allowlist" \
-    13bf75448f9ada79a34dfeb9343adb47b8bb78d7e9cf3a010788718ea86a363e \
+    357fc65b1b552f049e497e045f4b84a4df33bb892495a681837bb5e626701017 \
     48df8eb011e8c90f4a72d58d189a8605704f9adc3449f14f60588f6cbc5dd9d1 \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state "$installed_closure"
@@ -113,7 +113,7 @@ caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
 egress_proxy_source="$source_root/deploy/uap-observer-egress-proxy.py"
-runner_digest=13bf75448f9ada79a34dfeb9343adb47b8bb78d7e9cf3a010788718ea86a363e
+runner_digest=357fc65b1b552f049e497e045f4b84a4df33bb892495a681837bb5e626701017
 adapter_digest=48df8eb011e8c90f4a72d58d189a8605704f9adc3449f14f60588f6cbc5dd9d1
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
