@@ -93,6 +93,13 @@ FIXED_RESOLVED_MOUNT_SOURCES = {
     "/lib": "/usr/lib",
     "/lib64": "/usr/lib64",
 }
+SYSTEMD_INACCESSIBLE_PATHS = {
+    "/sys/fs/fuse/connections",
+    "/sys/kernel/config",
+    "/sys/kernel/debug",
+    "/sys/kernel/tracing",
+    "/usr/lib/modules",
+}
 PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,
     "credential_material_exported": False, "auth_copied": False,
@@ -611,6 +618,7 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         try:
             separator = fields.index("-")
             source_root, target = _mount_path(fields[3]), _mount_path(fields[4])
+            mount_options = set(fields[5].split(","))
             filesystem = fields[separator + 1]
         except (ValueError, IndexError):
             raise ValueError("mount namespace description is malformed") from None
@@ -618,6 +626,14 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
             if filesystem not in {"tmpfs", "ramfs"}:
                 raise ValueError("mount namespace root is not an empty synthetic filesystem")
             root_seen = True
+            continue
+        if target in SYSTEMD_INACCESSIBLE_PATHS:
+            if not (
+                source_root == "/systemd/inaccessible/dir"
+                and filesystem == "tmpfs"
+                and {"ro", "nosuid", "nodev", "noexec"} <= mount_options
+            ):
+                raise ValueError(f"protected kernel path at {target} is not inaccessible")
             continue
         if filesystem in kernel_filesystems and any(target == prefix or target.startswith(prefix + "/") for prefix in kernel_targets):
             continue

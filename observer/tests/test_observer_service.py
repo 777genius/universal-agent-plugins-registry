@@ -1870,6 +1870,12 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         self.assertIn("TemporaryFileSystem=/var/tmp:rw,nosuid,nodev,noexec", service)
         self.assertNotIn("PrivateTmp=yes", service)
         self.assertNotIn("\nProtectSystem=strict\n", "\n" + service)
+        self.assertIn("ProtectKernelLogs=yes", service)
+        self.assertIn(
+            "InaccessiblePaths=-/sys/kernel/debug -/sys/kernel/tracing "
+            "-/sys/kernel/config -/sys/fs/fuse/connections",
+            service,
+        )
         homes = (
             "BindReadOnlyPaths=/var/empty/uap-observer-codex "
             "/var/empty/uap-observer-cursor /var/empty/uap-observer-kiro "
@@ -4299,6 +4305,13 @@ class FixedAdapterContractTests(unittest.TestCase):
             + "13 10 0:55 / /tmp rw - tmpfs tmpfs rw\n"
             + "14 10 0:56 / /var/tmp rw - tmpfs tmpfs rw\n",
         )
+        fixed_adapters.verify_positive_mount_namespace(
+            root
+            + "12 10 0:25 /systemd/inaccessible/dir /sys/kernel/debug "
+            "ro,nosuid,nodev,noexec - tmpfs tmpfs rw\n"
+            + "13 10 0:25 /systemd/inaccessible/dir /usr/lib/modules "
+            "ro,nosuid,nodev,noexec - tmpfs tmpfs rw\n",
+        )
         for target in ("/var/www/customer-project", "/usr/local/src/repository", "/workspace/project", "/var/www/link-to-project", "/var/lib/uap-observer/state"):
             with self.subTest(target=target), self.assertRaisesRegex(ValueError, "non-allowlisted"):
                 fixed_adapters.verify_positive_mount_namespace(allowed + f"12 10 8:2 /project {target} ro - ext4 /dev/fixture ro\n")
@@ -4327,6 +4340,12 @@ class FixedAdapterContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-allowlisted"):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /run /run rw - ext4 /dev/fixture rw\n",
+            )
+        with self.assertRaisesRegex(ValueError, "not inaccessible"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root
+                + "12 10 0:25 /systemd/inaccessible/dir /sys/kernel/debug "
+                "ro,nosuid,nodev - tmpfs tmpfs rw\n",
             )
         with self.assertRaisesRegex(ValueError, "synthetic"):
             fixed_adapters.verify_positive_mount_namespace("10 1 8:1 / / ro - ext4 /dev/root ro\n")
