@@ -420,25 +420,45 @@ class PrivilegedTupleBoundaryTests(unittest.TestCase):
                 "schema_version": 2, "client_id": "codex", "entries": [entry],
             }))
             (proof / "receipts.json").write_text("{}")
-            framed = hashlib.sha256(b"uap-observer-profile-seed-v1\0")
-            source_fd = os.open(seed, profile_provisioner.OPEN_DIRECTORY)
-            try:
-                profile_provisioner.copy_tree(source_fd, None, framed)
-            finally:
-                os.close(source_fd)
-            expected_digest = "sha256:" + framed.hexdigest()
-            main_source_fd = os.open(seed, profile_provisioner.OPEN_DIRECTORY)
-            argv = ["provision", "--client", "codex", "--root-owned-seed", str(seed), "--seed-digest", expected_digest]
-            account = mock.Mock(pw_uid=123, pw_gid=456)
-            with mock.patch.object(sys, "argv", argv), mock.patch.object(profile_provisioner.os, "geteuid", return_value=0), mock.patch.object(
-                profile_provisioner.pwd, "getpwnam", return_value=account,
-            ), mock.patch.object(profile_provisioner, "open_root_owned_directory", return_value=main_source_fd) as open_root, mock.patch.object(
-                profile_provisioner, "write_transaction",
-            ) as transaction:
-                with self.assertRaisesRegex(ValueError, "sequence"):
-                    profile_provisioner.main()
-                open_root.assert_called_once_with(seed)
-                transaction.assert_not_called()
+            real_stat = profile_provisioner.os.stat
+            real_fstat = profile_provisioner.os.fstat
+
+            def protected(info: os.stat_result) -> os.stat_result:
+                values = list(info)
+                values[4] = 0
+                return os.stat_result(values, {
+                    "st_atime_ns": info.st_atime_ns,
+                    "st_mtime_ns": info.st_mtime_ns,
+                    "st_ctime_ns": info.st_ctime_ns,
+                })
+
+            # This fixture isolates sequence validation; ownership behavior is tested separately.
+            with mock.patch.object(
+                profile_provisioner.os, "stat",
+                side_effect=lambda *args, **kwargs: protected(real_stat(*args, **kwargs)),
+            ), mock.patch.object(
+                profile_provisioner.os, "fstat",
+                side_effect=lambda *args, **kwargs: protected(real_fstat(*args, **kwargs)),
+            ):
+                framed = hashlib.sha256(b"uap-observer-profile-seed-v1\0")
+                source_fd = os.open(seed, profile_provisioner.OPEN_DIRECTORY)
+                try:
+                    profile_provisioner.copy_tree(source_fd, None, framed)
+                finally:
+                    os.close(source_fd)
+                expected_digest = "sha256:" + framed.hexdigest()
+                main_source_fd = os.open(seed, profile_provisioner.OPEN_DIRECTORY)
+                argv = ["provision", "--client", "codex", "--root-owned-seed", str(seed), "--seed-digest", expected_digest]
+                account = mock.Mock(pw_uid=123, pw_gid=456)
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(profile_provisioner.os, "geteuid", return_value=0), mock.patch.object(
+                    profile_provisioner.pwd, "getpwnam", return_value=account,
+                ), mock.patch.object(profile_provisioner, "open_root_owned_directory", return_value=main_source_fd) as open_root, mock.patch.object(
+                    profile_provisioner, "write_transaction",
+                ) as transaction:
+                    with self.assertRaisesRegex(ValueError, "sequence"):
+                        profile_provisioner.main()
+                    open_root.assert_called_once_with(seed)
+                    transaction.assert_not_called()
 
 
 class WorkflowSequenceContractTests(unittest.TestCase):
