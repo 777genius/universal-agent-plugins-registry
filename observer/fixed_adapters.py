@@ -92,6 +92,7 @@ CLOSURE_MOUNT_SOURCE = re.compile(r"/opt/uap-observer-closures/[a-f0-9]{64}")
 SYSTEMD_PROPAGATION_SOURCE = re.compile(
     r"/systemd/propagate/[A-Za-z0-9_.@-]+\.service",
 )
+EFI_VARIABLES_PATH = "/sys/firmware/efi/efivars"
 FIXED_RESOLVED_MOUNT_SOURCES = {
     "/lib": "/usr/lib",
     "/lib64": "/usr/lib64",
@@ -626,7 +627,7 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         key=len, reverse=True,
     ))
     kernel_filesystems = {
-        "tmpfs", "proc", "sysfs", "efivarfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
+        "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
         "hugetlbfs", "securityfs", "tracefs", "pstore", "bpf", "autofs", "ramfs",
     }
     kernel_targets = ("/proc", "/sys", "/dev")
@@ -677,6 +678,14 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
                 and {"rw", "nosuid", "nodev", "noexec"} <= mount_options
             ):
                 raise ValueError(f"temporary directory at {target} is not isolated")
+            continue
+        if filesystem == "efivarfs" or target == EFI_VARIABLES_PATH:
+            if not (
+                target == EFI_VARIABLES_PATH and source_root == "/"
+                and filesystem == "efivarfs"
+                and {"ro", "nosuid", "nodev", "noexec"} <= mount_options
+            ):
+                raise ValueError("EFI variable mount differs")
             continue
         if filesystem in kernel_filesystems and any(target == prefix or target.startswith(prefix + "/") for prefix in kernel_targets):
             continue
