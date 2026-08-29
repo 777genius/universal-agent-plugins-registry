@@ -26,6 +26,10 @@ from directory_publication import (  # noqa: E402
     validate_with_schema,
 )
 from build_registry import RegistryError, validate_directory  # noqa: E402
+from directory_publication_cas import (  # noqa: E402
+    CasError,
+    validate_staged_lineage,
+)
 from launch_observer_signatures import (  # noqa: E402
     validate_evidence_redaction,
     verify_observer_bundle,
@@ -821,28 +825,6 @@ def verify_completed_state(
         fail("completed launch approval target is missing")
     approval_target = approval.stdout.decode().strip()
     evidence_parent = ledger_parents[0]
-    if _git(
-        ledger_repo, ["merge-base", "--is-ancestor", approval_target, evidence_parent], check=False,
-    ).returncode != 0:
-        fail("completed approval target is not an ancestor of the evidence parent")
-    descendants = _git(
-        ledger_repo,
-        ["rev-list", "--reverse", "--ancestry-path", f"{approval_target}..{evidence_parent}"],
-    ).stdout.decode().splitlines()
-    previous = approval_target
-    for descendant in descendants:
-        parents = _git(
-            ledger_repo, ["show", "-s", "--format=%P", descendant],
-        ).stdout.decode().strip().split()
-        if parents != [previous]:
-            fail("completed pre-evidence lineage is not linear")
-        changed = _git(
-            ledger_repo,
-            ["diff-tree", "--no-commit-id", "--name-only", "-r", previous, descendant],
-        ).stdout.decode().splitlines()
-        if not changed or any(not path.startswith("discovery/") for path in changed):
-            fail("completed pre-evidence lineage contains a non-Discovery append")
-        previous = descendant
     ledger_message = _git(ledger_repo, ["show", "-s", "--format=%B", ledger_commit]).stdout.decode()
     match = re.fullmatch(
         r"chore\(evidence\): persist stable launch evidence\n\n"
@@ -890,6 +872,21 @@ def verify_completed_state(
         or index.get("publication_source_commit") != expected_publication_source_commit
     ):
         fail("completed evidence index is not bound to this exact workflow run")
+    sequence_tag = (
+        "refs/tags/directory-publication-schema-1-sequence-"
+        f"{index['publication_sequence']:020d}"
+    )
+    signed = _git(ledger_repo, ["rev-parse", f"{sequence_tag}^{{commit}}"], check=False)
+    if signed.returncode != 0:
+        fail("completed signed publication target is missing")
+    try:
+        materialized = validate_staged_lineage(
+            ledger_repo, evidence_parent, signed.stdout.decode().strip(),
+        )
+    except (CasError, subprocess.SubprocessError) as error:
+        fail(f"completed signed-publication lineage is invalid: {error}")
+    if approval_target != materialized:
+        fail("completed launch approval is not the exact authenticated materialization child")
     with tempfile.TemporaryDirectory(prefix="uap-completed-evidence-") as temporary:
         bundle = Path(temporary)
         for name in (

@@ -463,15 +463,32 @@ class PermanentCommitTests(unittest.TestCase):
 
     def test_whole_run_retry_accepts_only_exact_persisted_state(self) -> None:
         publication_source_commit = "6" * 40
+        signed = self.parent
+        (self.repo / "discovery").mkdir()
+        (self.repo / "discovery" / "materialized.json").write_text("{}\n")
+        git(self.repo, "add", "discovery/materialized.json")
+        git(self.repo, "commit", "-qm", "chore(directory): materialize signed production site")
+        materialized = git(self.repo, "rev-parse", "HEAD")
+        discovery_commits = []
+        for sequence in (1, 2):
+            (self.repo / "discovery" / "latest.json").write_text(f'{{"sequence":{sequence}}}\n')
+            git(self.repo, "add", "discovery/latest.json")
+            git(self.repo, "commit", "-qm", f"chore(discovery): publish sequence {sequence}")
+            discovery_commits.append(git(self.repo, "rev-parse", "HEAD"))
+        evidence_parent = discovery_commits[-1]
         digest, files = self.files(
             publication_id="456", publication_source_commit=publication_source_commit,
         )
         result = evidence.materialize_commits(
             self.repo, self.repo, self.repo, files, repository="owner/repository",
-            main_parent=self.parent, ledger_parent=self.parent,
-            approval_target=self.parent, digest=digest,
+            main_parent=evidence_parent, ledger_parent=evidence_parent,
+            approval_target=materialized, digest=digest,
         )
-        git(self.repo, "tag", "directory-publication-schema-1-launch-approved", self.parent)
+        git(
+            self.repo, "tag", "directory-publication-schema-1-sequence-00000000000000000007",
+            signed,
+        )
+        git(self.repo, "tag", "directory-publication-schema-1-launch-approved", materialized)
         git(self.repo, "checkout", "-q", "--detach", result["ledger_commit"])
         base_files = dict(files)
         base_files.pop(evidence.ATTESTATION_BUNDLE_NAME)
@@ -492,7 +509,7 @@ class PermanentCommitTests(unittest.TestCase):
         ) as attach_two_lane_evidence:
             evidence.verify_completed_state(
                 self.repo, self.repo, repository="owner/repository",
-                main_commit=result["main_commit"], main_parent=self.parent,
+                main_commit=result["main_commit"], main_parent=evidence_parent,
                 expected_run_id="123", source_digest="4" * 40,
                 expected_publication_id="456",
                 expected_publication_source_commit=publication_source_commit,
@@ -504,7 +521,7 @@ class PermanentCommitTests(unittest.TestCase):
             with self.assertRaisesRegex(evidence.EvidenceError, "exact workflow run"):
                 evidence.verify_completed_state(
                     self.repo, self.repo, repository="owner/repository",
-                    main_commit=result["main_commit"], main_parent=self.parent,
+                    main_commit=result["main_commit"], main_parent=evidence_parent,
                     expected_run_id="999", source_digest="4" * 40,
                     expected_publication_id="456",
                     expected_publication_source_commit=publication_source_commit,
@@ -526,6 +543,37 @@ class PermanentCommitTests(unittest.TestCase):
                 attach_two_lane_evidence.call_args.kwargs["publication_source_commit"],
                 publication_source_commit,
             )
+            for label, substituted_target in (
+                ("evidence parent", evidence_parent),
+                ("later Discovery-only commit", discovery_commits[0]),
+                ("adjacent signed commit", signed),
+            ):
+                with self.subTest(substituted_approval_target=label):
+                    git(
+                        self.repo, "tag", "-f",
+                        "directory-publication-schema-1-launch-approved", substituted_target,
+                    )
+                    build_bundle.reset_mock()
+                    verify_attestation.reset_mock()
+                    attach_two_lane_evidence.reset_mock()
+                    with self.assertRaisesRegex(
+                        evidence.EvidenceError,
+                        "exact authenticated materialization child",
+                    ):
+                        evidence.verify_completed_state(
+                            self.repo, self.repo, repository="owner/repository",
+                            main_commit=result["main_commit"], main_parent=evidence_parent,
+                            expected_run_id="123", source_digest="4" * 40,
+                            expected_publication_id="456",
+                            expected_publication_source_commit=publication_source_commit,
+                            caller_event_name="push", caller_ref="refs/heads/main",
+                            caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
+                            approval_tag="refs/tags/directory-publication-schema-1-launch-approved",
+                            observer_public_key="trusted-key", observer_key_id="observer-v1",
+                        )
+                    build_bundle.assert_not_called()
+                    verify_attestation.assert_not_called()
+                    attach_two_lane_evidence.assert_not_called()
 
     def test_existing_immutable_digest_root_is_rejected(self) -> None:
         digest, files = self.files()
