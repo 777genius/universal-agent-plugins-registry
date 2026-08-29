@@ -11,6 +11,12 @@ on:
       - "scripts/directory_publication.py"
       - "scripts/directory_publication_cas.py"
       - "scripts/materialize_launch_evidence.py"
+      - "scripts/two_lane_evidence.py"
+      - "scripts/build_two_lane_readiness.py"
+      - "scripts/run_source_policy_conformance.py"
+      - "tests/e2e/source-policy-*.json"
+      - "schemas/e2e/*policy*.schema.json"
+      - "schemas/e2e/two-lane-readiness.schema.json"
       - "scripts/prepare_directory_publication.py"
       - "scripts/publication_trust_policy.py"
       - "scripts/sign_directory_publication.py"
@@ -928,6 +934,14 @@ jobs:
         with:
           name: ${{ needs.required_stable_launch_evidence.outputs.attestation_artifact_name }}
           path: launch-attestation
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.required_stable_launch_evidence.outputs.source_policy_artifact_name }}
+          path: source-policy-evidence
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.required_stable_launch_evidence.outputs.readiness_artifact_name }}
+          path: two-lane-readiness
       - name: Validate exact launch lineage, bundle, and workflow attestation
         env:
           EXPECTED_LEDGER_COMMIT: ${{ needs.materialize_site.outputs.ledger_commit }}
@@ -936,6 +950,8 @@ jobs:
           EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
           EXPECTED_SOURCE_COMMIT: ${{ needs.sign.outputs.marker_commit }}
           EXPECTED_EVIDENCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.launch_evidence_digest }}
+          EXPECTED_POLICY_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.source_policy_evidence_digest }}
+          EXPECTED_READINESS_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.readiness_evidence_digest }}
           EXPECTED_EVIDENCE_RUN_ATTEMPT: ${{ needs.required_stable_launch_evidence.outputs.evidence_run_attempt }}
           WORKFLOW_SOURCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.workflow_source_digest }}
         run: |
@@ -959,6 +975,18 @@ jobs:
             --verify-attestation --attestation-bundle launch-attestation/github-attestation.jsonl \
             --output verified-evidence.json
           test "$(python3 -c 'import json; print(json.load(open("verified-evidence.json"))["launch_evidence_digest"])')" = "${EXPECTED_EVIDENCE_DIGEST}"
+          test "sha256:$(sha256sum source-policy-evidence/source-policy-conformance.json | cut -d' ' -f1)" = "${EXPECTED_POLICY_DIGEST}"
+          test "sha256:$(sha256sum two-lane-readiness/two-lane-readiness.json | cut -d' ' -f1)" = "${EXPECTED_READINESS_DIGEST}"
+          python3 trusted-source/scripts/build_two_lane_readiness.py \
+            --runtime launch-evidence/launch-evidence.json \
+            --policy source-policy-evidence/source-policy-conformance.json \
+            --uap-sha "${WORKFLOW_SOURCE_DIGEST}" \
+            --directory-ledger-sha "${EXPECTED_LEDGER_COMMIT}" \
+            --publication-id "${EXPECTED_PUBLICATION_ID}" \
+            --publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
+            --publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
+            --publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \
+            --completed two-lane-readiness/two-lane-readiness.json
           python3 trusted-source/registry/publication/launch_approval.py \
             --repo approved-ledger \
             --contract trusted-source/registry/publication/launch-approved-marker.json \
@@ -980,6 +1008,7 @@ jobs:
           WORKFLOW_SOURCE_DIGEST: ${{ needs.required_stable_launch_evidence.outputs.workflow_source_digest }}
         run: |
           python3 trusted-source/scripts/materialize_launch_evidence.py commit \
+            --uap-sha "${WORKFLOW_SOURCE_DIGEST}" \
             --artifact-dir launch-evidence --repository "${GITHUB_REPOSITORY}" \
             --workflow "${GITHUB_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml" \
             --source-ref refs/heads/main --source-digest "${WORKFLOW_SOURCE_DIGEST}" \
@@ -993,6 +1022,8 @@ jobs:
             --source-repo trusted-source --ledger-repo approved-ledger \
             --main-parent "${EXPECTED_SOURCE_COMMIT}" --ledger-parent "${EXPECTED_LEDGER_COMMIT}" \
             --attestation-bundle launch-attestation/github-attestation.jsonl \
+            --policy-evidence source-policy-evidence/source-policy-conformance.json \
+            --readiness-evidence two-lane-readiness/two-lane-readiness.json \
             --output persistence.json
           main_commit="$(python3 -c 'import json; print(json.load(open("persistence.json"))["main_commit"])')"
           ledger_commit="$(python3 -c 'import json; print(json.load(open("persistence.json"))["ledger_commit"])')"

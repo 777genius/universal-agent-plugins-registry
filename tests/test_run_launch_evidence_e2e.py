@@ -556,6 +556,7 @@ import run_launch_evidence_e2e
             output = run_root / "evidence" / "launch-evidence.json"
             completed = subprocess.run([
                 sys.executable, str(MODULE), "--mode", "fixture-only",
+                "--uap-sha", "a" * 40,
                 "--consent", str(CONSENT), "--run-root", str(run_root),
                 "--output", str(output),
             ], cwd=ROOT, text=True, capture_output=True, check=False)
@@ -599,7 +600,7 @@ import run_launch_evidence_e2e
     def test_fixture_mode_is_explicitly_non_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e, "ROOT", Path("/opt/test-repository")):
             evidence = self.fixture_harness(Path(tmp) / "fresh").export()
-        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["schema_version"], 4)
         self.assertEqual(evidence["run"]["mode"], "fixture-only")
         self.assertFalse(evidence["run"]["runtime_claims"])
         self.assertFalse(evidence["summary"]["required_gates_complete"])
@@ -2085,7 +2086,7 @@ with tempfile.TemporaryDirectory() as temporary:
                     PUBLICATION / "trusted-keys.json",
                 )
 
-    def test_real_binary_directory_environment_has_exact_conformance_tuple(self) -> None:
+    def test_real_binary_directory_environment_forwards_only_candidate_origin(self) -> None:
         directory_environment = {
             "AGENTPLUGINS_DIRECTORY_ORIGIN": "https://directory.example.test/registry/",
             "AGENTPLUGINS_DIRECTORY_SNAPSHOT": str(PUBLICATION / "snapshot.json"),
@@ -2098,7 +2099,10 @@ with tempfile.TemporaryDirectory() as temporary:
             env = e2e.isolated_environment(sandbox, ("cursor",), directory_environment)
         directory_keys = {key for key in env if key.startswith("AGENTPLUGINS_DIRECTORY_")}
         self.assertEqual(directory_keys, e2e.DIRECTORY_LAUNCH_ENVIRONMENT_KEYS)
-        self.assertEqual(env["AGENTPLUGINS_DIRECTORY_CONFORMANCE_ONLY"], "1")
+        self.assertEqual(env["AGENTPLUGINS_DIRECTORY_ORIGIN"], directory_environment["AGENTPLUGINS_DIRECTORY_ORIGIN"])
+        self.assertNotIn("AGENTPLUGINS_DIRECTORY_SNAPSHOT", env)
+        self.assertNotIn("AGENTPLUGINS_DIRECTORY_TRUST", env)
+        self.assertNotIn("AGENTPLUGINS_DIRECTORY_CACHE", env)
 
     def test_partial_real_binary_directory_environment_is_rejected(self) -> None:
         partial = {
@@ -2374,8 +2378,8 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertNotIn("lifecycle_verified", item["properties"])
         self.assertNotIn("lifecycle_operations", item["properties"])
         self.assertNotIn("copilot", schema["$defs"]["nativeDiscoveryEvidence"]["properties"]["client"]["enum"])
-        launch = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
-        discovery_rule = launch["properties"]["matrix"]["items"]["allOf"][0]
+        launch = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
+        discovery_rule = launch["properties"]["matrix"]["items"]["allOf"][1]
         self.assertEqual(discovery_rule["then"]["properties"]["details"]["properties"]["evidence_basis"]["const"], "native_client_command")
         with tempfile.TemporaryDirectory() as tmp:
             artifact = Path(tmp) / "external.json"
@@ -2540,7 +2544,7 @@ with tempfile.TemporaryDirectory() as temporary:
         evidence["matrix"].append(row)
         evidence["run"]["mode"] = "contract-test"
         e2e.assert_redacted(evidence)
-        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
         jsonschema.Draft202012Validator(schema).evolve(
             schema=schema["properties"]["matrix"]["items"],
         ).validate(row)
@@ -2556,7 +2560,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 e2e.assert_redacted(rejected)
 
     def test_launch_schema_rejects_unknown_outcome_and_mutable_ref(self) -> None:
-        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence.schema.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
         evidence = self.fixture_harness().export()
         evidence["matrix"][0]["outcome"] = "not_tested"
         with self.assertRaises(jsonschema.ValidationError):
@@ -4987,78 +4991,15 @@ else: raise SystemExit(2)
             expected_release,
             {**expected_identity, "canonical_source": "upstash/context7@" + "1" * 40 + "//plugins/context7"},
         ))
-        for name, identity in (
-            ("missing", None),
-            ("missing_product", {key: value for key, value in expected_identity.items() if key != "product_id"}),
-            ("unauthorized_fork", {**expected_identity, "source_repository": "attacker/context7", "canonical_source": "attacker/context7@" + "1" * 40 + "//plugins/context7"}),
-            ("wrong_path", {**expected_identity, "source_path": "plugins/other", "canonical_source": "upstash/context7@" + "1" * 40 + "//plugins/other"}),
-            ("wrong_manifest", {**expected_identity, "manifest_digest": "sha256:" + "8" * 64}),
-            ("canonical_repository_mismatch", {**expected_identity, "canonical_source": "attacker/context7@" + "1" * 40 + "//plugins/context7"}),
-            ("canonical_sha_mismatch", {**expected_identity, "canonical_source": "upstash/context7@" + "2" * 40 + "//plugins/context7"}),
-            ("canonical_path_mismatch", {**expected_identity, "canonical_source": "upstash/context7@" + "1" * 40 + "//plugins/other"}),
-            ("spoofed_kind", {**expected_identity, "distribution_kind": "community_bridge"}),
-            ("spoofed_digest", {**expected_identity, "tree_digest": "sha256:" + "9" * 64}),
-        ):
-            with self.subTest(name=name):
-                harness = self.fixture_harness()
-                harness.config = {
-                    **harness.config, "fault_scenarios": [], "adapter_repair_faults": [],
-                    "advanced_scenarios": ["upstream_owned_short_name"],
-                    "source_identity_scenarios": {"upstream_owned_short_name": {
-                        "product_id": "context7", "distribution_id": "upstash/context7", "distribution_kind": "upstream",
-                    }},
-                }
-                value = {
-                    "source_kind": "upstream", "immutable_revision": True, "exact_source_identity": True,
-                    "source_identity": identity, "tuple": {"distribution_id": "spoofed/tuple"},
-                    "client_version": "manager-state-v1", "proof": {}, "command_traces": [],
-                }
-                with mock.patch.object(harness, "driven_scenario", return_value=("passed", value, "claimed")), mock.patch.object(
-                    harness, "configured_source_release", return_value=expected_release,
-                ):
-                    harness.fault_matrix()
-                self.assertEqual(harness.rows[0]["outcome"], "failed")
-                self.assertTrue(all(harness.rows[0]["tuple"][key] is None for key in (
-                    "product_id", "tree_digest", "distribution_id", "distribution_kind", "release_sequence",
-                )))
-
-        bridge_release = {
-            **expected_release, "product_id": "cloudflare-docs",
-            "distribution_id": "777genius/cloudflare-docs-bridge", "distribution_kind": "community_bridge",
-        }
-        bridge_identity = {key: bridge_release[key] for key in (
-            "product_id", "distribution_id", "distribution_kind", "release_sequence", "source_revision",
-            "source_repository", "source_path", "tree_digest", "manifest_digest",
-        )}
-        bridge_identity["canonical_source"] = "https://github.com/upstash/context7@" + "1" * 40 + "//plugins/context7"
-        self.assertTrue(e2e.LaunchHarness.source_identity_matches_release(bridge_release, bridge_identity))
-        self.assertFalse(e2e.LaunchHarness.source_identity_matches_release(
-            bridge_release, {**bridge_identity, "distribution_id": "upstash/context7"},
-        ))
-        self.assertFalse(e2e.LaunchHarness.source_identity_matches_release(bridge_release, None))
-
+        # Short-name identity is now a source-policy contract. It cannot be
+        # turned into a released-binary row, even when a manager-shaped value
+        # is supplied by a test observer.
         harness = self.fixture_harness()
-        harness.config = {
-            **harness.config, "fault_scenarios": [], "adapter_repair_faults": [],
-            "advanced_scenarios": ["upstream_owned_short_name"],
-            "source_identity_scenarios": {"upstream_owned_short_name": {
-                "product_id": "context7", "distribution_id": "upstash/context7", "distribution_kind": "upstream",
-            }},
-        }
-        exact_value = {
-            "source_kind": "upstream", "immutable_revision": True, "exact_source_identity": True,
-            "source_identity": expected_identity, "client_version": "manager-state-v1",
-            "proof": {}, "command_traces": [],
-        }
-        with mock.patch.object(harness, "driven_scenario", return_value=("passed", exact_value, "claimed")), mock.patch.object(
-            harness, "configured_source_release", return_value=expected_release,
-        ):
-            harness.fault_matrix()
-        exact_row = harness.rows[0]
-        self.assertEqual(exact_row["outcome"], "passed")
-        self.assertEqual(exact_row["details"]["evidence_basis"], "repository_owned_disposable_observer")
-        self.assertFalse(exact_row["details"]["runtime_proof"])
-        self.assertEqual(exact_row["tuple"]["source_repository"], expected_identity["source_repository"])
+        with mock.patch.object(harness, "fresh_sandbox") as sandbox, mock.patch.object(e2e.subprocess, "run") as process:
+            with self.assertRaisesRegex(ValueError, "source-policy conformance"):
+                harness.driven_scenario("upstream_owned_short_name")
+        sandbox.assert_not_called()
+        process.assert_not_called()
 
     def test_canonical_github_source_parser_rejects_noncanonical_identity(self) -> None:
         revision = "1" * 40

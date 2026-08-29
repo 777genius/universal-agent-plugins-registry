@@ -42,6 +42,82 @@ def pinned_requirements(body: str) -> set[str]:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_every_launch_harness_invocation_supplies_the_explicit_uap_sha(self) -> None:
+        command = re.compile(r"run_launch_evidence_e2e\.py(?:[^\n]*\\\n)*[^\n]*")
+        observed = []
+        for path in (LAUNCH, LIVE):
+            workflow = load(path)
+            body = "\n".join(commands(job) for job in workflow["jobs"].values() if "steps" in job)
+            matches = command.findall(body)
+            observed.extend((path, invocation) for invocation in matches)
+            for invocation in matches:
+                with self.subTest(path=path.name, invocation=invocation):
+                    self.assertIn("--uap-sha", invocation)
+        documentation = ROOT / "tests/e2e/LAUNCH_EVIDENCE.md"
+        for invocation in command.findall(documentation.read_text()):
+            observed.append((documentation, invocation))
+            self.assertIn("--uap-sha", invocation)
+        self.assertEqual(len(observed), 4)
+
+    def test_two_lane_evidence_is_independent_until_canonical_readiness(self) -> None:
+        launch = load(LAUNCH)
+        runtime = launch["jobs"]["enforced-stable-gate"]
+        policy = launch["jobs"]["source-policy-conformance"]
+        readiness = launch["jobs"]["two-lane-readiness"]
+        self.assertNotIn("source-policy-conformance", runtime["needs"])
+        self.assertEqual(set(readiness["needs"]), {"attest-stable-evidence", "source-policy-conformance"})
+        self.assertIn("needs.attest-stable-evidence.result == 'success'", readiness["if"])
+        self.assertIn("needs.source-policy-conformance.result == 'success'", readiness["if"])
+        for job in (policy, readiness):
+            self.assertEqual(job["steps"][0]["name"], "Validate the unmodified canonical publication sequence")
+        policy_body = commands(policy)
+        self.assertIn("74a3790ee15d92afda8e8e3dd8f903c04811cfc7", yaml.safe_dump(policy))
+        self.assertIn("agentplugins-v0.1.18", policy_body)
+        self.assertIn("run_source_policy_conformance.py", policy_body)
+        self.assertNotIn("DIRECTORY_SIGNING", yaml.safe_dump(policy))
+        readiness_body = commands(readiness)
+        self.assertIn("build_two_lane_readiness.py", readiness_body)
+        for argument in (
+            "--uap-sha", "--directory-ledger-sha", "--publication-id",
+            "--publication-sequence", "--publication-snapshot-digest",
+            "--publication-source-commit",
+        ):
+            self.assertIn(argument, readiness_body)
+        self.assertIn("two-lane-readiness.schema.json", readiness_body)
+
+    def test_directory_completed_readiness_replay_uses_exact_authenticated_identity(self) -> None:
+        publication = load(DIRECTORY_PUBLICATION)
+        body = "\n".join(commands(job) for job in publication["jobs"].values() if "steps" in job)
+        invocation_pattern = re.compile(
+            r"python3 trusted-source/scripts/build_two_lane_readiness\.py(?:[^\n]*\\\n)*[^\n]*"
+        )
+        invocations = invocation_pattern.findall(body)
+        self.assertEqual(len(invocations), 1, "stale or duplicate production readiness invocation")
+        self.assertEqual(invocations[0], """python3 trusted-source/scripts/build_two_lane_readiness.py \\
+  --runtime launch-evidence/launch-evidence.json \\
+  --policy source-policy-evidence/source-policy-conformance.json \\
+  --uap-sha "${WORKFLOW_SOURCE_DIGEST}" \\
+  --directory-ledger-sha "${EXPECTED_LEDGER_COMMIT}" \\
+  --publication-id "${EXPECTED_PUBLICATION_ID}" \\
+  --publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \\
+  --publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \\
+  --publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \\
+  --completed two-lane-readiness/two-lane-readiness.json""")
+
+    def test_source_policy_transport_contains_no_released_executable(self) -> None:
+        launch = load(LAUNCH)
+        producer = launch["jobs"]["node22-npm-facade"]
+        policy = launch["jobs"]["source-policy-conformance"]
+        upload = next(step for step in producer["steps"] if step.get("with", {}).get("name", "").startswith("prepared-policy-inputs-"))
+        self.assertEqual(set(upload["with"]["path"].splitlines()), {
+            "prepared-policy-inputs/release-manifest.json", "prepared-policy-inputs/checksums.txt",
+        })
+        downloads = [step["with"]["name"] for step in policy["steps"] if "download-artifact" in step.get("uses", "")]
+        self.assertEqual(len(downloads), 1)
+        self.assertTrue(downloads[0].startswith("prepared-policy-inputs-"))
+        self.assertNotIn("prepared-producer-inputs", yaml.safe_dump(policy))
+        self.assertNotRegex(yaml.safe_dump(policy), r"agentplugins_0\.1\.18_(?:linux|darwin|windows)")
+
     def test_public_sequence_inputs_stay_canonical_strings_across_reusable_edges(self) -> None:
         launch = load(LAUNCH)
         live = load(LIVE)
@@ -1088,6 +1164,8 @@ class WorkflowContractTests(unittest.TestCase):
             {
                 "STABLE_E2E_RESULT": "${{ needs.required-stable-launch-evidence.result }}",
                 "PUBLIC_READ_RESULT": "${{ needs.public-read-flows.result }}",
+                "READINESS_DIGEST": "${{ needs.required-stable-launch-evidence.outputs.readiness_evidence_digest }}",
+                "POLICY_DIGEST": "${{ needs.required-stable-launch-evidence.outputs.source_policy_evidence_digest }}",
             },
         )
         body = commands(gate)
@@ -1247,6 +1325,8 @@ class WorkflowContractTests(unittest.TestCase):
         expected_outputs = {
             "evidence_artifact_name", "launch_evidence_digest", "workflow_source_digest",
             "evidence_run_attempt", "attestation_artifact_name",
+            "source_policy_artifact_name", "source_policy_evidence_digest",
+            "readiness_artifact_name", "readiness_evidence_digest",
         }
         self.assertEqual(set(launch["on"]["workflow_call"]["outputs"]), expected_outputs)
         self.assertEqual(set(live["on"]["workflow_call"]["outputs"]), expected_outputs)
