@@ -4320,13 +4320,14 @@ class FixedAdapterContractTests(unittest.TestCase):
             + "12 10 0:59 / /sys/firmware/efi/efivars "
             "ro,nosuid,nodev,noexec - efivarfs efivarfs rw\n",
         )
-        for target, options in (
-            ("/sys/firmware/efi/efivars", "rw,nosuid,nodev,noexec"),
-            ("/sys/firmware/efi/foreign", "ro,nosuid,nodev,noexec"),
+        for source, target, options in (
+            ("/", "/sys/firmware/efi/efivars", "rw,nosuid,nodev,noexec"),
+            ("/", "/sys/firmware/efi/foreign", "ro,nosuid,nodev,noexec"),
+            ("/host/firmware", "/sys/firmware/efi/efivars", "ro,nosuid,nodev,noexec"),
         ):
             with self.subTest(target=target), self.assertRaisesRegex(ValueError, "EFI variable"):
                 fixed_adapters.verify_positive_mount_namespace(
-                    root + f"12 10 0:59 / {target} {options} - efivarfs efivarfs rw\n",
+                    root + f"12 10 0:59 {source} {target} {options} - efivarfs efivarfs rw\n",
                 )
         for target in ("/var/www/customer-project", "/usr/local/src/repository", "/workspace/project", "/var/www/link-to-project", "/var/lib/uap-observer/state"):
             with self.subTest(target=target), self.assertRaisesRegex(ValueError, "non-allowlisted"):
