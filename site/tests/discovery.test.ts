@@ -129,14 +129,14 @@ describe('signed public Discovery Index', () => {
     assert.equal((await verifyDiscovery(boundary.bytes, boundary.trust, {}, now)).snapshot.sequence, maximum)
     const aliases = JSON.parse('[9007199254740992,9007199254740993]') as number[]
     assert.equal(aliases[0], aliases[1], 'the regression requires the known JSON/Number alias')
-    for (const unsafe of [9_007_199_254_740_992, 9_007_199_254_740_993]) {
+    for (const unsafe of aliases) {
       const data = fixture(unsafe)
       await assert.rejects(verifyDiscovery(data.bytes, data.trust, {}, now), /non-integer number|invalid/)
     }
   })
 
   it('rejects each unsafe sequence field independently before alias comparison or path use', async () => {
-    const aliases = [9_007_199_254_740_992, 9_007_199_254_740_993]
+    const aliases = [Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER + 2]
     for (const artifact of ['pointer', 'envelope', 'snapshot', 'search'] as const) {
       for (const unsafe of aliases) {
         const data = fixture(7)
