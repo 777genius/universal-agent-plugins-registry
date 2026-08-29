@@ -1608,6 +1608,46 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(snapshot.exists())
 
+    def test_observer_config_pin_wrong_digest_preserves_source_stat_metadata(self) -> None:
+        if os.geteuid() != 0:
+            self.skipTest("production observer config pin requires root-owned input")
+        repository = Path(__file__).parents[2]
+        installer = (repository / "deploy/uap-observer-install.sh").read_text()
+        start = installer.index("pin_observer_config() {")
+        function = installer[start:installer.index("\nPY\n}\n", start) + 6]
+        runner_digest = hashlib.sha256((repository / "observer/fixed_runner.py").read_bytes()).hexdigest()
+        encoded = (repository / "deploy/uap-observer.json").read_bytes()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.json"
+            snapshot = root / "snapshot.json"
+            source.write_bytes(encoded)
+            initial = source.stat()
+            armed_atime_ns = initial.st_mtime_ns - 3 * 24 * 60 * 60 * 1_000_000_000
+            os.utime(source, ns=(armed_atime_ns, initial.st_mtime_ns))
+            before = source.stat()
+            self.assertEqual(before.st_atime_ns, armed_atime_ns)
+            self.assertLess(before.st_atime_ns, before.st_mtime_ns)
+
+            result = subprocess.run(
+                ["/bin/sh", "-c", function + '\npin_observer_config "$1" "$2" "$3" "$4"',
+                 "sh", str(source), "sha256:" + "0" * 64, runner_digest, str(snapshot)],
+                env={**os.environ, "PATH": "/usr/local/bin:/usr/bin:/bin"},
+                text=True, capture_output=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("digest differs", result.stderr)
+            self.assertFalse(snapshot.exists())
+            after = source.stat()
+            metadata = lambda info: (
+                info.st_mode, info.st_ino, info.st_dev, info.st_nlink, info.st_uid,
+                info.st_gid, info.st_size, info.st_atime_ns, info.st_mtime_ns,
+                info.st_ctime_ns,
+            )
+            self.assertEqual(metadata(after), metadata(before))
+
     def test_observer_config_pin_fails_closed_on_source_swap(self) -> None:
         if os.geteuid() != 0:
             self.skipTest("production observer config pin requires root-owned input")

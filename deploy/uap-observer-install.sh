@@ -29,7 +29,7 @@ import hashlib,json,math,os,stat,sys
 
 maximum=256 << 10
 source_path,supplied_digest,runner_digest,snapshot_path=sys.argv[1:]
-flags=os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+flags=os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NOATIME
 source=os.open(source_path,flags)
 def identity(info):
     return (info.st_dev,info.st_ino,info.st_mode,info.st_nlink,info.st_uid,
