@@ -28,7 +28,7 @@ on:
       publication_sequence:
         description: Exact staged snapshot sequence produced by the caller
         required: true
-        type: number
+        type: string
       publication_snapshot_digest:
         description: Exact sha256 digest of the caller's signed snapshot bytes
         required: true
@@ -79,7 +79,7 @@ on:
       publication_sequence:
         description: Exact published snapshot sequence to verify
         required: true
-        type: number
+        type: string
       publication_snapshot_digest:
         description: Exact sha256 digest of the signed snapshot bytes
         required: true
@@ -104,6 +104,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-publication-sequence:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
+
   fixture-only-non-runtime:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -129,7 +146,8 @@ jobs:
           python -m unittest tests.test_run_launch_evidence_e2e tests.test_materialize_launch_evidence tests.test_workflow_contracts
 
   native-release:
-    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    needs: [validate-publication-sequence]
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     strategy:
       fail-fast: false
       matrix:
@@ -148,6 +166,16 @@ jobs:
     outputs:
       evidence_run_attempt: ${{ steps.identity.outputs.run_attempt }}
     steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -196,7 +224,8 @@ jobs:
         run: echo "run_attempt=${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
   node22-npm-facade:
-    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    needs: [validate-publication-sequence]
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -205,6 +234,16 @@ jobs:
     outputs:
       evidence_run_attempt: ${{ steps.identity.outputs.run_attempt }}
     steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -277,7 +316,7 @@ jobs:
           overwrite: false
 
   aggregate-one-release:
-    if: always() && inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    if: always() && inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     needs: [native-release, node22-npm-facade]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -287,6 +326,16 @@ jobs:
     outputs:
       evidence_run_attempt: ${{ steps.identity.outputs.run_attempt }}
     steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -344,7 +393,7 @@ jobs:
           echo "run_attempt=${NODE_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
   protected-observer-inputs:
-    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     needs: [node22-npm-facade, aggregate-one-release]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -358,6 +407,16 @@ jobs:
       observer_public_key: ${{ steps.observer.outputs.public_key }}
       observer_key_id: ${{ steps.observer.outputs.key_id }}
     steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -490,7 +549,7 @@ jobs:
         run: echo "run_attempt=${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
   enforced-stable-gate:
-    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     needs: [native-release, node22-npm-facade, aggregate-one-release, protected-observer-inputs]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -503,6 +562,16 @@ jobs:
       workflow_source_digest: ${{ steps.bundle.outputs.source_digest }}
       evidence_run_attempt: ${{ steps.bundle.outputs.run_attempt }}
     steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
@@ -632,7 +701,7 @@ jobs:
           overwrite: false
 
   attest-stable-evidence:
-    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     needs: [enforced-stable-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -649,6 +718,16 @@ jobs:
       evidence_run_attempt: ${{ needs.enforced-stable-gate.outputs.evidence_run_attempt }}
       attestation_artifact_name: ${{ steps.attestation-identity.outputs.artifact_name }}
     steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

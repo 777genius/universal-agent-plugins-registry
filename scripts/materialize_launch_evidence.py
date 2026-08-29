@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from directory_publication import (  # noqa: E402
+    JSON_SAFE_INTEGER_MAX,
     PublicationError,
     canonical_json,
     parse_json_bytes,
@@ -29,6 +30,7 @@ from launch_observer_signatures import (  # noqa: E402
     validate_evidence_redaction,
     verify_observer_bundle,
 )
+from sequence_boundaries import parse_public_sequence  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -343,8 +345,11 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
     require_sha(expected_source_commit, "publication source commit")
     if not expected_run_id.isdigit() or not expected_run_attempt.isdigit() or not expected_publication_id.isdigit():
         fail("run ID, run attempt, and publication ID must be decimal strings")
-    if type(expected_sequence) is not int or expected_sequence < 1:
-        fail("publication sequence must be a positive integer")
+    if (
+        type(expected_sequence) is not int
+        or not 1 <= expected_sequence <= JSON_SAFE_INTEGER_MAX
+    ):
+        fail("publication sequence must be a safe positive integer")
     if DIGEST_RE.fullmatch(expected_snapshot_digest) is None:
         fail("publication snapshot digest is invalid")
 
@@ -888,7 +893,7 @@ def common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--expected-caller-ref", required=True)
     parser.add_argument("--expected-caller-workflow-ref", required=True)
     parser.add_argument("--expected-publication-id", required=True)
-    parser.add_argument("--expected-publication-sequence", type=int, required=True)
+    parser.add_argument("--expected-publication-sequence", type=parse_public_sequence, required=True)
     parser.add_argument("--expected-publication-snapshot-digest", required=True)
     parser.add_argument("--expected-publication-source-commit", required=True)
     parser.add_argument("--verify-observer", action="store_true")

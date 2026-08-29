@@ -11,7 +11,7 @@ on:
         type: string
       publication_sequence:
         required: true
-        type: number
+        type: string
       publication_snapshot_digest:
         required: true
         type: string
@@ -64,7 +64,7 @@ on:
       publication_sequence:
         description: Exact staged snapshot sequence to verify
         required: true
-        type: number
+        type: string
       publication_snapshot_digest:
         description: Exact sha256 digest of the staged snapshot bytes
         required: true
@@ -88,8 +88,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-publication-sequence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Validate the unmodified canonical publication sequence
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUBLICATION_SEQUENCE: ${{ inputs.publication_sequence }}
+          LC_ALL: C
+        run: |
+          if test "$EVENT_NAME" = schedule; then
+            exit 0
+          fi
+          value="$PUBLICATION_SEQUENCE"
+          case "$value" in ""|0*|*[!0-9]*) exit 1 ;; esac
+          maximum=9007199254740991
+          test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
+
   required-stable-launch-evidence:
-    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    needs: [validate-publication-sequence]
+    if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     uses: ./.github/workflows/launch-evidence-e2e.yml
     with:
       consent: ${{ inputs.consent }}
@@ -108,6 +129,7 @@ jobs:
       id-token: write
 
   public-read-flows:
+    needs: [validate-publication-sequence]
     if: github.event_name == 'schedule' || inputs.consent || inputs.run_scheduled_regression
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -135,8 +157,9 @@ jobs:
 
   required-live-e2e:
     name: Require complete live E2E results
-    if: always() && inputs.consent && inputs.publication_id != '' && inputs.publication_sequence > 0 && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
+    if: always() && needs.validate-publication-sequence.result == 'success' && inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     needs:
+      - validate-publication-sequence
       - required-stable-launch-evidence
       - public-read-flows
     runs-on: ubuntu-24.04
@@ -159,6 +182,7 @@ jobs:
           test "$PUBLIC_READ_RESULT" = success
 
   scheduled-fixture-contract:
+    needs: [validate-publication-sequence]
     if: github.event_name == 'schedule' || inputs.run_scheduled_regression
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -184,6 +208,7 @@ jobs:
           python -m unittest tests.test_run_launch_evidence_e2e tests.test_materialize_launch_evidence tests.test_workflow_contracts
 
   scheduled-production-directory-observation:
+    needs: [validate-publication-sequence]
     if: github.event_name == 'schedule' || inputs.run_scheduled_regression
     runs-on: ubuntu-24.04
     timeout-minutes: 10
