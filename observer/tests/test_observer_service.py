@@ -4315,6 +4315,11 @@ class FixedAdapterContractTests(unittest.TestCase):
             + "13 10 0:25 /systemd/inaccessible/dir /usr/lib/modules "
             "ro,nosuid,nodev,noexec - tmpfs tmpfs rw\n",
         )
+        fixed_adapters.verify_positive_mount_namespace(
+            root
+            + "12 10 0:59 / /sys/firmware/efi/efivars "
+            "ro,nosuid,nodev,noexec - efivarfs efivarfs rw\n",
+        )
         for target in ("/var/www/customer-project", "/usr/local/src/repository", "/workspace/project", "/var/www/link-to-project", "/var/lib/uap-observer/state"):
             with self.subTest(target=target), self.assertRaisesRegex(ValueError, "non-allowlisted"):
                 fixed_adapters.verify_positive_mount_namespace(allowed + f"12 10 8:2 /project {target} ro - ext4 /dev/fixture ro\n")

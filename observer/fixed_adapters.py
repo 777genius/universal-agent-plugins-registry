@@ -626,7 +626,7 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         key=len, reverse=True,
     ))
     kernel_filesystems = {
-        "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
+        "tmpfs", "proc", "sysfs", "efivarfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
         "hugetlbfs", "securityfs", "tracefs", "pstore", "bpf", "autofs", "ramfs",
     }
     kernel_targets = ("/proc", "/sys", "/dev")
