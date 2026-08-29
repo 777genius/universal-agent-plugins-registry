@@ -349,7 +349,10 @@ class PermanentCommitTests(unittest.TestCase):
         self.temporary.cleanup()
         self.validator_patch.stop()
 
-    def files(self, publication_id: str = "123") -> tuple[str, dict[str, bytes]]:
+    def files(
+        self, publication_id: str = "123", publication_source_commit: str | None = None,
+    ) -> tuple[str, dict[str, bytes]]:
+        publication_source_commit = publication_source_commit or self.parent
         record = {
             "schema_version": 1, "id": "launch/demo/codex/runtime/0123456789abcdef01234567",
             "product_id": "demo", "distribution_id": "publisher/demo", "release_sequence": 1,
@@ -362,7 +365,7 @@ class PermanentCommitTests(unittest.TestCase):
             "dependency_identity": "dependency", "observed_at": "2026-08-23T00:00:00Z",
         }
         path = "directory-evidence/records/demo-codex-runtime.json"
-        launch = evidence.canonical_json({"launch": True})
+        launch = evidence.canonical_json({"schema_version": 4, "launch": True})
         record_body = evidence.canonical_json(record)
         digest = evidence.sha256(launch)
         observer = evidence.canonical_json({"bundle": True})
@@ -377,7 +380,7 @@ class PermanentCommitTests(unittest.TestCase):
             "caller_workflow_ref": "owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
             "publication_id": publication_id, "publication_sequence": 7,
             "publication_snapshot_digest": "sha256:" + "5" * 64,
-            "publication_source_commit": self.parent,
+            "publication_source_commit": publication_source_commit,
             "records": [{"id": record["id"], "path": path, "digest": evidence.sha256(record_body)}],
         }
         files = {
@@ -459,7 +462,10 @@ class PermanentCommitTests(unittest.TestCase):
         )
 
     def test_whole_run_retry_accepts_only_exact_persisted_state(self) -> None:
-        digest, files = self.files(publication_id="456")
+        publication_source_commit = "6" * 40
+        digest, files = self.files(
+            publication_id="456", publication_source_commit=publication_source_commit,
+        )
         result = evidence.materialize_commits(
             self.repo, self.repo, self.repo, files, repository="owner/repository",
             main_parent=self.parent, ledger_parent=self.parent,
@@ -471,7 +477,7 @@ class PermanentCommitTests(unittest.TestCase):
         base_files.pop(evidence.ATTESTATION_BUNDLE_NAME)
         base_files.pop("SHA256SUMS")
         base_files["SHA256SUMS"] = evidence.checksum_bytes(base_files)
-        def attach_sidecars(value, policy, readiness):
+        def attach_sidecars(value, policy, readiness, **_identity):
             result = dict(value)
             result.pop("SHA256SUMS", None)
             result[evidence.POLICY_EVIDENCE_NAME] = policy
@@ -481,13 +487,15 @@ class PermanentCommitTests(unittest.TestCase):
 
         with mock.patch.object(evidence, "build_bundle", return_value=(digest, base_files)) as build_bundle, mock.patch.object(
             evidence, "verify_attestation",
-        ) as verify_attestation, mock.patch.object(evidence, "attach_two_lane_evidence", side_effect=attach_sidecars):
+        ) as verify_attestation, mock.patch.object(
+            evidence, "attach_two_lane_evidence", side_effect=attach_sidecars,
+        ) as attach_two_lane_evidence:
             evidence.verify_completed_state(
                 self.repo, self.repo, repository="owner/repository",
                 main_commit=result["main_commit"], main_parent=self.parent,
                 expected_run_id="123", source_digest="4" * 40,
                 expected_publication_id="456",
-                expected_publication_source_commit=self.parent,
+                expected_publication_source_commit=publication_source_commit,
                 caller_event_name="push", caller_ref="refs/heads/main",
                 caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
                 approval_tag="refs/tags/directory-publication-schema-1-launch-approved",
@@ -499,7 +507,7 @@ class PermanentCommitTests(unittest.TestCase):
                     main_commit=result["main_commit"], main_parent=self.parent,
                     expected_run_id="999", source_digest="4" * 40,
                     expected_publication_id="456",
-                    expected_publication_source_commit=self.parent,
+                    expected_publication_source_commit=publication_source_commit,
                     caller_event_name="push", caller_ref="refs/heads/main",
                     caller_workflow_ref="owner/repository/.github/workflows/directory-publication.yml@refs/heads/main",
                     approval_tag="refs/tags/directory-publication-schema-1-launch-approved",
@@ -511,6 +519,13 @@ class PermanentCommitTests(unittest.TestCase):
                 evidence.ATTESTATION_BUNDLE_NAME,
             )
             self.assertFalse(build_bundle.call_args.kwargs["enforce_observer_freshness"])
+            self.assertEqual(
+                attach_two_lane_evidence.call_args.kwargs["publication_id"], "456",
+            )
+            self.assertEqual(
+                attach_two_lane_evidence.call_args.kwargs["publication_source_commit"],
+                publication_source_commit,
+            )
 
     def test_existing_immutable_digest_root_is_rejected(self) -> None:
         digest, files = self.files()

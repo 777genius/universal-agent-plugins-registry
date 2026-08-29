@@ -925,10 +925,10 @@ def verify_completed_state(
                 derived, files[POLICY_EVIDENCE_NAME], files[READINESS_EVIDENCE_NAME],
                 uap_sha=source_digest,
                 directory_ledger_sha=ledger_parents[0],
-                publication_id=expected_run_id,
+                publication_id=expected_publication_id,
                 publication_sequence=index["publication_sequence"],
                 publication_snapshot_digest=index["publication_snapshot_digest"],
-                publication_source_commit=main_parent,
+                publication_source_commit=expected_publication_source_commit,
             )
         write_bundle(bundle, derived)
     if files != derived:
