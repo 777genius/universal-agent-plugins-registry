@@ -1928,7 +1928,7 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         )
         self.assertEqual(service.count(homes), 1)
         self.assertEqual(
-            service.count("BindReadOnlyPaths=/opt/uap-observer-inputs\n"), 1,
+            service.splitlines().count("BindReadOnlyPaths=/opt/uap-observer-inputs"), 1,
         )
 
     def test_protected_adapters_import_only_the_immutable_runtime(self) -> None:
