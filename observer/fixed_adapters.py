@@ -89,6 +89,10 @@ FIXED_MOUNT_PATHS = (FIXED_INPUT_PATHS - {
     str(CHROME_BINARY),
 }) | ADAPTER_HOME_PATHS
 CLOSURE_MOUNT_SOURCE = re.compile(r"/opt/uap-observer-closures/[a-f0-9]{64}")
+FIXED_RESOLVED_MOUNT_SOURCES = {
+    "/lib": "/usr/lib",
+    "/lib64": "/usr/lib64",
+}
 PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,
     "credential_material_exported": False, "auth_copied": False,
@@ -626,7 +630,14 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
             matched == "/opt/uap-observer-current"
             and CLOSURE_MOUNT_SOURCE.fullmatch(source_root) is not None
         )
-        same_source = matched is not None and (source_root == matched or source_root.startswith(matched + "/"))
+        resolved_system_alias = (
+            matched == target
+            and FIXED_RESOLVED_MOUNT_SOURCES.get(target) == source_root
+        )
+        same_source = matched is not None and (
+            source_root == matched or source_root.startswith(matched + "/")
+            or resolved_system_alias
+        )
         if target not in fixed_paths and not same_source and not closure_alias:
             raise ValueError(f"allowlisted runtime path at {target} has a foreign mount source")
     if not root_seen:

@@ -4285,6 +4285,11 @@ class FixedAdapterContractTests(unittest.TestCase):
             + "12 10 8:2 /var/empty/uap-observer-codex "
             "/var/empty/uap-observer-codex ro - ext4 /dev/root ro\n",
         )
+        fixed_adapters.verify_positive_mount_namespace(
+            root
+            + "12 10 8:2 /usr/lib /lib ro - ext4 /dev/root ro\n"
+            + "13 10 8:2 /usr/lib64 /lib64 ro - ext4 /dev/root ro\n",
+        )
         for target in ("/var/www/customer-project", "/usr/local/src/repository", "/workspace/project", "/var/www/link-to-project", "/var/lib/uap-observer/state"):
             with self.subTest(target=target), self.assertRaisesRegex(ValueError, "non-allowlisted"):
                 fixed_adapters.verify_positive_mount_namespace(allowed + f"12 10 8:2 /project {target} ro - ext4 /dev/fixture ro\n")
@@ -4305,6 +4310,10 @@ class FixedAdapterContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "alternate-path bind"):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /srv/foreign /var/empty/uap-observer-codex ro - ext4 /dev/fixture ro\n",
+            )
+        with self.assertRaisesRegex(ValueError, "foreign mount source"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root + "12 10 8:2 /srv/foreign /lib ro - ext4 /dev/fixture ro\n",
             )
         with self.assertRaisesRegex(ValueError, "synthetic"):
             fixed_adapters.verify_positive_mount_namespace("10 1 8:1 / / ro - ext4 /dev/root ro\n")
