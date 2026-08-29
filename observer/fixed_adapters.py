@@ -604,7 +604,7 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
         "hugetlbfs", "securityfs", "tracefs", "pstore", "bpf", "autofs", "ramfs",
     }
-    kernel_targets = ("/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/run/credentials", "/run/systemd")
+    kernel_targets = ("/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/run")
     root_seen = False
     for line in mountinfo.splitlines():
         fields = line.split()
