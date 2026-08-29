@@ -437,23 +437,26 @@ jobs:
           test "$(git -C exact-discovery-tree rev-parse HEAD)" = "${DISCOVERY_LEDGER_COMMIT}"
           contract=trusted-source/registry/publication/production-marker.json
           marker_ref="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["marker_ref"])' "${contract}")"
+          tag_prefix="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sequence_tag_prefix"])' "${contract}")"
           production_commit="$(git -C exact-discovery-tree ls-remote --refs origin "${marker_ref}" | awk '{ print $1 }')"
           if test -z "${production_commit}"; then
             production_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bootstrap_materialized_commit"])' "${contract}")"
             bootstrap_sequence="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bootstrap_sequence"])' "${contract}")"
-            tag_prefix="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sequence_tag_prefix"])' "${contract}")"
-            bootstrap_ref="${tag_prefix}$(printf '%020d' "${bootstrap_sequence}")"
-            bootstrap_signed="$(git -C exact-discovery-tree rev-parse "${bootstrap_ref}^{commit}")"
-            git -C exact-discovery-tree fetch --no-tags origin "${production_commit}"
-            test "$(git -C exact-discovery-tree show -s --format=%P "${production_commit}")" = "${bootstrap_signed}"
-            test "$(git -C exact-discovery-tree show -s --format=%B "${production_commit}")" = "chore(directory): materialize signed production site"
-            test "$(git -C exact-discovery-tree show "${production_commit}:registry/schemas/1/latest.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sequence"])')" = "${bootstrap_sequence}"
-          else
-            [[ "${production_commit}" =~ ^[0-9a-f]{40}$ ]]
-            git -C exact-discovery-tree fetch --no-tags origin "${production_commit}"
           fi
           [[ "${production_commit}" =~ ^[0-9a-f]{40}$ ]]
+          git -C exact-discovery-tree fetch --no-tags origin "${production_commit}"
           git -C exact-discovery-tree merge-base --is-ancestor "${production_commit}" "${DISCOVERY_LEDGER_COMMIT}"
+          production_sequence="$(git -C exact-discovery-tree show "${production_commit}:registry/schemas/1/latest.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sequence"])')"
+          test "$(python3 trusted-source/scripts/sequence_boundaries.py validate "${production_sequence}")" = "${production_sequence}"
+          production_ref="${tag_prefix}$(printf '%020d' "${production_sequence}")"
+          production_signed="$(git -C exact-discovery-tree rev-parse "${production_ref}^{commit}")"
+          materialized_commit="$(python3 trusted-source/scripts/directory_publication_cas.py staged-lineage-verify \
+            --repo exact-discovery-tree --signed "${production_signed}" --current "${production_commit}")"
+          [[ "${materialized_commit}" =~ ^[0-9a-f]{40}$ ]]
+          if test -n "${bootstrap_sequence:-}"; then
+            test "${production_sequence}" = "${bootstrap_sequence}"
+            test "${materialized_commit}" = "${production_commit}"
+          fi
           git -C exact-discovery-tree worktree add --detach ../production-pages-tree "${production_commit}"
           echo "production_commit=${production_commit}" >> "$GITHUB_ENV"
       - name: Overlay only the exact signed Discovery feed
