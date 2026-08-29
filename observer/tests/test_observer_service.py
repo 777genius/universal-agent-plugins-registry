@@ -1448,6 +1448,109 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             installer,
         )
 
+    def test_installer_rejects_mismatched_runner_binding_before_install_effects(self) -> None:
+        repository = Path(__file__).parents[2]
+        installer = (repository / "deploy/uap-observer-install.sh").read_text()
+        call = (
+            'validate_observer_runner_binding "$untrusted_observer_config" '
+            '"$observer_config_digest" "$runner_digest"'
+        )
+        self.assertLess(
+            installer.index(call),
+            installer.index("observer_validate_first_install_closures_root"),
+        )
+        self.assertLess(
+            installer.index(call),
+            installer.index('install -d -o root -g root -m 0700 "$stage_root"'),
+        )
+        function_start = installer.index("validate_observer_runner_binding() {")
+        function_end = installer.index("\nPY\n}\n", function_start) + 6
+        function = installer[function_start:function_end]
+        runner_digest = hashlib.sha256((repository / "observer/fixed_runner.py").read_bytes()).hexdigest()
+        checked_in = json.loads((repository / "deploy/uap-observer.json").read_text())
+        for field, mismatch in (
+            ("runner_source_path", "/opt/not-the-installed-runner"),
+            ("runner_source_digest", "sha256:" + "0" * 64),
+            ("runner_socket", "/run/not-the-installed-runner.sock"),
+            ("runner_user", "uap-observer"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                config = dict(checked_in)
+                config[field] = mismatch
+                path = Path(temporary) / "observer.json"
+                path.write_text(json.dumps(config))
+                digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                result = subprocess.run(
+                    ["/bin/sh", "-c", function + '\nvalidate_observer_runner_binding "$1" "$2" "$3"',
+                     "sh", str(path), digest, runner_digest],
+                    env={**os.environ, "PATH": "/usr/local/bin:/usr/bin:/bin"},
+                    text=True, capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("runner binding differs", result.stderr)
+
+        if os.geteuid() != 0:
+            return
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture_installer = installer
+            fixture_helper = (repository / "deploy/uap-observer-install-lib.sh").read_text()
+            for old, new in (
+                ("/opt/", f"{root}/opt/"), ("/usr/local/", f"{root}/usr/local/"),
+                ("/etc/", f"{root}/etc/"), ("/run/", f"{root}/run/"),
+                ("/var/", f"{root}/var/"),
+            ):
+                fixture_installer = fixture_installer.replace(old, new)
+                fixture_helper = fixture_helper.replace(old, new)
+            helper = root / "uap-observer-install-lib.sh"
+            helper.write_text(fixture_helper)
+            helper_digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+            fixture_installer = re.sub(
+                r'test "\$\(sha256sum "\$install_lib" \| cut -d\' \' -f1\)" = [0-9a-f]{64}',
+                f'test "$(sha256sum "$install_lib" | cut -d\' \' -f1)" = {helper_digest}',
+                fixture_installer,
+            )
+            archive = root / "caddy.tar.gz"
+            archive.write_bytes(b"disposable archive\n")
+            archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            fixture_installer = fixture_installer.replace(
+                "527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9",
+                archive_digest,
+            )
+            entry = root / "uap-observer-install.sh"
+            entry.write_text(fixture_installer)
+            entry.chmod(0o755)
+            observer_config = dict(checked_in)
+            observer_config["runner_source_path"] = str(
+                root / "opt/uap-observer-current/libexec/uap-observer-runner"
+            )
+            observer_config["runner_socket"] = str(root / "run/uap-observer-runner.sock")
+            observer_config["runner_source_digest"] = "sha256:" + "0" * 64
+            inputs = []
+            for name, encoded in (
+                ("adapter.json", "{}\n"),
+                ("observer.json", json.dumps(observer_config)),
+                ("Caddyfile", "{}\n"),
+                ("egress-allowlist.json", "{}\n"),
+            ):
+                path = root / name
+                path.write_text(encoded)
+                inputs.append(path)
+            digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]
+            (root / "opt").mkdir()
+            (root / "etc/systemd/system").mkdir(parents=True)
+            result = subprocess.run(
+                [str(entry), str(repository), str(inputs[0]), f"sha256:{digests[0]}",
+                 str(inputs[1]), f"sha256:{digests[1]}", str(archive), str(inputs[2]),
+                 f"sha256:{digests[2]}", str(inputs[3]), f"sha256:{digests[3]}"],
+                env={**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+                text=True, capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("runner binding differs", result.stderr)
+            self.assertFalse((root / "opt/uap-observer-source.new").exists())
+            self.assertFalse((root / "opt/uap-observer-closures").exists())
+
     def test_proxy_runtime_sources_are_closed_and_installed_at_service_paths(self) -> None:
         repository = Path(__file__).parents[2]
         manifest_paths = {
@@ -1515,7 +1618,15 @@ class FixedRunnerFixtureTests(unittest.TestCase):
             installer = root / "uap-observer-install.sh"; installer.write_text(fixture_installer); installer.chmod(0o755)
             inputs = []
             for name in ("adapter.json", "observer.json", "Caddyfile", "egress-allowlist.json"):
-                path = root / name; path.write_text("{}\n"); inputs.append(path)
+                path = root / name
+                if name == "observer.json":
+                    config = json.loads((repository / "deploy/uap-observer.json").read_text())
+                    config["runner_source_path"] = str(root / "opt/uap-observer-current/libexec/uap-observer-runner")
+                    config["runner_socket"] = str(root / "run/uap-observer-runner.sock")
+                    path.write_text(json.dumps(config))
+                else:
+                    path.write_text("{}\n")
+                inputs.append(path)
             digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]
             (root / "opt").mkdir(); (root / "etc/systemd/system").mkdir(parents=True)
             result = subprocess.run(

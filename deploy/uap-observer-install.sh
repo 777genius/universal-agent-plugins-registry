@@ -13,11 +13,34 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256 EGRESS_ALLOWLIST EGRESS_ALLOWLIST_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=4b625ee3bfcfc8a59c09617f875aeaf58b87c8f79678c59d74d6702524417268
+runtime_manifest_digest=48c378e03cc8851522eb1b79023abd2c0da6e7b3ced852d46350104cc96a941c
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
+runner_digest=357fc65b1b552f049e497e045f4b84a4df33bb892495a681837bb5e626701017
+adapter_digest=48df8eb011e8c90f4a72d58d189a8605704f9adc3449f14f60588f6cbc5dd9d1
 closure_digest=
 closure_stage=
 closure_final=
+
+validate_observer_runner_binding() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$1" "$2" "$3" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+
+encoded=Path(sys.argv[1]).read_bytes()
+if "sha256:" + hashlib.sha256(encoded).hexdigest() != sys.argv[2]:
+    raise SystemExit("observer config digest differs while validating runner binding")
+config=json.loads(encoded)
+expected={
+    "runner_source_path": "/opt/uap-observer-current/libexec/uap-observer-runner",
+    "runner_source_digest": "sha256:" + sys.argv[3],
+    "runner_socket": "/run/uap-observer-runner.sock",
+    "runner_user": "root",
+}
+if not isinstance(config,dict) or any(config.get(key) != value for key,value in expected.items()):
+    raise SystemExit("observer config runner binding differs from immutable closure")
+PY
+}
+
 install -d -o root -g root -m 0755 /run/lock
 exec 9>/run/lock/uap-observer-install.lock
 flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
@@ -44,6 +67,7 @@ install_identity=$(observer_install_input_identity \
   "$untrusted_caddy_archive" "$caddy_archive_digest" \
   "$untrusted_caddy_config" "$caddy_config_digest" \
   "$untrusted_egress_allowlist" "$egress_allowlist_digest")
+validate_observer_runner_binding "$untrusted_observer_config" "$observer_config_digest" "$runner_digest"
 if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   observer_validate_no_partial_paths
   observer_validate_completed_closure /opt/uap-observer-closures /opt/uap-observer-current "$install_identity"
@@ -51,8 +75,8 @@ if [ -e /opt/uap-observer-current ] || [ -L /opt/uap-observer-current ]; then
   installed_closure="/opt/$installed_target"
   observer_validate_installed_closure_sources "$installed_closure" "$untrusted_source_root" \
     "$untrusted_adapter_config" "$untrusted_observer_config" "$untrusted_caddy_config" "$untrusted_egress_allowlist" \
-    357fc65b1b552f049e497e045f4b84a4df33bb892495a681837bb5e626701017 \
-    48df8eb011e8c90f4a72d58d189a8605704f9adc3449f14f60588f6cbc5dd9d1 \
+    "$runner_digest" \
+    "$adapter_digest" \
     b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
   observer_validate_installed_accounts_and_state "$installed_closure"
   observer_validate_protected_inputs "$installed_closure"
@@ -113,8 +137,6 @@ caddy_config=$stage_root/Caddyfile
 runner_source="$source_root/observer/fixed_runner.py"
 adapter_source="$source_root/observer/fixed_adapters.py"
 egress_proxy_source="$source_root/deploy/uap-observer-egress-proxy.py"
-runner_digest=357fc65b1b552f049e497e045f4b84a4df33bb892495a681837bb5e626701017
-adapter_digest=48df8eb011e8c90f4a72d58d189a8605704f9adc3449f14f60588f6cbc5dd9d1
 caddy_digest=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
 
 test -f "$runner_source"
@@ -122,6 +144,7 @@ test "$(sha256sum "$runner_source" | cut -d' ' -f1)" = "$runner_digest"
 test "$(sha256sum "$adapter_source" | cut -d' ' -f1)" = "$adapter_digest"
 test "sha256:$(sha256sum "$adapter_config" | cut -d' ' -f1)" = "$adapter_config_digest"
 test "sha256:$(sha256sum "$observer_config" | cut -d' ' -f1)" = "$observer_config_digest"
+validate_observer_runner_binding "$observer_config" "$observer_config_digest" "$runner_digest"
 test "$(sha256sum "$caddy_binary" | cut -d' ' -f1)" = "$caddy_digest"
 test "$(sha256sum "$source_root/caddy_2.11.4_linux_amd64.tar.gz" | cut -d' ' -f1)" = "$caddy_archive_digest"
 test "$("$caddy_binary" version | awk '{print $1}')" = "v2.11.4"
