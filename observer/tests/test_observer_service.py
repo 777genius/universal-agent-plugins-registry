@@ -1867,6 +1867,12 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         self.assertNotIn("Environment=PYTHONPATH=/opt/uap-observer\n", service)
         self.assertIn("TemporaryFileSystem=/:ro,nosuid,nodev,noexec", service)
         self.assertNotIn("\nProtectSystem=strict\n", "\n" + service)
+        homes = (
+            "BindReadOnlyPaths=/var/empty/uap-observer-codex "
+            "/var/empty/uap-observer-cursor /var/empty/uap-observer-kiro "
+            "/var/empty/uap-observer-control"
+        )
+        self.assertEqual(service.count(homes), 1)
 
     def test_protected_adapters_import_only_the_immutable_runtime(self) -> None:
         protected = fixed_runner.adapter_environment("sha256:" + "a" * 64, "codex", protected=True)
@@ -3848,6 +3854,26 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
         self.assertEqual(fallback, os.O_RDONLY | common)
         self.assertFalse(fallback & synthetic_o_path)
 
+    def test_adapter_home_is_exact_metadata_and_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "adapter-home"
+            home.mkdir(mode=0o700)
+            fixed_runner.validate_empty_adapter_home(
+                home, uid=os.geteuid(), gid=os.getegid(),
+            )
+            unexpected = home / "unexpected"
+            unexpected.write_text("not empty")
+            with self.assertRaisesRegex(ValueError, "not empty"):
+                fixed_runner.validate_empty_adapter_home(
+                    home, uid=os.geteuid(), gid=os.getegid(),
+                )
+            unexpected.unlink()
+            home.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "home or groups differ"):
+                fixed_runner.validate_empty_adapter_home(
+                    home, uid=os.geteuid(), gid=os.getegid(),
+                )
+
     def test_fixed_runner_socket_executes_only_injected_reviewed_adapters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -4254,6 +4280,11 @@ class FixedAdapterContractTests(unittest.TestCase):
             + f"12 10 8:2 /opt/uap-observer-closures/{'a' * 64} "
             "/opt/uap-observer-current ro - ext4 /dev/root ro\n",
         )
+        fixed_adapters.verify_positive_mount_namespace(
+            allowed
+            + "12 10 8:2 /var/empty/uap-observer-codex "
+            "/var/empty/uap-observer-codex ro - ext4 /dev/root ro\n",
+        )
         for target in ("/var/www/customer-project", "/usr/local/src/repository", "/workspace/project", "/var/www/link-to-project", "/var/lib/uap-observer/state"):
             with self.subTest(target=target), self.assertRaisesRegex(ValueError, "non-allowlisted"):
                 fixed_adapters.verify_positive_mount_namespace(allowed + f"12 10 8:2 /project {target} ro - ext4 /dev/fixture ro\n")
@@ -4270,6 +4301,10 @@ class FixedAdapterContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "foreign mount source"):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /opt/uap-observer-closures/not-a-digest /opt/uap-observer-current ro - ext4 /dev/fixture ro\n",
+            )
+        with self.assertRaisesRegex(ValueError, "alternate-path bind"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root + "12 10 8:2 /srv/foreign /var/empty/uap-observer-codex ro - ext4 /dev/fixture ro\n",
             )
         with self.assertRaisesRegex(ValueError, "synthetic"):
             fixed_adapters.verify_positive_mount_namespace("10 1 8:1 / / ro - ext4 /dev/root ro\n")

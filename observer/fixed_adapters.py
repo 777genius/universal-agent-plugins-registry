@@ -80,10 +80,14 @@ FIXED_INPUT_PATHS = {
     "/opt/uap-observer-inputs/chatgpt/projection-receipt.json",
     "/opt/uap-observer-inputs/external-pr-evidence.json",
 }
-FIXED_MOUNT_PATHS = FIXED_INPUT_PATHS - {
+ADAPTER_HOME_PATHS = {
+    f"/var/empty/uap-observer-{identity}"
+    for identity in ("codex", "cursor", "kiro", "control")
+}
+FIXED_MOUNT_PATHS = (FIXED_INPUT_PATHS - {
     "/opt/uap-observer-inputs/cursor/cursor-agent",
     str(CHROME_BINARY),
-}
+}) | ADAPTER_HOME_PATHS
 CLOSURE_MOUNT_SOURCE = re.compile(r"/opt/uap-observer-closures/[a-f0-9]{64}")
 PRIVACY_RESULT = {
     "real_project_accessed": False, "absolute_paths_exported": False,

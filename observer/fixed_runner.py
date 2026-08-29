@@ -234,6 +234,24 @@ def _identity_directory_open_flags(o_path: int) -> int:
     return access_mode | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
+def validate_empty_adapter_home(path: Path, *, uid: int, gid: int) -> None:
+    """Validate one exact, empty service home through a race-resistant descriptor."""
+    descriptor = os.open(
+        path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
+            or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o700
+        ):
+            raise ValueError("reviewed adapter home or groups differ")
+        if os.listdir(descriptor):
+            raise ValueError("reviewed adapter home is not empty")
+    finally:
+        os.close(descriptor)
+
+
 def validate_adapter_input_access(
     config_path: Path, *, protected_root: Path = Path("/opt/uap-observer-inputs"),
     identities: dict[str, tuple[int, int, frozenset[int]]] | None = None,
@@ -753,13 +771,9 @@ class ReviewedRunner:
             self._config_gid = grp.getgrnam("uap-observer-adapter-config").gr_gid
             for identity in ("codex", "cursor", "kiro", "control"):
                 uid, gid, _ = service_identities[identity]
-                expected_home = f"/var/empty/uap-observer-{identity}"
-                home = os.stat(expected_home, follow_symlinks=False)
-                if (
-                    not stat.S_ISDIR(home.st_mode) or home.st_uid != uid
-                    or home.st_gid != gid or stat.S_IMODE(home.st_mode) != 0o700
-                ):
-                    raise ValueError("reviewed adapter home or groups differ")
+                validate_empty_adapter_home(
+                    Path(f"/var/empty/uap-observer-{identity}"), uid=uid, gid=gid,
+                )
                 self._identities[identity] = (uid, gid)
         else:
             self._identities = {identity: (os.geteuid(), os.getegid()) for identity in ("codex", "cursor", "kiro", "control")}
