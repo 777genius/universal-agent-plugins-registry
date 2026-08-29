@@ -50,6 +50,7 @@ CPUQuota=200%
 # Keep ProtectSystem unset: systemd applies ProtectSystem=strict over this
 # mount and exposes the host root read-only instead of preserving the allowlist.
 TemporaryFileSystem=/:ro,nosuid,nodev,noexec
+TemporaryFileSystem=/run:rw,nosuid,nodev,noexec
 TemporaryFileSystem=/tmp:rw,nosuid,nodev,noexec
 TemporaryFileSystem=/var/tmp:rw,nosuid,nodev,noexec
 BindReadOnlyPaths=/usr/bin /usr/lib -/usr/lib64 -/lib -/lib64 /etc/passwd /etc/group /etc/nsswitch.conf -/etc/ssl -/etc/pki

@@ -89,6 +89,9 @@ FIXED_MOUNT_PATHS = (FIXED_INPUT_PATHS - {
     str(CHROME_BINARY),
 }) | ADAPTER_HOME_PATHS
 CLOSURE_MOUNT_SOURCE = re.compile(r"/opt/uap-observer-closures/[a-f0-9]{64}")
+SYSTEMD_PROPAGATION_SOURCE = re.compile(
+    r"/systemd/propagate/[A-Za-z0-9_.@-]+\.service",
+)
 FIXED_RESOLVED_MOUNT_SOURCES = {
     "/lib": "/usr/lib",
     "/lib64": "/usr/lib64",
@@ -611,7 +614,7 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
         "tmpfs", "proc", "sysfs", "cgroup2", "devtmpfs", "devpts", "mqueue",
         "hugetlbfs", "securityfs", "tracefs", "pstore", "bpf", "autofs", "ramfs",
     }
-    kernel_targets = ("/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/run")
+    kernel_targets = ("/proc", "/sys", "/dev")
     root_seen = False
     for line in mountinfo.splitlines():
         fields = line.split()
@@ -634,6 +637,28 @@ def verify_positive_mount_namespace(mountinfo: str) -> None:
                 and {"ro", "nosuid", "nodev", "noexec"} <= mount_options
             ):
                 raise ValueError(f"protected kernel path at {target} is not inaccessible")
+            continue
+        if target == "/run":
+            if not (
+                source_root == "/" and filesystem == "tmpfs"
+                and {"rw", "nosuid", "nodev", "noexec"} <= mount_options
+            ):
+                raise ValueError("runtime directory is not an isolated tmpfs")
+            continue
+        if target == "/run/systemd/incoming":
+            if not (
+                SYSTEMD_PROPAGATION_SOURCE.fullmatch(source_root) is not None
+                and filesystem == "tmpfs"
+                and {"ro", "nosuid", "nodev", "noexec"} <= mount_options
+            ):
+                raise ValueError("systemd propagation mount differs")
+            continue
+        if target in {"/tmp", "/var/tmp"}:
+            if not (
+                source_root == "/" and filesystem == "tmpfs"
+                and {"rw", "nosuid", "nodev", "noexec"} <= mount_options
+            ):
+                raise ValueError(f"temporary directory at {target} is not isolated")
             continue
         if filesystem in kernel_filesystems and any(target == prefix or target.startswith(prefix + "/") for prefix in kernel_targets):
             continue

@@ -1866,6 +1866,7 @@ class FixedRunnerFixtureTests(unittest.TestCase):
         self.assertEqual(service.count(binding), 1)
         self.assertNotIn("Environment=PYTHONPATH=/opt/uap-observer\n", service)
         self.assertIn("TemporaryFileSystem=/:ro,nosuid,nodev,noexec", service)
+        self.assertIn("TemporaryFileSystem=/run:rw,nosuid,nodev,noexec", service)
         self.assertIn("TemporaryFileSystem=/tmp:rw,nosuid,nodev,noexec", service)
         self.assertIn("TemporaryFileSystem=/var/tmp:rw,nosuid,nodev,noexec", service)
         self.assertNotIn("PrivateTmp=yes", service)
@@ -4301,9 +4302,11 @@ class FixedAdapterContractTests(unittest.TestCase):
         )
         fixed_adapters.verify_positive_mount_namespace(
             root
-            + "12 10 0:54 / /run rw - tmpfs tmpfs rw\n"
-            + "13 10 0:55 / /tmp rw - tmpfs tmpfs rw\n"
-            + "14 10 0:56 / /var/tmp rw - tmpfs tmpfs rw\n",
+            + "12 10 0:54 / /run rw,nosuid,nodev,noexec - tmpfs tmpfs rw\n"
+            + "15 12 0:25 /systemd/propagate/uap-observer-runner.service "
+            "/run/systemd/incoming ro,nosuid,nodev,noexec - tmpfs tmpfs rw\n"
+            + "13 10 0:55 / /tmp rw,nosuid,nodev,noexec - tmpfs tmpfs rw\n"
+            + "14 10 0:56 / /var/tmp rw,nosuid,nodev,noexec - tmpfs tmpfs rw\n",
         )
         fixed_adapters.verify_positive_mount_namespace(
             root
@@ -4337,9 +4340,19 @@ class FixedAdapterContractTests(unittest.TestCase):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /srv/foreign /lib ro - ext4 /dev/fixture ro\n",
             )
-        with self.assertRaisesRegex(ValueError, "non-allowlisted"):
+        with self.assertRaisesRegex(ValueError, "isolated tmpfs"):
             fixed_adapters.verify_positive_mount_namespace(
                 root + "12 10 8:2 /run /run rw - ext4 /dev/fixture rw\n",
+            )
+        with self.assertRaisesRegex(ValueError, "systemd propagation"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root
+                + "12 10 0:25 /foreign/tmpfs /run/systemd/incoming "
+                "ro,nosuid,nodev,noexec - tmpfs tmpfs rw\n",
+            )
+        with self.assertRaisesRegex(ValueError, "temporary directory"):
+            fixed_adapters.verify_positive_mount_namespace(
+                root + "12 10 0:25 /host/private /tmp rw - tmpfs tmpfs rw\n",
             )
         with self.assertRaisesRegex(ValueError, "not inaccessible"):
             fixed_adapters.verify_positive_mount_namespace(
