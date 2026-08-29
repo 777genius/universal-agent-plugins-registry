@@ -85,6 +85,25 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(argument, readiness_body)
         self.assertIn("two-lane-readiness.schema.json", readiness_body)
 
+    def test_directory_completed_readiness_replay_uses_exact_authenticated_identity(self) -> None:
+        publication = load(DIRECTORY_PUBLICATION)
+        body = "\n".join(commands(job) for job in publication["jobs"].values() if "steps" in job)
+        invocation_pattern = re.compile(
+            r"python3 trusted-source/scripts/build_two_lane_readiness\.py(?:[^\n]*\\\n)*[^\n]*"
+        )
+        invocations = invocation_pattern.findall(body)
+        self.assertEqual(len(invocations), 1, "stale or duplicate production readiness invocation")
+        self.assertEqual(invocations[0], """python3 trusted-source/scripts/build_two_lane_readiness.py \\
+  --runtime launch-evidence/launch-evidence.json \\
+  --policy source-policy-evidence/source-policy-conformance.json \\
+  --uap-sha "${WORKFLOW_SOURCE_DIGEST}" \\
+  --directory-ledger-sha "${EXPECTED_LEDGER_COMMIT}" \\
+  --publication-id "${EXPECTED_PUBLICATION_ID}" \\
+  --publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \\
+  --publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \\
+  --publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \\
+  --completed two-lane-readiness/two-lane-readiness.json""")
+
     def test_source_policy_transport_contains_no_released_executable(self) -> None:
         launch = load(LAUNCH)
         producer = launch["jobs"]["node22-npm-facade"]

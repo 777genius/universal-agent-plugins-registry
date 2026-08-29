@@ -981,6 +981,11 @@ jobs:
             --runtime launch-evidence/launch-evidence.json \
             --policy source-policy-evidence/source-policy-conformance.json \
             --uap-sha "${WORKFLOW_SOURCE_DIGEST}" \
+            --directory-ledger-sha "${EXPECTED_LEDGER_COMMIT}" \
+            --publication-id "${EXPECTED_PUBLICATION_ID}" \
+            --publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
+            --publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
+            --publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \
             --completed two-lane-readiness/two-lane-readiness.json
           python3 trusted-source/registry/publication/launch_approval.py \
             --repo approved-ledger \

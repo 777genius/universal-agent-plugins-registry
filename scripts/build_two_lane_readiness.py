@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from two_lane_evidence import (
-    build_readiness_envelope, canonical_json, require_uap_sha, sha256_file,
-    validate_completed_readiness,
+    build_readiness_envelope, canonical_json, require_directory_ledger_sha,
+    require_uap_sha, sha256_file, validate_completed_readiness,
 )
 
 
@@ -48,6 +48,9 @@ def main() -> int:
     parser.add_argument("--publication-source-commit", required=True)
     args = parser.parse_args()
     uap_sha = require_uap_sha(args.uap_sha)
+    args.directory_ledger_sha = require_directory_ledger_sha(
+        args.directory_ledger_sha, uap_sha=uap_sha,
+    )
     runtime_body = args.runtime.read_bytes()
     policy_body = args.policy.read_bytes()
     runtime = json.loads(runtime_body)

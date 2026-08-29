@@ -201,6 +201,37 @@ class TwoLaneEvidenceTests(unittest.TestCase):
         with self.assertRaises(lanes.TwoLaneEvidenceError):
             lanes.build_readiness_envelope(forged, policy_evidence(), **self.identity())
 
+        # A self-consistent forgery still cannot collapse the two authorities:
+        # both supplied identities and both runtime Directory fields agree here.
+        collapsed = copy.deepcopy(runtime)
+        collapsed["directory"]["ledger_commit"] = FIXTURE_UAP_SHA
+        collapsed["directory"]["origin"] = (
+            "https://raw.githubusercontent.com/777genius/universal-agent-plugins/"
+            + FIXTURE_UAP_SHA + "/registry/schemas/1/"
+        )
+        collapsed_identity = {
+            **self.identity(), "directory_ledger_sha": FIXTURE_UAP_SHA,
+        }
+        runtime_identity = {
+            key: collapsed_identity[key] for key in (
+                "uap_sha", "directory_ledger_sha", "publication_id",
+                "publication_sequence", "publication_snapshot_digest",
+                "publication_source_commit",
+            )
+        }
+        with self.assertRaisesRegex(lanes.TwoLaneEvidenceError, "must differ"):
+            lanes.validate_released_binary_evidence(collapsed, **runtime_identity)
+        with self.assertRaisesRegex(lanes.TwoLaneEvidenceError, "must differ"):
+            lanes.build_readiness_envelope(
+                collapsed, policy_evidence(), **collapsed_identity,
+            )
+        completed = copy.deepcopy(complete)
+        completed["directory_ledger_sha"] = FIXTURE_UAP_SHA
+        with self.assertRaisesRegex(lanes.TwoLaneEvidenceError, "must differ"):
+            lanes.validate_completed_readiness(
+                completed, collapsed, policy_evidence(), **collapsed_identity,
+            )
+
     def test_runtime_rejects_arbitrary_fifteen_rows_and_identity_forgery(self) -> None:
         baseline = runtime_evidence()
         mutations = []

@@ -60,6 +60,15 @@ def require_uap_sha(value: str) -> str:
     return value
 
 
+def require_directory_ledger_sha(value: str, *, uap_sha: str) -> str:
+    """Validate the independent Directory authority and forbid UAP collapse."""
+    if not isinstance(value, str) or SHA.fullmatch(value) is None:
+        raise TwoLaneEvidenceError("Directory ledger SHA must be one explicit canonical 40-hex commit")
+    if value == uap_sha:
+        raise TwoLaneEvidenceError("Directory ledger SHA must differ from the UAP SHA")
+    return value
+
+
 def validate_launch_schema(value: dict[str, Any], *, historical: bool = False) -> None:
     """Route launch evidence to its frozen schema; unknown versions fail closed."""
     version = value.get("schema_version")
@@ -121,8 +130,9 @@ def validate_released_binary_evidence(
     publication_snapshot_digest: str, publication_source_commit: str,
 ) -> str:
     uap_sha = require_uap_sha(uap_sha)
-    if not isinstance(directory_ledger_sha, str) or SHA.fullmatch(directory_ledger_sha) is None:
-        raise TwoLaneEvidenceError("Directory ledger SHA must be one explicit canonical 40-hex commit")
+    directory_ledger_sha = require_directory_ledger_sha(
+        directory_ledger_sha, uap_sha=uap_sha,
+    )
     if (
         not isinstance(publication_id, str) or not publication_id
         or type(publication_sequence) is not int
@@ -284,6 +294,9 @@ def build_readiness_envelope(runtime: dict[str, Any], policy: dict[str, Any], *,
                              publication_sequence: int, publication_snapshot_digest: str,
                              publication_source_commit: str) -> dict[str, Any]:
     uap_sha = require_uap_sha(uap_sha)
+    directory_ledger_sha = require_directory_ledger_sha(
+        directory_ledger_sha, uap_sha=uap_sha,
+    )
     runtime_digest = validate_released_binary_evidence(
         runtime, uap_sha=uap_sha, directory_ledger_sha=directory_ledger_sha,
         publication_id=publication_id, publication_sequence=publication_sequence,
