@@ -600,7 +600,7 @@ import run_launch_evidence_e2e
     def test_fixture_mode_is_explicitly_non_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e, "ROOT", Path("/opt/test-repository")):
             evidence = self.fixture_harness(Path(tmp) / "fresh").export()
-        self.assertEqual(evidence["schema_version"], 4)
+        self.assertEqual(evidence["schema_version"], 5)
         self.assertEqual(evidence["run"]["mode"], "fixture-only")
         self.assertFalse(evidence["run"]["runtime_claims"])
         self.assertFalse(evidence["summary"]["required_gates_complete"])
@@ -1894,22 +1894,22 @@ with tempfile.TemporaryDirectory() as temporary:
                 )
 
     def test_native_observation_schema_accepts_exact_producer_attestation(self) -> None:
-        schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
-        asset = "agentplugins_0.1.18_linux_amd64"
-        digest = "sha256:" + "a" * 64
+        schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation-v2.schema.json").read_text())
+        asset = "agentplugins_0.1.24_linux_amd64"
+        digest = e2e.RELEASED_LINUX_AMD64_DIGEST
         observation = {
-            "schema_version": 1, "kind": "binary", "os": "linux", "architecture": "amd64",
-            "node_major": None, "executed": True, "version": "0.1.18",
+            "schema_version": 2, "kind": "binary", "os": "linux", "architecture": "amd64",
+            "node_major": None, "executed": True, "version": "0.1.24",
             "catalog_repository": e2e.TRUSTED_CATALOG_REPOSITORY, "catalog_sha": "b" * 40,
             "cli_release_repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
             "cli_release_tag": e2e.TRUSTED_CLI_RELEASE_TAG,
             "github_release_identity": {
                 "repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
                 "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "tag_commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
-                "release_id": 114, "immutable": True,
+                "release_id": 379284682, "immutable": True,
             },
-            "release_manifest_digest": "sha256:" + "c" * 64,
-            "release_checksums_digest": "sha256:" + "d" * 64,
+            "release_manifest_digest": e2e.RELEASE_MANIFEST_DIGEST,
+            "release_checksums_digest": e2e.RELEASE_CHECKSUMS_DIGEST,
             "directory_digest": "sha256:" + "e" * 64,
             "asset_name": asset, "asset_digest": digest,
             "github_asset_attestation": {
@@ -1937,6 +1937,18 @@ with tempfile.TemporaryDirectory() as temporary:
             del forged["github_asset_attestation"][missing]
             with self.subTest(missing=missing), self.assertRaises(jsonschema.ValidationError):
                 jsonschema.Draft202012Validator(schema).validate(forged)
+
+    def test_current_native_matrix_rejects_v1_sidecars_before_use(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "historical.json").write_text(json.dumps({
+                "schema_version": 1, "kind": "binary", "os": "linux",
+                "architecture": "amd64",
+            }))
+            harness = object.__new__(e2e.LaunchHarness)
+            harness.native_observations = root
+            with self.assertRaisesRegex(ValueError, "schema_version 2"):
+                harness.native_platform_matrix()
 
     def test_npm_installed_executable_must_equal_authenticated_native_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1989,12 +2001,13 @@ with tempfile.TemporaryDirectory() as temporary:
         config = e2e.read_production_config()
         self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
-        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.18")
+        self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.24")
         self.assertEqual(config["cli_release_commit"], e2e.TRUSTED_CLI_RELEASE_COMMIT)
         self.assertEqual(config["cli_release_workflow"], "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml")
-        self.assertEqual(config["cli_release_manifest_digest"], "sha256:0e8f7316ddef542067bdd7276273fffa3bc00532afed8fd42be12f612aedea57")
-        self.assertEqual(config["cli_release_checksums_digest"], "sha256:d581ac34d9880afe998f8f871df285b5474623778d2eae98ebc8780a932a9fa8")
-        self.assertEqual(config["npm_facade_version"], "0.1.18")
+        self.assertEqual(config["cli_release_manifest_digest"], e2e.RELEASE_MANIFEST_DIGEST)
+        self.assertEqual(config["cli_release_checksums_digest"], e2e.RELEASE_CHECKSUMS_DIGEST)
+        self.assertEqual(config["npm_facade_version"], "0.1.24")
+        self.assertRegex(config["npm_facade_integrity"], r"^sha512-[A-Za-z0-9+/]+={0,2}$")
         self.assertEqual(config["npm_facade_integrity"], "sha512-48UfVVaGrvmniWQpoiXQYZvTS3QqrCN0HFLSQBVCsqQJwPdecRtuK9XEsOs4nTMQuWImjX6ZAflUeY/79biRZg==")
         expected_directory_digest = "sha256:7d2e82322377e8f83a94912113c28287aebaf7ddf68f1908e709adca865aa21b"
         self.assertEqual(config["directory_source_digest"], expected_directory_digest)
@@ -2563,8 +2576,9 @@ with tempfile.TemporaryDirectory() as temporary:
                 e2e.assert_redacted(rejected)
 
     def test_launch_schema_rejects_unknown_outcome_and_mutable_ref(self) -> None:
-        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v4.schema.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/launch-evidence-v5.schema.json").read_text())
         evidence = self.fixture_harness().export()
+        jsonschema.Draft202012Validator(schema).validate(evidence)
         evidence["matrix"][0]["outcome"] = "not_tested"
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.Draft202012Validator(schema).validate(evidence)
@@ -3199,12 +3213,12 @@ print((fixtures / name).read_text(), end="")
             ("windows-arm64", "windows", "arm64", ".exe"),
         )
         assets = {
-            key: {"file": f"agentplugins_0.1.18_{os_name}_{arch}{suffix}", "sha256": f"{index + 1:064x}", "size": index + 1}
+            key: {"file": f"agentplugins_0.1.24_{os_name}_{arch}{suffix}", "sha256": f"{index + 1:064x}", "size": index + 1}
             for index, (key, os_name, arch, suffix) in enumerate(slots)
         }
         manifest = {
             "schema_version": 2, "tag": e2e.TRUSTED_CLI_RELEASE_TAG, "commit": e2e.TRUSTED_CLI_RELEASE_COMMIT,
-            "version": "0.1.18", "assets": assets,
+            "version": "0.1.24", "assets": assets,
         }
         asset = assets["linux-amd64"]
         digest = "sha256:" + asset["sha256"]

@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from directory_publication import (  # noqa: E402
@@ -355,6 +355,7 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
                  expected_snapshot_digest: str, expected_source_commit: str,
                  verify_observer: bool = False, observer_public_key: str = "",
                  observer_key_id: str = "", enforce_observer_freshness: bool = True,
+                 purpose: Literal["current", "historical"] = "current",
                  ) -> tuple[str, dict[str, bytes]]:
     if REPOSITORY_RE.fullmatch(repository) is None or WORKFLOW_RE.fullmatch(workflow) is None:
         fail("repository or workflow identity is invalid")
@@ -380,13 +381,13 @@ def build_bundle(artifact_dir: Path, *, repository: str, workflow: str,
     observer_bytes = read_bytes_bounded(bundle_path, MAX_FILE_BYTES)
     observer = parse_json_bytes(observer_bytes, "signed observer bundle", max_bytes=MAX_FILE_BYTES)
     try:
-        validate_launch_schema(launch, historical=launch.get("schema_version") == 3)
+        validate_launch_schema(launch, purpose=purpose)
     except ValueError as error:
         fail(str(error))
     validate_evidence_redaction(launch, context="canonical launch evidence")
-    if (launch.get("schema_version") == 4 and launch.get("evidence_class") != "released_binary") or launch["run"].get("mode") != "enforced" or launch["run"].get("runtime_claims") is not True:
+    if (launch.get("schema_version") != 3 and launch.get("evidence_class") != "released_binary") or launch["run"].get("mode") != "enforced" or launch["run"].get("runtime_claims") is not True:
         fail("only enforced runtime launch evidence is publishable")
-    gate = "released_binary_gate_complete" if launch.get("schema_version") == 4 else "required_gates_complete"
+    gate = "required_gates_complete" if launch.get("schema_version") == 3 else "released_binary_gate_complete"
     if launch["summary"].get(gate) is not True or launch["summary"].get("hero_runtime_results") != 15:
         fail("launch evidence does not prove the complete stable gate")
     if launch["run"].get("github_sha") != source_digest:
@@ -541,7 +542,8 @@ def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
                              readiness_body: bytes, *, uap_sha: str,
                              directory_ledger_sha: str, publication_id: str,
                              publication_sequence: int, publication_snapshot_digest: str,
-                             publication_source_commit: str) -> dict[str, bytes]:
+                             publication_source_commit: str,
+                             purpose: Literal["current", "historical"] = "current") -> dict[str, bytes]:
     """Validate and add gate-only sidecars without projecting policy rows."""
     result = dict(files)
     result.pop("SHA256SUMS", None)
@@ -552,6 +554,7 @@ def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
         fail("two-lane evidence sidecars must be objects")
     if policy_body != canonical_json(policy) or readiness_body != canonical_json(readiness):
         fail("two-lane evidence sidecars must be the canonical bytes bound by readiness")
+    sidecar_version = 2 if purpose == "current" or runtime.get("schema_version") == 5 else 1
     uap_sha = require_uap_sha(uap_sha)
     validate_completed_readiness(
         readiness, runtime, policy,
@@ -564,6 +567,8 @@ def attach_two_lane_evidence(files: Mapping[str, bytes], policy_body: bytes,
         publication_sequence=publication_sequence,
         publication_snapshot_digest=publication_snapshot_digest,
         publication_source_commit=publication_source_commit,
+        schema_version=sidecar_version,
+        purpose=purpose,
     )
     result[POLICY_EVIDENCE_NAME] = policy_body
     result[READINESS_EVIDENCE_NAME] = readiness_body
@@ -913,11 +918,12 @@ def verify_completed_state(
             expected_source_commit=expected_publication_source_commit,
             verify_observer=True, observer_public_key=observer_public_key,
             observer_key_id=observer_key_id, enforce_observer_freshness=False,
+            purpose="historical",
         )
         derived = attach_attestation_bundle(derived, files[ATTESTATION_BUNDLE_NAME])
-        if launch.get("schema_version") == 4:
+        if launch.get("schema_version") in {4, 5}:
             if POLICY_EVIDENCE_NAME not in files or READINESS_EVIDENCE_NAME not in files:
-                fail("completed v4 evidence root lacks the canonical two-lane sidecars")
+                fail("completed launch evidence root lacks the canonical two-lane sidecars")
             derived = attach_two_lane_evidence(
                 derived, files[POLICY_EVIDENCE_NAME], files[READINESS_EVIDENCE_NAME],
                 uap_sha=source_digest,
@@ -926,6 +932,7 @@ def verify_completed_state(
                 publication_sequence=index["publication_sequence"],
                 publication_snapshot_digest=index["publication_snapshot_digest"],
                 publication_source_commit=expected_publication_source_commit,
+                purpose="historical",
             )
         write_bundle(bundle, derived)
     if files != derived:

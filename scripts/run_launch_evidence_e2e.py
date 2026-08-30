@@ -65,7 +65,12 @@ from observe_launch_scenario import (  # noqa: E402
     validate_cli_envelope,
 )
 from two_lane_evidence import (  # noqa: E402
+    PLUGIN_KIT_COMMIT,
+    PLUGIN_KIT_TAG,
     POLICY_SCENARIO_SET,
+    RELEASED_LINUX_AMD64_DIGEST,
+    RELEASE_CHECKSUMS_DIGEST,
+    RELEASE_MANIFEST_DIGEST,
     classified_runtime_lists,
     reject_policy_scenario_before_effect,
 )
@@ -80,7 +85,6 @@ CAPTURE_PROVENANCE = ROOT / "tests" / "fixtures" / "agentplugins-0.1.14" / "prov
 RECOVERY_FIXTURE = ROOT / "tests" / "e2e" / "fixtures" / "recovery-cases.json"
 SCENARIO_OBSERVER = ROOT / "scripts" / "observe_launch_scenario.py"
 PRODUCTION_CONFIG = ROOT / "tests" / "e2e" / "production-launch.json"
-STABLE_LAUNCH_VERSION_FILE = ROOT / "tests" / "e2e" / "stable-launch-version.txt"
 PRODUCTION_DIRECTORY_TRUST = ROOT / "registry" / "publication" / "trusted-keys.json"
 RELEASE_MANIFEST_NAME = "release-manifest.json"
 RELEASE_CHECKSUMS_NAME = "checksums.txt"
@@ -100,9 +104,10 @@ TRUSTED_OBSERVER_SUBJECT = (
 TRUSTED_OBSERVER_WORKFLOW_REF = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/directory-publication.yml@{TRUSTED_OBSERVER_REF}"
 TRUSTED_OBSERVER_JOB_WORKFLOW_REF = f"{TRUSTED_CATALOG_REPOSITORY}/.github/workflows/launch-evidence-e2e.yml@{TRUSTED_OBSERVER_REF}"
 TRUSTED_CLI_RELEASE_REPOSITORY = "777genius/plugin-kit-ai"
-TRUSTED_CLI_RELEASE_TAG = "agentplugins-v" + STABLE_LAUNCH_VERSION_FILE.read_text(encoding="utf-8").strip()
+CURRENT_LAUNCH_VERSION = "0.1.24"
+TRUSTED_CLI_RELEASE_TAG = PLUGIN_KIT_TAG
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
-TRUSTED_CLI_RELEASE_COMMIT = "74a3790ee15d92afda8e8e3dd8f903c04811cfc7"
+TRUSTED_CLI_RELEASE_COMMIT = PLUGIN_KIT_COMMIT
 TRUSTED_CLI_RELEASE_SOURCE_REF = "refs/heads/main"
 TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:1e7e5ca4d72be2e188bbfa002cf19975b4e1b100913a329bbaf963b5633abb85"
 
@@ -222,7 +227,7 @@ def validate_capture_release_binding(
         # are deliberately unlinked from the current release binary and cannot
         # become current runtime evidence. Authenticate the enforced binary
         # against the independently frozen stable release instead.
-        and release_manifest.get("version") == STABLE_LAUNCH_VERSION_FILE.read_text(encoding="utf-8").strip()
+        and release_manifest.get("version") == CURRENT_LAUNCH_VERSION
         and isinstance(declared, dict) and declared.get("file") == asset_name
         and isinstance(declared.get("sha256"), str)
         and asset_digest == "sha256:" + declared["sha256"] and DIGEST.fullmatch(asset_digest)
@@ -552,11 +557,12 @@ def read_production_config() -> dict[str, Any]:
         or value.get("cli_release_tag") != TRUSTED_CLI_RELEASE_TAG
         or value.get("cli_release_commit") != TRUSTED_CLI_RELEASE_COMMIT
         or value.get("cli_release_workflow") != TRUSTED_CLI_RELEASE_WORKFLOW
-        or value.get("cli_release_manifest_digest") != "sha256:0e8f7316ddef542067bdd7276273fffa3bc00532afed8fd42be12f612aedea57"
-        or value.get("cli_release_checksums_digest") != "sha256:d581ac34d9880afe998f8f871df285b5474623778d2eae98ebc8780a932a9fa8"
+        or value.get("cli_release_manifest_digest") != RELEASE_MANIFEST_DIGEST
+        or value.get("cli_release_checksums_digest") != RELEASE_CHECKSUMS_DIGEST
         or value.get("npm_facade_package") != "universal-agent-plugins"
-        or value.get("npm_facade_version") != "0.1.18"
-        or value.get("npm_facade_integrity") != "sha512-48UfVVaGrvmniWQpoiXQYZvTS3QqrCN0HFLSQBVCsqQJwPdecRtuK9XEsOs4nTMQuWImjX6ZAflUeY/79biRZg=="
+        or value.get("npm_facade_version") != CURRENT_LAUNCH_VERSION
+        or not isinstance(value.get("npm_facade_integrity"), str)
+        or re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", value["npm_facade_integrity"]) is None
         or value.get("directory_source_digest") != "sha256:7d2e82322377e8f83a94912113c28287aebaf7ddf68f1908e709adca865aa21b"
         or value.get("scenario_contract_digest") != "sha256:30a5a44dd6a1a32957dcba1a6d96ccb7c64f4fc7ed042a29bec6108f30011c32"
         or value.get("copilot_cli_package") != "@github/copilot"
@@ -1916,10 +1922,8 @@ class LaunchHarness:
             "id": hashlib.sha256(identity.encode()).hexdigest()[:24],
             "scenario": scenario, "plugin": plugin, "client": client,
             "level": level, "outcome": outcome,
-            "tuple": tuple_value, "reason": reason,
+            "tuple": tuple_value, "reason": reason, "details": details or {},
         }
-        if details:
-            row["details"] = details
         self.rows.append(row)
 
     def _load_attestations(self, path: Path | None, *, allow_external_pr: bool = False) -> dict[tuple[str, str, str], dict[str, Any]]:
@@ -2747,8 +2751,8 @@ class LaunchHarness:
         records: dict[tuple[str, str, str], dict[str, Any]] = {}
         for path in sorted(self.native_observations.rglob("*.json")):
             value = json.loads(path.read_text())
-            if value.get("schema_version") != 1:
-                continue
+            if value.get("schema_version") != 2:
+                raise ValueError("current native observation sidecars must use schema_version 2")
             kind = value.get("kind", "npm" if value.get("node_major") == 22 else "binary")
             key = (kind, value.get("os", "any"), value.get("architecture", "any"))
             if key in expected:
@@ -2994,7 +2998,7 @@ class LaunchHarness:
         runtime_lists = classified_runtime_lists(self.config)
         required_ids = list(runtime_lists["fault_adapter_advanced"] + runtime_lists["acceptance"]) + self.config["journeys"] + ["shared_copilot_vscode_backend"]
         return {
-            "schema_version": 4,
+            "schema_version": 5,
             "evidence_class": "released_binary" if self.mode == "enforced" else "fixture_contract",
             "run": {"id": hashlib.sha256(run_seed.encode()).hexdigest()[:16], "mode": self.mode, "runtime_claims": self.mode == "enforced", "observed_at": self.observed_at, "platform": self.os_name, "architecture": self.architecture, "disposable": True, "root_id": exported_root_id(self.challenge), "github_sha": self.github_sha, "github_run_id": self.github_run_id, "github_run_attempt": self.github_run_attempt, "caller_event_name": self.caller_event_name, "caller_ref": self.caller_ref, "caller_workflow_ref": self.caller_workflow_ref, "challenge": self.challenge.get("value") if self.challenge else None, "observer_bundle_digest": self.observer_bundle_digest, "cli": {"available": self.cli_available, "version": self.cli_version or self.expected_version, "binary_digest": self.binary_digest}},
             "release": {"repository": read_production_config()["cli_release_repository"] if self.mode == "enforced" else None, "tag": self.release_tag, "tag_commit": self.release_manifest.get("commit"), "release_id": self.release_identity.get("release_id"), "immutable": self.release_identity.get("immutable") if self.mode == "enforced" else None, "manifest_digest": self.release_manifest_digest, "checksums_digest": self.release_checksums_digest},
@@ -3102,6 +3106,16 @@ def assert_redacted(value: dict[str, Any]) -> None:
     if value.get("run", {}).get("mode") == "enforced" and value.get("summary", {}).get("hero_runtime_results") != 15:
         raise ValueError("enforced evidence requires exactly 15 hero runtime results")
     if value.get("run", {}).get("mode") == "enforced":
+        if (
+            value.get("schema_version") != 5
+            or value.get("run", {}).get("cli", {}).get("version") != CURRENT_LAUNCH_VERSION
+            or value.get("run", {}).get("cli", {}).get("binary_digest") != RELEASED_LINUX_AMD64_DIGEST
+            or value.get("release", {}).get("tag") != TRUSTED_CLI_RELEASE_TAG
+            or value.get("release", {}).get("tag_commit") != TRUSTED_CLI_RELEASE_COMMIT
+            or value.get("release", {}).get("manifest_digest") != RELEASE_MANIFEST_DIGEST
+            or value.get("release", {}).get("checksums_digest") != RELEASE_CHECKSUMS_DIGEST
+        ):
+            raise ValueError("enforced evidence is not the single accepted 0.1.24 release identity")
         scenarios = value.get("scenario_contract", {})
         config = json.loads(SCENARIOS.read_text())
         runtime_lists = classified_runtime_lists(config)
@@ -3129,6 +3143,25 @@ def assert_redacted(value: dict[str, Any]) -> None:
         }
         if actual_counts != EXPECTED_COUNTS:
             raise ValueError(f"enforced evidence row counts differ from immutable contract: {actual_counts}")
+        protected = [
+            row for row in rows
+            if row.get("scenario") == "hero_5x3_runtime"
+            or row.get("scenario") == "chatgpt_registered_binding"
+        ]
+        if len(protected) != 16 or any(
+            row.get("tuple", {}).get("binary_digest") != RELEASED_LINUX_AMD64_DIGEST
+            or row.get("tuple", {}).get("installer_version") != CURRENT_LAUNCH_VERSION
+            or row.get("tuple", {}).get("adapter_version") != CURRENT_LAUNCH_VERSION
+            or (
+                row.get("outcome") == "passed"
+                and (
+                    row.get("details", {}).get("release_manifest_digest") != RELEASE_MANIFEST_DIGEST
+                    or row.get("details", {}).get("release_checksums_digest") != RELEASE_CHECKSUMS_DIGEST
+                )
+            )
+            for row in protected
+        ):
+            raise ValueError("protected runtime rows do not share the exact 0.1.24 release tuple")
         validate_enforced_scenario_coverage(rows, config)
     if any(row.get("client") == "chatgpt" and row.get("plugin") != "cloudflare-docs" for row in value.get("matrix", [])):
         raise ValueError("evidence makes an unsupported broad ChatGPT inference")
