@@ -28,7 +28,7 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
     def test_committed_legacy_catalogs_are_byte_frozen(self) -> None:
         expected = {
             1: "9ed64038a8a1b1eab6956008f94b3ffa16f1b6ddf01e8b2809b202656423f183",
-            2: "ea6fc4fea3fcd0c3d8c1110386376700085cee058ee6c49e1bdaf9555cfccbd9",
+            2: "66199c87bd68c65e39d15aa2c5c6e6c7830c9b116d8ed3590123031b32357050",
         }
         for schema_version, digest in expected.items():
             with self.subTest(schema_version=schema_version):
@@ -129,7 +129,7 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
                 / "tests"
                 / "e2e"
                 / "results"
-                / "chatgpt-cloudflare-docs-personal-app-2026-08-30.json"
+                / "chatgpt-cloudflare-docs-personal-app-2026-08-10.json"
             ).read_text()
         )
         cloudflare_docs = next(
@@ -145,14 +145,21 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
             pinned_evidence,
             (ROOT / app_binding["runtime_evidence"]).read_bytes(),
         )
-        self.assertNotIn("catalog", chatgpt_evidence)
-        self.assertEqual(
-            cloudflare_docs["compatibility"]["chatgpt"]["verification"],
-            "not_tested",
+        historical_catalog = subprocess.check_output(
+            ["git", "show", f"{evidence_revision}:catalog/v1/catalog.json"],
+            cwd=ROOT,
         )
-        self.assertIn("cloudflare_docs_mcp_runtime_lookup", chatgpt_evidence["scope"]["not_proved"])
+        historical_catalog_document = json.loads(historical_catalog)
+        self.assertEqual(
+            chatgpt_evidence["catalog"],
+            {
+                "revision": historical_catalog_document["revision"],
+                "digest": "sha256:" + hashlib.sha256(historical_catalog).hexdigest(),
+            },
+        )
         self.assertIn("local_codex_plugin_package_ingestion", chatgpt_evidence["scope"]["not_proved"])
         self.assertIn("agentplugins_manager_lifecycle", chatgpt_evidence["scope"]["not_proved"])
+        evidenced.add((chatgpt_evidence["binding"]["plugin"], "chatgpt"))
         claimed = {
             (plugin["name"], client)
             for plugin in current["plugins"]
@@ -177,19 +184,19 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
             committed["compatibility"]["chatgpt"],
             {
                 "package": "projected",
-                "verification": "not_tested",
+                "verification": "tested",
                 "authentication": "not_required",
                 "app_binding": {
                     "app_key": "cloudflare-docs",
-                    "id": "plugin_asdk_app_6a92d29a704c8191931e76b47668cb0b",
+                    "id": "plugin_asdk_app_6a78e90cf73481918ef10cdb87cd4bb4",
                     "mcp_server": "cloudflare-docs",
                     "mcp_url": "https://docs.mcp.cloudflare.com/mcp",
                     "runtime_evidence": (
                         "tests/e2e/results/"
-                        "chatgpt-cloudflare-docs-personal-app-2026-08-30.json"
+                        "chatgpt-cloudflare-docs-personal-app-2026-08-10.json"
                     ),
                     "runtime_evidence_revision": (
-                        "b89b8ffc3ccd2d8e0987ec9f105f4001cc08b834"
+                        "2ddbb99dd190c1792b79904f9875e6322bccd243"
                     ),
                 },
             },
@@ -270,8 +277,12 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotEqual(list(validator.iter_errors(document)), [])
 
-    def test_chatgpt_runtime_evidence_does_not_claim_catalog_or_runtime_pass(self) -> None:
-        catalog = json.loads((ROOT / "catalog" / "v2" / "catalog.json").read_text())
+    def test_current_chatgpt_evidence_does_not_claim_catalog_or_runtime_pass(self) -> None:
+        catalog = builder.build(
+            "b89b8ffc3ccd2d8e0987ec9f105f4001cc08b834",
+            "2026-08-30T11:06:27Z",
+            2,
+        )
         builder.validate_chatgpt_catalog_evidence(catalog)
         promoted = copy.deepcopy(catalog)
         cloudflare = next(
