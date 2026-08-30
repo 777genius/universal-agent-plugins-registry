@@ -802,7 +802,12 @@ class WorkflowContractTests(unittest.TestCase):
         manifest_path = ROOT / "deploy/uap-observer-runtime.sha256"
         entries = [line.split(maxsplit=1) for line in manifest_path.read_text().splitlines() if line.strip()]
         self.assertTrue(entries)
-        self.assertEqual(len(entries), len({relative for _, relative in entries}))
+        relatives = [relative for _, relative in entries]
+        self.assertEqual(len(entries), 47)
+        self.assertEqual(len(entries), len(set(relatives)))
+        self.assertEqual(relatives, sorted(relatives))
+        self.assertIn("tests/e2e/schemas/launch-evidence-v5.schema.json", relatives)
+        self.assertIn("tests/e2e/schemas/native-release-observation-v2.schema.json", relatives)
         manifest = {relative: digest for digest, relative in entries}
         def file_digest(relative: str) -> str:
             return hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
@@ -1148,6 +1153,32 @@ class WorkflowContractTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, runbook)
         self.assertIn("Do not bypass OIDC", runbook)
+
+    def test_runbook_uses_exact_current_and_historical_release_verifiers(self) -> None:
+        runbook = OBSERVER_RUNBOOK.read_text()
+        current = runbook.split(
+            'root = Path("/root/approved-inputs/agentplugins-0.1.24")', 1,
+        )[1].split("```", 1)[0]
+        historical = runbook.split(
+            'root = Path("/root/approved-inputs/agentplugins-0.1.18")', 1,
+        )[1].split("```", 1)[0]
+        self.assertIn('"agentplugins-v0.1.24"', current)
+        self.assertNotIn("attestation_verifier=", current)
+        self.assertIn('"agentplugins-v0.1.18"', historical)
+        self.assertIn(
+            "attestation_verifier=verify_historical_github_asset_attestation",
+            historical,
+        )
+        self.assertEqual(
+            runbook.count("attestation_verifier=verify_historical_github_asset_attestation"), 1,
+        )
+        self.assertIn(
+            "from scripts.run_launch_evidence_e2e import (\n"
+            "    resolve_github_release,\n"
+            "    verify_historical_github_asset_attestation,\n"
+            ")",
+            runbook,
+        )
         self.assertIn("five minutes before", runbook)
         self.assertIn("genuinely\nexternal unmerged PR", runbook)
         self.assertNotIn("uap-observer-egress-fqdns.txt", runbook)

@@ -295,18 +295,27 @@ PYTHONPATH="$SOURCE_ROOT" python3 - <<'PY'
 import hashlib
 import subprocess
 from pathlib import Path
-from scripts.run_launch_evidence_e2e import resolve_github_release
+from scripts.run_launch_evidence_e2e import (
+    resolve_github_release,
+    verify_historical_github_asset_attestation,
+)
 
 root = Path("/root/approved-inputs/agentplugins-0.1.18")
 binary, manifest, manifest_digest = resolve_github_release(
     "777genius/plugin-kit-ai", "agentplugins-v0.1.18",
     root / "agentplugins", asset_name="agentplugins_0.1.18_linux_amd64",
+    attestation_verifier=verify_historical_github_asset_attestation,
 )
+if manifest["commit"] != "74a3790ee15d92afda8e8e3dd8f903c04811cfc7":
+    raise SystemExit("release manifest commit differs from the historical deployment pin")
 if manifest_digest != "sha256:0e8f7316ddef542067bdd7276273fffa3bc00532afed8fd42be12f612aedea57":
     raise SystemExit("release-manifest.json differs from the deployment pin")
 checksums = "sha256:" + hashlib.sha256((root / "checksums.txt").read_bytes()).hexdigest()
 if checksums != "sha256:d581ac34d9880afe998f8f871df285b5474623778d2eae98ebc8780a932a9fa8":
     raise SystemExit("checksums.txt differs from the deployment pin")
+binary_digest = "sha256:" + hashlib.sha256(Path(binary).read_bytes()).hexdigest()
+if binary_digest != "sha256:9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779":
+    raise SystemExit("selected historical linux-amd64 asset differs from the deployment pin")
 observed = subprocess.run([binary, "version"], check=True, text=True,
                           stdout=subprocess.PIPE).stdout.strip()
 if manifest["version"] != "0.1.18" or observed != "agentplugins 0.1.18":

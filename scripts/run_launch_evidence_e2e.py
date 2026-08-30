@@ -118,6 +118,16 @@ TRUSTED_CLI_RELEASE_ASSETS = {
     "agentplugins_0.1.24_windows_amd64.exe": {"sha256": "0fc327e31009d5c9dc01b2b8cc091f98dd90012376fedb2b688b3e2293a0507d", "size": 12_459_520},
     "agentplugins_0.1.24_windows_arm64.exe": {"sha256": "e178f6fc3318fd26056c8bcc073cc4426102063f80974c2b23801d50c749109c", "size": 11_418_112},
 }
+HISTORICAL_CLI_RELEASE_TAG = "agentplugins-v0.1.18"
+HISTORICAL_CLI_RELEASE_COMMIT = "74a3790ee15d92afda8e8e3dd8f903c04811cfc7"
+HISTORICAL_CLI_RELEASE_ASSETS = {
+    "agentplugins_0.1.18_darwin_amd64": {"sha256": "94fd5875854ccbe1d5b734d3bd8fafdf0673697869ab0752a0b32c7d546a7dd9", "size": 11_783_952},
+    "agentplugins_0.1.18_darwin_arm64": {"sha256": "51d8310e4b1c85e9d33a6bf1917ba24b897c1382f95663419b9f127101a05d5b", "size": 11_008_994},
+    "agentplugins_0.1.18_linux_amd64": {"sha256": "9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779", "size": 11_677_880},
+    "agentplugins_0.1.18_linux_arm64": {"sha256": "92b3f40da0df229c99cc27a33917d0cadb8f8c3e23b9be037d8e7deb05bc8644", "size": 10_879_160},
+    "agentplugins_0.1.18_windows_amd64.exe": {"sha256": "a0902b7138dfc918d8bfc9b2e9169b64f5cb7d57bced342f21220ddd45cfecb0", "size": 11_941_888},
+    "agentplugins_0.1.18_windows_arm64.exe": {"sha256": "48f473047a7a6468246013d40b9adfe438cdb4c6e58b4edf1689f072f0bbfdb6", "size": 10_956_288},
+}
 TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:1e7e5ca4d72be2e188bbfa002cf19975b4e1b100913a329bbaf963b5633abb85"
 
 
@@ -143,6 +153,38 @@ def current_github_asset_attestation(
         "issuer": "https://token.actions.githubusercontent.com",
         "source_ref": TRUSTED_CLI_RELEASE_SOURCE_REF,
         "source_digest": TRUSTED_CLI_RELEASE_COMMIT,
+        "predicate_type": "https://slsa.dev/provenance/v1",
+        "subject_name": subject_name,
+        "subject_digest": asset_digest,
+        "runner_environment": "github-hosted",
+        "asset_name": asset_name,
+        "asset_digest": asset_digest,
+        "verified": True,
+    }
+
+
+def historical_github_asset_attestation(
+    *, asset_name: str, asset_digest: str, subject_name: str,
+) -> dict[str, Any]:
+    """Build the exact provenance record used by the retained 0.1.18 path."""
+    if (
+        not isinstance(asset_name, str)
+        or Path(asset_name).name != asset_name
+        or not asset_name
+        or not isinstance(subject_name, str)
+        or Path(subject_name).name != subject_name
+        or not subject_name
+        or not DIGEST.fullmatch(asset_digest)
+    ):
+        raise ValueError("historical GitHub asset attestation identity is invalid")
+    return {
+        "repository": TRUSTED_CLI_RELEASE_REPOSITORY,
+        "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
+        "tag": HISTORICAL_CLI_RELEASE_TAG,
+        "tag_commit": HISTORICAL_CLI_RELEASE_COMMIT,
+        "issuer": "https://token.actions.githubusercontent.com",
+        "source_ref": TRUSTED_CLI_RELEASE_SOURCE_REF,
+        "source_digest": HISTORICAL_CLI_RELEASE_COMMIT,
         "predicate_type": "https://slsa.dev/provenance/v1",
         "subject_name": subject_name,
         "subject_digest": asset_digest,
@@ -774,6 +816,13 @@ def resolve_github_release(
     ``fixture_fetch`` exists solely for direct unit tests. Production callers cannot
     select URLs, checksums, or versions independently.
     """
+    if (
+        fixture_fetch is None
+        and attestation_verifier not in (
+            None, verify_github_asset_attestation, verify_historical_github_asset_attestation,
+        )
+    ):
+        raise ValueError("production release resolution requires a statically allowlisted attestation verifier")
     if not re.fullmatch(r"agentplugins-v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise ValueError("release tag must be an exact stable agentplugins-vX.Y.Z tag")
     release = github_json(repository, f"releases/tags/{tag}", token=token)
@@ -957,21 +1006,26 @@ def validate_prepared_github_release(
     return paths["binary"], manifest, identity, manifest_digest, checksums_digest
 
 
-def verify_github_asset_attestation(
+def _verify_github_asset_attestation(
     asset: Path, repository: str, workflow: str, tag: str, tag_commit: str, digest: str,
-    subject_name: str | None = None,
+    subject_name: str | None, *, expected_tag: str, expected_commit: str,
+    expected_assets: dict[str, dict[str, Any]],
+    record_builder: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
-    """Cryptographically verify one GitHub artifact attestation with fixed identities."""
+    """Cryptographically verify one statically allowlisted GitHub release asset."""
+    subject_name = asset.name if subject_name is None else subject_name
+    expected_asset = expected_assets.get(subject_name) if isinstance(subject_name, str) else None
     if (
         repository != TRUSTED_CLI_RELEASE_REPOSITORY
         or workflow != TRUSTED_CLI_RELEASE_WORKFLOW
-        or tag != TRUSTED_CLI_RELEASE_TAG
-        or tag_commit != TRUSTED_CLI_RELEASE_COMMIT
+        or tag != expected_tag
+        or tag_commit != expected_commit
+        or not isinstance(expected_asset, dict)
+        or digest != "sha256:" + str(expected_asset.get("sha256", ""))
     ):
         raise ValueError("artifact attestation repository/workflow is not the trusted release identity")
     if not FULL_SHA.fullmatch(tag_commit) or not DIGEST.fullmatch(digest):
         raise ValueError("artifact attestation commit or digest is invalid")
-    subject_name = asset.name if subject_name is None else subject_name
     if not isinstance(subject_name, str) or Path(subject_name).name != subject_name or not subject_name:
         raise ValueError("artifact attestation subject name is invalid")
     command = [
@@ -1004,8 +1058,36 @@ def verify_github_asset_attestation(
             matching.append(record)
     if not matching:
         raise ValueError("GitHub artifact attestation subject name/digest does not match the native asset")
-    return current_github_asset_attestation(
+    return record_builder(
         asset_name=asset.name, asset_digest=digest, subject_name=subject_name,
+    )
+
+
+def verify_github_asset_attestation(
+    asset: Path, repository: str, workflow: str, tag: str, tag_commit: str, digest: str,
+    subject_name: str | None = None,
+) -> dict[str, Any]:
+    """Verify only the exact current 0.1.24 release identity."""
+    return _verify_github_asset_attestation(
+        asset, repository, workflow, tag, tag_commit, digest, subject_name,
+        expected_tag=TRUSTED_CLI_RELEASE_TAG,
+        expected_commit=TRUSTED_CLI_RELEASE_COMMIT,
+        expected_assets=TRUSTED_CLI_RELEASE_ASSETS,
+        record_builder=current_github_asset_attestation,
+    )
+
+
+def verify_historical_github_asset_attestation(
+    asset: Path, repository: str, workflow: str, tag: str, tag_commit: str, digest: str,
+    subject_name: str | None = None,
+) -> dict[str, Any]:
+    """Verify only the exact retained 0.1.18 release identity."""
+    return _verify_github_asset_attestation(
+        asset, repository, workflow, tag, tag_commit, digest, subject_name,
+        expected_tag=HISTORICAL_CLI_RELEASE_TAG,
+        expected_commit=HISTORICAL_CLI_RELEASE_COMMIT,
+        expected_assets=HISTORICAL_CLI_RELEASE_ASSETS,
+        record_builder=historical_github_asset_attestation,
     )
 
 

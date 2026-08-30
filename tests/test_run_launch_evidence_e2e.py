@@ -1731,6 +1731,16 @@ with tempfile.TemporaryDirectory() as temporary:
                     attestation_verifier=lambda *_args: {},
                 )
 
+    def test_production_release_resolution_rejects_caller_selected_verifier(self) -> None:
+        with self.assertRaisesRegex(ValueError, "statically allowlisted"):
+            e2e.resolve_github_release(
+                e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
+                e2e.TRUSTED_CLI_RELEASE_TAG,
+                Path("/unused/agentplugins"),
+                asset_name="agentplugins_0.1.24_linux_amd64",
+                attestation_verifier=lambda *_args: {},
+            )
+
     def test_github_token_is_scoped_to_exact_api_json_and_redirects_are_rejected(self) -> None:
         response = mock.MagicMock()
         response.__enter__.return_value = response
@@ -1810,18 +1820,9 @@ with tempfile.TemporaryDirectory() as temporary:
             "release_id": 123,
             "immutable": True,
         }
-        verified_statement = [{"verificationResult": {"statement": {
-            "predicateType": "https://slsa.dev/provenance/v1",
-            "subject": [{"name": selected_name, "digest": {"sha256": binary_digest.removeprefix("sha256:")}}],
-        }}}]
-        with mock.patch.object(
-            e2e.subprocess, "run",
-            return_value=subprocess.CompletedProcess([], 0, json.dumps(verified_statement), ""),
-        ):
-            attestation = e2e.verify_github_asset_attestation(
-                Path(selected_name), config["cli_release_repository"], config["cli_release_workflow"],
-                config["cli_release_tag"], config["cli_release_commit"], binary_digest, selected_name,
-            )
+        attestation = e2e.current_github_asset_attestation(
+            asset_name=selected_name, asset_digest=binary_digest, subject_name=selected_name,
+        )
         prepared = {
             "cli_release_tag": config["cli_release_tag"],
             "release_manifest": manifest,
@@ -1872,55 +1873,85 @@ with tempfile.TemporaryDirectory() as temporary:
     def test_github_attestation_rejects_missing_or_wrong_subject(self) -> None:
         verified = mock.Mock(returncode=0, stdout="[]", stderr="")
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(e2e.subprocess, "run", return_value=verified):
-            asset = Path(tmp) / "agentplugins_0.1.8_linux_amd64"
+            subject = "agentplugins_0.1.24_linux_amd64"
+            digest = "sha256:" + e2e.TRUSTED_CLI_RELEASE_ASSETS[subject]["sha256"]
+            asset = Path(tmp) / subject
             asset.write_bytes(b"native")
             with self.assertRaisesRegex(ValueError, "no verified"):
-                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, "sha256:" + e2e.hashlib.sha256(b"native").hexdigest())
+                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest)
             wrong = [{"verificationResult": {"statement": {"predicateType": "https://slsa.dev/provenance/v1", "subject": [{"name": "wrong", "digest": {"sha256": "0" * 64}}]}}}]
             verified.stdout = json.dumps(wrong)
             with self.assertRaisesRegex(ValueError, "subject name/digest"):
-                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, "sha256:" + e2e.hashlib.sha256(b"native").hexdigest())
+                e2e.verify_github_asset_attestation(asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW, e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest)
 
     def test_github_attestation_pins_release_identity_predicate_subject_and_hosted_runner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             asset = Path(tmp) / "agentplugins"
             asset.write_bytes(b"native")
-            digest = "sha256:" + hashlib.sha256(asset.read_bytes()).hexdigest()
-            subject_name = "agentplugins_0.1.18_linux_amd64"
-            statement = [{"verificationResult": {"statement": {
-                "predicateType": "https://slsa.dev/provenance/v1",
-                "subject": [{"name": subject_name, "digest": {"sha256": digest.removeprefix("sha256:")}}],
-            }}}]
-            completed = subprocess.CompletedProcess([], 0, json.dumps(statement), "")
-            with mock.patch.object(e2e.subprocess, "run", return_value=completed) as invoked:
-                verified = e2e.verify_github_asset_attestation(
-                    asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
-                    e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest, subject_name,
-                )
-            argv = invoked.call_args.args[0]
-            for flag in (
-                "--repo", "--signer-workflow", "--source-ref", "--source-digest",
-                "--predicate-type", "--deny-self-hosted-runners",
-            ):
-                self.assertIn(flag, argv)
-            self.assertEqual(verified["subject_name"], subject_name)
-            self.assertEqual(verified["subject_digest"], digest)
-            self.assertEqual(verified["runner_environment"], "github-hosted")
-            self.assertEqual(
-                argv[argv.index("--source-ref") + 1], e2e.TRUSTED_CLI_RELEASE_SOURCE_REF,
+            releases = (
+                (
+                    e2e.verify_github_asset_attestation,
+                    e2e.TRUSTED_CLI_RELEASE_TAG,
+                    e2e.TRUSTED_CLI_RELEASE_COMMIT,
+                    e2e.TRUSTED_CLI_RELEASE_ASSETS,
+                    "agentplugins_0.1.24_linux_amd64",
+                ),
+                (
+                    e2e.verify_historical_github_asset_attestation,
+                    e2e.HISTORICAL_CLI_RELEASE_TAG,
+                    e2e.HISTORICAL_CLI_RELEASE_COMMIT,
+                    e2e.HISTORICAL_CLI_RELEASE_ASSETS,
+                    "agentplugins_0.1.18_linux_amd64",
+                ),
             )
-            wrong_predicate = json.loads(json.dumps(statement))
-            wrong_predicate[0]["verificationResult"]["statement"]["predicateType"] = "https://example.invalid/claim"
-            with mock.patch.object(e2e.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(wrong_predicate), "")):
-                with self.assertRaisesRegex(ValueError, "subject name/digest"):
-                    e2e.verify_github_asset_attestation(
+            for verifier, tag, commit, assets, subject_name in releases:
+                digest = "sha256:" + assets[subject_name]["sha256"]
+                statement = [{"verificationResult": {"statement": {
+                    "predicateType": "https://slsa.dev/provenance/v1",
+                    "subject": [{"name": subject_name, "digest": {"sha256": digest.removeprefix("sha256:")}}],
+                }}}]
+                completed = subprocess.CompletedProcess([], 0, json.dumps(statement), "")
+                with self.subTest(tag=tag), mock.patch.object(e2e.subprocess, "run", return_value=completed) as invoked:
+                    verified = verifier(
                         asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
-                        e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest, subject_name,
+                        tag, commit, digest, subject_name,
                     )
+                    argv = invoked.call_args.args[0]
+                    for flag in (
+                        "--repo", "--signer-workflow", "--source-ref", "--source-digest",
+                        "--predicate-type", "--deny-self-hosted-runners",
+                    ):
+                        self.assertIn(flag, argv)
+                    self.assertEqual(verified["tag"], tag)
+                    self.assertEqual(verified["tag_commit"], commit)
+                    self.assertEqual(verified["subject_name"], subject_name)
+                    self.assertEqual(verified["subject_digest"], digest)
+                    self.assertEqual(verified["runner_environment"], "github-hosted")
+                    self.assertEqual(argv[argv.index("--source-ref") + 1], e2e.TRUSTED_CLI_RELEASE_SOURCE_REF)
+                    for wrong_tag, wrong_commit, wrong_digest in (
+                        (releases[1][1] if tag == releases[0][1] else releases[0][1], commit, digest),
+                        (tag, "0" * 40, digest),
+                        (tag, commit, "sha256:" + "0" * 64),
+                    ):
+                        with self.assertRaisesRegex(ValueError, "trusted release identity"):
+                            verifier(
+                                asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+                                wrong_tag, wrong_commit, wrong_digest, subject_name,
+                            )
+                wrong_predicate = json.loads(json.dumps(statement))
+                wrong_predicate[0]["verificationResult"]["statement"]["predicateType"] = "https://example.invalid/claim"
+                with mock.patch.object(e2e.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(wrong_predicate), "")):
+                    with self.assertRaisesRegex(ValueError, "subject name/digest"):
+                        verifier(
+                            asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
+                            tag, commit, digest, subject_name,
+                        )
             with self.assertRaisesRegex(ValueError, "trusted release identity"):
                 e2e.verify_github_asset_attestation(
                     asset, e2e.TRUSTED_CLI_RELEASE_REPOSITORY, "caller/workflow.yml",
-                    e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT, digest,
+                    e2e.TRUSTED_CLI_RELEASE_TAG, e2e.TRUSTED_CLI_RELEASE_COMMIT,
+                    "sha256:" + e2e.TRUSTED_CLI_RELEASE_ASSETS["agentplugins_0.1.24_linux_amd64"]["sha256"],
+                    "agentplugins_0.1.24_linux_amd64",
                 )
 
     def test_native_observation_schema_accepts_exact_producer_attestation(self) -> None:
