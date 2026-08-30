@@ -25,21 +25,17 @@ def call_versioned(
     function: Any, *values: dict[str, Any], schema_version: int,
     identity: dict[str, Any],
 ) -> Any:
-    parameters = inspect.signature(function).parameters.values()
-    version_aware = any(
-        parameter.name == "schema_version"
-        or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
-    if version_aware:
-        return function(
-            *values, schema_version=schema_version,
-            purpose="historical" if schema_version == 1 else "current",
-            **identity,
-        )
-    if schema_version == 1:
-        return function(*values, **identity)
-    raise RuntimeError("readiness v2 requires the version-aware evidence validator")
+    parameters = inspect.signature(function).parameters
+    supports_schema_version = "schema_version" in parameters
+    supports_purpose = "purpose" in parameters
+    if schema_version == 2 and not (supports_schema_version and supports_purpose):
+        raise RuntimeError("readiness v2 requires the version-aware evidence validator")
+    versioned: dict[str, Any] = {}
+    if supports_schema_version:
+        versioned["schema_version"] = schema_version
+    if supports_purpose:
+        versioned["purpose"] = "historical" if schema_version == 1 else "current"
+    return function(*values, **versioned, **identity)
 
 
 def identities(args: argparse.Namespace, uap_sha: str) -> dict[str, Any]:
