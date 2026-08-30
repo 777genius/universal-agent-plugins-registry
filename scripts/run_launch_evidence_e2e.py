@@ -1945,6 +1945,7 @@ class LaunchHarness:
                 raise ValueError(f"duplicate attestation tuple: {key}")
             if record.get("outcome") not in OUTCOMES:
                 raise ValueError(f"invalid attestation outcome: {key}")
+            self.validate_signed_chatgpt_app_identity(record)
             tuple_value = record.get("tuple", {})
             expected_scenario = "chatgpt_registered_binding" if record["client"] == "chatgpt" else "hero_5x3_runtime"
             privacy_fields = (
@@ -2320,6 +2321,52 @@ class LaunchHarness:
         clients = sorted({target["client"] for target in policy.get("targets", []) if "user" in target.get("scopes", [])})
         source = release.get("package_source", {})
         return {"product_id": product_id, "distribution_id": distribution["id"], "distribution_kind": distribution["kind"], "release_sequence": release["sequence"], "package_version": release.get("package_version"), "tree_digest": release["tree_digest"], "manifest_digest": release["manifest_digest"], "source_repository": source.get("repository"), "source_revision": source.get("revision"), "source_path": source.get("path"), "compatible_clients": clients, "resolved_targets": list(targets), "fallback_reason": resolved["fallback_reason"]}
+
+    def signed_chatgpt_app_id(self, product_id: str) -> str:
+        """Return the exact app id selected by the authenticated Directory policy."""
+        release = self.directory_release(product_id, ["chatgpt"])
+        distribution = next(
+            (item for item in self.snapshot.get("distributions", []) if item.get("id") == release["distribution_id"]),
+            None,
+        )
+        policies = [
+            item for item in (distribution or {}).get("release_policies", [])
+            if item.get("status") == "active" and item.get("release_sequence") == release["release_sequence"]
+        ]
+        if len(policies) != 1:
+            raise ValueError(f"signed Directory policy is ambiguous for {product_id}")
+        policy = policies[0]
+        targets = [
+            target for target in (policy or {}).get("targets", [])
+            if target.get("client") == "chatgpt" and "user" in target.get("scopes", [])
+        ]
+        if len(targets) != 1:
+            raise ValueError(f"signed Directory policy has no unique ChatGPT target for {product_id}")
+        binding = targets[0].get("app_binding")
+        if (
+            not isinstance(binding, dict)
+            or set(binding) != {"app_key", "id", "mcp_server"}
+            or type(binding.get("id")) is not str
+            or not binding["id"]
+        ):
+            raise ValueError(f"signed Directory policy has no exact ChatGPT app binding for {product_id}")
+        return binding["id"]
+
+    def validate_signed_chatgpt_app_identity(self, record: dict[str, Any]) -> None:
+        """Bind a positive protected-observer app chain to its signed target."""
+        if record.get("client") != "chatgpt" or record.get("outcome") != "passed":
+            return
+        product_id = record.get("plugin")
+        if type(product_id) is not str or not product_id:
+            raise ValueError("positive ChatGPT evidence lacks an exact product identity")
+        # The protected adapter emits application_id only after its immutable
+        # config, app-binding file, projection receipt, and human attestation
+        # agree. This final comparison binds that authenticated chain to the
+        # selected signed Directory target rather than a coherent substitute.
+        expected_app_id = self.signed_chatgpt_app_id(product_id)
+        if type(record.get("application_id")) is not str or record["application_id"] != expected_app_id:
+            key = (record.get("plugin"), record.get("client"), record.get("level"))
+            raise ValueError(f"ChatGPT application identity differs from the signed Directory target: {key}")
 
     def configured_source_release(self, scenario: str, targets: list[str] | tuple[str, ...]) -> dict[str, Any]:
         selection = self.config["source_identity_scenarios"][scenario]

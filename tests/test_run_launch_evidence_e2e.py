@@ -5445,6 +5445,95 @@ else: raise SystemExit(2)
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "bound|privacy|identity"):
                 load(value)
 
+    def test_chatgpt_attestation_application_id_is_bound_to_signed_directory_target(self) -> None:
+        harness = self.fixture_harness()
+        harness.challenge = {"value": "a" * 64}
+        harness.github_run_id = "17"
+        harness.github_run_attempt = "2"
+        harness.snapshot_digest = "sha256:" + "d" * 64
+        signed_app_id = "plugin_asdk_app_6a78e90cf73481918ef10cdb87cd4bb4"
+        digest = lambda character: "sha256:" + character * 64
+        chatgpt_target = {
+            "client": "chatgpt", "scopes": ["user"], "delivery": "registered_app",
+            "authentication": "oauth", "app_binding": {
+                "app_key": "cloudflare-docs", "id": signed_app_id,
+                "mcp_server": "cloudflare-docs",
+            },
+        }
+        harness.snapshot = {
+            "sequence": 19, "evidence": [],
+            "products": [{
+                "id": "cloudflare-docs", "aliases": ["cloudflare-docs"],
+                "default_distribution": "cloudflare/cloudflare-docs",
+                "distributions": ["cloudflare/cloudflare-docs"],
+                "minimum_capabilities": {"mcp": "required"},
+            }],
+            "distributions": [{
+                "id": "cloudflare/cloudflare-docs", "product_id": "cloudflare-docs",
+                "kind": "upstream", "status": "active",
+                "releases": [{
+                    "sequence": 1, "components": ["mcp"],
+                    "tree_digest": digest("b"), "manifest_digest": digest("c"),
+                    "package_version": "1.0.0",
+                }],
+                "release_policies": [{
+                    "release_sequence": 1, "status": "active",
+                    "targets": [chatgpt_target], "current_evidence": [],
+                }],
+            }],
+        }
+        consent = json.loads(CONSENT.read_text())
+        record = {
+            "plugin": "cloudflare-docs", "client": "chatgpt", "level": "runtime",
+            "outcome": "failed", "reason": "fixture negative record", "tuple": {},
+            "application_id": signed_app_id,
+            "challenge": harness.challenge["value"], "run_id": "17", "run_attempt": "2",
+            "scenario_id": "chatgpt_registered_binding",
+            "release_manifest_digest": harness.release_manifest_digest,
+            "release_checksums_digest": harness.release_checksums_digest,
+            "directory_digest": harness.snapshot_digest,
+            "scenario_contract_digest": e2e.sha256_file(e2e.SCENARIOS),
+            "identity_id": consent["pseudonymous_identity_id"],
+            "consent_artifact_digest": harness.consent_digest,
+            **{field: consent[field] for field in (
+                "pseudonymous_identity_id", "pseudonymous_workspace_id", "dedicated_identity",
+                "disposable_project_status", "operation_mode", "auth_origin", "cleanup_outcome",
+                "no_real_project_proof",
+            )},
+        }
+
+        def load(value):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "attestations.json"
+                path.write_text(json.dumps({"schema_version": 1, "attestations": [value]}))
+                with mock.patch.object(harness, "directory_release", return_value={
+                    "distribution_id": "cloudflare/cloudflare-docs", "release_sequence": 1,
+                }):
+                    return harness._load_attestations(path)
+
+        exact_pass = {**record, "outcome": "passed"}
+        with mock.patch.object(harness, "directory_release", return_value={
+            "distribution_id": "cloudflare/cloudflare-docs", "release_sequence": 1,
+        }):
+            harness.validate_signed_chatgpt_app_identity(exact_pass)
+        substituted = {
+            **exact_pass,
+            "application_id": "plugin_asdk_app_6a92d29a704c8191931e76b47668cb0b",
+        }
+        with mock.patch.object(e2e.subprocess, "run") as process_effect, mock.patch.object(
+            e2e, "urlopen",
+        ) as network_effect, self.assertRaisesRegex(ValueError, "signed Directory target"):
+            load(substituted)
+        process_effect.assert_not_called()
+        network_effect.assert_not_called()
+
+        non_chatgpt = {
+            **record, "plugin": "context7", "client": "codex",
+            "scenario_id": "hero_5x3_runtime", "application_id": "unrelated-client-identity",
+        }
+        self.assertIn(("context7", "codex", "runtime"), load(non_chatgpt))
+        harness.validate_signed_chatgpt_app_identity({**non_chatgpt, "outcome": "passed"})
+
     def test_hidden_yes_acceptance_or_mutation_fails_public_scenario(self) -> None:
         fake = '''#!/usr/bin/python3
 import os, pathlib, sys
