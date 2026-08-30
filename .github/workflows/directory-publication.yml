@@ -41,6 +41,14 @@ on:
         description: Existing staged sequence to resume without signing a new sequence
         required: false
         type: string
+      supersede_publication_id:
+        description: Current staged publication ID to supersede with a materially changed higher sequence
+        required: false
+        type: string
+      supersede_sequence:
+        description: Current staged sequence to supersede with a materially changed higher sequence
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -187,14 +195,26 @@ jobs:
           REQUESTED_SEED_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.ledger_seed_commit || '' }}
           RESUME_PUBLICATION_ID: ${{ inputs.resume_publication_id }}
           RESUME_SEQUENCE: ${{ inputs.resume_sequence }}
+          SUPERSEDE_PUBLICATION_ID: ${{ inputs.supersede_publication_id }}
+          SUPERSEDE_SEQUENCE: ${{ inputs.supersede_sequence }}
         run: |
           if { test -n "${RESUME_PUBLICATION_ID}" && test -z "${RESUME_SEQUENCE}"; } || \
              { test -z "${RESUME_PUBLICATION_ID}" && test -n "${RESUME_SEQUENCE}"; }; then
             echo "resume_publication_id and resume_sequence must be supplied together" >&2
             exit 1
           fi
-          if test -n "${RESUME_PUBLICATION_ID}" && test "${INITIALIZE_LEDGER}" = "true"; then
-            echo "staged resume cannot initialize the ledger" >&2
+          if { test -n "${SUPERSEDE_PUBLICATION_ID}" && test -z "${SUPERSEDE_SEQUENCE}"; } || \
+             { test -z "${SUPERSEDE_PUBLICATION_ID}" && test -n "${SUPERSEDE_SEQUENCE}"; }; then
+            echo "supersede_publication_id and supersede_sequence must be supplied together" >&2
+            exit 1
+          fi
+          if test -n "${RESUME_PUBLICATION_ID}" && test -n "${SUPERSEDE_PUBLICATION_ID}"; then
+            echo "staged resume and supersession are mutually exclusive" >&2
+            exit 1
+          fi
+          if { test -n "${RESUME_PUBLICATION_ID}" || test -n "${SUPERSEDE_PUBLICATION_ID}"; } && \
+             test "${INITIALIZE_LEDGER}" = "true"; then
+            echo "staged resume or supersession cannot initialize the ledger" >&2
             exit 1
           fi
           tag_prefix=directory-publication-schema-1-sequence-
@@ -246,7 +266,7 @@ jobs:
           fi
           echo "ledger_head=$(git -C _publication-ledger rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Reject a new append while a signed sequence is still staged
-        if: needs.authenticate-completed-state.outputs.completed != 'true' && inputs.resume_publication_id == '' && steps.ledger.outputs.initialize != 'true'
+        if: needs.authenticate-completed-state.outputs.completed != 'true' && inputs.resume_publication_id == '' && inputs.supersede_publication_id == '' && steps.ledger.outputs.initialize != 'true'
         env:
           LEDGER_SEQUENCE_FLOOR: ${{ steps.ledger.outputs.sequence_floor }}
         run: |
@@ -269,15 +289,24 @@ jobs:
           fi
       - name: Authenticate an exact staged signed publication
         id: resume
-        if: needs.authenticate-completed-state.outputs.completed != 'true' && inputs.resume_publication_id != ''
+        if: needs.authenticate-completed-state.outputs.completed != 'true' && (inputs.resume_publication_id != '' || inputs.supersede_publication_id != '')
         env:
-          REQUESTED_PUBLICATION_ID: ${{ inputs.resume_publication_id }}
-          REQUESTED_SEQUENCE: ${{ inputs.resume_sequence }}
+          RESUME_PUBLICATION_ID: ${{ inputs.resume_publication_id }}
+          RESUME_SEQUENCE: ${{ inputs.resume_sequence }}
+          SUPERSEDE_PUBLICATION_ID: ${{ inputs.supersede_publication_id }}
+          SUPERSEDE_SEQUENCE: ${{ inputs.supersede_sequence }}
           SOURCE_HEAD: ${{ github.sha }}
         run: |
+          mode=resume
+          REQUESTED_PUBLICATION_ID="${RESUME_PUBLICATION_ID}"
+          REQUESTED_SEQUENCE="${RESUME_SEQUENCE}"
+          if test -n "${SUPERSEDE_PUBLICATION_ID}"; then
+            mode=supersede
+            REQUESTED_PUBLICATION_ID="${SUPERSEDE_PUBLICATION_ID}"
+            REQUESTED_SEQUENCE="${SUPERSEDE_SEQUENCE}"
+          fi
           [[ "${REQUESTED_PUBLICATION_ID}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${REQUESTED_SEQUENCE}" =~ ^[1-9][0-9]*$ ]]
-          sequence="$((10#${REQUESTED_SEQUENCE}))"
+          sequence="$(python3 scripts/sequence_boundaries.py validate "${REQUESTED_SEQUENCE}")"
           tag_name="directory-publication-schema-1-sequence-$(printf '%020d' "${sequence}")"
           signed_ledger_commit="$(git -C _publication-ledger rev-parse "refs/tags/${tag_name}^{commit}")"
           ledger_head="$(git -C _publication-ledger rev-parse HEAD)"
@@ -313,14 +342,16 @@ jobs:
           fi
           test "${production_sequence}" -lt "${sequence}"
 
-          echo "signed_ledger_commit=${signed_ledger_commit}" >> "$GITHUB_OUTPUT"
-          echo "materialized_ledger_commit=${materialized_ledger_commit}" >> "$GITHUB_OUTPUT"
-          echo "ledger_head=${ledger_head}" >> "$GITHUB_OUTPUT"
-          echo "marker_commit=${marker_commit}" >> "$GITHUB_OUTPUT"
-          echo "publication_id=${REQUESTED_PUBLICATION_ID}" >> "$GITHUB_OUTPUT"
-          echo "sequence=${sequence}" >> "$GITHUB_OUTPUT"
-          echo "snapshot_digest=${snapshot_digest}" >> "$GITHUB_OUTPUT"
-          echo "main_parent=${SOURCE_HEAD}" >> "$GITHUB_OUTPUT"
+          if test "${mode}" = resume; then
+            echo "signed_ledger_commit=${signed_ledger_commit}" >> "$GITHUB_OUTPUT"
+            echo "materialized_ledger_commit=${materialized_ledger_commit}" >> "$GITHUB_OUTPUT"
+            echo "ledger_head=${ledger_head}" >> "$GITHUB_OUTPUT"
+            echo "marker_commit=${marker_commit}" >> "$GITHUB_OUTPUT"
+            echo "publication_id=${REQUESTED_PUBLICATION_ID}" >> "$GITHUB_OUTPUT"
+            echo "sequence=${sequence}" >> "$GITHUB_OUTPUT"
+            echo "snapshot_digest=${snapshot_digest}" >> "$GITHUB_OUTPUT"
+            echo "main_parent=${SOURCE_HEAD}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Observe immutable launch approval marker
         id: launch
         if: needs.authenticate-completed-state.outputs.completed != 'true'
@@ -343,6 +374,7 @@ jobs:
           INITIALIZE_LEDGER: ${{ steps.ledger.outputs.initialize }}
           LEDGER_SEED_COMMIT: ${{ steps.ledger.outputs.seed_commit }}
           LEDGER_SEQUENCE_FLOOR: ${{ steps.ledger.outputs.sequence_floor }}
+          SUPERSEDE_SEQUENCE: ${{ inputs.supersede_sequence }}
         run: |
           test -x /usr/bin/git
           test -x /usr/bin/gh
@@ -369,6 +401,12 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           test "$(wc -c < candidate.json)" -le 4194304
           check-jsonschema --schemafile schemas/directory-publication-candidate.schema.json candidate.json
+          if test -n "${SUPERSEDE_SEQUENCE}"; then
+            supersede_sequence="$(python3 scripts/sequence_boundaries.py validate "${SUPERSEDE_SEQUENCE}")"
+            superseded_snapshot="_publication-ledger/registry/schemas/1/snapshots/$(printf '%020d' "${supersede_sequence}").json"
+            python3 scripts/directory_staged_supersession.py \
+              --candidate candidate.json --staged-snapshot "${superseded_snapshot}"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: needs.authenticate-completed-state.outputs.completed != 'true' && inputs.resume_publication_id == ''
         with:

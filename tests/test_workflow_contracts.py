@@ -1712,6 +1712,49 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--approval-target "${EXPECTED_PUBLICATION_COMMIT}"', persist_body)
         self.assertIn('--expected-publication-source-commit "${EXPECTED_SOURCE_COMMIT}"', persist_body)
 
+    def test_staged_publication_supersession_authenticates_then_appends_higher_sequence(self) -> None:
+        workflow = load(DIRECTORY_PUBLICATION)
+        dispatch = workflow["on"]["workflow_dispatch"]["inputs"]
+        self.assertEqual(dispatch["supersede_publication_id"]["type"], "string")
+        self.assertEqual(dispatch["supersede_sequence"]["type"], "string")
+
+        prepare = workflow["jobs"]["prepare"]
+        ledger = next(step for step in prepare["steps"] if step.get("id") == "ledger")
+        staged = next(step for step in prepare["steps"] if step.get("id") == "resume")
+        guard = next(
+            step for step in prepare["steps"]
+            if step.get("name") == "Reject a new append while a signed sequence is still staged"
+        )
+        candidate = next(step for step in prepare["steps"] if step.get("id") == "candidate")
+        self.assertIn("supersession are mutually exclusive", ledger["run"])
+        self.assertIn("supersede_publication_id and supersede_sequence must be supplied together", ledger["run"])
+        self.assertIn("supersede_publication_id != ''", staged["if"])
+        self.assertIn("supersede_publication_id == ''", guard["if"])
+        for exact_authentication in (
+            "refs/tags/${tag_name}^{commit}",
+            "directory_publication_cas.py staged-lineage-verify",
+            'test "$(python3 -c \'import json,sys; print(json.load(open(sys.argv[1]))["publication_id"])\' "${feed}/${snapshot_path}")" = "${REQUESTED_PUBLICATION_ID}"',
+            'test "${production_sequence}" -lt "${sequence}"',
+        ):
+            self.assertIn(exact_authentication, staged["run"])
+        self.assertIn("directory_staged_supersession.py", candidate["run"])
+        self.assertLess(
+            prepare["steps"].index(staged), prepare["steps"].index(candidate),
+            "stale or mismatched staged inputs must fail before candidate preparation",
+        )
+        self.assertLess(
+            prepare["steps"].index(candidate),
+            next(index for index, step in enumerate(prepare["steps"])
+                 if str(step.get("uses", "")).startswith("actions/upload-artifact")),
+            "unchanged supersession must fail before candidate upload or signing",
+        )
+
+        signer = workflow["jobs"]["sign"]
+        signing_step = next(step for step in signer["steps"] if step.get("id") == "signed")
+        publisher_step = next(step for step in signer["steps"] if step.get("id") == "publisher")
+        self.assertEqual(signing_step["if"], "inputs.resume_publication_id == ''")
+        self.assertEqual(publisher_step["if"], "inputs.resume_publication_id == ''")
+
     def test_protected_observer_preflights_oidc_claim_names_without_logging_token(self) -> None:
         workflow = load(LAUNCH)
         observer = workflow["jobs"]["protected-observer-inputs"]
