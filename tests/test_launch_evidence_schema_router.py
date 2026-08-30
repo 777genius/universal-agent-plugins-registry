@@ -143,6 +143,13 @@ class LaunchEvidenceSchemaRouterTests(unittest.TestCase):
             with self.subTest(mutation=mutations.index(value)), self.assertRaises(lanes.TwoLaneEvidenceError):
                 lanes.validate_launch_schema(value)
 
+    def test_v5_rejects_protected_rows_without_details(self) -> None:
+        for row_index, row_name in ((0, "hero"), (-1, "chatgpt")):
+            value = launch_v5()
+            value["matrix"][row_index].pop("details")
+            with self.subTest(row=row_name), self.assertRaises(lanes.TwoLaneEvidenceError):
+                lanes.validate_launch_schema(value)
+
     def test_v2_sidecar_schemas_pin_versions_and_release_identity(self) -> None:
         source = json.loads((ROOT / "schemas/e2e/source-policy-conformance-v2.schema.json").read_text())
         readiness = json.loads((ROOT / "schemas/e2e/two-lane-readiness-v2.schema.json").read_text())
@@ -166,6 +173,29 @@ class LaunchEvidenceSchemaRouterTests(unittest.TestCase):
             native["properties"]["github_release_identity"]["properties"]["release_id"],
             {"const": 379284682},
         )
+
+    def test_source_policy_v2_requires_each_policy_id_exactly_once(self) -> None:
+        schema = json.loads((ROOT / "schemas/e2e/source-policy-conformance-v2.schema.json").read_text())
+        validator = jsonschema.Draft202012Validator(schema)
+        baseline = fixtures.policy_evidence()
+        baseline["schema_version"] = 2
+        baseline["identities"].update(
+            plugin_kit_tag=TAG,
+            plugin_kit_commit=COMMIT,
+            release_manifest_digest=MANIFEST_DIGEST,
+            release_checksums_digest=CHECKSUMS_DIGEST,
+            production_source_tree_before="sha256:3635457d320bc2c78a86b9b3d8e4937d14ac59848ffae70c6571167204130de8",
+            production_source_tree_after="sha256:3635457d320bc2c78a86b9b3d8e4937d14ac59848ffae70c6571167204130de8",
+        )
+        validator.validate(baseline)
+
+        duplicate = copy.deepcopy(baseline)
+        duplicate["results"][-1] = copy.deepcopy(duplicate["results"][0])
+        missing = copy.deepcopy(baseline)
+        missing["results"].pop()
+        for mutation, value in (("duplicate", duplicate), ("missing", missing)):
+            with self.subTest(mutation=mutation), self.assertRaises(jsonschema.ValidationError):
+                validator.validate(value)
 
     def test_frozen_v3_v4_and_v1_sidecar_bytes_are_unchanged(self) -> None:
         expected = {

@@ -53,7 +53,20 @@
             {"if": {"properties": {"id": {"const": "distribution_sticky_update"}}, "required": ["id"]}, "then": {"properties": {"test": {"properties": {"package": {"const": "./cli/plugin-kit-ai/internal/agentpluginscli"}, "name": {"const": "TestDirectoryUpdateAllowsHigherReleaseOwnImmutableSourceIdentity"}}}}}},
             {"if": {"properties": {"id": {"const": "external_activation_failure"}}, "required": ["id"]}, "then": {"properties": {"test": {"properties": {"package": {"const": "./cli/plugin-kit-ai/internal/agentpluginscli"}, "name": {"const": "TestSwitchSynthesizesRemoteChatGPTAndRecoversAfterActivationFailure"}}}}}}
         ]
-      }
+      },
+      "allOf": [
+        {"contains": {"type": "object", "properties": {"id": {"const": "retained_data_readd_before_changed_default"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "revoked_operations_boundary"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "signed_sequence_not_semver"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "directory_offline"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "directory_expired"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "directory_tampered"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "directory_sequence_rollback"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "upstream_owned_short_name"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "community_bridge_short_name"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "distribution_sticky_update"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"id": {"const": "external_activation_failure"}}, "required": ["id"]}, "minContains": 1, "maxContains": 1}
+      ]
     },
     "production_source_unchanged": {"const": true},
     "policy_conformance_gate_complete": {"const": true}
