@@ -11,10 +11,12 @@ must be the exact projection retained by released agentplugins state.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import os
 import re
-import shutil
+import secrets
 import stat
 import subprocess
 import sys
@@ -50,6 +52,8 @@ from observe_launch_scenario import (  # noqa: E402
 MAX_EVIDENCE_BYTES = 8 << 20
 MAX_PROJECTION_BYTES = 64 << 10
 MAX_BINARY_BYTES = 256 << 20
+MAX_PROJECTION_FILES = 10_000
+MAX_PROJECTION_TREE_BYTES = 256 << 20
 APP_ID = re.compile(r"plugin_asdk_app_[a-f0-9]{32}")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
@@ -156,7 +160,7 @@ def selected_identity(
 def validate_add(
     add: dict[str, Any], *, product_id: str, distribution: dict[str, Any], release: dict[str, Any],
     snapshot: dict[str, Any], snapshot_digest: str, binding: dict[str, Any],
-) -> str:
+) -> tuple[str, str]:
     exact_object(add, {"schema_version", "command", "result", "data"}, set(), "CLI add evidence")
     require(isinstance(add["schema_version"], int) and not isinstance(add["schema_version"], bool) and add["schema_version"] == 1, "CLI add schema is invalid")
     require(add["command"] == "add" and add["result"] == "success", "CLI add did not succeed")
@@ -281,13 +285,67 @@ def validate_add(
         and activation["policy"] == "allowed" and activation["verification"] == "package_validated",
         "CLI ChatGPT activation state is invalid",
     )
-    return result["installation_id"]
+    artifact_id = plan["physical_artifact_id"]
+    require(isinstance(artifact_id, str) and artifact_id != "", "CLI ChatGPT physical artifact ID is invalid")
+    return result["installation_id"], artifact_id
+
+
+def projection_artifact_snapshot(root: Path) -> tuple[str, dict[str, bytes]]:
+    """Reproduce the released manager's packagesnapshot digest over a stable tree."""
+    root_before = root.lstat()
+    require(stat.S_ISDIR(root_before.st_mode), "ChatGPT projection root must be a directory, not a link")
+    entries: list[tuple[str, Path, os.stat_result | None]] = []
+    file_count = 0
+    total_bytes = 0
+    for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        directories[:] = sorted(name for name in directories if name != ".git")
+        files = sorted(name for name in files if name != ".plugin-kit-ai.lock")
+        for name in directories:
+            path = current_path / name
+            metadata = path.lstat()
+            require(stat.S_ISDIR(metadata.st_mode), f"projection path {path!s} is not a real directory")
+            entries.append((path.relative_to(root).as_posix(), path, None))
+        for name in files:
+            path = current_path / name
+            metadata = path.lstat()
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1, f"projection file {path!s} must be a one-link regular file")
+            file_count += 1
+            total_bytes += metadata.st_size
+            require(file_count <= MAX_PROJECTION_FILES and total_bytes <= MAX_PROJECTION_TREE_BYTES, "ChatGPT projection exceeds snapshot limits")
+            entries.append((path.relative_to(root).as_posix(), path, metadata))
+    digest = hashlib.sha256()
+    contents: dict[str, bytes] = {}
+    for relative, path, metadata in sorted(entries, key=lambda item: item[0]):
+        require(relative not in {"", "."} and not relative.startswith("/"), "projection contains an unsafe relative path")
+        require(all(part not in {"", ".", ".."} for part in relative.split("/")), "projection contains an unsafe path segment")
+        if metadata is None:
+            digest.update(b"dir\0" + relative.encode() + b"\0false\0" + b"0\0")
+            continue
+        executable = metadata.st_mode & 0o111 != 0
+        body = read_regular_bounded(path, min(MAX_PROJECTION_TREE_BYTES, metadata.st_size + 1), f"projection file {relative!r}")
+        require(len(body) == metadata.st_size, f"projection file {relative!r} changed size while hashing")
+        contents[relative] = body
+        digest.update(f"file\0{relative}\0{'true' if executable else 'false'}\0{metadata.st_size}\0".encode())
+        digest.update(body)
+    root_after = root.lstat()
+    require(
+        (root_before.st_dev, root_before.st_ino, root_before.st_mtime_ns, root_before.st_ctime_ns)
+        == (root_after.st_dev, root_after.st_ino, root_after.st_mtime_ns, root_after.st_ctime_ns),
+        "ChatGPT projection root changed while hashing",
+    )
+    return "sha256:" + digest.hexdigest(), contents
+
+
+def projection_artifact_digest(root: Path) -> str:
+    return projection_artifact_snapshot(root)[0]
 
 
 def validate_state(
     state: dict[str, Any], projection_root: Path, *, product_id: str,
     distribution: dict[str, Any], release: dict[str, Any], snapshot: dict[str, Any], snapshot_digest: str,
-    binding: dict[str, Any], installation_id: str,
+    binding: dict[str, Any], installation_id: str, physical_artifact_id: str,
+    managed_digest: str,
 ) -> None:
     require(validate_released_state_v4(state), "released CLI State v4 is invalid")
     matches = [item for item in state["installations"] if item.get("declared_name") == product_id]
@@ -317,6 +375,7 @@ def validate_state(
     client = one([item for item in clients.values() if isinstance(item, dict) and item.get("client_id") == "chatgpt"], "State v4 ChatGPT client")
     require(len(clients) == 1, "State v4 installation contains ambiguous clients")
     require(Path(client.get("target_locator", "")).resolve() == projection_root.resolve(), "State v4 target locator differs from the supplied projection")
+    require(client.get("physical_artifact_id") == physical_artifact_id, "State v4 physical artifact differs from the add result")
     revision = client.get("package_revision")
     require(isinstance(revision, dict), "State v4 ChatGPT package revision is missing")
     expected_revision = {
@@ -337,12 +396,42 @@ def validate_state(
         require(isinstance(app, dict), "State v4 app binding evidence is missing")
         for field in ("app_key", "id", "mcp_server"):
             require(app.get(field) == binding[field], f"State v4 app binding {field} differs from the signed target")
+    native = one(
+        [
+            item for item in client.get("native_objects", [])
+            if isinstance(item, dict) and item.get("kind") == "managed_package_directory"
+        ],
+        "State v4 managed ChatGPT projection",
+    )
+    require(
+        native.get("path") == str(projection_root)
+        and native.get("logical_name") == product_id
+        and native.get("protection_class") == "managed"
+        and native.get("managed_digest") == managed_digest,
+        "State v4 managed projection digest differs from the actual projection bytes",
+    )
+    receipts = client.get("receipts")
+    require(isinstance(receipts, list) and receipts, "State v4 ChatGPT mutation receipt is missing")
+    receipt = receipts[-1]
+    require(
+        isinstance(receipt, dict)
+        and receipt.get("phase") == "committed"
+        and receipt.get("active_path") == str(projection_root)
+        and receipt.get("after_digest") == managed_digest,
+        "State v4 mutation receipt does not bind the actual projection bytes",
+    )
 
 
-def validate_projection(root: Path, binding: dict[str, Any], product_id: str) -> str:
-    metadata = root.lstat()
-    require(stat.S_ISDIR(metadata.st_mode), "ChatGPT projection root must be a directory, not a link")
-    manifest, _ = load_object(root / ".codex-plugin/plugin.json", MAX_PROJECTION_BYTES, "ChatGPT official manifest")
+def _projection_object(files: dict[str, bytes], name: str, label: str) -> dict[str, Any]:
+    body = files.get(name)
+    require(body is not None, f"{label} is missing from the authenticated projection snapshot")
+    value = parse_json_bytes(body, label, max_bytes=MAX_PROJECTION_BYTES)
+    require(isinstance(value, dict), f"{label} must be an object")
+    return value
+
+
+def validate_projection(files: dict[str, bytes], binding: dict[str, Any], product_id: str) -> str:
+    manifest = _projection_object(files, ".codex-plugin/plugin.json", "ChatGPT official manifest")
     require(
         manifest.get("name") == product_id
         and manifest.get("apps") == "./.app.json"
@@ -350,10 +439,10 @@ def validate_projection(root: Path, binding: dict[str, Any], product_id: str) ->
         and "hooks" not in manifest,
         "ChatGPT official manifest does not bind the exact app and MCP projection",
     )
-    app, _ = load_object(root / ".app.json", MAX_PROJECTION_BYTES, "ChatGPT .app.json")
+    app = _projection_object(files, ".app.json", "ChatGPT .app.json")
     expected_app = {"apps": {binding["app_key"]: {"id": binding["id"]}}}
     require(app == expected_app, "ChatGPT .app.json differs from the signed target")
-    mcp, _ = load_object(root / ".mcp.json", MAX_PROJECTION_BYTES, "ChatGPT .mcp.json")
+    mcp = _projection_object(files, ".mcp.json", "ChatGPT .mcp.json")
     servers = exact_object(mcp, {"mcpServers"}, set(), "ChatGPT .mcp.json")["mcpServers"]
     require(isinstance(servers, dict) and set(servers) == {binding["mcp_server"]}, "ChatGPT .mcp.json has ambiguous MCP servers")
     server = exact_object(servers[binding["mcp_server"]], {"url", "type"}, set(), "ChatGPT MCP server")
@@ -364,81 +453,222 @@ def validate_projection(root: Path, binding: dict[str, Any], product_id: str) ->
     return parsed.hostname
 
 
-def binary_snapshot(path: Path) -> tuple[str, tuple[int, int, int, int, int]]:
-    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns
+
+
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
+
+
+def _open_authority(path: Path) -> tuple[Path, list[int], int]:
+    absolute = path.resolve(strict=True)
+    require(absolute.is_absolute() and absolute.name not in {"", ".", ".."}, "released CLI path is invalid")
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors = [os.open(absolute.anchor, directory_flags)]
     try:
-        before = os.fstat(descriptor)
-        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1, "released CLI binary must be a one-link regular file")
-        require(before.st_mode & 0o111 != 0, "released CLI binary is not executable")
-        require(0 < before.st_size <= MAX_BINARY_BYTES, "released CLI binary size is invalid")
-        digest = hashlib.sha256()
-        remaining = before.st_size
-        while remaining:
-            block = os.read(descriptor, min(1 << 20, remaining))
-            require(bool(block), "released CLI binary was truncated")
-            digest.update(block)
-            remaining -= len(block)
-        after = os.fstat(descriptor)
-        require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns), "released CLI binary changed while hashing")
-        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-        return "sha256:" + digest.hexdigest(), identity
-    finally:
-        os.close(descriptor)
+        for component in absolute.parts[1:-1]:
+            require(component not in {"", ".", ".."}, "released CLI path contains an unsafe component")
+            descriptors.append(os.open(component, directory_flags, dir_fd=descriptors[-1]))
+        leaf = os.open(absolute.name, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), dir_fd=descriptors[-1])
+        return absolute, descriptors, leaf
+    except Exception:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+
+
+def _revalidate_authority(path: Path, descriptors: list[int], identities: list[tuple[int, int]]) -> None:
+    absolute = path.absolute()
+    require(len(descriptors) == len(identities), "released CLI ancestor authority is incomplete")
+    for index, descriptor in enumerate(descriptors):
+        require(_directory_identity(os.fstat(descriptor)) == identities[index], "released CLI ancestor authority changed")
+        if index == 0:
+            continue
+        reopened = os.open(
+            absolute.parts[index],
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=descriptors[index - 1],
+        )
+        try:
+            require(_directory_identity(os.fstat(reopened)) == identities[index], "released CLI ancestor pathname was replaced")
+        finally:
+            os.close(reopened)
+
+
+def _digest_descriptor(descriptor: int) -> tuple[str, tuple[int, int, int, int, int]]:
+    before = os.fstat(descriptor)
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1, "released CLI binary must be a one-link regular file")
+    require(before.st_mode & 0o111 != 0, "released CLI binary is not executable")
+    require(0 < before.st_size <= MAX_BINARY_BYTES, "released CLI binary size is invalid")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    remaining = before.st_size
+    while remaining:
+        block = os.read(descriptor, min(1 << 20, remaining))
+        require(bool(block), "released CLI binary was truncated")
+        digest.update(block)
+        remaining -= len(block)
+    after = os.fstat(descriptor)
+    require(_identity(before) == _identity(after), "released CLI binary changed while hashing")
+    return "sha256:" + digest.hexdigest(), _identity(before)
+
+
+def _run_authenticated_binary(descriptor: int) -> subprocess.CompletedProcess[str]:
+    # Linux can execute the held image directly. Other supported development
+    # hosts use a private, parent-anchored copy made only from that descriptor;
+    # the original pathname is never consulted after authentication.
+    if sys.platform.startswith("linux") and Path("/proc/self/fd").is_dir():
+        executable = f"/proc/self/fd/{descriptor}"
+        return subprocess.run(
+            [executable, "version"], executable=executable, pass_fds=(descriptor,),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd="/", env={"HOME": "/nonexistent", "PATH": "/usr/bin:/bin"},
+            timeout=10, check=False,
+        )
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="uap-authenticated-cli-") as temporary:
+        image = Path(temporary) / "agentplugins"
+        output = os.open(image, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o500)
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            while True:
+                block = os.read(descriptor, 1 << 20)
+                if not block:
+                    break
+                written = 0
+                while written < len(block):
+                    count = os.write(output, block[written:])
+                    require(count > 0, "short write while sealing authenticated CLI image")
+                    written += count
+            os.fsync(output)
+        finally:
+            os.close(output)
+        return subprocess.run(
+            [str(image), "version"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=temporary, env={"HOME": "/nonexistent", "PATH": "/usr/bin:/bin"},
+            timeout=10, check=False,
+        )
 
 
 def validate_binary(path: Path, installer_version: str) -> str:
-    digest, identity = binary_snapshot(path)
+    authority_path, ancestors, descriptor = _open_authority(path)
     try:
-        completed = subprocess.run(
-            [str(path.resolve()), "version"], stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            cwd=path.parent, env={"HOME": "/nonexistent", "PATH": "/usr/bin:/bin"},
-            timeout=10, check=False,
+        ancestor_identities = [_directory_identity(os.fstat(item)) for item in ancestors]
+        digest, identity = _digest_descriptor(descriptor)
+        _revalidate_authority(authority_path, ancestors, ancestor_identities)
+        try:
+            completed = _run_authenticated_binary(descriptor)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise PublicationError(f"released CLI version check failed: {error}") from error
+        _revalidate_authority(authority_path, ancestors, ancestor_identities)
+        after_digest, after_identity = _digest_descriptor(descriptor)
+        require((after_digest, after_identity) == (digest, identity), "released CLI binary changed during version verification")
+        require(
+            completed.returncode == 0
+            and completed.stdout == f"agentplugins {installer_version}\n"
+            and completed.stderr == "",
+            "released CLI version output differs from the requested installer version",
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise PublicationError(f"released CLI version check failed: {error}") from error
-    require(
-        completed.returncode == 0
-        and completed.stdout == f"agentplugins {installer_version}\n"
-        and completed.stderr == "",
-        "released CLI version output differs from the requested installer version",
-    )
-    after_digest, after_identity = binary_snapshot(path)
-    require((after_digest, after_identity) == (digest, identity), "released CLI binary changed during version verification")
-    return digest
+        return digest
+    finally:
+        os.close(descriptor)
+        for ancestor in reversed(ancestors):
+            os.close(ancestor)
+
+
+def _rename_noreplace(parent_descriptor: int, source: str, destination: str) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    encoded_source = os.fsencode(source)
+    encoded_destination = os.fsencode(destination)
+    if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        result = libc.renameat2(
+            ctypes.c_int(parent_descriptor), ctypes.c_char_p(encoded_source),
+            ctypes.c_int(parent_descriptor), ctypes.c_char_p(encoded_destination), ctypes.c_uint(1),
+        )
+    elif sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        result = libc.renameatx_np(
+            ctypes.c_int(parent_descriptor), ctypes.c_char_p(encoded_source),
+            ctypes.c_int(parent_descriptor), ctypes.c_char_p(encoded_destination), ctypes.c_uint(0x00000004),
+        )
+    else:
+        raise PublicationError("atomic no-replace directory publication is unsupported on this platform")
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise PublicationError("output directory already exists; refusing to overwrite approved inputs")
+        raise OSError(error, os.strerror(error), destination)
+
+
+def _remove_unpublished_stage(parent_descriptor: int, stage_name: str) -> None:
+    try:
+        stage_descriptor = os.open(
+            stage_name,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        return
+    try:
+        for name in ("app-binding.json", "projection-receipt.json"):
+            try:
+                os.unlink(name, dir_fd=stage_descriptor)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(stage_descriptor)
+    try:
+        os.rmdir(stage_name, dir_fd=parent_descriptor)
+    except OSError:
+        pass
 
 
 def write_outputs(output: Path, app: dict[str, Any], receipt: dict[str, Any]) -> None:
-    require(not output.exists(), "output directory already exists; refusing to overwrite approved inputs")
+    require(output.name not in {"", ".", ".."}, "output directory name is invalid")
     output.parent.mkdir(parents=True, exist_ok=True)
-    stage = output.with_name(f".{output.name}.{os.getpid()}.tmp")
-    require(not stage.exists(), "temporary output directory already exists")
-    stage.mkdir(mode=0o700)
+    parent = output.parent.absolute()
+    parent_descriptor = os.open(parent, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    parent_identity = _directory_identity(os.fstat(parent_descriptor))
+    stage_name = f".{output.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    os.mkdir(stage_name, mode=0o700, dir_fd=parent_descriptor)
     try:
+        stage_descriptor = os.open(stage_name, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_descriptor)
         for name, value in (("app-binding.json", app), ("projection-receipt.json", receipt)):
-            path = stage / name
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o640)
+            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o640, dir_fd=stage_descriptor)
             try:
                 body = canonical_output(value)
-                os.write(descriptor, body)
+                written = 0
+                while written < len(body):
+                    count = os.write(descriptor, body[written:])
+                    require(count > 0, f"short write while publishing {name}")
+                    written += count
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-        descriptor = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            os.fsync(descriptor)
+            os.fsync(stage_descriptor)
         finally:
-            os.close(descriptor)
-        os.rename(stage, output)
-        descriptor = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
+            os.close(stage_descriptor)
+        require(_directory_identity(os.fstat(parent_descriptor)) == parent_identity, "output parent authority changed before publication")
+        reopened = os.open(parent, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
         try:
-            os.fsync(descriptor)
+            require(_directory_identity(os.fstat(reopened)) == parent_identity, "output parent pathname was replaced")
         finally:
-            os.close(descriptor)
+            os.close(reopened)
+        _rename_noreplace(parent_descriptor, stage_name, output.name)
+        os.fsync(parent_descriptor)
+        require(_directory_identity(os.fstat(parent_descriptor)) == parent_identity, "output parent authority changed during publication")
+        reopened = os.open(parent, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            require(_directory_identity(os.fstat(reopened)) == parent_identity, "output parent pathname was replaced during publication")
+        finally:
+            os.close(reopened)
     except Exception:
-        shutil.rmtree(stage, ignore_errors=True)
+        _remove_unpublished_stage(parent_descriptor, stage_name)
         raise
+    finally:
+        os.close(parent_descriptor)
 
 
 def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -459,19 +689,21 @@ def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         app_key=args.app_key, app_id=args.app_id,
     )
     add, _ = load_object(args.add_evidence, MAX_EVIDENCE_BYTES, "CLI add evidence")
-    installation_id = validate_add(
+    installation_id, physical_artifact_id = validate_add(
         add, product_id=args.product_id, distribution=distribution, release=release,
         snapshot=snapshot, snapshot_digest=snapshot_digest, binding=binding,
     )
     state_body = read_regular_bounded(args.state, MAX_EVIDENCE_BYTES, "released CLI state")
     state = strict_state_json_loads(state_body)
     require(isinstance(state, dict), "released CLI state must be an object")
+    managed_digest, projection_files = projection_artifact_snapshot(args.projection_root)
     validate_state(
         state, args.projection_root, product_id=args.product_id, distribution=distribution,
         release=release, snapshot=snapshot, snapshot_digest=snapshot_digest,
-        binding=binding, installation_id=installation_id,
+        binding=binding, installation_id=installation_id, physical_artifact_id=physical_artifact_id,
+        managed_digest=managed_digest,
     )
-    endpoint_host = validate_projection(args.projection_root, binding, args.product_id)
+    endpoint_host = validate_projection(projection_files, binding, args.product_id)
     binary_digest = validate_binary(args.cli_binary, args.installer_version)
     source = release["package_source"]
     receipt = {

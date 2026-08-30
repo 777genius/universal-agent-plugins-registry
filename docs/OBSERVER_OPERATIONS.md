@@ -72,7 +72,10 @@ isolated ChatGPT add against the exact signed Directory feed and retain its add
 JSON, State v4 file, and official projection directory. Generate both observer
 inputs in one create-once directory. The requested app ID must already be the
 ID in the signed ChatGPT policy target; a different personal or development app
-fails closed even when it is visible in the UI.
+fails closed even when it is visible in the UI. The generator also requires the
+actual projection tree digest to match the released State v4 managed object and
+committed mutation receipt, executes only the authenticated CLI image, and
+publishes the pair with an atomic no-replace operation.
 
 ```sh
 CHATGPT_APP_ID=<exact-signed-plugin_asdk_app-id>

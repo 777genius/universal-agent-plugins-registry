@@ -5,11 +5,13 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -223,12 +225,30 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
         original = next(iter(installation["clients"].values()))
         original.update({
             "client_id": "chatgpt", "target_locator": str(self.projection),
+            "physical_artifact_id": "demo-fixture",
             "package_revision": {
                 "version": release["package_version"], "resolved_revision": source["revision"],
                 "tree_digest": release["tree_digest"], "manifest_digest": release["manifest_digest"],
                 "distribution_id": "example/demo", "release_sequence": 2,
             },
-            "affected_surfaces": ["chatgpt"], "native_objects": [], "receipts": [],
+            "affected_surfaces": ["chatgpt"],
+        })
+        managed_digest = generator.projection_artifact_digest(self.projection)
+        original["native_objects"] = [{
+            "object_id": "package:chatgpt:demo-fixture",
+            "kind": "managed_package_directory",
+            "logical_name": "demo",
+            "path": str(self.projection),
+            "managed_digest": managed_digest,
+            "protection_class": "managed",
+        }]
+        receipt = original["receipts"][-1]
+        receipt.update({
+            "client_binding_id": original["client_binding_id"],
+            "active_path": str(self.projection),
+            "staging_path": str(self.projection.parent / ".agentplugins-staging-demo"),
+            "backup_path": str(self.projection.parent / ".agentplugins-backup-demo"),
+            "after_digest": managed_digest,
         })
         installation["clients"] = {original["client_binding_id"]: original}
         if mutate:
@@ -262,6 +282,10 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
         return app, receipt
 
     def test_builds_existing_canonical_contract_from_signed_and_cli_evidence(self) -> None:
+        self.assertEqual(
+            generator.projection_artifact_digest(self.projection),
+            "sha256:ff1ef3d924a011c7d8139e5ef721cda5561e5a5c18bc5c76a537c73c6b66d956",
+        )
         app, receipt = self.generate()
         self.assertEqual(app, {"apps": {"demo": {"id": APP_ID}}})
         self.assertEqual(receipt["application_id"], APP_ID)
@@ -368,6 +392,85 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
         self.generate()
         with self.assertRaisesRegex(PublicationError, "already exists"):
             self.generate()
+
+    def test_existing_empty_output_directory_is_never_replaced(self) -> None:
+        output = self.root / "occupied"
+        output.mkdir()
+        app, receipt = generator.build(self.args(output))
+        with self.assertRaisesRegex(PublicationError, "already exists"):
+            generator.write_outputs(output, app, receipt)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_projection_byte_tamper_fails_managed_receipt_binding(self) -> None:
+        self.write_json(self.projection / ".mcp.json", {
+            "mcpServers": {"demo": {"type": "http", "url": "https://evil.example.test/mcp"}},
+        })
+        with self.assertRaisesRegex(PublicationError, "managed projection digest"):
+            generator.build(self.args())
+
+    def test_binary_path_swap_executes_authenticated_image_and_fails_authority_recheck(self) -> None:
+        real_run = generator.subprocess.run
+        original_parent = self.binary.parent
+        moved_parent = original_parent.with_name(original_parent.name + "-moved")
+
+        def swap_then_run(*args, **kwargs):
+            original_parent.rename(moved_parent)
+            original_parent.mkdir()
+            replacement = original_parent / "agentplugins"
+            replacement.write_bytes(b"#!/bin/sh\nprintf 'agentplugins 9.9.9\\n'\n")
+            replacement.chmod(0o755)
+            return real_run(*args, **kwargs)
+
+        with mock.patch.object(generator.subprocess, "run", side_effect=swap_then_run):
+            with self.assertRaisesRegex(PublicationError, "ancestor pathname was replaced"):
+                generator.validate_binary(self.binary, "0.1.18")
+        shutil.rmtree(original_parent)
+        moved_parent.rename(original_parent)
+
+    def test_binary_leaf_swap_cannot_change_executed_image(self) -> None:
+        saved = self.binary.with_name("agentplugins-authenticated")
+        real_run = generator.subprocess.run
+        observed: list[str] = []
+
+        def swap_then_run(*args, **kwargs):
+            self.binary.rename(saved)
+            self.binary.write_bytes(b"#!/bin/sh\nprintf 'agentplugins 9.9.9\\n'\n")
+            self.binary.chmod(0o755)
+            completed = real_run(*args, **kwargs)
+            observed.append(completed.stdout)
+            return completed
+
+        try:
+            with mock.patch.object(generator.subprocess, "run", side_effect=swap_then_run):
+                with self.assertRaisesRegex(PublicationError, "changed during version verification"):
+                    generator.validate_binary(self.binary, "0.1.18")
+            self.assertEqual(observed, ["agentplugins 0.1.18\n"])
+        finally:
+            self.binary.unlink(missing_ok=True)
+            saved.rename(self.binary)
+
+    def test_atomic_publish_loses_race_without_replacing_winner(self) -> None:
+        output = self.root / "raced"
+        app, receipt = generator.build(self.args(output))
+        real_rename = generator._rename_noreplace
+
+        def install_winner(parent_descriptor, source, destination):
+            os.mkdir(destination, mode=0o700, dir_fd=parent_descriptor)
+            winner_dir = os.open(destination, os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent_descriptor)
+            try:
+                winner = os.open("winner", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=winner_dir)
+                try:
+                    os.write(winner, b"winner")
+                finally:
+                    os.close(winner)
+            finally:
+                os.close(winner_dir)
+            return real_rename(parent_descriptor, source, destination)
+
+        with mock.patch.object(generator, "_rename_noreplace", side_effect=install_winner):
+            with self.assertRaisesRegex(PublicationError, "already exists"):
+                generator.write_outputs(output, app, receipt)
+        self.assertEqual((output / "winner").read_bytes(), b"winner")
 
 
 if __name__ == "__main__":
