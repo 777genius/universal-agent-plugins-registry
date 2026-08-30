@@ -4984,39 +4984,111 @@ class FixedAdapterContractTests(unittest.TestCase):
     def test_public_mcp_requests_use_deterministic_user_agent(self) -> None:
         class Response:
             status = 200
-            headers = {"Mcp-Session-Id": "session"}
-            def __init__(self, body: bytes) -> None: self.body = body
+            def __init__(self, body: bytes, session: str | None) -> None:
+                self.body = body
+                self.headers = {} if session is None else {"Mcp-Session-Id": session}
             def geturl(self) -> str: return fixed_adapters.MCP_ENDPOINT
             def read(self, _limit: int) -> bytes: return self.body
             def __enter__(self): return self
             def __exit__(self, *_args): return False
 
-        requests = []
-        def open_request(request, timeout):
-            self.assertEqual(timeout, 15)
-            requests.append(request)
-            payload = json.loads(request.data)
-            body = b"" if "id" not in payload else fixed_adapters.canonical_json({
-                "jsonrpc": "2.0", "id": payload["id"], "result": {},
-            })
-            return Response(body)
+        for server_session in ("session", None):
+            requests = []
+            def open_request(request, timeout):
+                self.assertEqual(timeout, 15)
+                requests.append(request)
+                payload = json.loads(request.data)
+                body = b"" if "id" not in payload else fixed_adapters.canonical_json({
+                    "jsonrpc": "2.0", "id": payload["id"], "result": {},
+                })
+                return Response(body, server_session)
 
-        opener = mock.Mock()
-        opener.open.side_effect = open_request
-        with mock.patch.object(fixed_adapters.urllib.request, "build_opener", return_value=opener):
-            fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 1, "initialize", {})
-            fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 2, "tools/list", {}, "session")
-            fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 3, "tools/call", {}, "session")
-            fixed_adapters.mcp_initialized(fixed_adapters.MCP_ENDPOINT, "session")
+            opener = mock.Mock()
+            opener.open.side_effect = open_request
+            with self.subTest(session=server_session), mock.patch.object(
+                fixed_adapters.urllib.request, "build_opener", return_value=opener,
+            ):
+                _, session = fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 1, "initialize", {})
+                fixed_adapters.mcp_initialized(fixed_adapters.MCP_ENDPOINT, session)
+                _, session = fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 2, "tools/list", {}, session)
+                fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 3, "tools/call", {}, session)
 
-        self.assertEqual(
-            [json.loads(request.data)["method"] for request in requests],
-            ["initialize", "tools/list", "tools/call", "notifications/initialized"],
+            self.assertEqual(
+                [json.loads(request.data)["method"] for request in requests],
+                ["initialize", "notifications/initialized", "tools/list", "tools/call"],
+            )
+            self.assertEqual(
+                [request.get_header("User-agent") for request in requests],
+                [fixed_adapters.MCP_USER_AGENT] * 4,
+            )
+            self.assertEqual(
+                [request.get_header("Mcp-session-id") for request in requests],
+                [None, server_session, server_session, server_session],
+            )
+
+    def test_chatgpt_artifact_accepts_full_stateless_mcp_sequence(self) -> None:
+        request = Fixture(Path(tempfile.mkdtemp())).request()
+        challenge = request["challenge"]["value"]
+        produced = artifacts(challenge)
+        consent = produced["consent.json"]
+        github = produced["runtime-attestations.json"]["attestations"][0]["github_attestation"]
+        app_id = "plugin_asdk_app_" + "c" * 32
+        tuple_value = sealed_tuple("cloudflare-docs")
+        binding = {"apps": {"cloudflare-docs": {"id": app_id}}}
+        receipt = {
+            "product_id": "cloudflare-docs", "application_id": app_id,
+            "tuple": tuple_value,
+        }
+        snapshots = {
+            "app-binding.json": {"body": fixed_adapters.canonical_json(binding)},
+            "projection-receipt.json": {"body": fixed_adapters.canonical_json(receipt)},
+        }
+        config = {"chatgpt": {
+            "app_binding_path": "/opt/uap-observer-inputs/chatgpt/app-binding.json",
+            "app_binding_sha256": "sha256:" + "1" * 64,
+            "app_id": app_id,
+            "mcp_endpoint": fixed_adapters.MCP_ENDPOINT,
+            "projection_receipt_path": "/opt/uap-observer-inputs/chatgpt/projection-receipt.json",
+            "projection_receipt_sha256": "sha256:" + "2" * 64,
+            "tuple": tuple_value,
+            "client_version": "chatgpt-web",
+        }}
+        responses = (
+            ({"protocolVersion": "2025-06-18"}, None),
+            ({"tools": [{"name": fixed_adapters.MCP_READ_TOOL}]}, None),
+            ({"content": [{"type": "text", "text": "substantive"}]}, None),
         )
-        self.assertEqual(
-            [request.get_header("User-agent") for request in requests],
-            [fixed_adapters.MCP_USER_AGENT] * 4,
-        )
+        with (
+            mock.patch.object(
+                fixed_adapters, "regular_snapshot",
+                side_effect=lambda path, *_args, **_kwargs: snapshots[path.name],
+            ),
+            mock.patch.object(fixed_adapters, "revalidate_snapshot"),
+            mock.patch.object(fixed_adapters, "mcp_call", side_effect=responses) as mcp_call,
+            mock.patch.object(fixed_adapters, "mcp_initialized") as initialized,
+            mock.patch.object(
+                fixed_adapters, "wait_human",
+                return_value={"observed_at": "2026-08-26T00:00:00Z"},
+            ),
+            mock.patch.object(fixed_adapters, "isolation_proof", return_value=dict(fixed_adapters.PRIVACY_RESULT)),
+        ):
+            artifact = fixed_adapters.chatgpt_artifact(
+                config, request, github, consent, owner_uid=1234,
+            )
+
+        initialized.assert_called_once_with(fixed_adapters.MCP_ENDPOINT, None)
+        self.assertEqual(mcp_call.call_args_list, [
+            mock.call(
+                fixed_adapters.MCP_ENDPOINT, 1, "initialize",
+                {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "uap-observer", "version": "1"}},
+            ),
+            mock.call(fixed_adapters.MCP_ENDPOINT, 2, "tools/list", {}, None),
+            mock.call(
+                fixed_adapters.MCP_ENDPOINT, 3, "tools/call",
+                {"name": fixed_adapters.MCP_READ_TOOL, "arguments": fixed_adapters.MCP_READ_ARGUMENTS}, None,
+            ),
+        ])
+        self.assertEqual(artifact["attestations"][0]["outcome"], "passed")
 
     def test_initialized_notification_accepts_only_empty_acknowledgement(self) -> None:
         class Response:
@@ -7666,6 +7738,135 @@ class FixedAdapterContractTests(unittest.TestCase):
                 fixed_adapters.isolation_proof = original_isolation
 
 
+class KiroRuntimeClosureTests(unittest.TestCase):
+    def runtime_fixture(self, root: Path) -> tuple[Path, dict[tuple[str, ...], str]]:
+        profile = root / "profile"
+        runtime = profile.joinpath(*fixed_adapters.KIRO_RUNTIME_RELATIVE)
+        runtime.mkdir(parents=True)
+        bodies: dict[tuple[str, ...], bytes] = {}
+        for index, logical in enumerate(fixed_adapters.KIRO_RUNTIME_DIGESTS):
+            path = runtime.joinpath(*logical)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            bodies[logical] = f"critical-{index}".encode()
+            path.write_bytes(bodies[logical])
+        (runtime / "feed-cache.source").write_bytes(fixed_adapters.KIRO_FEED_SOURCE)
+        feed = json.dumps({"$schema": "fixture", "entries": [{"type": "release", "version": "2.20.0"}]}).encode()
+        for name in fixed_adapters.KIRO_FEED_FILES:
+            (runtime / name).write_bytes(feed)
+        extra = runtime / "data.json"
+        extra.write_bytes(b"data")
+        for path in (profile / ".local", profile / ".local" / "share", runtime, *[item for item in runtime.rglob("*") if item.is_dir()]):
+            path.chmod(0o550)
+        for path in [item for item in runtime.rglob("*") if item.is_file()]:
+            logical = path.relative_to(runtime).parts
+            path.chmod(0o550 if logical in fixed_adapters.KIRO_RUNTIME_EXECUTABLES else 0o440)
+        digests = {logical: hashlib.sha256(body).hexdigest() for logical, body in bodies.items()}
+        digests[("__feed_cache__",)] = hashlib.sha256(feed).hexdigest()
+        kas_fd = os.open(runtime / "kas" / fixed_adapters.KIRO_KAS_DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            digests[("__kas_tree__",)] = fixed_adapters.canonical_kiro_tree_digest(kas_fd)
+        finally:
+            os.close(kas_fd)
+        return profile, digests
+
+    def verify_fixture(self, profile: Path, digests: dict[tuple[str, ...], str], **kwargs) -> None:
+        feed_digest = digests.pop(("__feed_cache__",))
+        tree_digest = digests.pop(("__kas_tree__",))
+        with mock.patch.object(fixed_adapters, "KIRO_RUNTIME_DIGESTS", digests), mock.patch.object(fixed_adapters, "KIRO_FEED_CACHE_SHA256", feed_digest), mock.patch.object(fixed_adapters, "KIRO_KAS_TREE_SHA256", tree_digest):
+            fixed_adapters.verify_kiro_runtime(
+                profile, expected_uid=os.geteuid(), expected_gid=os.getegid(), verify_tree_digest=True, **kwargs,
+            )
+
+    def test_exact_kiro_runtime_contract_accepts_only_reviewed_executables(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile, digests = self.runtime_fixture(Path(temporary))
+            self.verify_fixture(profile, digests)
+
+    def test_kiro_runtime_rejects_digest_identity_modes_links_and_ambiguous_kas(self) -> None:
+        cases = ("digest", "missing", "owner", "group", "mode", "hardlink", "symlink", "extra-executable", "ambiguous-kas", "old-feed", "wrong-feed-source")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                profile, digests = self.runtime_fixture(Path(temporary))
+                feed_digest = digests.pop(("__feed_cache__",))
+                tree_digest = digests.pop(("__kas_tree__",))
+                runtime = profile.joinpath(*fixed_adapters.KIRO_RUNTIME_RELATIVE)
+                node = runtime / "node"
+                kwargs = {}
+                if case == "digest":
+                    digests = {**digests, ("node",): "0" * 64}
+                elif case == "missing":
+                    runtime.chmod(0o750)
+                    node.chmod(0o600); node.unlink(); runtime.chmod(0o550)
+                elif case == "owner":
+                    kwargs["expected_uid"] = os.geteuid() + 1
+                elif case == "group":
+                    kwargs["expected_gid"] = os.getegid() + 1
+                elif case == "mode":
+                    node.chmod(0o540)
+                elif case == "hardlink":
+                    runtime.chmod(0o750)
+                    node.chmod(0o600); node.unlink(); os.link(runtime / "data.json", node); node.chmod(0o550); runtime.chmod(0o550)
+                elif case == "symlink":
+                    runtime.chmod(0o750)
+                    node.chmod(0o600); node.unlink(); node.symlink_to("data.json"); runtime.chmod(0o550)
+                elif case == "extra-executable":
+                    (runtime / "data.json").chmod(0o550)
+                elif case == "ambiguous-kas":
+                    (runtime / "kas").chmod(0o750)
+                    (runtime / "kas" / "2.20.0-foreign").mkdir(mode=0o550)
+                    (runtime / "kas").chmod(0o550)
+                elif case == "old-feed":
+                    path = runtime / "feed.json"; path.chmod(0o600)
+                    path.write_text(json.dumps({"entries": [{"type": "release", "version": "2.19.1"}]})); path.chmod(0o440)
+                else:
+                    path = runtime / "feed-cache.source"; path.chmod(0o600); path.write_text("https://example.invalid/feed.json"); path.chmod(0o440)
+                with mock.patch.object(fixed_adapters, "KIRO_RUNTIME_DIGESTS", digests), mock.patch.object(fixed_adapters, "KIRO_FEED_CACHE_SHA256", feed_digest), mock.patch.object(fixed_adapters, "KIRO_KAS_TREE_SHA256", tree_digest), self.assertRaises((ValueError, FileNotFoundError, NotADirectoryError)):
+                    fixed_adapters.verify_kiro_runtime(
+                        profile,
+                        expected_uid=kwargs.get("expected_uid", os.geteuid()),
+                        expected_gid=kwargs.get("expected_gid", os.getegid()),
+                        verify_tree_digest=True,
+                    )
+
+    def test_noncritical_kiro_js_mutation_changes_canonical_tree_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile, digests = self.runtime_fixture(Path(temporary))
+            expected = digests[("__kas_tree__",)]
+            runtime = profile.joinpath(*fixed_adapters.KIRO_RUNTIME_RELATIVE)
+            kas = runtime / "kas" / fixed_adapters.KIRO_KAS_DIRECTORY
+            kas.chmod(0o750)
+            target = kas / "noncritical.js"
+            target.write_bytes(b"first")
+            tree_fd = os.open(runtime / "kas" / fixed_adapters.KIRO_KAS_DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                first = fixed_adapters.canonical_kiro_tree_digest(tree_fd)
+            finally:
+                os.close(tree_fd)
+            target.write_bytes(b"secon")
+            tree_fd = os.open(runtime / "kas" / fixed_adapters.KIRO_KAS_DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                second = fixed_adapters.canonical_kiro_tree_digest(tree_fd)
+            finally:
+                os.close(tree_fd)
+            self.assertNotEqual(expected, first)
+            self.assertNotEqual(first, second)
+
+    def test_kiro_process_effect_is_guarded_before_and_after(self) -> None:
+        events = []
+        with mock.patch.object(fixed_adapters, "verify_kiro_runtime", side_effect=lambda _profile: events.append("verify")):
+            result = fixed_adapters.verified_kiro_call(Path("/profile"), lambda: events.append("effect") or "ok")
+        self.assertEqual(result, "ok")
+        self.assertEqual(events, ["verify", "effect", "verify"])
+        with mock.patch.object(fixed_adapters, "verify_kiro_runtime", side_effect=[None, ValueError("post-run drift")]):
+            with self.assertRaisesRegex(ValueError, "post-run drift"):
+                fixed_adapters.verified_kiro_call(Path("/profile"), lambda: None)
+        primary = RuntimeError("client failed")
+        with mock.patch.object(fixed_adapters, "verify_kiro_runtime", side_effect=[None, ValueError("post-run drift")]):
+            with self.assertRaisesRegex(ValueError, "revalidation failed") as captured:
+                fixed_adapters.verified_kiro_call(Path("/profile"), lambda: (_ for _ in ()).throw(primary))
+        self.assertIs(captured.exception.__cause__, primary)
+
+
 @requires_disposable_observer_host
 class ProfileProvisioningTests(unittest.TestCase):
     @classmethod
@@ -8284,6 +8485,112 @@ class ProfileProvisioningTests(unittest.TestCase):
                 (), (".kiro",), (".kiro", "settings"), (".kiro", "skills"),
                 (".kiro", "skills", "code-tool-router"),
             })
+
+    def kiro_seed_fixture(self, root: Path) -> tuple[Path, Path, dict[tuple[str, ...], str], str, str]:
+        staging = root / "staging"
+        runtime = staging.joinpath(*self.helper.KIRO_RUNTIME_ROOT)
+        runtime.mkdir(parents=True)
+        digests: dict[tuple[str, ...], str] = {}
+        for index, logical in enumerate(self.helper.KIRO_RUNTIME_DIGESTS):
+            path = staging.joinpath(*logical)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            body = f"seed-critical-{index}".encode()
+            path.write_bytes(body)
+            digests[logical] = hashlib.sha256(body).hexdigest()
+        (runtime / "feed-cache.source").write_bytes(self.helper.KIRO_FEED_SOURCE)
+        feed = json.dumps({"entries": [{"type": "release", "version": "2.20.0"}]}).encode()
+        for name in self.helper.KIRO_FEED_FILES:
+            (runtime / name).write_bytes(feed)
+        (runtime / "data.json").write_bytes(b"data")
+        (runtime / "kas" / self.helper.KIRO_KAS_DIRECTORY / "noncritical.js").write_bytes(b"reviewed")
+        kas_fd = os.open(runtime / "kas" / self.helper.KIRO_KAS_DIRECTORY, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            tree_digest = self.helper.canonical_kiro_tree_digest(kas_fd)
+        finally:
+            os.close(kas_fd)
+        return staging, runtime, digests, hashlib.sha256(feed).hexdigest(), tree_digest
+
+    def validate_kiro_seed(
+        self, staging: Path, digests: dict[tuple[str, ...], str], feed_digest: str, tree_digest: str,
+    ) -> tuple[set[tuple[str, ...]], set[tuple[str, ...]], set[tuple[str, ...]]]:
+        staging_fd = os.open(staging, self.helper.OPEN_DIRECTORY)
+        try:
+            with mock.patch.object(self.helper, "KIRO_RUNTIME_DIGESTS", digests), \
+                    mock.patch.object(self.helper, "KIRO_FEED_CACHE_SHA256", feed_digest), \
+                    mock.patch.object(self.helper, "KIRO_KAS_TREE_SHA256", tree_digest):
+                return self.helper.kiro_runtime_paths(staging_fd)
+        finally:
+            os.close(staging_fd)
+
+    def test_kiro_provisioner_rejects_untrusted_runtime_seed_surfaces(self) -> None:
+        cases = (
+            "critical-digest", "critical-path", "noncritical-digest", "feed-cache", "feed-source",
+            "feed-selector", "alternate-current-kas", "symlink", "hardlink", "fifo", "bounds",
+        )
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                staging, runtime, digests, feed_digest, tree_digest = self.kiro_seed_fixture(Path(temporary))
+                if case == "critical-digest":
+                    path = staging.joinpath(*next(iter(digests))); path.write_bytes(b"changed")
+                elif case == "critical-path":
+                    path = staging.joinpath(*next(iter(digests))); path.rename(path.with_name(path.name + ".moved"))
+                elif case == "noncritical-digest":
+                    (runtime / "kas" / self.helper.KIRO_KAS_DIRECTORY / "noncritical.js").write_bytes(b"tampered")
+                elif case == "feed-cache":
+                    (runtime / "feed-cache.json").write_bytes(b'{"entries":[]}')
+                elif case == "feed-source":
+                    (runtime / "feed-cache.source").write_bytes(b"https://example.invalid/feed.json")
+                elif case == "feed-selector":
+                    (runtime / "feed.json").write_text(json.dumps({"entries": [{"type": "release", "version": "2.19.1"}]}))
+                elif case == "alternate-current-kas":
+                    (runtime / "kas" / "2.20.0-foreign").mkdir()
+                elif case == "symlink":
+                    (runtime / "untrusted-link").symlink_to("data.json")
+                elif case == "hardlink":
+                    os.link(runtime / "data.json", runtime / "untrusted-hardlink")
+                elif case == "fifo":
+                    os.mkfifo(runtime / "untrusted-fifo")
+                elif case == "bounds":
+                    self.helper.MAX_BYTES = 1
+                try:
+                    with self.assertRaises((ValueError, FileNotFoundError, NotADirectoryError)):
+                        self.validate_kiro_seed(staging, digests, feed_digest, tree_digest)
+                finally:
+                    if case == "bounds":
+                        self.helper.MAX_BYTES = 2 << 30
+
+    def test_kiro_provisioner_never_promotes_unreviewed_source_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            staging, runtime, digests, feed_digest, tree_digest = self.kiro_seed_fixture(Path(temporary))
+            extra = runtime / "data.json"
+            extra.chmod(0o755)
+            _files, _directories, executables = self.validate_kiro_seed(staging, digests, feed_digest, tree_digest)
+            self.assertNotIn(extra.relative_to(staging).parts, executables)
+
+    def test_kiro_runtime_is_provisioned_root_owned_with_exact_executable_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            staging, runtime, digests, feed_digest, tree_digest = self.kiro_seed_fixture(Path(temporary))
+            files, directories, executables = self.validate_kiro_seed(
+                staging, digests, feed_digest, tree_digest,
+            )
+            staging_fd = os.open(staging, self.helper.OPEN_DIRECTORY)
+            try:
+                ownership = []
+                with mock.patch.object(self.helper.os, "fchown", side_effect=lambda fd, uid, gid: ownership.append((uid, gid))):
+                    self.helper.assign_tree(
+                        staging_fd, os.geteuid(), os.getegid(),
+                        protected_files=files - executables,
+                        protected_executables=executables,
+                        protected_readable_directories=directories,
+                    )
+            finally:
+                os.close(staging_fd)
+            for path in runtime.rglob("*"):
+                info = path.stat()
+                logical = path.relative_to(staging).parts
+                expected = 0o550 if path.is_dir() or logical in executables else 0o440
+                self.assertEqual(stat.S_IMODE(info.st_mode), expected)
+            self.assertGreaterEqual(ownership.count((0, os.getegid())), len(files) + len(directories))
 
     @requires_disposable_observer_host
     def test_copy_tree_uses_descriptors_and_preserves_exact_private_modes(self) -> None:

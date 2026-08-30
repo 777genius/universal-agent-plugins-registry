@@ -6,7 +6,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install_lib="$script_dir/uap-observer-install-lib.sh"
-test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = c3c457a4fe093488ac5a9fa993f1aef8ade9cd898a6e5e4df62071bde830b97e
+test "$(sha256sum "$install_lib" | cut -d' ' -f1)" = 56c70841c8d98872f005982f65ddf192005d52580a4704a98feceb94cbae61fe
 . "$install_lib"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -16,10 +16,10 @@ fi
 
 usage='usage: uap-observer-install.sh SOURCE_ROOT ADAPTER_CONFIG ADAPTER_SHA256 OBSERVER_CONFIG OBSERVER_SHA256 CADDY_2.11.4_LINUX_AMD64_ARCHIVE CADDY_CONFIG CADDY_CONFIG_SHA256 EGRESS_ALLOWLIST EGRESS_ALLOWLIST_SHA256'
 stage_root=/opt/uap-observer-source.new
-runtime_manifest_digest=e5679062ae97c0e57576671a6579a0fb82e56805d3514f57e9a66ea3645ebdc0
+runtime_manifest_digest=7a4af9eb6ad29de7b62e43b671815dc03623c01c968a6c8ad019c9a4b0a7bbb6
 caddy_archive_digest=527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
 runner_digest=e4ad9db2b74f2b07a29e6de61c32076d0a4c543e3c1e1e891cffa75729563d1e
-adapter_digest=29c74213cc7a0fe13d73c4e049bc11e7dd982ee1cfb489d351123f0f473c1203
+adapter_digest=36082bf6bb006d06eab0ed6d1b3072ebcbbdc7aef47ab1bfea68f68a52703b67
 closure_digest=
 closure_stage=
 closure_final=

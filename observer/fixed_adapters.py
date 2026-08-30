@@ -15,10 +15,12 @@ import shlex
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import tempfile
 import time
 import urllib.request
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,27 @@ CONSENT_DIRECTORY = Path("/var/lib/uap-observer-consent/pending")
 GIT_BINARY = Path("/opt/uap-observer-inputs/bin/git")
 CODEX_CODE_MODE_HOST = Path("/opt/uap-observer-inputs/bin/codex-code-mode-host")
 KIRO_CHAT_BINARY = Path("/opt/uap-observer-inputs/bin/kiro-cli-chat")
+KIRO_RUNTIME_RELATIVE = (".local", "share", "kiro-cli")
+KIRO_KAS_DIRECTORY = "2.20.0-426339cf358a40306b73d09e69160be6201aba88d449893179d2a15a10020bdd"
+KIRO_RUNTIME_DIGESTS = {
+    ("node",): "81925c0995b5c1427b5d538e6a90ca2fdc4daffb786b09af749beaf7369d4e90",
+    ("bun",): "b29d78892abd5a9398e0700f0cb602f725089602ed1a5082d681c7257b2bf4d0",
+    ("tui.js",): "2e4db6323c38b6fba18367e2fbf2a7e2951bed87638fd030e207e45a152d5fc2",
+    ("kas", KIRO_KAS_DIRECTORY, "node_modules", "@kiro", "agent", "dist", "server", "acp-server.js"):
+        "e15cb01e83da5989999ca6529dc9b2f0992de588e6d87107651bd4a45dea8901",
+    ("kas", KIRO_KAS_DIRECTORY, "node_modules", "@vscode", "ripgrep-linux-x64", "bin", "rg"):
+        "193906679498de4d939345b937fa24e0e69a03c244bd70c859f5e41232713f21",
+}
+KIRO_RUNTIME_EXECUTABLES = {
+    ("node",), ("bun",),
+    ("kas", KIRO_KAS_DIRECTORY, "node_modules", "@vscode", "ripgrep-linux-x64", "bin", "rg"),
+}
+KIRO_FEED_SOURCE = b"https://prod.download.cli.kiro.dev/stable/2.20.0/feed.json"
+KIRO_FEED_FILES = ("feed.json", "feed-cache.json")
+KIRO_FEED_CACHE_SHA256 = "b2dcea68049b68264cb303eb252d385fe1e79984d38f7848feb89cb5f9603e82"
+KIRO_KAS_TREE_SHA256 = "af228471d33f48c382819f9377fbb1f9d822eaf921348d0862785b7092be61c4"
+KIRO_RUNTIME_MAX_FILES = 50_000
+KIRO_RUNTIME_MAX_BYTES = 2 << 30
 NODE_BINARY = Path("/opt/uap-observer-inputs/cursor/node")
 CURSOR_RUNTIME_MEMBERS = frozenset({
     Path("/opt/uap-observer-inputs/cursor/cursor-agent"),
@@ -857,6 +880,221 @@ def validate_chrome_runtime_config(encoded: bytes) -> None:
     prefix = args[:-len(CHROME_RUNTIME_ARGUMENTS)]
     if any(argument == name or argument.startswith(name + "=") for argument in prefix for name in forbidden):
         raise ValueError("sealed chrome-devtools config contains a conflicting browser selector")
+
+
+def verify_kiro_runtime(
+    profile: Path, *, expected_uid: int = 0, expected_gid: int | None = None,
+    verify_tree_digest: bool = False,
+) -> None:
+    """Descriptor-walk the immutable Kiro runtime before and after client effects."""
+    gid = os.getegid() if expected_gid is None else expected_gid
+    profile_fd = os.open(profile, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    opened: list[int] = []
+    try:
+        current = profile_fd
+        for index, component in enumerate(KIRO_RUNTIME_RELATIVE):
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=current)
+            opened.append(child)
+            info = os.fstat(child)
+            expected_mode = 0o550
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != expected_uid or info.st_gid != gid or stat.S_IMODE(info.st_mode) != expected_mode:
+                raise ValueError("Kiro runtime ancestor ownership or mode differs")
+            current = child
+        runtime_fd = current
+        files: set[tuple[str, ...]] = set()
+        directories: set[tuple[str, ...]] = set()
+        total = 0
+
+        def visit(directory_fd: int, parent: tuple[str, ...]) -> None:
+            nonlocal total
+            for name in sorted(os.listdir(directory_fd)):
+                if name in {"", ".", ".."} or "/" in name or "\x00" in name:
+                    raise ValueError("Kiro runtime entry name is invalid")
+                info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                logical = (*parent, name)
+                if stat.S_ISDIR(info.st_mode):
+                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+                    try:
+                        current_info = os.fstat(child)
+                        if (
+                            (current_info.st_dev, current_info.st_ino) != (info.st_dev, info.st_ino)
+                            or current_info.st_uid != expected_uid or current_info.st_gid != gid
+                            or stat.S_IMODE(current_info.st_mode) != 0o550
+                        ):
+                            raise ValueError("Kiro runtime directory contract differs")
+                        directories.add(logical)
+                        visit(child, logical)
+                        after = os.fstat(child)
+                        if (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns) != (
+                            current_info.st_dev, current_info.st_ino, current_info.st_mtime_ns, current_info.st_ctime_ns,
+                        ):
+                            raise ValueError("Kiro runtime directory changed during verification")
+                    finally:
+                        os.close(child)
+                    continue
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_uid or info.st_gid != gid or info.st_nlink != 1:
+                    raise ValueError("Kiro runtime contains an untrusted file")
+                mode = stat.S_IMODE(info.st_mode)
+                if mode != (0o550 if logical in KIRO_RUNTIME_EXECUTABLES else 0o440):
+                    raise ValueError("Kiro runtime file mode or executable allowlist differs")
+                files.add(logical)
+                total += info.st_size
+                if len(files) + len(directories) > KIRO_RUNTIME_MAX_FILES or total > KIRO_RUNTIME_MAX_BYTES:
+                    raise ValueError("Kiro runtime exceeds verification bounds")
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+                try:
+                    current_info = os.fstat(descriptor)
+                    if (current_info.st_dev, current_info.st_ino, current_info.st_size) != (info.st_dev, info.st_ino, info.st_size):
+                        raise ValueError("Kiro runtime file changed during verification")
+                    expected = KIRO_RUNTIME_DIGESTS.get(logical)
+                    if expected is not None:
+                        digest = hashlib.sha256()
+                        while chunk := os.read(descriptor, 1 << 20):
+                            digest.update(chunk)
+                        if digest.hexdigest() != expected:
+                            raise ValueError("Kiro runtime critical digest differs")
+                finally:
+                    os.close(descriptor)
+
+        visit(runtime_fd, ())
+        def runtime_body(name: str) -> bytes:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=runtime_fd)
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4 << 20:
+                    raise ValueError("Kiro runtime selector is invalid")
+                body = bytearray()
+                while chunk := os.read(descriptor, min(65536, (4 << 20) + 1 - len(body))):
+                    body.extend(chunk)
+                    if len(body) > 4 << 20:
+                        raise ValueError("Kiro runtime selector is oversized")
+                return bytes(body)
+            finally:
+                os.close(descriptor)
+        if runtime_body("feed-cache.source") != KIRO_FEED_SOURCE:
+            raise ValueError("Kiro runtime feed source differs")
+        if hashlib.sha256(runtime_body("feed-cache.json")).hexdigest() != KIRO_FEED_CACHE_SHA256:
+            raise ValueError("Kiro runtime official feed cache digest differs")
+        for name in KIRO_FEED_FILES:
+            feed = strict_json_loads(runtime_body(name))
+            entries = feed.get("entries") if isinstance(feed, dict) else None
+            active = entries[0] if isinstance(entries, list) and entries else None
+            if not isinstance(active, dict) or active.get("type") != "release" or active.get("version") != "2.20.0":
+                raise ValueError("Kiro runtime active feed release differs")
+        if verify_tree_digest:
+            kas_fd = os.open(
+                f"kas/{KIRO_KAS_DIRECTORY}",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=runtime_fd,
+            )
+            try:
+                if canonical_kiro_tree_digest(kas_fd) != KIRO_KAS_TREE_SHA256:
+                    raise ValueError("Kiro runtime official KAS tree digest differs")
+            finally:
+                os.close(kas_fd)
+        if not set(KIRO_RUNTIME_DIGESTS).issubset(files):
+            raise ValueError("Kiro runtime critical inventory is incomplete")
+        kas_versions = {
+            path[1] for path in directories
+            if len(path) == 2 and path[0] == "kas" and path[1].startswith("2.20.0-")
+        }
+        if kas_versions != {KIRO_KAS_DIRECTORY}:
+            raise ValueError("Kiro runtime active KAS version is ambiguous")
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+        os.close(profile_fd)
+
+
+def canonical_kiro_tree_digest(root_fd: int) -> str:
+    count = total = 0
+    entries: list[tuple[bytes, bytes, int, bytes]] = []
+
+    def visit(directory_fd: int, parent: tuple[str, ...]) -> None:
+        nonlocal count, total
+        for name in sorted(os.listdir(directory_fd)):
+            if (
+                name in {"", ".", ".."} or "/" in name or "\\" in name or "\x00" in name
+                or unicodedata.normalize("NFC", name) != name
+            ):
+                raise ValueError("Kiro KAS tree path is non-canonical")
+            try:
+                encoded = "/".join((*parent, name)).encode("utf-8", "strict")
+            except UnicodeEncodeError as error:
+                raise ValueError("Kiro KAS tree path is not UTF-8") from error
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            count += 1
+            if count > KIRO_RUNTIME_MAX_FILES:
+                raise ValueError("Kiro KAS tree exceeds file-count bound")
+            if stat.S_ISDIR(info.st_mode):
+                entries.append((encoded, b"D", 0, b""))
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+                try:
+                    before = os.fstat(child)
+                    if (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino):
+                        raise ValueError("Kiro KAS directory changed during hashing")
+                    visit(child, (*parent, name))
+                    after = os.fstat(child)
+                    if (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns) != (
+                        before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns,
+                    ):
+                        raise ValueError("Kiro KAS directory changed during hashing")
+                finally:
+                    os.close(child)
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError("Kiro KAS tree contains a link or special file")
+            total += info.st_size
+            if total > KIRO_RUNTIME_MAX_BYTES:
+                raise ValueError("Kiro KAS tree exceeds byte bound")
+            file_digest = hashlib.sha256()
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory_fd)
+            try:
+                before = os.fstat(descriptor)
+                if (before.st_dev, before.st_ino, before.st_size) != (info.st_dev, info.st_ino, info.st_size):
+                    raise ValueError("Kiro KAS file changed during hashing")
+                copied = 0
+                while chunk := os.read(descriptor, 1 << 20):
+                    copied += len(chunk)
+                    file_digest.update(chunk)
+                after = os.fstat(descriptor)
+                if copied != before.st_size or (
+                    after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+                ) != (
+                    before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+                ):
+                    raise ValueError("Kiro KAS file changed during hashing")
+            finally:
+                os.close(descriptor)
+            entries.append((encoded, b"F", info.st_size, file_digest.digest()))
+
+    visit(root_fd, ())
+    digest = hashlib.sha256(b"uap-kiro-kas-tree-v1\0")
+    for encoded, kind, size, file_digest in sorted(entries):
+        digest.update(kind + struct.pack("!I", len(encoded)) + encoded)
+        if kind == b"F":
+            digest.update(struct.pack("!Q", size) + file_digest)
+    return digest.hexdigest()
+
+
+def verified_kiro_call(profile: Path, operation):
+    """Require the Kiro runtime contract immediately around one process effect."""
+    verify_kiro_runtime(profile)
+    primary_error: BaseException | None = None
+    result = None
+    try:
+        result = operation()
+    except BaseException as error:
+        primary_error = error
+    try:
+        verify_kiro_runtime(profile)
+    except BaseException as revalidation_error:
+        if primary_error is not None:
+            raise ValueError("Kiro runtime revalidation failed after client termination") from primary_error
+        raise revalidation_error
+    if primary_error is not None:
+        raise primary_error
+    return result
 
 
 def runtime_environment(profile: Path, runtime_node: Path | None = None) -> dict[str, str]:
@@ -3292,17 +3530,26 @@ def invoke(
         validate_chrome_runtime_config(native_config_before["body"])
     if component_kind == "skill":
         write_skill_probe(workspace, expected_marker)
-    version_stdout, _, _ = run_client([str(binary), "--version"], workspace=workspace, environment=environment, timeout=10)
+    if client == "kiro":
+        version_stdout, _, _ = verified_kiro_call(
+            profile,
+            lambda: run_client([str(binary), "--version"], workspace=workspace, environment=environment, timeout=10),
+        )
+    else:
+        version_stdout, _, _ = run_client([str(binary), "--version"], workspace=workspace, environment=environment, timeout=10)
     if len(version_stdout) > 4096:
         raise ValueError("fixed client version observation failed")
     client_version = version_stdout.decode("utf-8", "strict").strip()
     if not client_version or any(character in client_version for character in "\r\n/\\"):
         raise ValueError("fixed client version marker is invalid")
     if client == "kiro":
-        summary, started, ended = run_kiro_acp(
-            binary, workspace=workspace, environment=environment,
-            plugin=plugin, tool=tool, marker=expected_marker,
-            skill_path=native_path if component_kind == "skill" else None,
+        summary, started, ended = verified_kiro_call(
+            profile,
+            lambda: run_kiro_acp(
+                binary, workspace=workspace, environment=environment,
+                plugin=plugin, tool=tool, marker=expected_marker,
+                skill_path=native_path if component_kind == "skill" else None,
+            ),
         )
         native_before = native_after = summary
         discovery_argv = [str(binary), *CLIENT_ARGUMENTS[client]]
@@ -3583,11 +3830,14 @@ def mcp_call(endpoint: str, request_id: int, method: str, params: dict[str, Any]
     return value["result"], session
 
 
-def mcp_initialized(endpoint: str, session: str) -> None:
+def mcp_initialized(endpoint: str, session: str | None) -> None:
     payload = canonical_json({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18", "User-Agent": MCP_USER_AGENT}
+    if session:
+        headers["Mcp-Session-Id"] = session
     request = urllib.request.Request(
         endpoint, data=payload, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18", "Mcp-Session-Id": session, "User-Agent": MCP_USER_AGENT},
+        headers=headers,
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": FIXED_HTTPS_PROXY}), NoRedirect())
     with opener.open(request, timeout=15) as response:
@@ -3672,7 +3922,7 @@ def chatgpt_artifact(config: dict[str, Any], request: dict[str, Any], github: di
     ):
         raise ValueError("ChatGPT projection receipt differs from the approved release identity")
     initialized, session = mcp_call(MCP_ENDPOINT, 1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "uap-observer", "version": "1"}})
-    if not session or initialized.get("protocolVersion") != "2025-06-18":
+    if initialized.get("protocolVersion") != "2025-06-18":
         raise ValueError("Cloudflare MCP initialize contract differs")
     mcp_initialized(MCP_ENDPOINT, session)
     tools, session = mcp_call(MCP_ENDPOINT, 2, "tools/list", {}, session)
