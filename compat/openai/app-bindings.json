@@ -4,15 +4,15 @@
   "bindings": {
     "cloudflare-docs": {
       "app_key": "cloudflare-docs",
-      "id": "plugin_asdk_app_6a78e90cf73481918ef10cdb87cd4bb4",
+      "id": "plugin_asdk_app_6a92d29a704c8191931e76b47668cb0b",
       "mcp_server": "cloudflare-docs",
       "mcp_url": "https://docs.mcp.cloudflare.com/mcp",
-      "runtime_evidence": "tests/e2e/results/chatgpt-cloudflare-docs-direct-2026-08-10.json",
-      "runtime_evidence_revision": "fd77a74fa85724a57b328157ab82ef4dd991cda5",
-      "runtime_evidence_digest": "sha256:050a18c56cf3f6b98d12ad35ac3c4642bd18d9e862956447dc3dad8e3189bcc5",
-      "personal_app_evidence": "tests/e2e/results/chatgpt-cloudflare-docs-personal-app-2026-08-10.json",
-      "personal_app_evidence_revision": "2ddbb99dd190c1792b79904f9875e6322bccd243",
-      "personal_app_evidence_digest": "sha256:97ddb41b887eebb7629bff1ae88937448b0c23073688122ab8939c3d96372b37",
+      "runtime_evidence": "tests/e2e/results/chatgpt-cloudflare-docs-read-only-runtime-2026-08-30.json",
+      "runtime_evidence_revision": "bc784b57122fedab6914ba5ecc8cae4e8e9ad795",
+      "runtime_evidence_digest": "sha256:5611352a14f4605d78398b2275053c32ed5faa7065b6918af57ea2141f1ab73d",
+      "personal_app_evidence": "tests/e2e/results/chatgpt-cloudflare-docs-personal-app-2026-08-30.json",
+      "personal_app_evidence_revision": "bc784b57122fedab6914ba5ecc8cae4e8e9ad795",
+      "personal_app_evidence_digest": "sha256:d9ae9b392b61f26ab31aa398740e8c5ed200dfb8c9287343cab87b9119d7ca9a",
       "registration": {
         "surface": "chatgpt_developer_mode",
         "status": "development",
