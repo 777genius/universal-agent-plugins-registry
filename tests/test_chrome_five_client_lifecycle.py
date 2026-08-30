@@ -119,6 +119,14 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
         with self.assertRaises(runner.EvidenceError):
             runner.validate_add(add, "c" * 40, identity)
 
+    def test_add_rejects_boolean_acquisition_count(self) -> None:
+        dry_run = self.batch(dry_run=True)
+        identity = runner.validate_dry_run(dry_run, "c" * 40)
+        add = self.batch(dry_run=False)
+        add["data"]["acquisition"]["acquisition_count"] = True
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_add(add, "c" * 40, identity)
+
     def test_add_rejects_split_target_acquisition_ids(self) -> None:
         dry_run = self.batch(dry_run=True)
         identity = runner.validate_dry_run(dry_run, "c" * 40)

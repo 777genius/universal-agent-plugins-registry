@@ -225,7 +225,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --source-commit "$GITHUB_SHA"
-          python3 -m pip install check-jsonschema==0.37.4
+          python3 -m pip install check-jsonschema==0.38.0
           check-jsonschema \
             --schemafile schemas/e2e/chrome-five-client-lifecycle.schema.json \
             "$EVIDENCE_ROOT/evidence.json"

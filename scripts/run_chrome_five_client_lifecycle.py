@@ -390,6 +390,7 @@ def validate_completed_acquisition(
     if (
         not isinstance(acquisition_id, str)
         or re.fullmatch(r"acq-[0-9a-f]{32}", acquisition_id) is None
+        or type(acquisition.get("acquisition_count")) is not int
         or acquisition.get("acquisition_count") != 1
         or acquisition.get("tree_digest") != identity["tree_digest"]
         or acquisition.get("manifest_digest") != identity["manifest_digest"]
