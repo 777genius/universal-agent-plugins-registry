@@ -5129,10 +5129,7 @@ class FixedAdapterContractTests(unittest.TestCase):
         app_id = "plugin_asdk_app_" + "c" * 32
         tuple_value = sealed_tuple("cloudflare-docs")
         binding = {"apps": {"cloudflare-docs": {"id": app_id}}}
-        receipt = {
-            "product_id": "cloudflare-docs", "application_id": app_id,
-            "tuple": tuple_value,
-        }
+        receipt = chatgpt_projection_receipt(app_id, tuple_value, binding=binding)
         snapshots = {
             "app-binding.json": {"body": fixed_adapters.canonical_json(binding)},
             "projection-receipt.json": {"body": fixed_adapters.canonical_json(receipt)},
