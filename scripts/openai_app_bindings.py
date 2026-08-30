@@ -40,7 +40,8 @@ DIRECT_RUNTIME_CHECKS = {
     "package_ui_install": "skipped",
 }
 PERSONAL_RUNTIME_V2_CHECKS = {
-    "cloudflare_docs_read_only_lookup": "passed",
+    "assistant_response_observed": "passed",
+    "mcp_runtime_attribution": "skipped",
     "durable_objects_follow_up": "failed",
     "local_codex_plugin_package_ingestion": "skipped",
 }
@@ -58,17 +59,18 @@ PERSONAL_APP_V2_CHECKS = {
     "plugins_personal_installed": "passed",
     "plugin_detail_try_in_chat": "passed",
     "new_chat_plugin_chip_selected": "passed",
-    "cloudflare_docs_read_only_lookup": "passed",
-    "assistant_response_semantics": "passed",
+    "assistant_response_observed": "passed",
+    "mcp_runtime_attribution": "skipped",
     "durable_objects_follow_up": "failed",
     "local_codex_plugin_package_ingestion": "skipped",
     "agentplugins_manager_lifecycle": "skipped",
 }
 PERSONAL_RUNTIME_V2 = {
     "prompt_count": 1,
-    "successful_read_only_lookup_count": 1,
     "read_only": True,
+    "assistant_response_observed": True,
     "tool_invocation_visibility": "not_exposed",
+    "mcp_runtime_outcome": "inconclusive",
 }
 
 
@@ -220,12 +222,18 @@ def _validate_runtime_evidence(
         raise ValueError(f"{evidence_path}: observed runtime boundary does not match")
     if actual_checks != PERSONAL_RUNTIME_V2_CHECKS:
         raise ValueError(f"{evidence_path}: personal runtime checks do not match binding")
-    lookup = checks["cloudflare_docs_read_only_lookup"]
-    if lookup.get("detail") != (
-        "The response identified Workers KV as a global low-latency key-value "
-        "store optimized for read-heavy workloads. No raw tool payload was recorded."
+    response = checks["assistant_response_observed"]
+    if response.get("detail") != (
+        "An answer about Workers KV was displayed, but no MCP tool invocation or "
+        "raw tool payload was exposed."
     ):
-        raise ValueError(f"{evidence_path}: Workers KV response evidence does not match")
+        raise ValueError(f"{evidence_path}: assistant response evidence does not match")
+    attribution = checks["mcp_runtime_attribution"]
+    if attribution.get("reason") != (
+        "the selected app and response are not sufficient to prove an MCP tool "
+        "invocation"
+    ):
+        raise ValueError(f"{evidence_path}: inconclusive MCP boundary is required")
     durable = checks["durable_objects_follow_up"]
     if durable.get("detail") != (
         "The attempts returned incomplete one-word output and are not counted as "
@@ -248,14 +256,6 @@ def _validate_personal_app_evidence(
     }
     if evidence.get("binding") != expected_binding:
         raise ValueError(f"{evidence_path}: binding identity does not match sidecar")
-    catalog = evidence.get("catalog")
-    if (
-        not isinstance(catalog, dict)
-        or set(catalog) != {"revision", "digest"}
-        or not re.fullmatch(r"[0-9a-f]{40}", str(catalog.get("revision", "")))
-        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(catalog.get("digest", "")))
-    ):
-        raise ValueError(f"{evidence_path}: pinned catalog identity is required")
     evidence_type = evidence.get("evidence_type")
     if evidence.get("client") != "ChatGPT web Plugins UI" or evidence_type not in {
         "interactive_personal_app_runtime",
@@ -270,6 +270,19 @@ def _validate_personal_app_evidence(
     ):
         raise ValueError(f"{evidence_path}: local package ingestion must remain unproved")
     legacy = evidence_type == "interactive_personal_app_runtime"
+    catalog = evidence.get("catalog")
+    if legacy:
+        if (
+            not isinstance(catalog, dict)
+            or set(catalog) != {"revision", "digest"}
+            or not re.fullmatch(r"[0-9a-f]{40}", str(catalog.get("revision", "")))
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(catalog.get("digest", "")))
+        ):
+            raise ValueError(f"{evidence_path}: pinned catalog identity is required")
+    elif catalog is not None:
+        raise ValueError(
+            f"{evidence_path}: current UI evidence must not claim repository catalog origin"
+        )
     expected_ui = {
         "directory_source": "Personal",
         "display_name": (
@@ -300,10 +313,17 @@ def _validate_personal_app_evidence(
             "plugins_ui_discovery",
             "chat_activation",
             "exact_app_id_linkage",
-            "read_only_runtime" if legacy else "read_only_response",
+            "read_only_runtime" if legacy else "assistant_response_observed",
         ],
         "not_proved": [
-            *([] if legacy else ["individual_mcp_tool_call_visibility"]),
+            *(
+                []
+                if legacy
+                else [
+                    "cloudflare_docs_mcp_runtime_lookup",
+                    "individual_mcp_tool_call_visibility",
+                ]
+            ),
             "local_codex_plugin_package_ingestion",
             "repository_marketplace_install",
             "agentplugins_manager_lifecycle",
@@ -329,19 +349,18 @@ def _validate_personal_app_evidence(
         if checks["assistant_response_marker"].get("marker") != "E2E_OK Rules Of_":
             raise ValueError(f"{evidence_path}: sanitized response marker does not match")
         return
-    lookup = checks["cloudflare_docs_read_only_lookup"]
-    if lookup.get("query") != (
+    response = checks["assistant_response_observed"]
+    if response.get("query") != (
         "Using only Cloudflare Docs, explain in one short sentence what Cloudflare "
         "Workers KV is. Read-only lookup only."
     ):
-        raise ValueError(f"{evidence_path}: Workers KV lookup evidence does not match")
-    if checks["assistant_response_semantics"].get("expected_concepts") != [
-        "global",
-        "low-latency",
-        "key-value store",
-        "read-heavy workloads",
-    ]:
-        raise ValueError(f"{evidence_path}: response semantics evidence does not match")
+        raise ValueError(f"{evidence_path}: assistant response prompt does not match")
+    attribution = checks["mcp_runtime_attribution"]
+    if attribution.get("reason") != (
+        "the UI did not expose an MCP tool invocation or raw tool payload; the "
+        "response alone is not runtime proof"
+    ):
+        raise ValueError(f"{evidence_path}: inconclusive MCP boundary is required")
     durable = checks["durable_objects_follow_up"]
     if durable.get("detail") != (
         "The attempts returned incomplete one-word output and are not counted as "

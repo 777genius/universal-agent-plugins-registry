@@ -107,12 +107,13 @@
         },
         {
           "type": "object",
-          "required": ["prompt_count", "successful_read_only_lookup_count", "read_only", "tool_invocation_visibility"],
+          "required": ["prompt_count", "read_only", "assistant_response_observed", "tool_invocation_visibility", "mcp_runtime_outcome"],
           "properties": {
             "prompt_count": { "const": 1 },
-            "successful_read_only_lookup_count": { "const": 1 },
             "read_only": { "const": true },
-            "tool_invocation_visibility": { "const": "not_exposed" }
+            "assistant_response_observed": { "const": true },
+            "tool_invocation_visibility": { "const": "not_exposed" },
+            "mcp_runtime_outcome": { "const": "inconclusive" }
           },
           "additionalProperties": false
         }
@@ -173,7 +174,8 @@
         "required": ["evidence_type"]
       },
       "then": {
-        "required": ["version", "date_timezone", "binding", "catalog", "source", "ui", "runtime", "scope", "cleanup"],
+        "required": ["version", "date_timezone", "binding", "source", "ui", "runtime", "scope", "cleanup"],
+        "not": { "required": ["catalog"] },
         "properties": {
           "client": { "const": "ChatGPT web Plugins UI" },
           "ui": {
@@ -183,12 +185,13 @@
             }
           },
           "runtime": {
-            "required": ["prompt_count", "successful_read_only_lookup_count", "read_only", "tool_invocation_visibility"],
+            "required": ["prompt_count", "read_only", "assistant_response_observed", "tool_invocation_visibility", "mcp_runtime_outcome"],
             "properties": {
               "prompt_count": { "const": 1 },
-              "successful_read_only_lookup_count": { "const": 1 },
               "read_only": { "const": true },
-              "tool_invocation_visibility": { "const": "not_exposed" }
+              "assistant_response_observed": { "const": true },
+              "tool_invocation_visibility": { "const": "not_exposed" },
+              "mcp_runtime_outcome": { "const": "inconclusive" }
             }
           },
           "checks": {
@@ -211,17 +214,18 @@
         "properties": {
           "client": { "const": "ChatGPT web Plugins UI" },
           "runtime": {
-            "required": ["prompt_count", "successful_read_only_lookup_count", "read_only", "tool_invocation_visibility"],
+            "required": ["prompt_count", "read_only", "assistant_response_observed", "tool_invocation_visibility", "mcp_runtime_outcome"],
             "properties": {
               "prompt_count": { "const": 1 },
-              "successful_read_only_lookup_count": { "const": 1 },
               "read_only": { "const": true },
-              "tool_invocation_visibility": { "const": "not_exposed" }
+              "assistant_response_observed": { "const": true },
+              "tool_invocation_visibility": { "const": "not_exposed" },
+              "mcp_runtime_outcome": { "const": "inconclusive" }
             }
           },
           "checks": {
-            "minItems": 3,
-            "maxItems": 3,
+            "minItems": 4,
+            "maxItems": 4,
             "items": { "required": ["scenario", "operation", "status"] }
           }
         }

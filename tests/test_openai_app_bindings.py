@@ -451,6 +451,34 @@ class OpenAIAppBindingTests(unittest.TestCase):
             ):
                 load_app_bindings(sidecar, root)
 
+    def test_current_evidence_keeps_mcp_runtime_inconclusive(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas/e2e/client-evidence.schema.json").read_text()
+        )
+        validator = Draft202012Validator(schema)
+        for relative in (
+            "tests/e2e/results/chatgpt-cloudflare-docs-personal-app-2026-08-30.json",
+            "tests/e2e/results/chatgpt-cloudflare-docs-read-only-runtime-2026-08-30.json",
+        ):
+            evidence = json.loads((ROOT / relative).read_text())
+            with self.subTest(relative=relative):
+                self.assertEqual(list(validator.iter_errors(evidence)), [])
+                self.assertEqual(evidence["runtime"]["mcp_runtime_outcome"], "inconclusive")
+                self.assertNotIn("successful_read_only_lookup_count", evidence["runtime"])
+                self.assertNotIn("catalog", evidence)
+
+                promoted = copy.deepcopy(evidence)
+                promoted["runtime"]["mcp_runtime_outcome"] = "passed"
+                self.assertNotEqual(list(validator.iter_errors(promoted)), [])
+
+                attributed = copy.deepcopy(evidence)
+                attributed["catalog"] = {
+                    "revision": "0" * 40,
+                    "digest": "sha256:" + "0" * 64,
+                }
+                if attributed["evidence_type"] == "interactive_personal_app_ui_v2":
+                    self.assertNotEqual(list(validator.iter_errors(attributed)), [])
+
     def test_sidecar_rejects_duplicate_app_id(self) -> None:
         document = valid_document()
         duplicate = copy.deepcopy(document["bindings"]["cloudflare-docs"])
