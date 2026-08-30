@@ -18,16 +18,23 @@
   },
   "runtime": {
     "prompt_count": 1,
-    "successful_read_only_lookup_count": 1,
     "read_only": true,
-    "tool_invocation_visibility": "not_exposed"
+    "assistant_response_observed": true,
+    "tool_invocation_visibility": "not_exposed",
+    "mcp_runtime_outcome": "inconclusive"
   },
   "checks": [
     {
-      "scenario": "ask the selected Cloudflare Docs E2E personal app for one short explanation of Workers KV",
-      "operation": "cloudflare_docs_read_only_lookup",
+      "scenario": "observe an assistant response after selecting the Cloudflare Docs E2E personal app",
+      "operation": "assistant_response_observed",
       "status": "passed",
-      "detail": "The response identified Workers KV as a global low-latency key-value store optimized for read-heavy workloads. No raw tool payload was recorded."
+      "detail": "An answer about Workers KV was displayed, but no MCP tool invocation or raw tool payload was exposed."
+    },
+    {
+      "scenario": "attribute the displayed response to the Cloudflare Docs MCP runtime",
+      "operation": "mcp_runtime_attribution",
+      "status": "skipped",
+      "reason": "the selected app and response are not sufficient to prove an MCP tool invocation"
     },
     {
       "scenario": "attempt later Durable Objects follow-up lookups",

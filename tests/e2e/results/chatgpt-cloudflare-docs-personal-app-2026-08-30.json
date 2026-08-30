@@ -9,10 +9,6 @@
     "app_id": "plugin_asdk_app_6a92d29a704c8191931e76b47668cb0b",
     "mcp_url": "https://docs.mcp.cloudflare.com/mcp"
   },
-  "catalog": {
-    "revision": "f735387217061dbbe186d9ee77c3f5d854a72c25",
-    "digest": "sha256:9ed64038a8a1b1eab6956008f94b3ffa16f1b6ddf01e8b2809b202656423f183"
-  },
   "source": {
     "repository": "https://github.com/777genius/universal-agent-plugins",
     "plugin": "cloudflare-docs",
@@ -30,9 +26,10 @@
   },
   "runtime": {
     "prompt_count": 1,
-    "successful_read_only_lookup_count": 1,
     "read_only": true,
-    "tool_invocation_visibility": "not_exposed"
+    "assistant_response_observed": true,
+    "tool_invocation_visibility": "not_exposed",
+    "mcp_runtime_outcome": "inconclusive"
   },
   "scope": {
     "proved": [
@@ -40,9 +37,10 @@
       "plugins_ui_discovery",
       "chat_activation",
       "exact_app_id_linkage",
-      "read_only_response"
+      "assistant_response_observed"
     ],
     "not_proved": [
+      "cloudflare_docs_mcp_runtime_lookup",
       "individual_mcp_tool_call_visibility",
       "local_codex_plugin_package_ingestion",
       "repository_marketplace_install",
@@ -66,21 +64,16 @@
       "status": "passed"
     },
     {
-      "scenario": "ask for one short read-only explanation of Cloudflare Workers KV",
-      "operation": "cloudflare_docs_read_only_lookup",
+      "scenario": "observe an assistant response after selecting the personal app",
+      "operation": "assistant_response_observed",
       "query": "Using only Cloudflare Docs, explain in one short sentence what Cloudflare Workers KV is. Read-only lookup only.",
       "status": "passed"
     },
     {
-      "scenario": "verify the bounded Workers KV response meaning",
-      "operation": "assistant_response_semantics",
-      "expected_concepts": [
-        "global",
-        "low-latency",
-        "key-value store",
-        "read-heavy workloads"
-      ],
-      "status": "passed"
+      "scenario": "attribute the assistant response to an MCP tool invocation",
+      "operation": "mcp_runtime_attribution",
+      "status": "skipped",
+      "reason": "the UI did not expose an MCP tool invocation or raw tool payload; the response alone is not runtime proof"
     },
     {
       "scenario": "attempt later Durable Objects follow-up lookups",
