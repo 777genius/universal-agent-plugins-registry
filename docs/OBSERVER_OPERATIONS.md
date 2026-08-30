@@ -935,6 +935,107 @@ controls do not replace the host firewall. Cloud images with
 `manage_etc_hosts: true` overwrite `/etc/hosts`, so do not use a local hosts
 entry as persistent DNS configuration.
 
+### Reprovision the same disposable observer VM
+
+Do not create another VM for a release change. The reset helper can reuse only
+the existing disposable observer and only when its exact sentinel, machine ID,
+old install identity, and old closure digest all match. It has no alternate-root
+or arbitrary-cleanup CLI. The signing key, reviewed client/Chrome inputs, Caddy
+state/config, deployment configs, egress input, and external firewall/route stay
+outside its quarantine.
+
+Put only reviewed replacement inputs below the fixed root-owned mode-`0700`
+tree `/root/uap-observer-reset-prepared-v1`. Its exact inventory is the four
+mode-`0700` directories `seeds`, `evidence`, `path`, and `projection-digests`
+plus canonical root-owned mode-`0400` `manifest.json`. The manifest binds the
+new catalog SHA/install identity, fixed installer paths and digests, exact
+Codex/Cursor/Kiro seed and projection digests, and descriptor-safe digests of
+all four trees. Each projection digest must also match the prepared adapter
+config and the installed protected projection after provisioning. Links,
+hardlinks, special files, mount crossings, group/world writes, extra entries,
+or more than one million entries are rejected. Never use a workstation profile
+or real project. Create the one-time sentinel
+from the already recorded disposable VM identity; never copy it to another host:
+
+```sh
+MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
+OLD_CLOSURE="$(readlink /opt/uap-observer-current | sed 's#^uap-observer-closures/##')"
+OLD_INSTALL="$(cat "/opt/uap-observer-closures/$OLD_CLOSURE/.install-identity")"
+umask 077
+jq -cn --arg machine_id "$MACHINE_ID" \
+  '{machine_id:$machine_id,purpose:"uap-observer-e2e-disposable",schema_version:1}' \
+  >/etc/uap-observer-disposable.json
+chmod 0600 /etc/uap-observer-disposable.json
+```
+
+Keep the installer lock on descriptor 9 through reset, the unchanged installer,
+profile provisioning, health checks, and finalize. The helper journals unit
+state, stops transient public ingress first, then stops managed services and
+sockets. Immediately before the first rename it rejects active runner
+cgroups/processes, jobs, pending consent/attestations, unexpected state/systemd
+inventory, partial installer paths, links, substitutions, or changed preserved
+inputs. Every old path is atomically renamed to a same-filesystem quarantine and
+the phase is fsynced.
+
+```sh
+exec 9>/run/lock/uap-observer-install.lock
+flock -n 9
+export UAP_OBSERVER_INSTALL_LOCK_FD=9
+
+python3 -B "$SOURCE_ROOT/deploy/uap-observer-reset.py" apply \
+  --machine-id "$MACHINE_ID" \
+  --old-install-identity "$OLD_INSTALL" \
+  --old-closure-digest "$OLD_CLOSURE"
+
+# apply holds FD 9 while it runs the unchanged installer from the canonical
+# manifest, provisions all three declared seeds, and reaches new-ready only
+# after installed projections, managed services, listeners, transient ingress,
+# and its CA-authenticated public endpoint are verified.
+
+NEW_CLOSURE="$(readlink /opt/uap-observer-current | sed 's#^uap-observer-closures/##')"
+NEW_INSTALL="$(cat "/opt/uap-observer-closures/$NEW_CLOSURE/.install-identity")"
+python3 -B "$SOURCE_ROOT/deploy/uap-observer-reset.py" finalize \
+  --machine-id "$MACHINE_ID" \
+  --old-install-identity "$OLD_INSTALL" \
+  --old-closure-digest "$OLD_CLOSURE" \
+  --new-install-identity "$NEW_INSTALL" \
+  --new-closure-digest "$NEW_CLOSURE"
+
+unset UAP_OBSERVER_INSTALL_LOCK_FD
+flock -u 9
+exec 9>&-
+```
+
+Finalize is irreversible after its durable `finalizing` phase begins. It proves
+the explicit new closure and install identity, recreates the exact reviewed
+transient `uap-observer-caddy-internal.service`, proves that process executes the
+new closure and the public endpoint responds, then removes only the old
+quarantine and fixed prepared tree. A retry resumes the same finalization, and
+an executable still used by public ingress is never deleted.
+
+An ordinary install, provisioning, or health error makes `apply` restore the
+exact old closure, state, units, enablement, active state, and transient ingress
+before returning the primary failure. If a process crash or documented
+failpoint leaves a durable transaction, keep descriptor 9 locked and inspect or
+resume its rollback:
+
+```sh
+python3 -B "$SOURCE_ROOT/deploy/uap-observer-reset.py" status \
+  --machine-id "$MACHINE_ID"
+python3 -B "$SOURCE_ROOT/deploy/uap-observer-reset.py" rollback \
+  --machine-id "$MACHINE_ID" \
+  --old-install-identity "$OLD_INSTALL" \
+  --old-closure-digest "$OLD_CLOSURE"
+```
+
+`apply`, `rollback`, and `finalize` are resumable across their failpoints. On an
+unknown error, rerun only that same command or `rollback`; never edit the
+journal, completion tombstone, quarantine, pointer, closure, or unit files
+manually. Rollback enters a durable cleanup phase before deleting candidate
+quarantine. Finalization and rollback write a fixed root-owned completion
+tombstone before removing the journal, so a retry can finish even if power is
+lost after the journal disappears.
+
 ## 3. Install and start
 
 First compute the three `sha256:` arguments from the final adapter, observer,
@@ -1068,6 +1169,13 @@ is rejected, and a protected workflow gets a signed bundle whose public key
 and key ID match the repository variables.
 
 ## 4. Operate one evidence run
+
+For the sequence-20 cutover, dispatch exactly one Directory publication. Approve
+`directory-publication` first so sequence 20 can be built and signed while its
+`stable-launch-e2e` job waits. After reset, provisioning, health, fresh consent,
+and fresh human attestation are complete, approve `stable-launch-e2e` exactly
+once. Do not dispatch a second scan or publication while either gate waits; a
+failed staged sequence is superseded only by the next append-only sequence.
 
 Before approving the protected job, obtain its challenge, run ID/attempt,
 catalog SHA, canonical request digest, scenario-contract digest, and fresh

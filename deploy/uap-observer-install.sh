@@ -117,8 +117,21 @@ trap 'cleanup_observer_config_snapshot' EXIT
 trap 'exit 1' HUP INT TERM
 
 install -d -o root -g root -m 0755 /run/lock
-exec 9>/run/lock/uap-observer-install.lock
+case "${UAP_OBSERVER_INSTALL_LOCK_FD:-}" in
+  '')
+    exec 9>/run/lock/uap-observer-install.lock
+    ;;
+  9)
+    test -e /proc/self/fd/9
+    test "$(readlink -f /proc/self/fd/9)" = /run/lock/uap-observer-install.lock
+    ;;
+  *)
+    echo "observer install lock FD must be the reviewed descriptor 9" >&2
+    exit 1
+    ;;
+esac
 flock -n 9 || { echo "another observer install is active" >&2; exit 1; }
+test "$(stat -c '%u:%a:%h' /run/lock/uap-observer-install.lock)" = '0:600:1'
 
 # Recovery is deliberately before even requiring, opening, hashing, or
 # otherwise validating caller-controlled arguments.  A retry after power loss
