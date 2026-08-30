@@ -125,6 +125,11 @@ class LaunchEvidenceSchemaRouterTests(unittest.TestCase):
         duplicate["id"] = "e" * 24
         duplicate_chatgpt["matrix"].append(duplicate)
         mutations.append(duplicate_chatgpt)
+        failed_duplicate_chatgpt = copy.deepcopy(baseline)
+        failed_duplicate = copy.deepcopy(failed_duplicate_chatgpt["matrix"][-1])
+        failed_duplicate.update(id="d" * 24, outcome="failed")
+        failed_duplicate_chatgpt["matrix"].append(failed_duplicate)
+        mutations.append(failed_duplicate_chatgpt)
         wrong_release = copy.deepcopy(baseline)
         wrong_release["release"]["tag"] = "agentplugins-v0.1.23"
         mutations.append(wrong_release)
