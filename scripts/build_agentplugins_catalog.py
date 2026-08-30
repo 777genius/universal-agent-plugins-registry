@@ -25,7 +25,7 @@ SCHEMAS = {
     1: "https://github.com/777genius/universal-agent-plugins/schemas/catalog-v1.schema.json",
     2: "https://github.com/777genius/universal-agent-plugins/schemas/catalog-v2.schema.json",
 }
-CATALOG_VERSIONS = {1: "0.1.0", 2: "0.2.0"}
+CATALOG_VERSIONS = {1: "0.1.0", 2: "0.2.1"}
 PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 CLIENT_PACKAGE = {
     "codex": "projected",
@@ -36,9 +36,6 @@ CLIENT_PACKAGE = {
 }
 TESTED = {
     "agent-code-navigator": {"codex", "cursor", "kiro"},
-    "chrome-devtools": {"codex", "cursor", "kiro"},
-    "cloudflare-docs": {"codex", "cursor", "kiro"},
-    "context7": {"codex", "cursor", "kiro"},
     "notion": {"codex", "cursor", "kiro"},
 }
 AUTH_NOT_REQUIRED = {

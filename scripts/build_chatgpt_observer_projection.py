@@ -987,7 +987,7 @@ def _run_authenticated_binary(descriptor: int) -> subprocess.CompletedProcess[st
         )
 
 
-def validate_binary(path: Path, installer_version: str) -> str:
+def validate_binary(path: Path, installer_version: str, approved_digest: str) -> str:
     try:
         authority_path, ancestors, descriptor = _open_authority(path)
     except OSError as error:
@@ -995,6 +995,10 @@ def validate_binary(path: Path, installer_version: str) -> str:
     try:
         ancestor_identities = [_directory_identity(os.fstat(item)) for item in ancestors]
         digest, identity = _digest_descriptor(descriptor)
+        require(
+            digest == approved_digest,
+            "released CLI binary is not the exact approved Linux/amd64 asset",
+        )
         try:
             _revalidate_authority(authority_path, ancestors, ancestor_identities, identity)
         except OSError as error:
@@ -1514,10 +1518,10 @@ def _build(
         projection_files, binding, args.product_id, expected_mcp, approved_mcp_url,
         expected_manifest, expected_files, projection_directories,
     )
-    binary_digest = validate_binary(args.cli_binary, args.installer_version)
-    require(
-        binary_digest == CURRENT_LINUX_AMD64_DIGEST,
-        "released CLI binary is not the exact approved Linux/amd64 asset",
+    binary_digest = validate_binary(
+        args.cli_binary,
+        args.installer_version,
+        CURRENT_LINUX_AMD64_DIGEST,
     )
     endpoint_host = urlsplit(mcp_url).hostname
     require(endpoint_host is not None, "ChatGPT MCP endpoint has no host")

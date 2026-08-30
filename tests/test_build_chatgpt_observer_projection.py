@@ -571,8 +571,10 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
     def test_wrong_cli_version_and_extra_signed_target_field_fail_closed(self) -> None:
         self.binary.write_bytes(b"#!/bin/sh\nprintf 'agentplugins 0.1.23\\n'\n")
         self.binary.chmod(0o755)
-        with self.assertRaisesRegex(PublicationError, "version output"):
-            generator.generate(self.args())
+        wrong_version_digest = "sha256:" + hashlib.sha256(self.binary.read_bytes()).hexdigest()
+        with mock.patch.object(generator, "CURRENT_LINUX_AMD64_DIGEST", wrong_version_digest):
+            with self.assertRaisesRegex(PublicationError, "version output"):
+                generator.generate(self.args())
         self.binary.write_bytes(b"#!/bin/sh\n[ \"$1\" = version ] && printf 'agentplugins 0.1.24\\n'\n")
         self.binary.chmod(0o755)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "example/demo")
@@ -1369,7 +1371,7 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
             for label, path in (("leaf", leaf), ("ancestor", ancestor / "agentplugins")):
                 with self.subTest(label=label):
                     with self.assertRaisesRegex(PublicationError, "path is unsafe"):
-                        generator.validate_binary(path, "0.1.24")
+                        generator.validate_binary(path, "0.1.24", self.fake_binary_digest)
             run.assert_not_called()
 
     def test_binary_path_swap_executes_authenticated_image_and_fails_authority_recheck(self) -> None:
@@ -1387,7 +1389,7 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
 
         with mock.patch.object(generator.subprocess, "run", side_effect=swap_then_run):
             with self.assertRaisesRegex(PublicationError, "ancestor pathname was replaced"):
-                generator.validate_binary(self.binary, "0.1.24")
+                generator.validate_binary(self.binary, "0.1.24", self.fake_binary_digest)
         shutil.rmtree(original_parent)
         moved_parent.rename(original_parent)
 
@@ -1407,11 +1409,21 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
         try:
             with mock.patch.object(generator.subprocess, "run", side_effect=swap_then_run):
                 with self.assertRaisesRegex(PublicationError, "leaf pathname was replaced"):
-                    generator.validate_binary(self.binary, "0.1.24")
+                    generator.validate_binary(self.binary, "0.1.24", self.fake_binary_digest)
             self.assertEqual(observed, ["agentplugins 0.1.24\n"])
         finally:
             self.binary.unlink(missing_ok=True)
             saved.rename(self.binary)
+
+    def test_unapproved_cli_digest_is_rejected_before_execution(self) -> None:
+        with mock.patch.object(generator, "_run_authenticated_binary") as run:
+            with self.assertRaisesRegex(PublicationError, "exact approved Linux/amd64 asset"):
+                generator.validate_binary(
+                    self.binary,
+                    "0.1.24",
+                    "sha256:" + "0" * 64,
+                )
+        run.assert_not_called()
 
     def test_atomic_publish_loses_race_without_replacing_winner(self) -> None:
         output = self.root / "raced"

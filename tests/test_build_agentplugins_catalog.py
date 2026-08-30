@@ -28,7 +28,7 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
     def test_committed_legacy_catalogs_are_byte_frozen(self) -> None:
         expected = {
             1: "9ed64038a8a1b1eab6956008f94b3ffa16f1b6ddf01e8b2809b202656423f183",
-            2: "66199c87bd68c65e39d15aa2c5c6e6c7830c9b116d8ed3590123031b32357050",
+            2: "5f2d4d0161ef92eb4424437b86a47f3143b67efb5e63883409ed7ccb8edf493c",
         }
         for schema_version, digest in expected.items():
             with self.subTest(schema_version=schema_version):
@@ -129,7 +129,7 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
                 / "tests"
                 / "e2e"
                 / "results"
-                / "chatgpt-cloudflare-docs-personal-app-2026-08-10.json"
+                / "chatgpt-cloudflare-docs-personal-app-2026-08-30.json"
             ).read_text()
         )
         cloudflare_docs = next(
@@ -145,21 +145,10 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
             pinned_evidence,
             (ROOT / app_binding["runtime_evidence"]).read_bytes(),
         )
-        historical_catalog = subprocess.check_output(
-            ["git", "show", f"{evidence_revision}:catalog/v1/catalog.json"],
-            cwd=ROOT,
-        )
-        historical_catalog_document = json.loads(historical_catalog)
-        self.assertEqual(
-            chatgpt_evidence["catalog"],
-            {
-                "revision": historical_catalog_document["revision"],
-                "digest": "sha256:" + hashlib.sha256(historical_catalog).hexdigest(),
-            },
-        )
+        self.assertNotIn("catalog", chatgpt_evidence)
         self.assertIn("local_codex_plugin_package_ingestion", chatgpt_evidence["scope"]["not_proved"])
         self.assertIn("agentplugins_manager_lifecycle", chatgpt_evidence["scope"]["not_proved"])
-        evidenced.add((chatgpt_evidence["binding"]["plugin"], "chatgpt"))
+        self.assertEqual(cloudflare_docs["compatibility"]["chatgpt"]["verification"], "not_tested")
         claimed = {
             (plugin["name"], client)
             for plugin in current["plugins"]
@@ -184,19 +173,19 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
             committed["compatibility"]["chatgpt"],
             {
                 "package": "projected",
-                "verification": "tested",
+                "verification": "not_tested",
                 "authentication": "not_required",
                 "app_binding": {
                     "app_key": "cloudflare-docs",
-                    "id": "plugin_asdk_app_6a78e90cf73481918ef10cdb87cd4bb4",
+                    "id": "plugin_asdk_app_6a92d29a704c8191931e76b47668cb0b",
                     "mcp_server": "cloudflare-docs",
                     "mcp_url": "https://docs.mcp.cloudflare.com/mcp",
                     "runtime_evidence": (
                         "tests/e2e/results/"
-                        "chatgpt-cloudflare-docs-personal-app-2026-08-10.json"
+                        "chatgpt-cloudflare-docs-personal-app-2026-08-30.json"
                     ),
                     "runtime_evidence_revision": (
-                        "2ddbb99dd190c1792b79904f9875e6322bccd243"
+                        "b89b8ffc3ccd2d8e0987ec9f105f4001cc08b834"
                     ),
                 },
             },
