@@ -14,12 +14,14 @@ import argparse
 import ctypes
 import errno
 import hashlib
+import json
 import os
 import re
 import secrets
 import stat
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import timezone
 from pathlib import Path
 from typing import Any
@@ -43,7 +45,21 @@ from directory_publication import (  # noqa: E402
     validate_snapshot_semantics,
     verify_envelope,
 )
-from build_openai_compat import BRAND_ASSETS, openai_manifest, openai_mcp  # noqa: E402
+
+
+@dataclass(frozen=True)
+class ProtectedAuthority:
+    path: Path
+    identities: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class ProtectedTree:
+    authority: ProtectedAuthority
+    seal: str
+    package_contract: bool
+
+
 from observe_launch_scenario import (  # noqa: E402
     strict_state_json_loads,
     validate_released_state_v4,
@@ -63,10 +79,15 @@ MAX_BINARY_BYTES = 256 << 20
 MAX_PROJECTION_FILES = 10_000
 MAX_PROJECTION_TREE_BYTES = 256 << 20
 MAX_SNAPSHOT_DIRECTORIES = 512
+CURRENT_INSTALLER_VERSION = "0.1.24"
+CURRENT_LINUX_AMD64_DIGEST = "sha256:e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca"
 APP_ID = re.compile(r"plugin_asdk_app_[a-f0-9]{32}")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+INSTALLATION_ID = re.compile(
+    r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}"
+)
 
 
 def exact_object(value: Any, required: set[str], optional: set[str], label: str) -> dict[str, Any]:
@@ -89,6 +110,73 @@ def canonical_output(value: Any) -> bytes:
     """Match the official package JSON profile consumed by the observer."""
     body = directory_json(value)
     return body[:-1]
+
+
+def _go_json(value: Any, *, indent: bool) -> bytes:
+    """Encode the JSON subset exactly like Go's encoding/json package."""
+    kwargs: dict[str, Any] = {"allow_nan": False, "ensure_ascii": False, "sort_keys": True}
+    if indent:
+        kwargs["indent"] = 2
+    else:
+        kwargs["separators"] = (",", ":")
+    body = json.dumps(value, **kwargs)
+    # encoding/json escapes these runes even when all other non-ASCII text is
+    # emitted as UTF-8. Python deliberately does not, so bind the difference.
+    body = (
+        body.replace("&", r"\u0026")
+        .replace("<", r"\u003c")
+        .replace(">", r"\u003e")
+        .replace("\u2028", r"\u2028")
+        .replace("\u2029", r"\u2029")
+    )
+    return body.encode("utf-8")
+
+
+def released_json(value: Any) -> bytes:
+    """Match Go json.MarshalIndent plus the newline used by agentplugins 0.1.24."""
+    return _go_json(value, indent=True) + b"\n"
+
+
+def released_manifest_json(value: dict[str, Any]) -> bytes:
+    """Match the projected manifest map containing a typed Go Author value."""
+    ordered: dict[str, Any] = {}
+    for key in sorted(value):
+        item = value[key]
+        if key == "author" and isinstance(item, dict):
+            # domain.Author is a struct, so encoding/json preserves declaration
+            # order rather than recursively sorting these fields as map keys.
+            author: dict[str, str] = {}
+            for field in ("name", "email", "url"):
+                author_value = item.get(field, "")
+                require(isinstance(author_value, str), "projected manifest author is invalid")
+                if author_value:
+                    author[field] = author_value
+            item = author
+        ordered[key] = item
+    kwargs: dict[str, Any] = {"allow_nan": False, "ensure_ascii": False, "indent": 2, "sort_keys": False}
+    body = json.dumps(ordered, **kwargs)
+    body = (
+        body.replace("&", r"\u0026")
+        .replace("<", r"\u003c")
+        .replace(">", r"\u003e")
+        .replace("\u2028", r"\u2028")
+        .replace("\u2029", r"\u2029")
+    )
+    return body.encode("utf-8") + b"\n"
+
+
+def released_compact_json(value: Any) -> bytes:
+    """Match Go json.Marshal used for the synthesized Directory app manifest."""
+    return _go_json(value, indent=False)
+
+
+def physical_artifact_id(declared_name: str, installation_id: str) -> str:
+    """Match domain.ComputePhysicalArtifactID in the released Go CLI."""
+    suffix = hashlib.sha256(installation_id.encode()).hexdigest()[:12]
+    maximum_name_bytes = 64 - 1 - len(suffix)
+    name = declared_name.strip().encode("utf-8")[:maximum_name_bytes].decode("utf-8", "strict")
+    name = name.rstrip(".-")
+    return f"{name}-{suffix}"
 
 
 def read_regular_bounded(path: Path, limit: int, label: str) -> bytes:
@@ -261,7 +349,11 @@ def validate_add(
         "CLI ChatGPT result",
     )
     require(result["mutated"] is True, "CLI ChatGPT add did not materialize the package")
-    require(isinstance(result["installation_id"], str) and result["installation_id"] != "", "CLI ChatGPT installation ID is invalid")
+    installation_id = result["installation_id"]
+    require(
+        isinstance(installation_id, str) and INSTALLATION_ID.fullmatch(installation_id) is not None,
+        "CLI ChatGPT installation ID is invalid",
+    )
     require(result["requires_confirmation"] is False and result["group_phase"] == "external_completed", "CLI ChatGPT group completion is invalid")
     plan = exact_object(
         result["plan"],
@@ -295,8 +387,12 @@ def validate_add(
         "CLI ChatGPT activation state is invalid",
     )
     artifact_id = plan["physical_artifact_id"]
-    require(isinstance(artifact_id, str) and artifact_id != "", "CLI ChatGPT physical artifact ID is invalid")
-    return result["installation_id"], artifact_id
+    require(
+        isinstance(artifact_id, str)
+        and artifact_id == physical_artifact_id(product_id, installation_id),
+        "CLI ChatGPT physical artifact ID is invalid",
+    )
+    return installation_id, artifact_id
 
 
 def _snapshot_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
@@ -332,9 +428,26 @@ def _read_snapshot_file(descriptor: int, size: int, label: str) -> bytes:
     return bytes(body)
 
 
+def _tree_seal(entries: dict[str, dict[str, Any]], contents: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for relative in sorted(entries):
+        metadata = entries[relative]
+        record = (
+            relative, metadata["kind"], stat.S_IMODE(metadata["mode"]), metadata["size"],
+            *metadata["identity"], tuple(metadata.get("children", ())),
+        )
+        encoded = repr(record).encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        body = contents.get(relative, b"")
+        digest.update(len(body).to_bytes(8, "big"))
+        digest.update(body)
+    return "sha256:" + digest.hexdigest()
+
+
 def _stable_tree_snapshot(
     root: Path, label: str, *, package_contract: bool = False,
-) -> tuple[dict[str, dict[str, Any]], dict[str, bytes]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, bytes], ProtectedTree]:
     """Read and finally revalidate every member through held no-follow descriptors."""
     try:
         absolute, ancestry = _open_absolute_directory(root, label)
@@ -346,23 +459,30 @@ def _stable_tree_snapshot(
     file_count = 0
     directory_count = 1
     total_bytes = 0
+    discovered_members = 0
     folded_paths: dict[str, str] = {}
 
-    def visible_names(descriptor: int, relative: str) -> list[str]:
-        visible = []
-        for name in os.listdir(descriptor):
+    def visible_names(descriptor: int, relative: str, expected_count: int | None = None) -> list[str]:
+        nonlocal discovered_members
+        maximum_files = PORTABLE_MAX_FILES if package_contract else MAX_PROJECTION_FILES
+        member_budget = maximum_files + MAX_SNAPSHOT_DIRECTORIES - 1
+        visible: list[str] = []
+        with os.scandir(descriptor) as iterator:
+            for item in iterator:
+                if expected_count is None:
+                    require(discovered_members < member_budget, f"{label} exceeds snapshot member limits")
+                    discovered_members += 1
+                else:
+                    require(len(visible) < expected_count, f"{label} directory {relative or '.'!r} changed after traversal")
+                visible.append(item.name)
+        for name in visible:
             metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            if package_contract and not relative:
-                if name == ".git" or (
-                    name == ".plugin-kit-ai.lock" and not stat.S_ISDIR(metadata.st_mode)
-                ):
-                    continue
-            elif not package_contract and (
-                (name == ".git" and stat.S_ISDIR(metadata.st_mode))
-                or (name == ".plugin-kit-ai.lock" and stat.S_ISREG(metadata.st_mode))
-            ):
-                continue
-            visible.append(name)
+            child_relative = name if not relative else f"{relative}/{name}"
+            require(
+                not (name.casefold() == ".git" and stat.S_ISDIR(metadata.st_mode))
+                and not (name.casefold() == ".plugin-kit-ai.lock" and stat.S_ISREG(metadata.st_mode)),
+                f"{label} contains reserved ownership metadata: {child_relative!r}",
+            )
         return sorted(visible)
 
     def traverse(descriptor: int, relative: str) -> None:
@@ -430,7 +550,10 @@ def _stable_tree_snapshot(
             return
         descriptor = entry["descriptor"]
         require(_snapshot_identity(os.fstat(descriptor)) == entry["identity"], f"{label} {relative or 'root'} changed after reading")
-        require(visible_names(descriptor, relative) == entry["children"], f"{label} directory {relative or '.'!r} changed after traversal")
+        require(
+            visible_names(descriptor, relative, len(entry["children"])) == entry["children"],
+            f"{label} directory {relative or '.'!r} changed after traversal",
+        )
         for name in entry["children"]:
             child_relative = name if not relative else f"{relative}/{name}"
             child_entry = entries[child_relative]
@@ -460,7 +583,10 @@ def _stable_tree_snapshot(
         finally:
             for descriptor in reversed(reopened):
                 os.close(descriptor)
-        return entries, contents
+        return entries, contents, ProtectedTree(
+            ProtectedAuthority(absolute, tuple(identities)),
+            _tree_seal(entries, contents), package_contract,
+        )
     except OSError as error:
         raise PublicationError(f"{label} changed or contains an unsafe member: {error}") from error
     finally:
@@ -470,9 +596,11 @@ def _stable_tree_snapshot(
             os.close(descriptor)
 
 
-def _projection_artifact_snapshot_details(root: Path) -> tuple[str, dict[str, bytes], set[str]]:
+def _projection_artifact_snapshot_details(
+    root: Path,
+) -> tuple[str, dict[str, bytes], set[str], ProtectedTree]:
     """Reproduce the released manager's packagesnapshot digest over a stable tree."""
-    entries, contents = _stable_tree_snapshot(root, "ChatGPT projection")
+    entries, contents, authority = _stable_tree_snapshot(root, "ChatGPT projection")
     digest = hashlib.sha256()
     for relative in sorted(name for name in entries if name != "."):
         metadata = entries[relative]
@@ -483,11 +611,11 @@ def _projection_artifact_snapshot_details(root: Path) -> tuple[str, dict[str, by
         digest.update(f"file\0{relative}\0{'true' if executable else 'false'}\0{metadata['size']}\0".encode())
         digest.update(contents[relative])
     directories = {name for name, metadata in entries.items() if name != "." and metadata["kind"] == "dir"}
-    return "sha256:" + digest.hexdigest(), contents, directories
+    return "sha256:" + digest.hexdigest(), contents, directories, authority
 
 
 def projection_artifact_snapshot(root: Path) -> tuple[str, dict[str, bytes]]:
-    digest, contents, _ = _projection_artifact_snapshot_details(root)
+    digest, contents, _, _ = _projection_artifact_snapshot_details(root)
     return digest, contents
 
 
@@ -497,9 +625,10 @@ def projection_artifact_digest(root: Path) -> str:
 
 def authenticated_package_projection(
     root: Path, release: dict[str, Any], binding: dict[str, Any], product_id: str,
-) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, bytes]]:
+    physical_artifact_id: str,
+) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, bytes], ProtectedTree]:
     """Authenticate source package bytes and derive the security-relevant projection."""
-    entries, files = _stable_tree_snapshot(root, "approved source package", package_contract=True)
+    entries, files, authority = _stable_tree_snapshot(root, "approved source package", package_contract=True)
     manifest_body = files.get("plugin.json")
     require(manifest_body is not None, "approved source package plugin.json is missing")
     manifest = parse_json_bytes(manifest_body, "approved source package plugin.json", max_bytes=MAX_PROJECTION_BYTES)
@@ -538,7 +667,8 @@ def authenticated_package_projection(
     source_members = set(entries) - {"."}
     require(
         source_members <= {"plugin.json", "mcp.json", "README.md", "NOTICE"}
-        and "README.md" in files and all(entries[name]["kind"] == "file" for name in source_members),
+        and {"README.md", "NOTICE"} <= set(files)
+        and all(entries[name]["kind"] == "file" for name in source_members),
         "approved source package is outside the supported remote-app projection contract",
     )
     mcp_body = files.get("mcp.json")
@@ -550,14 +680,44 @@ def authenticated_package_projection(
     require(isinstance(servers, dict) and set(servers) == {binding["mcp_server"]}, "approved source package has ambiguous MCP servers")
     server = exact_object(servers[binding["mcp_server"]], {"type", "url"}, set(), "approved source package MCP server")
     require(server["type"] == "streamable-http" and isinstance(server["url"], str), "approved source package MCP transport is invalid")
-    expected_mcp = openai_mcp(portable, product_id)
-    expected_manifest = openai_manifest(manifest, False, True, True)
+    expected_mcp = {
+        "mcpServers": {
+            binding["mcp_server"]: {"type": "http", "url": server["url"]},
+        },
+    }
+    expected_manifest = {"name": manifest["name"]}
+    for field in ("version", "description", "homepage", "repository", "license"):
+        if isinstance(manifest.get(field), str) and manifest[field].strip():
+            expected_manifest[field] = manifest[field]
+    if manifest.get("author") is not None:
+        author = manifest["author"]
+        require(isinstance(author, dict), "approved source package author is invalid")
+        typed_author: dict[str, str] = {}
+        for field in ("name", "email", "url"):
+            value = author.get(field, "")
+            require(isinstance(value, str), "approved source package author is invalid")
+            if value:
+                typed_author[field] = value
+        expected_manifest["author"] = typed_author
+    if isinstance(manifest.get("keywords"), list) and manifest["keywords"]:
+        expected_manifest["keywords"] = manifest["keywords"]
+    expected_manifest.update({"mcpServers": "./.mcp.json", "apps": "./.app.json"})
+    marketplace_name = "agentplugins-" + hashlib.sha256(physical_artifact_id.strip().encode()).hexdigest()[:12]
+    marketplace = {
+        "name": marketplace_name,
+        "plugins": [{
+            "name": product_id,
+            "source": {"source": "local", "path": "./"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Productivity",
+        }],
+    }
     expected_files = {
         "README.md": files["README.md"],
-        "assets/icon.png": read_regular_bounded(BRAND_ASSETS / "icon.png", MAX_PROJECTION_TREE_BYTES, "approved OpenAI icon"),
-        "assets/logo.png": read_regular_bounded(BRAND_ASSETS / "logo.png", MAX_PROJECTION_TREE_BYTES, "approved OpenAI logo"),
+        "NOTICE": files["NOTICE"],
+        ".agents/plugins/marketplace.json": released_json(marketplace),
     }
-    return expected_mcp, server["url"], expected_manifest, expected_files
+    return expected_mcp, server["url"], expected_manifest, expected_files, authority
 
 
 def validate_state(
@@ -661,12 +821,25 @@ def validate_projection(
     require(app == expected_app, "ChatGPT .app.json differs from the signed target")
     mcp = _projection_object(files, ".mcp.json", "ChatGPT .mcp.json")
     require(mcp == expected_mcp, "ChatGPT .mcp.json was not derived from the approved source package")
+    require(
+        files[".codex-plugin/plugin.json"] == released_manifest_json(expected_manifest),
+        "ChatGPT official manifest bytes differ from the released stager",
+    )
+    require(
+        files[".mcp.json"] == released_json(expected_mcp),
+        "ChatGPT .mcp.json bytes differ from the released stager",
+    )
+    require(
+        files[".app.json"] == released_compact_json(expected_app),
+        "ChatGPT .app.json bytes differ from the released Directory synthesis",
+    )
     expected_members = {
         ".codex-plugin/plugin.json", ".app.json", ".mcp.json", *expected_files,
     }
     require(
-        set(files) == expected_members and directories == {".codex-plugin", "assets"},
-        "ChatGPT projection contains members outside the exact approved transformation",
+        set(files) == expected_members
+        and directories == {".codex-plugin", ".agents", ".agents/plugins"},
+        "ChatGPT projection has members outside the exact approved transformation",
     )
     for name, body in expected_files.items():
         require(files[name] == body, f"ChatGPT projection file {name!r} differs from the approved transformation")
@@ -872,83 +1045,443 @@ def _rename_noreplace(parent_descriptor: int, source: str, destination: str) -> 
         raise OSError(error, os.strerror(error), destination)
 
 
-def _remove_unpublished_stage(parent_descriptor: int, stage_name: str) -> None:
+def _quarantine_owned_stage(
+    parent_descriptor: int,
+    expected_identity: tuple[int, int],
+    preferred_name: str | None = None,
+    quarantine_prefix: str = ".rejected-stage-",
+) -> str | None:
+    """Preserve the exact owned stage; never pathname-delete during error recovery."""
+    if preferred_name is not None:
+        quarantine = f"{quarantine_prefix}{secrets.token_hex(12)}"
+        try:
+            _rename_noreplace(parent_descriptor, preferred_name, quarantine)
+        except (OSError, PublicationError):
+            pass
+        else:
+            # Preserve a substituted foreign inode too. If it is not ours, the
+            # bounded scan below may still locate the exact owned stage.
+            if _path_identity(parent_descriptor, quarantine) == expected_identity:
+                return quarantine
+    for _ in range(4):
+        candidates: list[str] = []
+        with os.scandir(parent_descriptor) as iterator:
+            for item in iterator:
+                require(len(candidates) < 4096, "output parent has too many entries for bounded stage recovery")
+                candidates.append(item.name)
+        for candidate in candidates:
+            try:
+                metadata = os.stat(candidate, dir_fd=parent_descriptor, follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISDIR(metadata.st_mode) or _directory_identity(metadata) != expected_identity:
+                continue
+            quarantine = f"{quarantine_prefix}{secrets.token_hex(12)}"
+            try:
+                _rename_noreplace(parent_descriptor, candidate, quarantine)
+            except OSError:
+                continue
+            # A same-UID racer may substitute candidate between stat and rename.
+            # Preserve that foreign inode too, then continue looking for ours.
+            if _path_identity(parent_descriptor, quarantine) == expected_identity:
+                return quarantine
+    return None
+
+
+def _quarantine_unidentified_stage(parent_descriptor: int, preferred_name: str) -> str | None:
+    """Preserve the create-once stage when its initial stat could not be read."""
+    quarantine = f".rejected-stage-{secrets.token_hex(12)}"
     try:
-        stage_descriptor = os.open(
-            stage_name,
-            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=parent_descriptor,
+        _rename_noreplace(parent_descriptor, preferred_name, quarantine)
+    except (OSError, PublicationError):
+        return None
+    return quarantine
+
+
+def _stage_path_identity(parent_descriptor: int, stage_name: str) -> tuple[int, int]:
+    metadata = os.stat(stage_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    require(stat.S_ISDIR(metadata.st_mode), "publication stage pathname is not a directory")
+    return _directory_identity(metadata)
+
+
+def _path_identity(parent_descriptor: int, name: str) -> tuple[int, int]:
+    return _directory_identity(os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False))
+
+
+def _publication_directory_seal(
+    descriptor: int, expected_bodies: dict[str, bytes],
+) -> tuple[tuple[str, tuple[int, ...], str], ...]:
+    names: list[str] = []
+    with os.scandir(descriptor) as iterator:
+        for item in iterator:
+            require(len(names) < len(expected_bodies), "publication directory has unexpected members")
+            names.append(item.name)
+    require(set(names) == set(expected_bodies), "publication directory member set changed")
+    seal: list[tuple[str, tuple[int, ...], str]] = []
+    for name in sorted(names):
+        metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        expected = expected_bodies[name]
+        require(
+            stat.S_ISREG(metadata.st_mode)
+            and metadata.st_nlink == 1
+            and stat.S_IMODE(metadata.st_mode) == 0o640
+            and metadata.st_size == len(expected),
+            f"publication member {name!r} has unsafe metadata",
         )
-    except FileNotFoundError:
-        return
-    try:
-        for name in ("app-binding.json", "projection-receipt.json"):
-            try:
-                os.unlink(name, dir_fd=stage_descriptor)
-            except FileNotFoundError:
-                pass
-    finally:
-        os.close(stage_descriptor)
-    try:
-        os.rmdir(stage_name, dir_fd=parent_descriptor)
-    except OSError:
-        pass
+        member = os.open(
+            name,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=descriptor,
+        )
+        try:
+            opened = os.fstat(member)
+            identity = _snapshot_identity(opened)
+            require(identity == _snapshot_identity(metadata), f"publication member {name!r} changed while opening")
+            body = _read_snapshot_file(member, opened.st_size, f"publication member {name!r}")
+            require(body == expected, f"publication member {name!r} differs from generated bytes")
+            require(_snapshot_identity(os.fstat(member)) == identity, f"publication member {name!r} changed while reading")
+            seal.append((name, identity, hashlib.sha256(body).hexdigest()))
+        finally:
+            os.close(member)
+    return tuple(seal)
 
 
-def write_outputs(output: Path, app: dict[str, Any], receipt: dict[str, Any]) -> None:
-    require(output.name not in {"", ".", ".."}, "output directory name is invalid")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    parent = output.parent.absolute()
-    parent_descriptor = os.open(parent, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-    parent_identity = _directory_identity(os.fstat(parent_descriptor))
-    stage_name = f".{output.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
-    os.mkdir(stage_name, mode=0o700, dir_fd=parent_descriptor)
-    try:
-        stage_descriptor = os.open(stage_name, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_descriptor)
-        for name, value in (("app-binding.json", app), ("projection-receipt.json", receipt)):
-            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o640, dir_fd=stage_descriptor)
-            try:
-                body = canonical_output(value)
-                written = 0
-                while written < len(body):
-                    count = os.write(descriptor, body[written:])
-                    require(count > 0, f"short write while publishing {name}")
-                    written += count
-                os.fsync(descriptor)
-            finally:
+def _reject_published_output(
+    parent_descriptor: int, output_name: str, expected_identity: tuple[int, int],
+) -> str | None:
+    """Preserve substitutions and quarantine the exact owned publication when found."""
+    for _ in range(4):
+        try:
+            observed_identity = _path_identity(parent_descriptor, output_name)
+        except FileNotFoundError:
+            break
+        prefix = f".rejected-{output_name}." if observed_identity == expected_identity else f".foreign-{output_name}."
+        quarantine = f"{prefix}{secrets.token_hex(12)}"
+        try:
+            _rename_noreplace(parent_descriptor, output_name, quarantine)
+        except (OSError, PublicationError):
+            continue
+        # The move is the authority boundary: a racer may have substituted a
+        # different inode after our stat. Preserve it and keep looking for ours.
+        if _path_identity(parent_descriptor, quarantine) == expected_identity:
+            return quarantine
+    return _quarantine_owned_stage(
+        parent_descriptor,
+        expected_identity,
+        quarantine_prefix=f".rejected-{output_name}.",
+    )
+
+
+def _require_disjoint_authorities(
+    candidate_path: Path, candidate_identities: list[tuple[int, int]],
+    protected_path: Path, protected_identities: list[tuple[int, int]],
+) -> None:
+    common_components = 0
+    for candidate_component, protected_component in zip(candidate_path.parts, protected_path.parts):
+        if candidate_component != protected_component:
+            break
+        common_components += 1
+    require(
+        set(candidate_identities[common_components:]).isdisjoint(protected_identities[common_components:]),
+        "output directory aliases an authenticated input root",
+    )
+
+
+def validate_output_authority(output: Path, protected_roots: tuple[Path, ...]) -> None:
+    """Reject overlap and symlinked existing ancestors before any output mutation."""
+    require(output.is_absolute() and output.name not in {"", ".", ".."}, "output directory must be an absolute non-root path")
+    require(all(part not in {"", ".", ".."} for part in output.parts[1:]), "output directory contains an unsafe component")
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+    def ancestry(path: Path, *, allow_missing: bool, label: str) -> list[tuple[int, int]]:
+        descriptor = os.open(path.anchor, flags)
+        identities = [_directory_identity(os.fstat(descriptor))]
+        try:
+            for component in path.parts[1:]:
+                try:
+                    child = os.open(component, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    if allow_missing:
+                        return identities
+                    raise PublicationError(f"{label} is missing")
+                except OSError as error:
+                    raise PublicationError(f"{label} has a symlink or non-directory ancestor: {error}") from error
                 os.close(descriptor)
-        try:
-            os.fsync(stage_descriptor)
+                descriptor = child
+                identities.append(_directory_identity(os.fstat(descriptor)))
+            return identities
         finally:
-            os.close(stage_descriptor)
-        require(_directory_identity(os.fstat(parent_descriptor)) == parent_identity, "output parent authority changed before publication")
-        reopened = os.open(parent, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            require(_directory_identity(os.fstat(reopened)) == parent_identity, "output parent pathname was replaced")
-        finally:
-            os.close(reopened)
-        _rename_noreplace(parent_descriptor, stage_name, output.name)
-        os.fsync(parent_descriptor)
-        require(_directory_identity(os.fstat(parent_descriptor)) == parent_identity, "output parent authority changed during publication")
-        reopened = os.open(parent, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            require(_directory_identity(os.fstat(reopened)) == parent_identity, "output parent pathname was replaced during publication")
-        finally:
-            os.close(reopened)
-    except Exception:
-        _remove_unpublished_stage(parent_descriptor, stage_name)
-        raise
+            os.close(descriptor)
+
+    output_identities = ancestry(output, allow_missing=True, label="output path")
+    for protected in protected_roots:
+        require(protected.is_absolute(), "protected input root must be absolute")
+        common = Path(os.path.commonpath((str(output), str(protected))))
+        require(
+            common not in {output, protected},
+            "output directory overlaps an authenticated input root",
+        )
+        protected_identities = ancestry(protected, allow_missing=False, label="protected input root")
+        _require_disjoint_authorities(output, output_identities, protected, protected_identities)
+
+
+def _open_or_create_output_parent(
+    output: Path,
+    protected_authorities: tuple[tuple[Path, list[tuple[int, int]]], ...],
+) -> int:
+    """Create missing parent components without ever following a symlink."""
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(output.anchor, flags)
+    identities = [_directory_identity(os.fstat(descriptor))]
+
+    def check() -> None:
+        for protected_path, protected_identities in protected_authorities:
+            _require_disjoint_authorities(output.parent, identities, protected_path, protected_identities)
+
+    try:
+        for component in output.parts[1:-1]:
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                check()
+                os.mkdir(component, mode=0o755, dir_fd=descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            identities.append(_directory_identity(os.fstat(descriptor)))
+        check()
+        result = descriptor
+        descriptor = -1
+        return result
+    except OSError as error:
+        raise PublicationError(f"output parent changed or contains a symlink: {error}") from error
     finally:
-        os.close(parent_descriptor)
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
-def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
+def _revalidate_output_parent(parent: Path, identity: tuple[int, int]) -> None:
+    try:
+        _, descriptors = _open_absolute_directory(parent, "output parent")
+    except OSError as error:
+        raise PublicationError(f"output parent pathname changed: {error}") from error
+    try:
+        require(_directory_identity(os.fstat(descriptors[-1])) == identity, "output parent pathname was replaced")
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _revalidate_protected_tree(expected: ProtectedTree) -> None:
+    _, _, observed = _stable_tree_snapshot(
+        expected.authority.path, "authenticated input root",
+        package_contract=expected.package_contract,
+    )
+    require(
+        observed.authority == expected.authority and observed.seal == expected.seal,
+        "authenticated input tree changed after validation",
+    )
+
+
+def _publication_preflight_hook() -> None:
+    """Test seam before the private publication closure; never authorizes writes."""
+
+
+def generate(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
+    app, receipt, protected_trees = _build(args)
+    _publication_preflight_hook()
+    output = args.output
+
+    def write_outputs() -> None:
+        require(len(protected_trees) == 2, "validated publication has incomplete protected trees")
+        held_protected: list[list[int]] = []
+        protected_authorities: list[tuple[Path, list[tuple[int, int]]]] = []
+        try:
+            for expected_tree in protected_trees:
+                expected = expected_tree.authority
+                protected = expected.path
+                try:
+                    _, descriptors = _open_absolute_directory(protected, "protected input root")
+                except OSError as error:
+                    raise PublicationError(f"protected input root is not a real directory: {error}") from error
+                held_protected.append(descriptors)
+                actual_identities = [_directory_identity(os.fstat(descriptor)) for descriptor in descriptors]
+                require(
+                    actual_identities == list(expected.identities),
+                    "authenticated input root pathname changed between validation and publication",
+                )
+                protected_authorities.append((protected, actual_identities))
+
+            for expected_tree in protected_trees:
+                _revalidate_protected_tree(expected_tree)
+
+            validate_output_authority(output, tuple(item.authority.path for item in protected_trees))
+            require(output.name not in {"", ".", ".."}, "output directory name is invalid")
+            parent = output.parent
+            parent_descriptor = _open_or_create_output_parent(output, tuple(protected_authorities))
+            try:
+                parent_identity = _directory_identity(os.fstat(parent_descriptor))
+                for protected_path, expected_identities in protected_authorities:
+                    try:
+                        _, reopened = _open_absolute_directory(protected_path, "protected input root")
+                    except OSError as error:
+                        raise PublicationError(f"protected input root pathname changed before publication: {error}") from error
+                    try:
+                        require(
+                            [_directory_identity(os.fstat(descriptor)) for descriptor in reopened] == expected_identities,
+                            "protected input root pathname changed before publication",
+                        )
+                    finally:
+                        for descriptor in reversed(reopened):
+                            os.close(descriptor)
+
+                stage_name = f".{output.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+                stage_created = False
+                stage_identity: tuple[int, int] | None = None
+                stage_descriptor = -1
+                preserve_rejected_output = False
+                try:
+                    os.mkdir(stage_name, mode=0o700, dir_fd=parent_descriptor)
+                    stage_created = True
+                    stage_identity = _stage_path_identity(parent_descriptor, stage_name)
+                    stage_descriptor = os.open(
+                        stage_name,
+                        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=parent_descriptor,
+                    )
+                    require(
+                        _directory_identity(os.fstat(stage_descriptor)) == stage_identity,
+                        "publication stage changed before descriptor open",
+                    )
+                    publication_bodies = {
+                        "app-binding.json": canonical_output(app),
+                        "projection-receipt.json": canonical_output(receipt),
+                    }
+                    for name, body in publication_bodies.items():
+                        descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o640, dir_fd=stage_descriptor)
+                        try:
+                            written = 0
+                            while written < len(body):
+                                count = os.write(descriptor, body[written:])
+                                require(count > 0, f"short write while publishing {name}")
+                                written += count
+                            os.fsync(descriptor)
+                        finally:
+                            os.close(descriptor)
+                    os.fsync(stage_descriptor)
+                    for expected_tree in protected_trees:
+                        _revalidate_protected_tree(expected_tree)
+                    require(_directory_identity(os.fstat(parent_descriptor)) == parent_identity, "output parent authority changed before publication")
+                    _revalidate_output_parent(parent, parent_identity)
+                    require(
+                        _stage_path_identity(parent_descriptor, stage_name) == stage_identity,
+                        "publication stage pathname was replaced before rename",
+                    )
+                    prepublication_seal = _publication_directory_seal(stage_descriptor, publication_bodies)
+                    _rename_noreplace(parent_descriptor, stage_name, output.name)
+                    try:
+                        published_identity = _stage_path_identity(parent_descriptor, output.name)
+                    except Exception as error:
+                        preserve_rejected_output = True
+                        try:
+                            _reject_published_output(parent_descriptor, output.name, stage_identity)
+                        except (OSError, PublicationError):
+                            pass
+                        raise PublicationError("publication stage pathname was replaced during rename") from error
+                    if published_identity != stage_identity:
+                        try:
+                            _reject_published_output(parent_descriptor, output.name, stage_identity)
+                        except (OSError, PublicationError):
+                            pass
+                        preserve_rejected_output = True
+                        raise PublicationError("publication stage pathname was replaced during rename")
+                    try:
+                        for expected_tree in protected_trees:
+                            _revalidate_protected_tree(expected_tree)
+                    except Exception:
+                        preserve_rejected_output = True
+                        try:
+                            _reject_published_output(parent_descriptor, output.name, stage_identity)
+                        except (OSError, PublicationError):
+                            pass
+                        try:
+                            os.fsync(parent_descriptor)
+                        except OSError:
+                            pass
+                        raise
+                    os.fsync(parent_descriptor)
+                    require(_directory_identity(os.fstat(parent_descriptor)) == parent_identity, "output parent authority changed during publication")
+                    _revalidate_output_parent(parent, parent_identity)
+                    try:
+                        final_identity = _stage_path_identity(parent_descriptor, output.name)
+                    except Exception as error:
+                        preserve_rejected_output = True
+                        try:
+                            _reject_published_output(parent_descriptor, output.name, stage_identity)
+                        except (OSError, PublicationError):
+                            pass
+                        raise PublicationError("published output pathname was replaced during finalization") from error
+                    if final_identity != stage_identity:
+                        try:
+                            _reject_published_output(parent_descriptor, output.name, stage_identity)
+                        except (OSError, PublicationError):
+                            pass
+                        preserve_rejected_output = True
+                        raise PublicationError("published output pathname was replaced during finalization")
+                    try:
+                        require(
+                            _publication_directory_seal(stage_descriptor, publication_bodies) == prepublication_seal,
+                            "published output members changed during publication",
+                        )
+                        require(
+                            _stage_path_identity(parent_descriptor, output.name) == stage_identity,
+                            "published output pathname was replaced after content validation",
+                        )
+                    except Exception:
+                        preserve_rejected_output = True
+                        try:
+                            _reject_published_output(parent_descriptor, output.name, stage_identity)
+                        except (OSError, PublicationError):
+                            pass
+                        raise
+                except Exception:
+                    if stage_created and not preserve_rejected_output:
+                        try:
+                            if stage_identity is None:
+                                _quarantine_unidentified_stage(parent_descriptor, stage_name)
+                            else:
+                                _quarantine_owned_stage(parent_descriptor, stage_identity, stage_name)
+                        except (OSError, PublicationError):
+                            # Preserve the primary failure. Recovery never deletes by
+                            # pathname; an unlocated owned inode remains audit residue.
+                            pass
+                    raise
+                finally:
+                    if stage_descriptor >= 0:
+                        os.close(stage_descriptor)
+            finally:
+                os.close(parent_descriptor)
+        finally:
+            for descriptors in reversed(held_protected):
+                for descriptor in reversed(descriptors):
+                    os.close(descriptor)
+    write_outputs()
+    return app, receipt
+
+
+def _build(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any], tuple[ProtectedTree, ProtectedTree]]:
+    validate_output_authority(args.output, (args.package_root, args.projection_root))
     require(NAME.fullmatch(args.product_id) is not None, "product ID is invalid")
     require(NAME.fullmatch(args.app_key) is not None, "app key is invalid")
     require(APP_ID.fullmatch(args.app_id) is not None, "app ID is invalid")
     require(isinstance(args.release_sequence, int) and not isinstance(args.release_sequence, bool) and 1 <= args.release_sequence <= 9007199254740991, "release sequence is invalid")
     require(isinstance(args.minimum_sequence, int) and not isinstance(args.minimum_sequence, bool) and 1 <= args.minimum_sequence <= 9007199254740991, "minimum sequence is invalid")
-    semver(args.installer_version, "installer version")
+    require(
+        args.installer_version == CURRENT_INSTALLER_VERSION,
+        f"generator requires agentplugins {CURRENT_INSTALLER_VERSION}",
+    )
     require(TIMESTAMP.fullmatch(args.observed_at) is not None, "observed-at must be canonical UTC seconds")
     observed = parse_timestamp(args.observed_at, "observed-at")
     require(observed.tzinfo == timezone.utc, "observed-at must be UTC")
@@ -967,10 +1500,10 @@ def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     state_body = read_regular_bounded(args.state, MAX_EVIDENCE_BYTES, "released CLI state")
     state = strict_state_json_loads(state_body)
     require(isinstance(state, dict), "released CLI state must be an object")
-    expected_mcp, approved_mcp_url, expected_manifest, expected_files = authenticated_package_projection(
-        args.package_root, release, binding, args.product_id,
+    expected_mcp, approved_mcp_url, expected_manifest, expected_files, package_authority = authenticated_package_projection(
+        args.package_root, release, binding, args.product_id, physical_artifact_id,
     )
-    managed_digest, projection_files, projection_directories = _projection_artifact_snapshot_details(args.projection_root)
+    managed_digest, projection_files, projection_directories, projection_authority = _projection_artifact_snapshot_details(args.projection_root)
     validate_state(
         state, args.projection_root, product_id=args.product_id, distribution=distribution,
         release=release, snapshot=snapshot, snapshot_digest=snapshot_digest,
@@ -982,6 +1515,10 @@ def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         expected_manifest, expected_files, projection_directories,
     )
     binary_digest = validate_binary(args.cli_binary, args.installer_version)
+    require(
+        binary_digest == CURRENT_LINUX_AMD64_DIGEST,
+        "released CLI binary is not the exact approved Linux/amd64 asset",
+    )
     endpoint_host = urlsplit(mcp_url).hostname
     require(endpoint_host is not None, "ChatGPT MCP endpoint has no host")
     source = release["package_source"]
@@ -1019,7 +1556,7 @@ def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         },
     }
     app = {"apps": {args.app_key: {"id": args.app_id}}}
-    return app, receipt
+    return app, receipt, (package_authority, projection_authority)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1047,8 +1584,7 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
-        app, receipt = build(args)
-        write_outputs(args.output, app, receipt)
+        generate(args)
         print(f"wrote canonical ChatGPT observer projection to {args.output}")
         return 0
     except (OSError, ValueError, PublicationError, KeyError, TypeError) as error:
