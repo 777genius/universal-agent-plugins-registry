@@ -2038,7 +2038,7 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertEqual(config["cli_release_checksums_digest"], e2e.RELEASE_CHECKSUMS_DIGEST)
         self.assertEqual(config["npm_facade_version"], "0.1.24")
         self.assertRegex(config["npm_facade_integrity"], r"^sha512-[A-Za-z0-9+/]+={0,2}$")
-        self.assertEqual(config["npm_facade_integrity"], "sha512-48UfVVaGrvmniWQpoiXQYZvTS3QqrCN0HFLSQBVCsqQJwPdecRtuK9XEsOs4nTMQuWImjX6ZAflUeY/79biRZg==")
+        self.assertEqual(config["npm_facade_integrity"], "sha512-hUMKvd2kAjTWA1obzAlXdbE3GxjRk8lhXRA9YuO2h2NINnYv/GQi2JwgkqWhOd95BpEKh5Do8vV1B4B/Unl+jw==")
         expected_directory_digest = "sha256:7d2e82322377e8f83a94912113c28287aebaf7ddf68f1908e709adca865aa21b"
         self.assertEqual(config["directory_source_digest"], expected_directory_digest)
         self.assertEqual(e2e.sha256_file(ROOT / "registry/directory.json"), expected_directory_digest)
@@ -2049,12 +2049,14 @@ with tempfile.TemporaryDirectory() as temporary:
         if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
             self.assertEqual(config["directory_source_digest"], e2e.sha256_file(ROOT / "registry/directory.json"))
         self.assertEqual(config["scenario_contract_digest"], e2e.sha256_file(e2e.SCENARIOS))
-        schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
+        schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation-v2.schema.json").read_text())
         self.assertEqual(
             schema["properties"]["github_asset_attestation"]["properties"]["workflow"]["const"],
             e2e.TRUSTED_CLI_RELEASE_WORKFLOW,
         )
         self.assertEqual(schema["properties"]["cli_release_tag"]["const"], e2e.TRUSTED_CLI_RELEASE_TAG)
+        frozen_v1 = json.loads((ROOT / "tests/e2e/schemas/native-release-observation.schema.json").read_text())
+        self.assertEqual(frozen_v1["properties"]["cli_release_tag"]["const"], "agentplugins-v0.1.18")
         self.assertNotIn("repository", config)
         observer = json.loads((ROOT / "deploy/uap-observer.json").read_text())
         self.assertEqual(observer["cli_release_tag"], e2e.TRUSTED_CLI_RELEASE_TAG)
