@@ -325,6 +325,33 @@ class TwoLaneEvidenceTests(unittest.TestCase):
             with self.assertRaises(lanes.TwoLaneEvidenceError):
                 lanes.validate_source_policy_evidence(value, **self.policy_identity())
 
+    def test_current_readiness_rejects_policy_shape_outside_v2_schema(self) -> None:
+        mutations = []
+        root_extra = copy.deepcopy(policy_evidence())
+        root_extra["unexpected"] = True
+        mutations.append(root_extra)
+        nested_extra = copy.deepcopy(policy_evidence())
+        nested_extra["identities"]["unexpected"] = True
+        mutations.append(nested_extra)
+        malformed_details = copy.deepcopy(policy_evidence())
+        malformed_details["results"][0]["details"] = {"claimed": True}
+        mutations.append(malformed_details)
+        for policy in mutations:
+            with self.subTest(policy=mutations.index(policy)), self.assertRaisesRegex(
+                lanes.TwoLaneEvidenceError, "v2 schema mismatch",
+            ):
+                lanes.build_readiness_envelope(
+                    runtime_evidence(schema_version=5), policy, **self.identity(),
+                )
+
+        # Frozen v1 remains governed by its historical semantic validator.
+        historical = policy_evidence(schema_version=1)
+        historical["historical_annotation"] = "preserved"
+        lanes.build_readiness_envelope(
+            runtime_evidence(schema_version=4), historical,
+            schema_version=1, purpose="historical", **self.identity(),
+        )
+
     def test_schema_versions_route_without_reinterpreting_v3(self) -> None:
         v3 = runtime_evidence(schema_version=4)
         v3["schema_version"] = 3

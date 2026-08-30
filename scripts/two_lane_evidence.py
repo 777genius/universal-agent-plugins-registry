@@ -258,9 +258,41 @@ def validate_source_policy_evidence(
     value: dict[str, Any], *, scenario_digest: str, harness_digest: str,
     overlay_digest: str, uap_sha: str, expected_schema_version: Literal[1, 2] = 2,
 ) -> str:
-    uap_sha = require_uap_sha(uap_sha)
     if type(expected_schema_version) is not int or expected_schema_version not in {1, 2}:
         raise TwoLaneEvidenceError("unknown caller-selected source-policy schema_version")
+    if expected_schema_version == 2:
+        try:
+            import jsonschema
+            schema = json.loads(
+                (ROOT / "schemas/e2e/source-policy-conformance-v2.schema.json").read_text()
+            )
+            pending: list[Any] = [schema]
+            while pending:
+                node = pending.pop()
+                if isinstance(node, dict):
+                    reference = node.get("$ref")
+                    if reference is not None and (
+                        not isinstance(reference, str) or not reference.startswith("#/")
+                    ):
+                        raise TwoLaneEvidenceError(
+                            "source-policy v2 schema contains a non-local reference"
+                        )
+                    pending.extend(node.values())
+                elif isinstance(node, list):
+                    pending.extend(node)
+            errors = sorted(
+                jsonschema.Draft202012Validator(schema).iter_errors(value),
+                key=lambda item: list(item.absolute_path),
+            )
+        except ImportError as error:  # pragma: no cover - protected jobs install it
+            raise TwoLaneEvidenceError(
+                "jsonschema is required for source-policy evidence validation"
+            ) from error
+        if errors:
+            raise TwoLaneEvidenceError(
+                f"source-policy evidence v2 schema mismatch: {errors[0].message}"
+            )
+    uap_sha = require_uap_sha(uap_sha)
     if type(value.get("schema_version")) is not int or value.get("schema_version") != expected_schema_version:
         raise TwoLaneEvidenceError("source-policy schema_version differs from caller purpose")
     if expected_schema_version == 2:

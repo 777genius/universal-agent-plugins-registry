@@ -264,6 +264,40 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         self.assertEqual(json.loads(attached[evidence.POLICY_EVIDENCE_NAME])["schema_version"], 2)
         self.assertEqual(json.loads(attached[evidence.READINESS_EVIDENCE_NAME])["runtime_results"], 16)
 
+    def test_materializer_rejects_non_schema_v2_policy_shapes(self) -> None:
+        from tests.test_launch_evidence_schema_router import launch_v5
+        from tests.test_two_lane_evidence import (
+            FIXTURE_LEDGER_SHA, FIXTURE_PUBLICATION_ID, FIXTURE_SOURCE_COMMIT,
+            FIXTURE_UAP_SHA, digest, policy_evidence,
+        )
+
+        runtime = launch_v5()
+        files = {"launch-evidence.json": evidence.canonical_json(runtime), "SHA256SUMS": b""}
+        mutations = []
+        root_extra = policy_evidence(schema_version=2)
+        root_extra["unexpected"] = True
+        mutations.append(root_extra)
+        nested_extra = policy_evidence(schema_version=2)
+        nested_extra["identities"]["unexpected"] = True
+        mutations.append(nested_extra)
+        malformed_details = policy_evidence(schema_version=2)
+        malformed_details["results"][0]["details"] = {"claimed": True}
+        mutations.append(malformed_details)
+        for policy in mutations:
+            with self.subTest(policy=mutations.index(policy)), self.assertRaisesRegex(
+                ValueError, "v2 schema mismatch",
+            ):
+                evidence.attach_two_lane_evidence(
+                    files, evidence.canonical_json(policy),
+                    evidence.canonical_json({"schema_version": 2}),
+                    uap_sha=FIXTURE_UAP_SHA,
+                    directory_ledger_sha=FIXTURE_LEDGER_SHA,
+                    publication_id=FIXTURE_PUBLICATION_ID,
+                    publication_sequence=1,
+                    publication_snapshot_digest=digest("a"),
+                    publication_source_commit=FIXTURE_SOURCE_COMMIT,
+                )
+
     def test_attester_verifies_signature_and_exact_signed_authoritative_rows(self) -> None:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -321,6 +355,30 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
             launch, bundle, repository="owner/repository",
             public_key=public_key, key_id="observer-v1",
         )
+        historical_without_chatgpt = json.loads(json.dumps(launch))
+        historical_without_chatgpt["matrix"] = [
+            row for row in historical_without_chatgpt["matrix"]
+            if row["client"] != "chatgpt"
+        ]
+        historical_bundle = json.loads(json.dumps(bundle))
+        del historical_bundle["artifacts"]["chatgpt-cloudflare-attestation.json"]
+        historical_bundle["signature"] = base64.b64encode(
+            private_key.sign(signatures.signed_payload(historical_bundle))
+        ).decode()
+        evidence.verify_authoritative_observer_rows(
+            historical_without_chatgpt, historical_bundle,
+            repository="owner/repository", public_key=public_key,
+            key_id="observer-v1",
+        )
+
+        current_missing_chatgpt_observer = json.loads(json.dumps(launch))
+        current_missing_chatgpt_observer["schema_version"] = 5
+        with self.assertRaisesRegex(ValueError, "artifact set"):
+            evidence.verify_authoritative_observer_rows(
+                current_missing_chatgpt_observer, historical_bundle,
+                repository="owner/repository", public_key=public_key,
+                key_id="observer-v1",
+            )
         delayed = {**bundle, "signed_at": (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat()}
         delayed["signature"] = base64.b64encode(private_key.sign(signatures.signed_payload(delayed))).decode()
         with self.assertRaisesRegex(ValueError, "stale"):

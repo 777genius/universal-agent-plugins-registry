@@ -198,12 +198,15 @@ def verify_authoritative_observer_rows(
     launch: dict[str, Any], observer: dict[str, Any], *, repository: str,
     public_key: str, key_id: str, enforce_freshness: bool = True,
 ) -> None:
+    rows = selected_rows(launch)
+    require_chatgpt = any(row["client"] == "chatgpt" for row in rows)
     artifacts = verify_observer_bundle(
         observer, challenge=launch["run"]["challenge"],
         public_key_base64=public_key, expected_key_id=key_id,
         enforce_freshness=enforce_freshness,
+        require_chatgpt=require_chatgpt,
     )
-    validate_observer_artifact_schemas(artifacts)
+    validate_observer_artifact_schemas(artifacts, require_chatgpt=require_chatgpt)
     source: dict[tuple[str, str, str], dict[str, Any]] = {}
     expected_file_pairs = {
         "runtime-attestations.json": {
@@ -212,10 +215,10 @@ def verify_authoritative_observer_rows(
         "notion-oauth-attestations.json": {("notion", client) for client in HERO_CLIENTS},
         "chatgpt-cloudflare-attestation.json": {("cloudflare-docs", "chatgpt")},
     }
-    for name in (
-        "runtime-attestations.json", "notion-oauth-attestations.json",
-        "chatgpt-cloudflare-attestation.json",
-    ):
+    artifact_names = ["runtime-attestations.json", "notion-oauth-attestations.json"]
+    if require_chatgpt:
+        artifact_names.append("chatgpt-cloudflare-attestation.json")
+    for name in artifact_names:
         artifact = artifacts.get(name)
         if not isinstance(artifact, dict) or artifact.get("schema_version") != 1:
             fail(f"signed observer artifact is invalid: {name}")
@@ -250,7 +253,6 @@ def verify_authoritative_observer_rows(
             ):
                 fail(f"signed observer row is not bound to the protected OIDC job: {key}")
             source[key] = record
-    rows = selected_rows(launch)
     expected = {(row["plugin"], row["client"], row["level"]): row for row in rows}
     if set(source) != set(expected):
         fail("signed observer and canonical launch rows differ")
@@ -280,7 +282,9 @@ def verify_authoritative_observer_rows(
             fail(f"canonical launch row differs from signed observer row ({', '.join(mismatches)}): {key}")
 
 
-def validate_observer_artifact_schemas(artifacts: dict[str, Any]) -> None:
+def validate_observer_artifact_schemas(
+    artifacts: dict[str, Any], *, require_chatgpt: bool = True,
+) -> None:
     """Apply the reviewed observer schemas inside the minimal attester."""
     try:
         import jsonschema
@@ -300,12 +304,16 @@ def validate_observer_artifact_schemas(artifacts: dict[str, Any]) -> None:
     consent_schema["allOf"][0]["then"]["properties"]["no_real_project_proof"] = {"required": ["enforcement"]}
     schemas["consent.schema.json"] = consent_schema
     store = {base + name: value for name, value in schemas.items()}
-    for name, schema_name in (
+    artifact_schemas = [
         ("runtime-attestations.json", "runtime-attestations.schema.json"),
         ("notion-oauth-attestations.json", "runtime-attestations.schema.json"),
-        ("chatgpt-cloudflare-attestation.json", "runtime-attestations.schema.json"),
         ("consent.json", "consent.schema.json"),
-    ):
+    ]
+    if require_chatgpt:
+        artifact_schemas.insert(
+            2, ("chatgpt-cloudflare-attestation.json", "runtime-attestations.schema.json"),
+        )
+    for name, schema_name in artifact_schemas:
         schema = schemas[schema_name]
         resolver = jsonschema.RefResolver(base + schema_name, schema, store=store)
         validator = jsonschema.Draft202012Validator(
