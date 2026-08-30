@@ -5019,6 +5019,7 @@ else: raise SystemExit(2)
         release = distribution["releases"][0]
         context = {
             "github_sha": "a" * 40,
+            "expected_version": e2e.CURRENT_LAUNCH_VERSION,
             "directory_product": snapshot["products"][0],
             "directory_distribution": distribution,
             "release": {
@@ -5039,6 +5040,10 @@ else: raise SystemExit(2)
         self.assertNotEqual(trust, json.loads(e2e.PRODUCTION_DIRECTORY_TRUST.read_text()))
         self.assertEqual([item["sequence"] for item in generated["distributions"][0]["releases"]], [1, 2])
         self.assertEqual([item["package_version"] for item in generated["distributions"][0]["releases"]], ["9.0.0", "1.0.0"])
+        self.assertEqual(
+            [item["minimum_installer_version"] for item in generated["distributions"][0]["release_policies"]],
+            [e2e.CURRENT_LAUNCH_VERSION, e2e.CURRENT_LAUNCH_VERSION],
+        )
 
     def test_fixture_contracts_cover_required_fault_slots(self) -> None:
         config = json.loads(e2e.SCENARIOS.read_text())
