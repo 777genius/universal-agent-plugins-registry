@@ -13,7 +13,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,13 +69,20 @@ def require_directory_ledger_sha(value: str, *, uap_sha: str) -> str:
     return value
 
 
-def validate_launch_schema(value: dict[str, Any], *, historical: bool = False) -> None:
-    """Route launch evidence to its frozen schema; unknown versions fail closed."""
+LaunchEvidencePurpose = Literal["current", "historical"]
+
+
+def validate_launch_schema(
+    value: dict[str, Any], *, purpose: LaunchEvidencePurpose = "current",
+) -> None:
+    """Route launch evidence by caller purpose; artifact bytes cannot downgrade it."""
+    if purpose not in {"current", "historical"}:
+        raise TwoLaneEvidenceError("unknown launch evidence validation purpose")
     version = value.get("schema_version")
-    if type(version) is not int or version not in {3, 4}:
+    if type(version) is not int or version not in {3, 4, 5}:
         raise TwoLaneEvidenceError("unknown launch evidence schema_version")
-    if version == 3 and not historical:
-        raise TwoLaneEvidenceError("launch evidence v3 is historical replay only")
+    if purpose == "current" and version != 5:
+        raise TwoLaneEvidenceError("current launch evidence requires schema_version 5")
     try:
         import jsonschema
         schema = json.loads((ROOT / f"tests/e2e/schemas/launch-evidence-v{version}.schema.json").read_text())
