@@ -52,19 +52,43 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
         }
 
     def batch(self, *, dry_run: bool) -> dict:
+        data = {
+            "status": "planned" if dry_run else "completed",
+            "succeeded": 5,
+            "failed": 0,
+            "dry_run": dry_run,
+            "revision": "c" * 40,
+            "tree_digest": "sha256:" + "a" * 64,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "targets": [self.target(client, dry_run=dry_run) for client in runner.CLIENTS],
+        }
+        if not dry_run:
+            acquisition_id = "acq-" + "d" * 32
+            closure_digest = "sha256:" + "e" * 64
+            data["acquisition"] = {
+                "acquisition_id": acquisition_id,
+                "acquisition_count": 1,
+                "tree_digest": "sha256:" + "a" * 64,
+                "manifest_digest": "sha256:" + "b" * 64,
+                "closure_digest": closure_digest,
+                "source_kind": "github",
+                "fetched": True,
+                "validated": True,
+            }
+            data["target_outcomes"] = {
+                client: {
+                    "outcome": "passed",
+                    "acquisition_id": acquisition_id,
+                    "tree_digest": "sha256:" + "a" * 64,
+                    "manifest_digest": "sha256:" + "b" * 64,
+                    "closure_digest": closure_digest,
+                }
+                for client in runner.CLIENTS
+            }
         return {
             "command": "add",
             "result": "success",
-            "data": {
-                "status": "planned" if dry_run else "completed",
-                "succeeded": 5,
-                "failed": 0,
-                "dry_run": dry_run,
-                "revision": "c" * 40,
-                "tree_digest": "sha256:" + "a" * 64,
-                "manifest_digest": "sha256:" + "b" * 64,
-                "targets": [self.target(client, dry_run=dry_run) for client in runner.CLIENTS],
-            },
+            "data": data,
         }
 
     def test_dry_run_and_add_require_one_shared_five_target_identity(self) -> None:
@@ -80,6 +104,30 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
         split["data"]["targets"][3]["output"]["result"]["plan"]["physical_artifact_id"] = "chrome-devtools-deadbeefcafe"
         with self.assertRaises(runner.EvidenceError):
             runner.validate_dry_run(split, "c" * 40)
+
+    def test_dry_run_rejects_a_false_completed_acquisition_proof(self) -> None:
+        dry_run = self.batch(dry_run=True)
+        dry_run["data"]["acquisition"] = {"acquisition_count": 1}
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_dry_run(dry_run, "c" * 40)
+
+    def test_add_rejects_more_than_one_acquisition(self) -> None:
+        dry_run = self.batch(dry_run=True)
+        identity = runner.validate_dry_run(dry_run, "c" * 40)
+        add = self.batch(dry_run=False)
+        add["data"]["acquisition"]["acquisition_count"] = 5
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_add(add, "c" * 40, identity)
+
+    def test_add_rejects_split_target_acquisition_ids(self) -> None:
+        dry_run = self.batch(dry_run=True)
+        identity = runner.validate_dry_run(dry_run, "c" * 40)
+        add = self.batch(dry_run=False)
+        add["data"]["target_outcomes"]["windsurf"]["acquisition_id"] = (
+            "acq-" + "f" * 32
+        )
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_add(add, "c" * 40, identity)
 
     def test_timestamp_order_rejects_repinning_evidence_before_the_commit(self) -> None:
         source = {

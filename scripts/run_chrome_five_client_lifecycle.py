@@ -329,6 +329,8 @@ def validate_dry_run(value: dict[str, Any], revision: str) -> dict[str, str]:
     data, targets = validate_batch(value, command="add", expected_status="planned")
     if data.get("dry_run") is not True or data.get("revision") != revision:
         raise EvidenceError("dry-run is not bound to the expected immutable revision")
+    if "acquisition" in data or "target_outcomes" in data:
+        raise EvidenceError("dry-run exposed a completed acquisition proof")
     shared: dict[str, set[str]] = {
         "tree_digest": set(),
         "manifest_digest": set(),
@@ -367,6 +369,63 @@ def validate_dry_run(value: dict[str, Any], revision: str) -> dict[str, str]:
     return identity
 
 
+def validate_completed_acquisition(
+    data: dict[str, Any], identity: dict[str, str]
+) -> None:
+    acquisition = data.get("acquisition")
+    expected_fields = {
+        "acquisition_id",
+        "acquisition_count",
+        "tree_digest",
+        "manifest_digest",
+        "closure_digest",
+        "source_kind",
+        "fetched",
+        "validated",
+    }
+    if not isinstance(acquisition, dict) or set(acquisition) != expected_fields:
+        raise EvidenceError("add acquisition proof is missing or malformed")
+    acquisition_id = acquisition.get("acquisition_id")
+    closure_digest = acquisition.get("closure_digest")
+    if (
+        not isinstance(acquisition_id, str)
+        or re.fullmatch(r"acq-[0-9a-f]{32}", acquisition_id) is None
+        or acquisition.get("acquisition_count") != 1
+        or acquisition.get("tree_digest") != identity["tree_digest"]
+        or acquisition.get("manifest_digest") != identity["manifest_digest"]
+        or not isinstance(closure_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", closure_digest) is None
+        or acquisition.get("source_kind") != "github"
+        or acquisition.get("fetched") is not True
+        or acquisition.get("validated") is not True
+    ):
+        raise EvidenceError("add acquisition proof does not prove one validated fetch")
+
+    outcomes = data.get("target_outcomes")
+    if not isinstance(outcomes, dict) or set(outcomes) != set(CLIENTS):
+        raise EvidenceError("add acquisition outcomes are not the exact five targets")
+    expected_outcome_fields = {
+        "outcome",
+        "acquisition_id",
+        "tree_digest",
+        "manifest_digest",
+        "closure_digest",
+    }
+    for client, outcome in outcomes.items():
+        if not isinstance(outcome, dict) or set(outcome) != expected_outcome_fields:
+            raise EvidenceError(f"add acquisition outcome for {client} is malformed")
+        if (
+            outcome.get("outcome") != "passed"
+            or outcome.get("acquisition_id") != acquisition_id
+            or outcome.get("tree_digest") != acquisition["tree_digest"]
+            or outcome.get("manifest_digest") != acquisition["manifest_digest"]
+            or outcome.get("closure_digest") != closure_digest
+        ):
+            raise EvidenceError(
+                f"add acquisition outcome for {client} is not bound to the shared fetch"
+            )
+
+
 def validate_add(value: dict[str, Any], revision: str, identity: dict[str, str]) -> str:
     data, targets = validate_batch(value, command="add", expected_status="completed")
     if data.get("revision") != revision:
@@ -374,6 +433,7 @@ def validate_add(value: dict[str, Any], revision: str, identity: dict[str, str])
     for field in ("tree_digest", "manifest_digest"):
         if data.get(field) != identity[field]:
             raise EvidenceError(f"add {field} changed after dry-run")
+    validate_completed_acquisition(data, identity)
     artifact_ids: set[str] = set()
     for client, item in targets.items():
         if item.get("status") != "external_completed":
