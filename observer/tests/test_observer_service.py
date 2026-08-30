@@ -4356,6 +4356,78 @@ class FixedAdapterContractTests(unittest.TestCase):
                 fixed_adapters.verified_git(item, owner_uid=1234)
             verify.assert_not_called()
 
+    def test_executable_size_bound_allows_only_reviewed_kiro_companion_size(self) -> None:
+        payload = b"reviewed"
+        expected_digest = fixed_adapters.KIRO_CHAT_SHA256
+
+        def verify(size: int, *, max_size: int | None = None) -> None:
+            info = mock.Mock(
+                st_mode=stat.S_IFREG | 0o755, st_uid=1234, st_nlink=1, st_size=size,
+            )
+            digest = mock.Mock()
+            digest.hexdigest.return_value = expected_digest.removeprefix("sha256:")
+            with (
+                mock.patch.object(fixed_adapters, "open_directory", return_value=10),
+                mock.patch.object(fixed_adapters.os, "open", return_value=11),
+                mock.patch.object(fixed_adapters.os, "fstat", return_value=info),
+                mock.patch.object(fixed_adapters.os, "read", side_effect=[payload, b""]),
+                mock.patch.object(fixed_adapters.os, "close"),
+                mock.patch.object(fixed_adapters.hashlib, "sha256", return_value=digest),
+            ):
+                kwargs = {} if max_size is None else {"max_size": max_size}
+                fixed_adapters.verify_executable_file(
+                    fixed_adapters.KIRO_CHAT_BINARY,
+                    expected_digest, owner_uid=1234, **kwargs,
+                )
+
+        verify(978_872_504, max_size=fixed_adapters.MAX_KIRO_COMPANION_FILE)
+        with self.assertRaisesRegex(ValueError, "fixed executable is not trusted"):
+            verify(fixed_adapters.MAX_KIRO_COMPANION_FILE + 1, max_size=fixed_adapters.MAX_KIRO_COMPANION_FILE)
+        with self.assertRaisesRegex(ValueError, "fixed executable is not trusted"):
+            verify(fixed_adapters.MAX_EXECUTABLE_FILE + 1)
+        with mock.patch.object(fixed_adapters, "open_directory") as open_directory:
+            with self.assertRaisesRegex(ValueError, "size bound is invalid"):
+                fixed_adapters.verify_executable_file(
+                    Path("/opt/uap-observer-inputs/bin/codex"),
+                    fixed_adapters.KIRO_CHAT_SHA256, owner_uid=1234,
+                    max_size=fixed_adapters.MAX_KIRO_COMPANION_FILE,
+                )
+            open_directory.assert_not_called()
+
+    def test_only_exact_digest_pinned_kiro_companion_receives_larger_bound(self) -> None:
+        item = {
+            "binary": "/opt/uap-observer-inputs/bin/kiro",
+            "sha256": fixed_adapters.KIRO_CLI_SHA256,
+            "profile": "/var/lib/uap-observer/profiles/kiro",
+            "client_id": "kiro",
+            "native_projection": {},
+            "companion_binary": str(fixed_adapters.KIRO_CHAT_BINARY),
+            "companion_sha256": fixed_adapters.KIRO_CHAT_SHA256,
+        }
+        with (
+            mock.patch.object(fixed_adapters, "verify_executable_file") as verify,
+            mock.patch.object(fixed_adapters, "verify_root_readonly_directory", return_value=10),
+            mock.patch.object(fixed_adapters.os, "close"),
+        ):
+            self.assertEqual(
+                fixed_adapters.verified_executable(item, owner_uid=1234),
+                Path(item["binary"]),
+            )
+            self.assertEqual(verify.call_args_list, [
+                mock.call(Path(item["binary"]), fixed_adapters.KIRO_CLI_SHA256, owner_uid=1234),
+                mock.call(
+                    Path(item["companion_binary"]), fixed_adapters.KIRO_CHAT_SHA256,
+                    owner_uid=1234, max_size=fixed_adapters.MAX_KIRO_COMPANION_FILE,
+                ),
+            ])
+
+        with mock.patch.object(fixed_adapters, "verify_executable_file") as verify:
+            with self.assertRaisesRegex(ValueError, "Kiro executable digest contract differs"):
+                fixed_adapters.verified_executable(
+                    {**item, "companion_sha256": "sha256:" + "0" * 64}, owner_uid=1234,
+                )
+            verify.assert_not_called()
+
     def test_fixed_node_runtime_requires_the_verified_cursor_bundle(self) -> None:
         bundle = {
             "root": "/opt/uap-observer-inputs/cursor",
@@ -4908,6 +4980,43 @@ class FixedAdapterContractTests(unittest.TestCase):
             opener = mock.Mock(); opener.open.return_value = Response(body)
             with self.subTest(valid=body), mock.patch.object(fixed_adapters.urllib.request, "build_opener", return_value=opener):
                 self.assertEqual(fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 1, "tools/list", {})[0], {"tools": []})
+
+    def test_public_mcp_requests_use_deterministic_user_agent(self) -> None:
+        class Response:
+            status = 200
+            headers = {"Mcp-Session-Id": "session"}
+            def __init__(self, body: bytes) -> None: self.body = body
+            def geturl(self) -> str: return fixed_adapters.MCP_ENDPOINT
+            def read(self, _limit: int) -> bytes: return self.body
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+
+        requests = []
+        def open_request(request, timeout):
+            self.assertEqual(timeout, 15)
+            requests.append(request)
+            payload = json.loads(request.data)
+            body = b"" if "id" not in payload else fixed_adapters.canonical_json({
+                "jsonrpc": "2.0", "id": payload["id"], "result": {},
+            })
+            return Response(body)
+
+        opener = mock.Mock()
+        opener.open.side_effect = open_request
+        with mock.patch.object(fixed_adapters.urllib.request, "build_opener", return_value=opener):
+            fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 1, "initialize", {})
+            fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 2, "tools/list", {}, "session")
+            fixed_adapters.mcp_call(fixed_adapters.MCP_ENDPOINT, 3, "tools/call", {}, "session")
+            fixed_adapters.mcp_initialized(fixed_adapters.MCP_ENDPOINT, "session")
+
+        self.assertEqual(
+            [json.loads(request.data)["method"] for request in requests],
+            ["initialize", "tools/list", "tools/call", "notifications/initialized"],
+        )
+        self.assertEqual(
+            [request.get_header("User-agent") for request in requests],
+            [fixed_adapters.MCP_USER_AGENT] * 4,
+        )
 
     def test_initialized_notification_accepts_only_empty_acknowledgement(self) -> None:
         class Response:

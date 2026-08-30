@@ -44,6 +44,7 @@ CONFIG_PATH = Path("/opt/uap-observer-current/etc/uap-observer-adapter-config.js
 CONSENT_DIRECTORY = Path("/var/lib/uap-observer-consent/pending")
 GIT_BINARY = Path("/opt/uap-observer-inputs/bin/git")
 CODEX_CODE_MODE_HOST = Path("/opt/uap-observer-inputs/bin/codex-code-mode-host")
+KIRO_CHAT_BINARY = Path("/opt/uap-observer-inputs/bin/kiro-cli-chat")
 NODE_BINARY = Path("/opt/uap-observer-inputs/cursor/node")
 CURSOR_RUNTIME_MEMBERS = frozenset({
     Path("/opt/uap-observer-inputs/cursor/cursor-agent"),
@@ -75,7 +76,7 @@ FIXED_INPUT_PATHS = {
     str(CHROME_MANIFEST),
     str(CHROME_BINARY),
     "/opt/uap-observer-inputs/bin/kiro",
-    "/opt/uap-observer-inputs/bin/kiro-cli-chat",
+    str(KIRO_CHAT_BINARY),
     "/opt/uap-observer-inputs/chatgpt/app-binding.json",
     "/opt/uap-observer-inputs/chatgpt/projection-receipt.json",
     "/opt/uap-observer-inputs/external-pr-evidence.json",
@@ -130,6 +131,8 @@ PRIVACY_RESULT = {
 }
 MAX_FILE = 4 << 20
 MAX_STDOUT = 1 << 20
+MAX_EXECUTABLE_FILE = 512 << 20
+MAX_KIRO_COMPANION_FILE = 1 << 30
 MAX_SSE_RECORDS = 64
 MAX_SSE_LINE = 256 << 10
 JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
@@ -138,6 +141,7 @@ COMMAND_SECONDS = 45
 HUMAN_WAIT_SECONDS = 300
 FIXED_HTTPS_PROXY = "http://127.0.0.2:8766"
 MCP_ENDPOINT = "https://docs.mcp.cloudflare.com/mcp"
+MCP_USER_AGENT = "universal-agent-plugins-observer/0.1"
 MCP_MARKER = "cloudflare-docs-read-only-v1"
 MCP_READ_TOOL = "search_cloudflare_documentation"
 MCP_READ_ARGUMENTS = {"query": "Cloudflare Durable Objects SQLite storage API marker cloudflare-docs-read-only-v1"}
@@ -421,13 +425,21 @@ def load_json(path: Path, digest: str, *, owner_uid: int, mode: int | None = Non
     return value
 
 
-def verify_executable_file(path: Path, expected_digest: str, *, owner_uid: int) -> None:
+def verify_executable_file(path: Path, expected_digest: str, *, owner_uid: int, max_size: int = MAX_EXECUTABLE_FILE) -> None:
+    if type(max_size) is not int or not 0 < max_size <= MAX_KIRO_COMPANION_FILE:
+        raise ValueError("fixed executable size bound is invalid")
+    if max_size > MAX_EXECUTABLE_FILE and (
+        max_size != MAX_KIRO_COMPANION_FILE
+        or path != KIRO_CHAT_BINARY
+        or expected_digest != KIRO_CHAT_SHA256
+    ):
+        raise ValueError("fixed executable size bound is invalid")
     parent_fd = open_directory(path.parent, allowed_owners={owner_uid})
     descriptor = -1
     try:
         descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_mode & 0o022 or info.st_nlink != 1 or not info.st_mode & stat.S_IXUSR or info.st_size > 512 << 20:
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_mode & 0o022 or info.st_nlink != 1 or not info.st_mode & stat.S_IXUSR or info.st_size > max_size:
             raise ValueError("fixed executable is not trusted")
         digest = hashlib.sha256()
         while chunk := os.read(descriptor, 1 << 20):
@@ -489,7 +501,7 @@ def validate_config(value: dict[str, Any]) -> None:
     kiro = value["clients"]["kiro"]
     if (
         kiro.get("sha256") != KIRO_CLI_SHA256
-        or kiro.get("companion_binary") != "/opt/uap-observer-inputs/bin/kiro-cli-chat"
+        or kiro.get("companion_binary") != str(KIRO_CHAT_BINARY)
         or kiro.get("companion_sha256") != KIRO_CHAT_SHA256
     ):
         raise ValueError("Kiro ACP executables differ from the captured 2.20.0 closure")
@@ -737,6 +749,10 @@ def verified_executable(item: dict[str, Any], owner_uid: int) -> Path:
         expected |= {"companion_binary", "companion_sha256"}
     if not isinstance(item, dict) or set(item) != expected:
         raise ValueError("fixed client config is invalid")
+    if item["client_id"] == "kiro" and (
+        item["sha256"] != KIRO_CLI_SHA256 or item["companion_sha256"] != KIRO_CHAT_SHA256
+    ):
+        raise ValueError("Kiro executable digest contract differs")
     binary = Path(item["binary"])
     if item["client_id"] == "cursor":
         bundle = item["bundle"]
@@ -764,14 +780,17 @@ def verified_executable(item: dict[str, Any], owner_uid: int) -> Path:
         expected_companion = (
             CODEX_CODE_MODE_HOST
             if item["client_id"] == "codex"
-            else Path("/opt/uap-observer-inputs/bin/kiro-cli-chat")
+            else KIRO_CHAT_BINARY
         )
         if companion != expected_companion:
             raise ValueError(f"{item['client_id']} companion executable path differs")
-        verify_executable_file(companion, item["companion_sha256"], owner_uid=owner_uid)
-    if item["client_id"] == "kiro":
-        if item["sha256"] != KIRO_CLI_SHA256 or item["companion_sha256"] != KIRO_CHAT_SHA256:
-            raise ValueError("Kiro executable digest contract differs")
+        if item["client_id"] == "kiro":
+            verify_executable_file(
+                companion, item["companion_sha256"], owner_uid=owner_uid,
+                max_size=MAX_KIRO_COMPANION_FILE,
+            )
+        else:
+            verify_executable_file(companion, item["companion_sha256"], owner_uid=owner_uid)
     return binary
 
 
@@ -3546,7 +3565,7 @@ def mcp_call(endpoint: str, request_id: int, method: str, params: dict[str, Any]
     if type(request_id) is not int:
         raise ValueError("Cloudflare MCP request id has an unsupported type")
     payload = canonical_json({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18"}
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18", "User-Agent": MCP_USER_AGENT}
     if session:
         headers["Mcp-Session-Id"] = session
     request = urllib.request.Request(endpoint, data=payload, headers=headers, method="POST")
@@ -3568,7 +3587,7 @@ def mcp_initialized(endpoint: str, session: str) -> None:
     payload = canonical_json({"jsonrpc": "2.0", "method": "notifications/initialized"})
     request = urllib.request.Request(
         endpoint, data=payload, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18", "Mcp-Session-Id": session},
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18", "Mcp-Session-Id": session, "User-Agent": MCP_USER_AGENT},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": FIXED_HTTPS_PROXY}), NoRedirect())
     with opener.open(request, timeout=15) as response:
