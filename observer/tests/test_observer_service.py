@@ -68,6 +68,26 @@ def sealed_tuple(product: str) -> dict[str, Any]:
     }
 
 
+def chatgpt_projection_receipt(
+    app_id: str, release_tuple: dict[str, Any],
+    *, binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    binding = binding or {"apps": {"cloudflare-docs": {"id": app_id}}}
+    digest = "sha256:" + "d" * 64
+    return {
+        "application_id": app_id,
+        "product_id": "cloudflare-docs",
+        "projection": {
+            "app_json_digest": fixed_adapters.sha256(fixed_adapters.canonical_json(binding)),
+            "codex_manifest_digest": digest,
+            "managed_digest": digest,
+            "mcp_json_digest": digest,
+            "mcp_url": fixed_adapters.MCP_ENDPOINT,
+        },
+        "tuple": release_tuple,
+    }
+
+
 def native_fixture_relative(plugin: str) -> Path:
     return (
         Path("skills/code-tool-router/SKILL.md")
@@ -3747,20 +3767,17 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
                 "observed_at": "2026-08-29T00:03:12Z",
                 "client_version": None,
             }
+            binding = {"apps": {"cloudflare-docs": {"id": app_id}}}
             files = {
                 protected / "bin/git": b"git",
                 protected / "bin/codex": b"codex",
                 protected / "bin/codex-code-mode-host": b"codex-host",
                 protected / "bin/kiro": b"kiro",
                 protected / "bin/kiro-cli-chat": b"kiro-chat",
-                protected / "chatgpt/app-binding.json": json.dumps({
-                    "apps": {"cloudflare-docs": {"id": app_id}},
-                }).encode(),
-                protected / "chatgpt/projection-receipt.json": json.dumps({
-                    "application_id": app_id,
-                    "product_id": "cloudflare-docs",
-                    "tuple": chat_tuple,
-                }).encode(),
+                protected / "chatgpt/app-binding.json": fixed_runner.canonical_json(binding),
+                protected / "chatgpt/projection-receipt.json": fixed_runner.canonical_json(
+                    chatgpt_projection_receipt(app_id, chat_tuple, binding=binding)
+                ),
                 protected / "external-pr-evidence.json": b"evidence",
                 protected / "cursor/cursor-agent": b"cursor",
                 protected / "cursor/index.js": b"index",
@@ -3827,6 +3844,7 @@ recover_observer_install "$2" "$3" "$4" "$5" /bin/true cleanup_fixture
                     "app_binding_path": str(protected / "chatgpt/app-binding.json"),
                     "app_binding_sha256": digest(protected / "chatgpt/app-binding.json"),
                     "app_id": app_id,
+                    "mcp_endpoint": fixed_adapters.MCP_ENDPOINT,
                     "tuple": chat_tuple,
                     "projection_receipt_path": str(protected / "chatgpt/projection-receipt.json"),
                     "projection_receipt_sha256": digest(protected / "chatgpt/projection-receipt.json"),
@@ -4748,7 +4766,9 @@ class FixedAdapterContractTests(unittest.TestCase):
 
             chat_tuple = release_tuple("cloudflare-docs")
             binding = {"apps": {"cloudflare-docs": {"id": "plugin_asdk_app_" + "c" * 32}}}
-            receipt = {"product_id": "cloudflare-docs", "application_id": "plugin_asdk_app_" + "c" * 32, "tuple": chat_tuple}
+            receipt = chatgpt_projection_receipt(
+                "plugin_asdk_app_" + "c" * 32, chat_tuple, binding=binding,
+            )
             fixed_adapters.regular_snapshot = lambda path, *args, **kwargs: {
                 "body": fixed_adapters.canonical_json(binding if path.name == "app-binding.json" else receipt),
             }
@@ -4795,6 +4815,79 @@ class FixedAdapterContractTests(unittest.TestCase):
         self.assertFalse(fixed_adapters.substantive_mcp_content({"type": "resource", "resource": {}}))
         self.assertFalse(fixed_adapters.substantive_mcp_content({"type": "resource_link"}))
         self.assertTrue(fixed_adapters.substantive_mcp_content({"type": "text", "text": "marker"}))
+
+    def test_chatgpt_projection_receipt_is_exact_and_app_bound(self) -> None:
+        app_id = "plugin_asdk_app_" + "c" * 32
+        release_tuple = sealed_tuple("cloudflare-docs")
+        binding = {"apps": {"cloudflare-docs": {"id": app_id}}}
+        chat = {
+            "app_id": app_id,
+            "mcp_endpoint": fixed_adapters.MCP_ENDPOINT,
+            "tuple": release_tuple,
+        }
+        original = chatgpt_projection_receipt(app_id, release_tuple, binding=binding)
+        validators = (
+            fixed_adapters.validate_chatgpt_projection_receipt,
+            fixed_runner.validate_chatgpt_projection_receipt,
+        )
+        for validator in validators:
+            validator(original, binding, chat)
+        mutations: list[tuple[str, Any]] = [
+            ("unknown root key", lambda value: value.update({"extra": True})),
+            ("missing root key", lambda value: value.pop("product_id")),
+            ("projection is bool", lambda value: value.update({"projection": True})),
+            ("unknown projection key", lambda value: value["projection"].update({"extra": True})),
+            ("missing projection key", lambda value: value["projection"].pop("managed_digest")),
+            ("digest is bool", lambda value: value["projection"].update({"managed_digest": True})),
+            ("digest syntax", lambda value: value["projection"].update({"managed_digest": "sha256:ABC"})),
+            ("wrong scheme", lambda value: value["projection"].update({"mcp_url": "http://docs.mcp.cloudflare.com/mcp"})),
+            ("wrong path", lambda value: value["projection"].update({"mcp_url": fixed_adapters.MCP_ENDPOINT + "/"})),
+            ("query", lambda value: value["projection"].update({"mcp_url": fixed_adapters.MCP_ENDPOINT + "?x=1"})),
+            ("fragment", lambda value: value["projection"].update({"mcp_url": fixed_adapters.MCP_ENDPOINT + "#x"})),
+            ("app digest substitution", lambda value: value["projection"].update({"app_json_digest": "sha256:" + "e" * 64})),
+        ]
+        for label, mutate in mutations:
+            for validator in validators:
+                with self.subTest(label=label, validator=validator.__module__):
+                    value = json.loads(json.dumps(original))
+                    mutate(value)
+                    with self.assertRaisesRegex(ValueError, "projection receipt differs"):
+                        validator(value, binding, chat)
+        substituted_binding = {"apps": {"cloudflare-docs": {"id": "plugin_asdk_app_" + "e" * 32}}}
+        for validator in validators:
+            with self.assertRaisesRegex(ValueError, "projection receipt differs"):
+                validator(original, substituted_binding, chat)
+
+    def test_chatgpt_projection_receipt_fails_before_runtime_effects(self) -> None:
+        app_id = "plugin_asdk_app_" + "c" * 32
+        release_tuple = sealed_tuple("cloudflare-docs")
+        binding = {"apps": {"cloudflare-docs": {"id": app_id}}}
+        receipt = chatgpt_projection_receipt(app_id, release_tuple, binding=binding)
+        receipt["projection"]["mcp_url"] += "?substituted=1"
+        config = {"chatgpt": {
+            "app_binding_path": "/opt/uap-observer-inputs/chatgpt/app-binding.json",
+            "app_binding_sha256": "sha256:" + "a" * 64,
+            "app_id": app_id,
+            "mcp_endpoint": fixed_adapters.MCP_ENDPOINT,
+            "human_attestation_directory": "/fixture",
+            "tuple": release_tuple,
+            "client_version": "chatgpt-web",
+            "projection_receipt_path": "/opt/uap-observer-inputs/chatgpt/projection-receipt.json",
+            "projection_receipt_sha256": "sha256:" + "b" * 64,
+        }}
+        request = Fixture(Path(tempfile.mkdtemp())).request()
+        with (
+            mock.patch.object(fixed_adapters, "regular_snapshot", side_effect=(
+                {"body": fixed_adapters.canonical_json(binding)},
+                {"body": fixed_adapters.canonical_json(receipt)},
+            )),
+            mock.patch.object(fixed_adapters, "mcp_call") as mcp_call,
+            mock.patch.object(fixed_adapters, "wait_human") as wait_human,
+        ):
+            with self.assertRaisesRegex(ValueError, "projection receipt differs"):
+                fixed_adapters.chatgpt_artifact(config, request, {}, {}, os.geteuid())
+            mcp_call.assert_not_called()
+            wait_human.assert_not_called()
 
     def test_human_attestation_requires_exact_types_and_unambiguous_members(self) -> None:
         request = Fixture(Path(tempfile.mkdtemp())).request()
