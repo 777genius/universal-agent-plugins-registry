@@ -164,7 +164,7 @@ def compatibility(
         validate_pinned_runtime_evidence(binding)
         result["chatgpt"] = {
             "package": "projected",
-            "verification": "tested",
+            "verification": "not_tested",
             "authentication": "not_required",
             "app_binding": {
                 "app_key": binding["app_key"],
@@ -247,41 +247,31 @@ def validate_chatgpt_catalog_evidence(catalog: dict[str, object]) -> None:
             evidence_bytes = git_blob_at_revision(
                 ROOT, evidence_revision, binding["runtime_evidence"]
             )
-            historical_catalog_bytes = git_blob_at_revision(
-                ROOT, evidence_revision, "catalog/v1/catalog.json"
-            )
             evidence = json.loads(evidence_bytes)
-            historical_catalog = json.loads(historical_catalog_bytes)
         except (ValueError, json.JSONDecodeError) as error:
             raise ValueError(
                 f"{plugin['name']}: pinned ChatGPT evidence is unavailable or invalid"
             ) from error
-        expected_identity = {
-            "revision": historical_catalog.get("revision"),
-            "digest": sha256(historical_catalog_bytes),
-        }
-        source_revision = expected_identity["revision"]
-        current_revision = catalog["revision"]
-        if evidence.get("catalog") != expected_identity:
+        if evidence.get("catalog") is not None:
             raise ValueError(
-                f"{plugin['name']}: pinned ChatGPT evidence does not match its historical catalog"
+                f"{plugin['name']}: ChatGPT UI evidence must not claim repository catalog origin"
             )
-        try:
-            validate_revision(str(source_revision))
-            validate_revision(str(current_revision))
-        except ValueError as error:
+        if evidence.get("binding") != {
+            "plugin": plugin["name"],
+            "app_id": binding["id"],
+            "mcp_url": binding["mcp_url"],
+        }:
             raise ValueError(
-                f"{plugin['name']}: invalid ChatGPT evidence catalog revision"
-            ) from error
-        comparison = subprocess.run(
-            ["git", "diff", "--quiet", source_revision, current_revision, "--", "plugins"],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-        )
-        if comparison.returncode != 0:
+                f"{plugin['name']}: ChatGPT catalog binding does not match pinned evidence"
+            )
+        runtime = evidence.get("runtime")
+        if not isinstance(runtime, dict) or runtime.get("mcp_runtime_outcome") != "inconclusive":
             raise ValueError(
-                f"{plugin['name']}: portable packages differ from the evidence catalog"
+                f"{plugin['name']}: pinned ChatGPT evidence must keep MCP runtime inconclusive"
+            )
+        if chatgpt.get("verification") != "not_tested":
+            raise ValueError(
+                f"{plugin['name']}: inconclusive ChatGPT runtime evidence cannot be tested"
             )
 
 

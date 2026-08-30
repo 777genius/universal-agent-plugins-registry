@@ -95,12 +95,12 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
         self.assertIn(equivalence["catalog_digest"], historical_digests)
         self.assertEqual(equivalence["allowed_delta"], "plugins/*/README.md")
 
-        evidence_revisions = {
-            check.get("source_commit", evidence["source"]["commit_sha"])
-            for check in evidence["checks"]
-            if check["status"] == "passed"
-        }
-        for revision in evidence_revisions:
+        client_ids = {"Codex CLI": "codex", "Cursor Agent": "cursor", "Kiro CLI": "kiro"}
+        evidenced: set[tuple[str, str]] = set()
+        for check in evidence["checks"]:
+            if check["status"] != "passed" or check["client"] not in client_ids:
+                continue
+            revision = check.get("source_commit", evidence["source"]["commit_sha"])
             ancestor = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", revision, current["revision"]],
                 cwd=ROOT,
@@ -115,23 +115,14 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
                     revision,
                     current["revision"],
                     "--",
-                    "plugins",
+                    f"plugins/{check['plugin']}",
                     ":(glob,exclude)plugins/*/README.md",
                 ],
                 cwd=ROOT,
                 check=False,
             )
-            self.assertEqual(
-                comparison.returncode,
-                0,
-                "runtime-bearing package files differ from the tested evidence commit",
-            )
-        client_ids = {"Codex CLI": "codex", "Cursor Agent": "cursor", "Kiro CLI": "kiro"}
-        evidenced = {
-            (check["plugin"], client_ids[check["client"]])
-            for check in evidence["checks"]
-            if check["status"] == "passed" and check["client"] in client_ids
-        }
+            if comparison.returncode == 0:
+                evidenced.add((check["plugin"], client_ids[check["client"]]))
         chatgpt_evidence = json.loads(
             (
                 ROOT
@@ -286,13 +277,30 @@ class AgentpluginsCatalogBuilderTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotEqual(list(validator.iter_errors(document)), [])
 
-    def test_chatgpt_runtime_evidence_must_match_catalog_identity(self) -> None:
-        catalog = json.loads((ROOT / "catalog" / "v2" / "catalog.json").read_text())
+    def test_current_chatgpt_evidence_does_not_claim_catalog_or_runtime_pass(self) -> None:
+        catalog = builder.build(
+            "b89b8ffc3ccd2d8e0987ec9f105f4001cc08b834",
+            "2026-08-30T11:06:27Z",
+            2,
+        )
         builder.validate_chatgpt_catalog_evidence(catalog)
-        drifted = copy.deepcopy(catalog)
-        drifted["revision"] = "0" * 40
-        with self.assertRaisesRegex(ValueError, "portable packages differ"):
-            builder.validate_chatgpt_catalog_evidence(drifted)
+        promoted = copy.deepcopy(catalog)
+        cloudflare = next(
+            plugin for plugin in promoted["plugins"] if plugin["name"] == "cloudflare-docs"
+        )
+        cloudflare["compatibility"]["chatgpt"]["verification"] = "tested"
+        with self.assertRaisesRegex(ValueError, "cannot be tested"):
+            builder.validate_chatgpt_catalog_evidence(promoted)
+
+        rebound = copy.deepcopy(catalog)
+        rebound_cloudflare = next(
+            plugin for plugin in rebound["plugins"] if plugin["name"] == "cloudflare-docs"
+        )
+        rebound_cloudflare["compatibility"]["chatgpt"]["app_binding"]["id"] = (
+            "plugin_asdk_app_unobserved"
+        )
+        with self.assertRaisesRegex(ValueError, "does not match pinned evidence"):
+            builder.validate_chatgpt_catalog_evidence(rebound)
 
     def test_pinned_runtime_evidence_rejects_missing_or_changed_git_blob(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
