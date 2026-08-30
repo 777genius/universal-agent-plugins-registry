@@ -66,6 +66,38 @@ The external PR record must validate against
 external unmerged PR, and bind its successful head checks to the exact release
 and Directory identity. A local fork simulation is not sufficient.
 
+Never hand-write the ChatGPT app binding or projection receipt. After
+authenticating the immutable agentplugins release as described below, run one
+isolated ChatGPT add against the exact signed Directory feed and retain its add
+JSON, State v4 file, and official projection directory. Generate both observer
+inputs in one create-once directory. The requested app ID must already be the
+ID in the signed ChatGPT policy target; a different personal or development app
+fails closed even when it is visible in the UI.
+
+```sh
+CHATGPT_APP_ID=<exact-signed-plugin_asdk_app-id>
+OBSERVED_AT=<canonical-UTC-seconds-from-the-change-ticket>
+CHATGPT_STATE=/root/chatgpt-evidence/state-v2.json
+CHATGPT_PROJECTION="$(jq -er '
+  [.installations[] | select(.declared_name == "cloudflare-docs") |
+   .clients[] | select(.client_id == "chatgpt") | .target_locator] |
+  if length == 1 then .[0] else error("expected one ChatGPT projection") end
+' "$CHATGPT_STATE")"
+PYTHONPATH="$SOURCE_ROOT/scripts" python3 -B \
+  "$SOURCE_ROOT/scripts/build_chatgpt_observer_projection.py" \
+  --feed /root/approved-directory/registry/schemas/1 \
+  --trusted-keys /root/approved-directory/trusted-keys.json \
+  --now "$OBSERVED_AT" --minimum-sequence 19 \
+  --add-evidence /root/chatgpt-evidence/add.json \
+  --state "$CHATGPT_STATE" --projection-root "$CHATGPT_PROJECTION" \
+  --cli-binary /root/approved-inputs/agentplugins-0.1.18/agentplugins \
+  --installer-version 0.1.18 --product-id cloudflare-docs \
+  --distribution-id 777genius/cloudflare-docs-bridge --release-sequence 1 \
+  --app-key cloudflare-docs --app-id "$CHATGPT_APP_ID" \
+  --observed-at "$OBSERVED_AT" --output /root/generated-chatgpt-inputs
+sha256sum /root/generated-chatgpt-inputs/{app-binding,projection-receipt}.json
+```
+
 Build that exact tree from the approved, digest-recorded input directory. The
 group creation is safe before the idempotent installer creates the remaining
 service identities.
@@ -105,7 +137,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$SOURCE_ROOT" python3 -B \
   /opt/uap-observer-inputs/chrome-for-testing-bundle.json
 for name in app-binding.json projection-receipt.json; do
   install -o root -g uap-observer-adapter-config -m 0640 \
-    "/root/approved-inputs/$name" "/opt/uap-observer-inputs/chatgpt/$name"
+    "/root/generated-chatgpt-inputs/$name" "/opt/uap-observer-inputs/chatgpt/$name"
 done
 install -o root -g uap-observer-adapter-config -m 0640 \
   /root/approved-inputs/external-pr-evidence.json \
