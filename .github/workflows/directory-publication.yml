@@ -17,6 +17,7 @@ on:
       - "tests/e2e/source-policy-*.json"
       - "schemas/e2e/*policy*.schema.json"
       - "schemas/e2e/two-lane-readiness.schema.json"
+      - "schemas/e2e/two-lane-readiness-v2.schema.json"
       - "scripts/prepare_directory_publication.py"
       - "scripts/publication_trust_policy.py"
       - "scripts/sign_directory_publication.py"
@@ -1012,8 +1013,8 @@ jobs:
           done
       - name: Prove compatibility with the exact released CLI
         env:
-          AGENTPLUGINS_COMMIT: 74a3790ee15d92afda8e8e3dd8f903c04811cfc7
-          AGENTPLUGINS_VERSION: 0.1.18
+          AGENTPLUGINS_COMMIT: c78c79e44efd5ad07083d63436d9170b107df6cb
+          AGENTPLUGINS_VERSION: 0.1.24
           EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
           EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
           EXPECTED_LEDGER_HEAD: ${{ needs.materialize_site.outputs.ledger_commit }}
@@ -1028,9 +1029,9 @@ jobs:
           binary="${release_dir}/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
           chmod +x "${binary}"
           cd "${release_dir}"
-          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = 9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = d581ac34d9880afe998f8f871df285b5474623778d2eae98ebc8780a932a9fa8
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 0e8f7316ddef542067bdd7276273fffa3bc00532afed8fd42be12f612aedea57
+          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 623fb73d0e2f59da8b01399842b0d82b8f6456c6e43db2251c0ea5f9e32f37e3
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = eb834da8237b13ed36061aeafb4fbb6f4aadeb5a6fbd4a31d43781f456f3d1e2
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib
@@ -1184,6 +1185,7 @@ jobs:
             --publication-sequence "${EXPECTED_PUBLICATION_SEQUENCE}" \
             --publication-snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}" \
             --publication-source-commit "${EXPECTED_SOURCE_COMMIT}" \
+            --schema-version 2 \
             --completed two-lane-readiness/two-lane-readiness.json
           python3 trusted-source/registry/publication/launch_approval.py \
             --repo approved-ledger \

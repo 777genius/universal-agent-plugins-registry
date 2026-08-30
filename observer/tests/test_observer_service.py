@@ -61,9 +61,10 @@ def sealed_tuple(product: str) -> dict[str, Any]:
         "release_sequence": 1, "package_version": "1.0.0",
         "source_repository": f"owner/{product}", "source_revision": "b" * 40,
         "source_path": f"plugins/{product}", "snapshot_sequence": 1,
-        "snapshot_digest": digest, "binary_digest": digest,
-        "dependency_identity": "locked", "installer_version": "0.1.18",
-        "adapter_version": "r14d", "client_version": None,
+        "snapshot_digest": digest,
+        "binary_digest": "sha256:e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca",
+        "dependency_identity": "locked", "installer_version": "0.1.24",
+        "adapter_version": "0.1.24", "client_version": None,
         "os": "linux", "architecture": "x86_64", "observed_at": "2026-08-26T00:00:00Z",
     }
 
@@ -126,7 +127,7 @@ class Fixture:
             github_api_url="https://api.github.com", audience="stable-launch-observer",
             issuer="https://token.actions.githubusercontent.com", key_id="fixture-ed25519",
             public_key_base64=base64.b64encode(public_bytes).decode(),
-            cli_release_repository="777genius/plugin-kit-ai", cli_release_tag="agentplugins-v0.1.18",
+            cli_release_repository="777genius/plugin-kit-ai", cli_release_tag="agentplugins-v0.1.24",
             signer_socket=root / "sign.sock", runner_socket=root / "runner.sock",
             runner_source_path=runner_source,
             runner_source_digest="sha256:" + hashlib.sha256(runner_source.read_bytes()).hexdigest(),
@@ -153,7 +154,7 @@ class Fixture:
         value = {
             "schema_version": 1, "purpose": "stable-launch-e2e",
             "catalog_repository": self.policy.repository,
-            "cli_release_repository": "777genius/plugin-kit-ai", "cli_release_tag": "agentplugins-v0.1.18",
+            "cli_release_repository": "777genius/plugin-kit-ai", "cli_release_tag": "agentplugins-v0.1.24",
             "release_manifest_digest": release, "release_checksums_digest": "sha256:" + "f" * 64,
             "directory_digest": directory, "scenario_contract_digest": scenario,
             "github": {"sha": sha, "run_id": "1001", "run_attempt": "2"},
@@ -288,7 +289,7 @@ def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
             "catalog_repository": "777genius/universal-agent-plugins", "catalog_sha": "a" * 40,
             "directory_snapshot_digest": "sha256:" + "c" * 64, "directory_sequence": 1,
             "directory_publication_id": "fixture-publication", "directory_source_commit": "4" * 40,
-            "release_repository": "777genius/plugin-kit-ai", "release_tag": "agentplugins-v0.1.18",
+            "release_repository": "777genius/plugin-kit-ai", "release_tag": "agentplugins-v0.1.24",
             "release_commit": "5" * 40, "release_manifest_digest": "sha256:" + "b" * 64,
         },
     }
@@ -7017,11 +7018,11 @@ class FixedAdapterContractTests(unittest.TestCase):
                     "tree_digest": "sha256:" + "a" * 64,
                     "manifest_digest": "sha256:" + "b" * 64,
                     "snapshot_digest": "sha256:" + "d" * 64,
-                    "binary_digest": "sha256:" + "e" * 64,
+                    "binary_digest": "sha256:e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca",
                     "source_repository": f"upstream/{plugin}",
                     "source_revision": "c" * 40, "source_path": f"plugins/{plugin}",
-                    "dependency_identity": "locked", "installer_version": "0.1.18",
-                    "adapter_version": "r14d", "client_version": None,
+                    "dependency_identity": "locked", "installer_version": "0.1.24",
+                    "adapter_version": "0.1.24", "client_version": None,
                     "os": "linux", "architecture": "x86_64",
                     "observed_at": "2026-08-26T00:00:00Z",
                 }
@@ -7065,6 +7066,7 @@ class FixedAdapterContractTests(unittest.TestCase):
                 }))
             doctor = {
                 "schema_version": 1, "command": "doctor", "result": "success", "data": {
+                    "tool_version": "0.1.24",
                     "clients": [{"client_id": "cursor", "detected": True}],
                     "inventory": [{
                         "plugin": row["plugin"],
@@ -7518,10 +7520,14 @@ class FixedAdapterContractTests(unittest.TestCase):
                 "supported_clients": [
                     {"client_id": name, "package_mode": "native"} for name in expected_clients
                 ],
-                "tool_version": "0.1.18",
+                "tool_version": "0.1.24",
             },
         }
         sealer.matching_doctor(doctor, "cursor", {"context7": approved})
+        stale_doctor = json.loads(json.dumps(doctor))
+        stale_doctor["data"]["tool_version"] = "0.1.18"
+        with self.assertRaisesRegex(ValueError, "tool_version is not exactly 0.1.24"):
+            sealer.matching_doctor(stale_doctor, "cursor", {"context7": approved})
         healthy_doctor = json.loads(json.dumps(doctor))
         healthy_doctor["data"]["findings"] = [{
             "status": "healthy", "code": "no_degradation_detected",

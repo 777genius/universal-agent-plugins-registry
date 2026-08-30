@@ -109,6 +109,15 @@ TRUSTED_CLI_RELEASE_TAG = PLUGIN_KIT_TAG
 TRUSTED_CLI_RELEASE_WORKFLOW = "777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml"
 TRUSTED_CLI_RELEASE_COMMIT = PLUGIN_KIT_COMMIT
 TRUSTED_CLI_RELEASE_SOURCE_REF = "refs/heads/main"
+TRUSTED_CLI_RELEASE_ID = 379284682
+TRUSTED_CLI_RELEASE_ASSETS = {
+    "agentplugins_0.1.24_darwin_amd64": {"sha256": "93f7cc8fd9300e23719e63d08af1eb2cc1ed9743bac98de1e59c352623328bf2", "size": 12_299_152},
+    "agentplugins_0.1.24_darwin_arm64": {"sha256": "c9d3dfe4b4b06d70733841d72fd9c8b9070ce066f6fa5dd7260073cf69565972", "size": 11_474_578},
+    "agentplugins_0.1.24_linux_amd64": {"sha256": "e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca", "size": 12_185_784},
+    "agentplugins_0.1.24_linux_arm64": {"sha256": "6768db4cdc3faf41ec31194284ac8c92bc58953737a6164e0fe88cc13aae57a1", "size": 11_337_912},
+    "agentplugins_0.1.24_windows_amd64.exe": {"sha256": "0fc327e31009d5c9dc01b2b8cc091f98dd90012376fedb2b688b3e2293a0507d", "size": 12_459_520},
+    "agentplugins_0.1.24_windows_arm64.exe": {"sha256": "e178f6fc3318fd26056c8bcc073cc4426102063f80974c2b23801d50c749109c", "size": 11_418_112},
+}
 TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:1e7e5ca4d72be2e188bbfa002cf19975b4e1b100913a329bbaf963b5633abb85"
 
 
@@ -556,13 +565,14 @@ def read_production_config() -> dict[str, Any]:
         or value.get("cli_release_repository") != TRUSTED_CLI_RELEASE_REPOSITORY
         or value.get("cli_release_tag") != TRUSTED_CLI_RELEASE_TAG
         or value.get("cli_release_commit") != TRUSTED_CLI_RELEASE_COMMIT
+        or value.get("cli_release_id") != TRUSTED_CLI_RELEASE_ID
+        or value.get("cli_release_assets") != TRUSTED_CLI_RELEASE_ASSETS
         or value.get("cli_release_workflow") != TRUSTED_CLI_RELEASE_WORKFLOW
         or value.get("cli_release_manifest_digest") != RELEASE_MANIFEST_DIGEST
         or value.get("cli_release_checksums_digest") != RELEASE_CHECKSUMS_DIGEST
         or value.get("npm_facade_package") != "universal-agent-plugins"
         or value.get("npm_facade_version") != CURRENT_LAUNCH_VERSION
-        or not isinstance(value.get("npm_facade_integrity"), str)
-        or re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", value["npm_facade_integrity"]) is None
+        or value.get("npm_facade_integrity") != "sha512-hUMKvd2kAjTWA1obzAlXdbE3GxjRk8lhXRA9YuO2h2NINnYv/GQi2JwgkqWhOd95BpEKh5Do8vV1B4B/Unl+jw=="
         or value.get("directory_source_digest") != "sha256:7d2e82322377e8f83a94912113c28287aebaf7ddf68f1908e709adca865aa21b"
         or value.get("scenario_contract_digest") != "sha256:30a5a44dd6a1a32957dcba1a6d96ccb7c64f4fc7ed042a29bec6108f30011c32"
         or value.get("copilot_cli_package") != "@github/copilot"

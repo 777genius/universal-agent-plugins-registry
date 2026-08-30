@@ -478,6 +478,17 @@ class LaunchEvidenceE2ETests(unittest.TestCase):
             "9a294d2d117d6be2042aa28f911999edccf051ccbc3f1c7f0f46920cfd6b5779",
         )
 
+    def test_current_authenticated_linux_binary_pin_matches_immutable_0_1_24_release(self) -> None:
+        self.assertEqual(observer.RELEASED_AGENTPLUGINS_0_1_24_SIZE, 12_185_784)
+        self.assertEqual(
+            observer.RELEASED_AGENTPLUGINS_0_1_24_SHA256,
+            "e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca",
+        )
+        self.assertEqual(
+            observer.released_agentplugins_identity("0.1.24"),
+            (12_185_784, "e79125f7ffabd11c6e211d6b049c2eb2b36eb1aba3a76ce27cac819aeba1e6ca"),
+        )
+
     def test_windows_release_preparation_import_does_not_load_linux_libc(self) -> None:
         program = r"""
 import ctypes
