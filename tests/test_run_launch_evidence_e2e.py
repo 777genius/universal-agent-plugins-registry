@@ -1810,15 +1810,18 @@ with tempfile.TemporaryDirectory() as temporary:
             "release_id": 123,
             "immutable": True,
         }
-        attestation = {
-            "repository": config["cli_release_repository"],
-            "workflow": config["cli_release_workflow"],
-            "tag": config["cli_release_tag"],
-            "tag_commit": config["cli_release_commit"],
-            "asset_name": selected_name,
-            "asset_digest": binary_digest,
-            "verified": True,
-        }
+        verified_statement = [{"verificationResult": {"statement": {
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "subject": [{"name": selected_name, "digest": {"sha256": binary_digest.removeprefix("sha256:")}}],
+        }}}]
+        with mock.patch.object(
+            e2e.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, json.dumps(verified_statement), ""),
+        ):
+            attestation = e2e.verify_github_asset_attestation(
+                Path(selected_name), config["cli_release_repository"], config["cli_release_workflow"],
+                config["cli_release_tag"], config["cli_release_commit"], binary_digest, selected_name,
+            )
         prepared = {
             "cli_release_tag": config["cli_release_tag"],
             "release_manifest": manifest,
@@ -1846,6 +1849,22 @@ with tempfile.TemporaryDirectory() as temporary:
             self.assertEqual(path.read_bytes(), selected_body)
             self.assertEqual(resolved, manifest)
             self.assertEqual(resolved_identity, identity)
+            for field in attestation:
+                with self.subTest(missing=field):
+                    forged = json.loads(json.dumps(attestation))
+                    del forged[field]
+                    (release_dir / f"{selected_name}.attestation.json").write_text(json.dumps(forged))
+                    with self.assertRaisesRegex(ValueError, "attestation differs"):
+                        e2e.validate_prepared_github_release(root, {**prepared, "github_asset_attestation": forged}, selected_name)
+            forged = {**attestation, "unexpected": "unreviewed provenance"}
+            (release_dir / f"{selected_name}.attestation.json").write_text(json.dumps(forged))
+            with self.assertRaisesRegex(ValueError, "attestation differs"):
+                e2e.validate_prepared_github_release(root, {**prepared, "github_asset_attestation": forged}, selected_name)
+            forged = {**attestation, "source_digest": "0" * 40}
+            (release_dir / f"{selected_name}.attestation.json").write_text(json.dumps(forged))
+            with self.assertRaisesRegex(ValueError, "attestation differs"):
+                e2e.validate_prepared_github_release(root, {**prepared, "github_asset_attestation": forged}, selected_name)
+            (release_dir / f"{selected_name}.attestation.json").write_text(json.dumps(attestation))
             path.write_bytes(b"x" * len(selected_body))
             with self.assertRaisesRegex(ValueError, "prepared native asset bytes differ"):
                 e2e.validate_prepared_github_release(root, prepared, selected_name)

@@ -121,6 +121,38 @@ TRUSTED_CLI_RELEASE_ASSETS = {
 TRUSTED_SANITIZED_CAPTURE_MANIFEST = "sha256:1e7e5ca4d72be2e188bbfa002cf19975b4e1b100913a329bbaf963b5633abb85"
 
 
+def current_github_asset_attestation(
+    *, asset_name: str, asset_digest: str, subject_name: str,
+) -> dict[str, Any]:
+    """Build the exact provenance record used by the current prepared path."""
+    if (
+        not isinstance(asset_name, str)
+        or Path(asset_name).name != asset_name
+        or not asset_name
+        or not isinstance(subject_name, str)
+        or Path(subject_name).name != subject_name
+        or not subject_name
+        or not DIGEST.fullmatch(asset_digest)
+    ):
+        raise ValueError("current GitHub asset attestation identity is invalid")
+    return {
+        "repository": TRUSTED_CLI_RELEASE_REPOSITORY,
+        "workflow": TRUSTED_CLI_RELEASE_WORKFLOW,
+        "tag": TRUSTED_CLI_RELEASE_TAG,
+        "tag_commit": TRUSTED_CLI_RELEASE_COMMIT,
+        "issuer": "https://token.actions.githubusercontent.com",
+        "source_ref": TRUSTED_CLI_RELEASE_SOURCE_REF,
+        "source_digest": TRUSTED_CLI_RELEASE_COMMIT,
+        "predicate_type": "https://slsa.dev/provenance/v1",
+        "subject_name": subject_name,
+        "subject_digest": asset_digest,
+        "runner_environment": "github-hosted",
+        "asset_name": asset_name,
+        "asset_digest": asset_digest,
+        "verified": True,
+    }
+
+
 def validate_capture_provenance(path: Path = CAPTURE_PROVENANCE) -> dict[str, Any]:
     """Verify retained capture bytes and reject path/secret-bearing provenance."""
     value = strict_json_loads(path.read_bytes())
@@ -917,15 +949,9 @@ def validate_prepared_github_release(
     ):
         raise ValueError("prepared native asset bytes differ from the authenticated manifest/checksum identity")
 
-    expected_attestation = {
-        "repository": config["cli_release_repository"],
-        "workflow": config["cli_release_workflow"],
-        "tag": config["cli_release_tag"],
-        "tag_commit": config["cli_release_commit"],
-        "asset_name": asset_name,
-        "asset_digest": binary_digest,
-        "verified": True,
-    }
+    expected_attestation = current_github_asset_attestation(
+        asset_name=asset_name, asset_digest=binary_digest, subject_name=asset_name,
+    )
     if attestation != expected_attestation or attestation != prepared.get("github_asset_attestation"):
         raise ValueError("prepared native asset attestation differs from the trusted release identity")
     return paths["binary"], manifest, identity, manifest_digest, checksums_digest
@@ -978,15 +1004,9 @@ def verify_github_asset_attestation(
             matching.append(record)
     if not matching:
         raise ValueError("GitHub artifact attestation subject name/digest does not match the native asset")
-    return {
-        "repository": repository, "workflow": workflow, "tag": tag,
-        "tag_commit": tag_commit, "issuer": "https://token.actions.githubusercontent.com",
-        "source_ref": TRUSTED_CLI_RELEASE_SOURCE_REF, "source_digest": tag_commit,
-        "predicate_type": "https://slsa.dev/provenance/v1", "subject_name": subject_name,
-        "subject_digest": digest, "runner_environment": "github-hosted",
-        "asset_name": asset.name, "asset_digest": digest,
-        "verified": True,
-    }
+    return current_github_asset_attestation(
+        asset_name=asset.name, asset_digest=digest, subject_name=subject_name,
+    )
 
 
 def resolve_npm_package(
