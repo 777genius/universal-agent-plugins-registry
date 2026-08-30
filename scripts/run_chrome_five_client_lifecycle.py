@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -53,6 +54,13 @@ PRIVACY_EXCLUSIONS = (
     "OAuth state",
     "authorization URLs",
 )
+GENERATOR_PATHS = (
+    ".github/workflows/upstream-package-e2e.yml",
+    "schemas/e2e/chrome-five-client-lifecycle.schema.json",
+    "scripts/run_chrome_five_client_lifecycle.py",
+)
+CLIENT_SECRET_ENV_KEYS = frozenset(("GH_TOKEN", "GITHUB_TOKEN"))
+SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class EvidenceError(RuntimeError):
@@ -77,6 +85,70 @@ def parse_rfc3339(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise EvidenceError(f"timestamp is not timezone-aware: {value}")
     return parsed.astimezone(timezone.utc)
+
+
+def scrub_client_env(env: dict[str, str]) -> dict[str, str]:
+    """Remove GitHub credentials before invoking a client or the manager."""
+    return {
+        key: value
+        for key, value in env.items()
+        if key not in CLIENT_SECRET_ENV_KEYS
+    }
+
+
+def require_generator_at_commit(
+    git: Path, repository_root: Path, source_commit: str
+) -> None:
+    """Bind evidence to the exact committed workflow, schema, and generator."""
+    if not SHA_PATTERN.fullmatch(source_commit):
+        raise EvidenceError("source commit must be an exact lowercase Git SHA")
+    completed = subprocess.run(
+        [str(git), "-C", str(repository_root), "rev-parse", "HEAD"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0 or completed.stdout.strip() != source_commit:
+        raise EvidenceError("source commit is not the checked-out generator commit")
+    for relative in GENERATOR_PATHS:
+        committed = subprocess.run(
+            [
+                str(git),
+                "-C",
+                str(repository_root),
+                "cat-file",
+                "-e",
+                f"{source_commit}:{relative}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+        if committed.returncode != 0:
+            raise EvidenceError(
+                f"evidence generator file is unavailable at source commit: {relative}"
+            )
+    unchanged = subprocess.run(
+        [
+            str(git),
+            "-C",
+            str(repository_root),
+            "diff",
+            "--quiet",
+            source_commit,
+            "--",
+            *GENERATOR_PATHS,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    if unchanged.returncode != 0:
+        raise EvidenceError("evidence generator files differ from the source commit")
 
 
 def checked_json(
@@ -506,6 +578,8 @@ def make_tool_bin(sandbox: Path, tools: Iterable[Path]) -> Path:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[1]
+    require_generator_at_commit(args.git, repository_root, args.source_commit)
     sandbox = args.sandbox.resolve()
     if sandbox.exists():
         raise EvidenceError("sandbox must not exist before the lifecycle")
@@ -530,7 +604,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         tool_bin = make_tool_bin(
             sandbox, (args.agentplugins, args.claude, args.node, args.npx, args.git)
         )
-        env = {
+        env = scrub_client_env({
             "PATH": os.pathsep.join((str(tool_bin), "/usr/bin", "/bin")),
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
@@ -544,9 +618,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0",
             "CI": "true",
-        }
-        if token := os.environ.get("GH_TOKEN"):
-            env["GH_TOKEN"] = token
+        })
         source = f"{args.upstream_repository}@{args.expected_head}"
         common = ["--target", TARGETS, "--format", "json"]
         cli = str(args.agentplugins.resolve(strict=True))
@@ -554,7 +626,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         claude_version = subprocess.run(
             [str(args.claude.resolve(strict=True)), "--version"],
-            env=env,
+            env=scrub_client_env(env),
             cwd=workspace,
             text=True,
             stdout=subprocess.PIPE,
@@ -589,13 +661,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         validate_doctor(doctor, post_remove=False)
 
-        immutable_before = snapshot_roots(
-            {
-                "state": sandbox / "state",
-                "home": sandbox / "home",
-                "config": sandbox / "config",
-            }
-        )
+        immutable_before = snapshot_roots({"sandbox": sandbox})
         update, update_stderr, _ = checked_json(
             [cli, "update", "chrome-devtools", *common],
             env=env,
@@ -614,15 +680,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             or "direct full-SHA installations require explicit switch" not in update_stderr
         ):
             raise EvidenceError("immutable full-SHA update did not fail closed")
-        immutable_after = snapshot_roots(
-            {
-                "state": sandbox / "state",
-                "home": sandbox / "home",
-                "config": sandbox / "config",
-            }
-        )
+        immutable_after = snapshot_roots({"sandbox": sandbox})
         if immutable_before != immutable_after:
-            raise EvidenceError("failed immutable update changed manager or client bytes")
+            raise EvidenceError("failed immutable update changed an isolated writable root")
 
         repair, _, _ = checked_json(
             [cli, "repair", "chrome-devtools", *common], env=env, cwd=workspace
@@ -759,8 +819,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "outcome": "expected_failure",
                     "reason": "direct_full_sha_requires_explicit_switch",
                     "targets_changed": 0,
-                    "state_and_client_snapshot_before": immutable_before,
-                    "state_and_client_snapshot_after": immutable_after,
+                    "all_writable_roots_snapshot_before": immutable_before,
+                    "all_writable_roots_snapshot_after": immutable_after,
                     "byte_identical": True,
                 },
                 "repair": "passed_5_of_5",
@@ -824,7 +884,7 @@ def claude_plugin_list(
 ) -> list[dict[str, Any]]:
     completed = subprocess.run(
         [str(claude.resolve(strict=True)), "plugin", "list", "--json"],
-        env=env,
+        env=scrub_client_env(env),
         cwd=cwd,
         text=True,
         stdout=subprocess.PIPE,
@@ -864,7 +924,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-repository", default="local")
     parser.add_argument("--run-id", default="local")
     parser.add_argument("--run-attempt", default="1")
-    parser.add_argument("--source-commit", default="local")
+    parser.add_argument("--source-commit", required=True)
     parser.add_argument("--keep-sandbox", action="store_true")
     return parser
 

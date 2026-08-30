@@ -25,9 +25,9 @@ jobs:
       matrix:
         package:
           - id: chrome-devtools
-            source: 777genius/chrome-devtools-mcp@4ff0c06eab3c2e7af216b24a9350867d5dccb4c8//agent-plugin
-            repository: 777genius/chrome-devtools-mcp
-            revision: 4ff0c06eab3c2e7af216b24a9350867d5dccb4c8
+            source: ChromeDevTools/chrome-devtools-mcp@7e193aed8baa23c692355237a55237540b36cb2f
+            repository: ChromeDevTools/chrome-devtools-mcp
+            revision: 7e193aed8baa23c692355237a55237540b36cb2f
             plugin: chrome-devtools
             version: 1.8.0
           - id: cloudflare-docs

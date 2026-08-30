@@ -153,13 +153,13 @@
         "doctor": { "const": "passed_read_only_with_authentication_unchecked" },
         "immutable_update": {
           "type": "object",
-          "required": ["outcome", "reason", "targets_changed", "state_and_client_snapshot_before", "state_and_client_snapshot_after", "byte_identical"],
+          "required": ["outcome", "reason", "targets_changed", "all_writable_roots_snapshot_before", "all_writable_roots_snapshot_after", "byte_identical"],
           "properties": {
             "outcome": { "const": "expected_failure" },
             "reason": { "const": "direct_full_sha_requires_explicit_switch" },
             "targets_changed": { "const": 0 },
-            "state_and_client_snapshot_before": { "$ref": "#/$defs/digest" },
-            "state_and_client_snapshot_after": { "$ref": "#/$defs/digest" },
+            "all_writable_roots_snapshot_before": { "$ref": "#/$defs/digest" },
+            "all_writable_roots_snapshot_after": { "$ref": "#/$defs/digest" },
             "byte_identical": { "const": true }
           },
           "additionalProperties": false
@@ -214,7 +214,7 @@
         "repository": { "type": "string", "minLength": 1 },
         "run_id": { "type": "string", "minLength": 1 },
         "run_attempt": { "type": "string", "minLength": 1 },
-        "source_commit": { "type": "string", "minLength": 1 }
+        "source_commit": { "$ref": "#/$defs/sha" }
       },
       "additionalProperties": false
     },

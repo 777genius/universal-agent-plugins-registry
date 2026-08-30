@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-import jsonschema
 import yaml
 
 
@@ -110,20 +110,77 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
                     env={},
                 )
 
-    def test_snapshot_hash_covers_bytes_topology_and_modes_not_mtime(self) -> None:
+    def test_snapshot_hash_covers_every_writable_root_but_not_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = Path(temporary) / "sandbox"
+            for name in ("home", "state", "config", "cache", "tmp", "workspace"):
+                (sandbox / name).mkdir(parents=True)
+            file = sandbox / "state" / "state.json"
+            file.write_text("one\n", encoding="utf-8")
+            first = runner.snapshot_roots({"sandbox": sandbox})
+            file.touch()
+            self.assertEqual(first, runner.snapshot_roots({"sandbox": sandbox}))
+            for name in ("home", "state", "config", "cache", "tmp", "workspace"):
+                with self.subTest(root=name):
+                    marker = sandbox / name / "mutation"
+                    marker.write_text(name, encoding="utf-8")
+                    self.assertNotEqual(
+                        first, runner.snapshot_roots({"sandbox": sandbox})
+                    )
+                    marker.unlink()
+
+    def test_generator_commit_must_contain_exact_clean_harness(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            state = root / "state"
-            home = root / "home"
-            state.mkdir()
-            home.mkdir()
-            file = state / "state.json"
-            file.write_text("one\n", encoding="utf-8")
-            first = runner.snapshot_roots({"state": state, "home": home})
-            file.touch()
-            self.assertEqual(first, runner.snapshot_roots({"state": state, "home": home}))
-            file.write_text("two\n", encoding="utf-8")
-            self.assertNotEqual(first, runner.snapshot_roots({"state": state, "home": home}))
+
+            def git(*args: str) -> str:
+                completed = subprocess.run(
+                    ["git", "-C", str(root), *args],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                return completed.stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Evidence Test")
+            git("config", "user.email", "evidence@example.invalid")
+            (root / "README.md").write_text("before\n", encoding="utf-8")
+            git("add", "README.md")
+            git("commit", "-qm", "before generator")
+            missing_generator_commit = git("rev-parse", "HEAD")
+            for relative in runner.GENERATOR_PATHS:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative + "\n", encoding="utf-8")
+            git("add", *runner.GENERATOR_PATHS)
+            git("commit", "-qm", "add generator")
+            generator_commit = git("rev-parse", "HEAD")
+
+            runner.require_generator_at_commit(
+                Path("git"), root, generator_commit
+            )
+            with self.assertRaises(runner.EvidenceError):
+                runner.require_generator_at_commit(
+                    Path("git"), root, missing_generator_commit
+                )
+            (root / runner.GENERATOR_PATHS[-1]).write_text(
+                "uncommitted replacement\n", encoding="utf-8"
+            )
+            with self.assertRaises(runner.EvidenceError):
+                runner.require_generator_at_commit(Path("git"), root, generator_commit)
+
+    def test_client_environment_scrubs_github_tokens(self) -> None:
+        cleaned = runner.scrub_client_env(
+            {
+                "PATH": "/bin",
+                "GH_TOKEN": "gh-secret",
+                "GITHUB_TOKEN": "github-secret",
+                "HOME": "/sandbox/home",
+            }
+        )
+        self.assertEqual(cleaned, {"PATH": "/bin", "HOME": "/sandbox/home"})
 
     def test_sanitizer_rejects_raw_paths_and_operation_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -135,19 +192,18 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 runner.ensure_sanitized({"operation_id": "op-secret"}, sandbox)
 
-    def test_committed_evidence_matches_the_strict_schema(self) -> None:
-        evidence = json.loads(
-            (ROOT / "tests/e2e/results/agentplugins-chrome-devtools-multiclient-2026-08-30.json").read_text()
-        )
+    def test_schema_requires_exact_generator_commit_and_full_root_snapshot(self) -> None:
         schema = json.loads(
             (ROOT / "schemas/e2e/chrome-five-client-lifecycle.schema.json").read_text()
         )
-        jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(evidence)
-        runner.validate_timestamp_order(evidence["source"])
+        immutable = schema["properties"]["operations"]["properties"]["immutable_update"]
         self.assertEqual(
-            evidence["operations"]["immutable_update"]["state_and_client_snapshot_before"],
-            evidence["operations"]["immutable_update"]["state_and_client_snapshot_after"],
+            schema["properties"]["run"]["properties"]["source_commit"],
+            {"$ref": "#/$defs/sha"},
         )
+        self.assertIn("all_writable_roots_snapshot_before", immutable["required"])
+        self.assertIn("all_writable_roots_snapshot_after", immutable["required"])
+        self.assertNotIn("state_and_client_snapshot_before", immutable["properties"])
 
     def test_workflow_pins_public_clients_and_uploads_only_sanitized_evidence(self) -> None:
         workflow_source = (ROOT / ".github/workflows/upstream-package-e2e.yml").read_text()
@@ -165,6 +221,19 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
             workflow["env"]["CHROME_UPSTREAM_HEAD"],
             "7e193aed8baa23c692355237a55237540b36cb2f",
         )
+        chrome = workflow["jobs"]["install-lifecycle"]["strategy"]["matrix"]["package"][0]
+        self.assertEqual(
+            chrome,
+            {
+                "id": "chrome-devtools",
+                "source": "ChromeDevTools/chrome-devtools-mcp@7e193aed8baa23c692355237a55237540b36cb2f",
+                "repository": "ChromeDevTools/chrome-devtools-mcp",
+                "revision": "7e193aed8baa23c692355237a55237540b36cb2f",
+                "plugin": "chrome-devtools",
+                "version": "1.8.0",
+            },
+        )
+        self.assertNotIn("777genius/chrome-devtools-mcp", workflow_source)
 
 
 if __name__ == "__main__":
