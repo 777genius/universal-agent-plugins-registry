@@ -137,7 +137,7 @@ class ReadinessProducerV2Tests(unittest.TestCase):
             root = Path(temporary)
             args = self.args(root, schema_version=1)
             runtime = runtime_evidence()
-            policy_value = policy_evidence()
+            policy_value = policy_evidence(schema_version=1)
             scenario_digest = lanes.sha256_file(readiness.SCENARIOS)
             harness_digest = lanes.sha256_file(readiness.HARNESS)
             overlay_digest = lanes.sha256_file(readiness.OVERLAY)
@@ -162,7 +162,9 @@ class ReadinessProducerV2Tests(unittest.TestCase):
                 "publication_sequence": 1, "publication_snapshot_digest": digest("a"),
                 "publication_source_commit": FIXTURE_SOURCE_COMMIT,
             }
-            completed = lanes.build_readiness_envelope(runtime, policy_value, **identity)
+            completed = lanes.build_readiness_envelope(
+                runtime, policy_value, schema_version=1, purpose="historical", **identity,
+            )
             args.runtime.write_bytes(lanes.canonical_json(runtime))
             args.policy.write_bytes(lanes.canonical_json(policy_value))
             args.completed = root / "completed.json"

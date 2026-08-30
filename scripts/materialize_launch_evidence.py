@@ -172,14 +172,22 @@ def selected_rows(launch: dict[str, Any]) -> list[dict[str, Any]]:
         ):
             fail(f"launch row is not authoritative protected observer evidence: {row.get('id')}")
         rows.append(row)
-    if len(rows) != 16:
-        fail(f"expected 16 authoritative hero runtime/OAuth rows, found {len(rows)}")
+    version = launch.get("schema_version")
+    if version not in {3, 4, 5}:
+        fail("unsupported launch evidence schema version")
     expected_runtime = {(plugin, client) for plugin in HEROES for client in HERO_CLIENTS}
-    actual_runtime = {(row["plugin"], row["client"]) for row in rows if row["client"] in HERO_CLIENTS}
-    if actual_runtime != expected_runtime:
+    runtime_rows = [row for row in rows if row["client"] in HERO_CLIENTS]
+    actual_runtime = {(row["plugin"], row["client"]) for row in runtime_rows}
+    if len(runtime_rows) != 15 or actual_runtime != expected_runtime:
         fail("hero runtime applicability matrix is incomplete or duplicated")
-    if sum(row["client"] == "chatgpt" and row["level"] == "runtime" for row in rows) != 1:
+    chatgpt_rows = [
+        row for row in rows
+        if row["client"] == "chatgpt" and row["level"] == "runtime"
+    ]
+    if version == 5 and (len(rows) != 16 or len(chatgpt_rows) != 1):
         fail("exactly one Cloudflare ChatGPT public-MCP runtime record is required")
+    if version in {3, 4} and (len(rows) not in {15, 16} or len(chatgpt_rows) > 1):
+        fail("historical evidence requires 15 hero rows and at most one compatible ChatGPT row")
     keys = [canonical_json(applicability(row)) for row in rows]
     if len(keys) != len(set(keys)):
         fail("duplicate current-evidence applicability tuple")

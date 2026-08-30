@@ -122,10 +122,35 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
     def test_selects_only_exact_authoritative_runtime_and_oauth_matrix(self) -> None:
         rows = authoritative_rows()
         rows.append({"scenario": "hero_5x3_lifecycle", "level": "materialization"})
-        selected = evidence.selected_rows({"evidence_class": "released_binary", "matrix": rows})
+        selected = evidence.selected_rows({
+            "schema_version": 5, "evidence_class": "released_binary", "matrix": rows,
+        })
         self.assertEqual(len(selected), 16)
         self.assertEqual(sum(row["level"] == "runtime" for row in selected), 16)
         self.assertEqual(sum(row["client"] == "chatgpt" and row["level"] == "runtime" for row in selected), 1)
+
+    def test_historical_v3_v4_preserve_fifteen_rows_and_optional_chatgpt(self) -> None:
+        for version in (3, 4):
+            for include_chatgpt in (False, True):
+                rows = authoritative_rows() if include_chatgpt else authoritative_rows()[:-1]
+                with self.subTest(version=version, include_chatgpt=include_chatgpt):
+                    selected = evidence.selected_rows({
+                        "schema_version": version,
+                        "evidence_class": "released_binary",
+                        "matrix": rows,
+                    })
+                    self.assertEqual(len(selected), 16 if include_chatgpt else 15)
+                    self.assertEqual(
+                        any(row["client"] == "chatgpt" for row in selected),
+                        include_chatgpt,
+                    )
+
+    def test_current_v5_rejects_missing_chatgpt_row(self) -> None:
+        rows = authoritative_rows()[:-1]
+        with self.assertRaisesRegex(evidence.EvidenceError, "exactly one Cloudflare ChatGPT"):
+            evidence.selected_rows({
+                "schema_version": 5, "evidence_class": "released_binary", "matrix": rows,
+            })
 
     def test_fresh_sequence_20_cannot_select_historical_v4_from_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -340,8 +365,10 @@ class LaunchEvidenceBundleTests(unittest.TestCase):
         rows = authoritative_rows()
         rows[-1] = dict(rows[-1], id="different")
         rows.append(dict(rows[-1]))
-        with self.assertRaisesRegex(evidence.EvidenceError, "expected 16|duplicate"):
-            evidence.selected_rows({"evidence_class": "released_binary", "matrix": rows})
+        with self.assertRaisesRegex(evidence.EvidenceError, "exactly one Cloudflare ChatGPT|duplicate"):
+            evidence.selected_rows({
+                "schema_version": 5, "evidence_class": "released_binary", "matrix": rows,
+            })
 
     def test_wrong_attempt_event_or_caller_is_rejected(self) -> None:
         observer = evidence.canonical_json({"schema_version": 1, "signed": True})
