@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_chatgpt_observer_projection as generator  # noqa: E402
+import build_openai_compat as openai_compat  # noqa: E402
 import directory_publication as publication  # noqa: E402
+from observe_launch_scenario import package_identity  # noqa: E402
 
 publication.OPENSSL = shutil.which("openssl") or publication.OPENSSL
 PublicationError = publication.PublicationError
@@ -31,7 +33,7 @@ SNAPSHOT_DIGEST = ""
 class ChatGPTProjectionGeneratorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.feed = self.root / "feed"
         self.feed.mkdir()
         (self.feed / "snapshots").mkdir()
@@ -54,16 +56,38 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
             }],
         }]
         self.snapshot["evidence"] = []
+        self.package = self.root / "package"
+        self.package.mkdir()
+        portable_manifest = {
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "demo", "version": "1.0.0", "description": "Demo package.",
+            "author": {"name": "Example", "url": "https://example.test"},
+            "homepage": "https://example.test/demo", "repository": "https://example.test/repository",
+            "license": "MIT", "keywords": ["demo"],
+        }
+        self.write_json(self.package / "plugin.json", portable_manifest)
+        self.write_json(self.package / "mcp.json", {
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+            "mcpServers": {"demo": {"type": "streamable-http", "url": "https://docs.example.test/mcp"}},
+        })
+        (self.package / "README.md").write_bytes(b"# Demo\n")
+        self.release().update(package_identity(self.package))
         self.write_signed_snapshot()
         self.projection = self.root / "projection"
         (self.projection / ".codex-plugin").mkdir(parents=True)
-        self.write_json(self.projection / ".codex-plugin/plugin.json", {
-            "name": "demo", "apps": "./.app.json", "mcpServers": "./.mcp.json",
-        })
+        openai_compat.SHORT_DESCRIPTIONS["demo"] = "Demo MCP"
+        self.write_json(
+            self.projection / ".codex-plugin/plugin.json",
+            openai_compat.openai_manifest(portable_manifest, False, True, True),
+        )
         self.write_json(self.projection / ".app.json", {"apps": {"demo": {"id": APP_ID}}})
         self.write_json(self.projection / ".mcp.json", {
             "mcpServers": {"demo": {"type": "http", "url": "https://docs.example.test/mcp"}},
         })
+        (self.projection / "README.md").write_bytes(b"# Demo\n")
+        (self.projection / "assets").mkdir()
+        shutil.copy2(openai_compat.BRAND_ASSETS / "icon.png", self.projection / "assets/icon.png")
+        shutil.copy2(openai_compat.BRAND_ASSETS / "logo.png", self.projection / "assets/logo.png")
         self.binary = self.root / "agentplugins"
         self.binary.write_bytes(b"#!/bin/sh\n[ \"$1\" = version ] && printf 'agentplugins 0.1.18\\n'\n")
         self.binary.chmod(0o755)
@@ -263,6 +287,7 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
             minimum_sequence=15,
             add_evidence=self.add,
             state=self.state,
+            package_root=self.package,
             projection_root=self.projection,
             cli_binary=self.binary,
             installer_version="0.1.18",
@@ -284,12 +309,20 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
     def test_builds_existing_canonical_contract_from_signed_and_cli_evidence(self) -> None:
         self.assertEqual(
             generator.projection_artifact_digest(self.projection),
-            "sha256:ff1ef3d924a011c7d8139e5ef721cda5561e5a5c18bc5c76a537c73c6b66d956",
+            "sha256:4e32b51e3972e4895ec6832aaf5fecdd11d89f6495edb8c498f6f848484f47cf",
         )
         app, receipt = self.generate()
         self.assertEqual(app, {"apps": {"demo": {"id": APP_ID}}})
         self.assertEqual(receipt["application_id"], APP_ID)
         self.assertEqual(receipt["product_id"], "demo")
+        self.assertEqual(receipt["projection"], {
+            "app_json_digest": "sha256:" + hashlib.sha256((self.projection / ".app.json").read_bytes()).hexdigest(),
+            "codex_manifest_digest": "sha256:" + hashlib.sha256((self.projection / ".codex-plugin/plugin.json").read_bytes()).hexdigest(),
+            "managed_digest": generator.projection_artifact_digest(self.projection),
+            "mcp_json_digest": "sha256:" + hashlib.sha256((self.projection / ".mcp.json").read_bytes()).hexdigest(),
+            "mcp_url": "https://docs.example.test/mcp",
+        })
+        release = self.release()
         self.assertEqual(receipt["tuple"], {
             "adapter_version": "0.1.18",
             "architecture": "amd64",
@@ -299,7 +332,7 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
             "distribution_id": "example/demo",
             "distribution_kind": "upstream",
             "installer_version": "0.1.18",
-            "manifest_digest": "sha256:" + "2" * 64,
+            "manifest_digest": release["manifest_digest"],
             "observed_at": "2026-08-30T00:00:00Z",
             "os": "linux",
             "package_version": "1.0.0",
@@ -310,7 +343,7 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
             "source_path": "plugins/demo",
             "source_repository": "example/plugins",
             "source_revision": "a" * 40,
-            "tree_digest": "sha256:" + "1" * 64,
+            "tree_digest": release["tree_digest"],
         })
         for name, value in (("app-binding.json", app), ("projection-receipt.json", receipt)):
             body = (self.root / "generated" / name).read_bytes()
@@ -408,6 +441,124 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "managed projection digest"):
             generator.build(self.args())
 
+    def test_coherent_state_and_mcp_substitution_fails_approved_package_binding(self) -> None:
+        for label, url in (
+            ("foreign-host", "https://evil.example.test/mcp"),
+            ("foreign-path", "https://docs.example.test/other-path"),
+        ):
+            with self.subTest(label=label):
+                self.write_json(self.projection / ".mcp.json", {
+                    "mcpServers": {"demo": {"type": "http", "url": url}},
+                })
+                self.write_state()
+                args = self.args(self.root / f"out-{label}")
+                with self.assertRaisesRegex(PublicationError, "not derived from the approved source package"):
+                    generator.build(args)
+                self.assertFalse(args.output.exists())
+        self.write_json(self.projection / ".mcp.json", {
+            "mcpServers": {"demo": {"type": "http", "url": "https://docs.example.test/mcp"}},
+        })
+        self.write_state()
+
+    def test_coherent_state_cannot_bless_manifest_or_readme_substitution(self) -> None:
+        original_manifest = json.loads((self.projection / ".codex-plugin/plugin.json").read_text())
+        cases = (
+            ("manifest", self.projection / ".codex-plugin/plugin.json", {**original_manifest, "description": "substituted"}, "official manifest"),
+            ("readme", self.projection / "README.md", None, "README.md"),
+        )
+        for label, path, value, message in cases:
+            with self.subTest(label=label):
+                if value is None:
+                    path.write_bytes(b"substituted\n")
+                else:
+                    self.write_json(path, value)
+                self.write_state()
+                with self.assertRaisesRegex(PublicationError, message):
+                    generator.build(self.args())
+                if label == "manifest":
+                    self.write_json(path, original_manifest)
+                else:
+                    path.write_bytes(b"# Demo\n")
+        self.write_state()
+
+    def test_source_package_nested_reserved_path_is_not_silently_ignored(self) -> None:
+        nested = self.package / "nested"
+        nested.mkdir()
+        (nested / ".plugin-kit-ai.lock").write_bytes(b"attacker")
+        release = self.release()
+        release.update(package_identity(self.package))
+        self.write_signed_snapshot()
+        self.write_add()
+        self.write_state()
+        with self.assertRaisesRegex(PublicationError, "outside the supported remote-app projection contract"):
+            generator.build(self.args())
+
+    def test_unapproved_package_bytes_fail_before_output(self) -> None:
+        self.write_json(self.package / "mcp.json", {
+            "mcpServers": {"demo": {"type": "streamable-http", "url": "https://evil.example.test/mcp"}},
+        })
+        args = self.args()
+        with self.assertRaisesRegex(PublicationError, "bytes differ from the signed release"):
+            generator.build(args)
+        self.assertFalse(args.output.exists())
+
+    def test_projection_post_read_app_mutation_is_detected(self) -> None:
+        real_read = generator._read_snapshot_file
+        changed = False
+
+        def mutate_after_read(descriptor, size, label):
+            nonlocal changed
+            body = real_read(descriptor, size, label)
+            if not changed and label.endswith("file '.app.json'"):
+                changed = True
+                self.write_json(self.projection / ".app.json", {"apps": {"demo": {"id": "plugin_asdk_app_" + "b" * 32}}})
+            return body
+
+        args = self.args()
+        with mock.patch.object(generator, "_read_snapshot_file", side_effect=mutate_after_read):
+            with self.assertRaisesRegex(PublicationError, "changed .* reading"):
+                generator.build(args)
+        self.assertTrue(changed)
+        self.assertFalse(args.output.exists())
+
+    def test_projection_nested_insertion_after_traversal_is_detected(self) -> None:
+        nested = self.projection / "nested"
+        nested.mkdir()
+        (nested / "original.txt").write_bytes(b"original")
+        self.write_state()
+        real_read = generator._read_snapshot_file
+        inserted = False
+
+        def insert_after_read(descriptor, size, label):
+            nonlocal inserted
+            body = real_read(descriptor, size, label)
+            if not inserted and label.endswith("file 'nested/original.txt'"):
+                inserted = True
+                (nested / "inserted.txt").write_bytes(b"inserted")
+            return body
+
+        args = self.args()
+        with mock.patch.object(generator, "_read_snapshot_file", side_effect=insert_after_read):
+            with self.assertRaisesRegex(PublicationError, "changed after"):
+                generator.build(args)
+        self.assertTrue(inserted)
+        self.assertFalse(args.output.exists())
+
+    def test_cli_symlink_leaf_and_ancestor_are_rejected_before_execution(self) -> None:
+        leaf = self.root / "agentplugins-link"
+        leaf.symlink_to(self.binary)
+        real_directory = self.root / "real-bin"
+        real_directory.mkdir()
+        shutil.copy2(self.binary, real_directory / "agentplugins")
+        ancestor = self.root / "bin-link"
+        ancestor.symlink_to(real_directory, target_is_directory=True)
+        with mock.patch.object(generator.subprocess, "run") as run:
+            for label, path in (("leaf", leaf), ("ancestor", ancestor / "agentplugins")):
+                with self.subTest(label=label):
+                    with self.assertRaisesRegex(PublicationError, "path is unsafe"):
+                        generator.validate_binary(path, "0.1.18")
+            run.assert_not_called()
+
     def test_binary_path_swap_executes_authenticated_image_and_fails_authority_recheck(self) -> None:
         real_run = generator.subprocess.run
         original_parent = self.binary.parent
@@ -442,7 +593,7 @@ class ChatGPTProjectionGeneratorTests(unittest.TestCase):
 
         try:
             with mock.patch.object(generator.subprocess, "run", side_effect=swap_then_run):
-                with self.assertRaisesRegex(PublicationError, "changed during version verification"):
+                with self.assertRaisesRegex(PublicationError, "leaf pathname was replaced"):
                     generator.validate_binary(self.binary, "0.1.18")
             self.assertEqual(observed, ["agentplugins 0.1.18\n"])
         finally:

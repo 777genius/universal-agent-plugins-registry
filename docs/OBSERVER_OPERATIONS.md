@@ -81,6 +81,7 @@ publishes the pair with an atomic no-replace operation.
 CHATGPT_APP_ID=<exact-signed-plugin_asdk_app-id>
 OBSERVED_AT=<canonical-UTC-seconds-from-the-change-ticket>
 CHATGPT_STATE=/root/chatgpt-evidence/state-v2.json
+CHATGPT_PACKAGE=/root/approved-inputs/cloudflare-docs-package
 CHATGPT_PROJECTION="$(jq -er '
   [.installations[] | select(.declared_name == "cloudflare-docs") |
    .clients[] | select(.client_id == "chatgpt") | .target_locator] |
@@ -92,7 +93,8 @@ PYTHONPATH="$SOURCE_ROOT/scripts" python3 -B \
   --trusted-keys /root/approved-directory/trusted-keys.json \
   --now "$OBSERVED_AT" --minimum-sequence 19 \
   --add-evidence /root/chatgpt-evidence/add.json \
-  --state "$CHATGPT_STATE" --projection-root "$CHATGPT_PROJECTION" \
+  --state "$CHATGPT_STATE" --package-root "$CHATGPT_PACKAGE" \
+  --projection-root "$CHATGPT_PROJECTION" \
   --cli-binary /root/approved-inputs/agentplugins-0.1.18/agentplugins \
   --installer-version 0.1.18 --product-id cloudflare-docs \
   --distribution-id 777genius/cloudflare-docs-bridge --release-sequence 1 \
@@ -100,6 +102,16 @@ PYTHONPATH="$SOURCE_ROOT/scripts" python3 -B \
   --observed-at "$OBSERVED_AT" --output /root/generated-chatgpt-inputs
 sha256sum /root/generated-chatgpt-inputs/{app-binding,projection-receipt}.json
 ```
+
+`CHATGPT_PACKAGE` must be the immutable approved source-package directory for
+the signed release, not another copy derived from State. The generator
+descriptor-snapshots it, verifies its tree and manifest digests against the
+signed Directory release, and derives the exact app/MCP projection from those
+authenticated bytes before publishing either output. The full Codex manifest,
+README, and fixed icon/logo bytes are also checked against that package and the
+clean, reviewed `SOURCE_ROOT`; therefore the source checkout verification at
+the start of this runbook is an out-of-band provenance prerequisite, not an
+optional convenience.
 
 Build that exact tree from the approved, digest-recorded input directory. The
 group creation is safe before the idempotent installer creates the remaining

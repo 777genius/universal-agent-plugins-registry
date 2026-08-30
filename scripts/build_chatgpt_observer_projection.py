@@ -43,9 +43,17 @@ from directory_publication import (  # noqa: E402
     validate_snapshot_semantics,
     verify_envelope,
 )
+from build_openai_compat import BRAND_ASSETS, openai_manifest, openai_mcp  # noqa: E402
 from observe_launch_scenario import (  # noqa: E402
     strict_state_json_loads,
     validate_released_state_v4,
+)
+from portable_paths import (  # noqa: E402
+    MAX_DEPTH as PORTABLE_MAX_DEPTH,
+    MAX_FILES as PORTABLE_MAX_FILES,
+    MAX_FILE_BYTES as PORTABLE_MAX_FILE_BYTES,
+    MAX_TREE_BYTES as PORTABLE_MAX_TREE_BYTES,
+    validate_segment,
 )
 
 
@@ -54,6 +62,7 @@ MAX_PROJECTION_BYTES = 64 << 10
 MAX_BINARY_BYTES = 256 << 20
 MAX_PROJECTION_FILES = 10_000
 MAX_PROJECTION_TREE_BYTES = 256 << 20
+MAX_SNAPSHOT_DIRECTORIES = 512
 APP_ID = re.compile(r"plugin_asdk_app_[a-f0-9]{32}")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
@@ -290,55 +299,265 @@ def validate_add(
     return result["installation_id"], artifact_id
 
 
-def projection_artifact_snapshot(root: Path) -> tuple[str, dict[str, bytes]]:
-    """Reproduce the released manager's packagesnapshot digest over a stable tree."""
-    root_before = root.lstat()
-    require(stat.S_ISDIR(root_before.st_mode), "ChatGPT projection root must be a directory, not a link")
-    entries: list[tuple[str, Path, os.stat_result | None]] = []
-    file_count = 0
-    total_bytes = 0
-    for current, directories, files in os.walk(root, topdown=True, followlinks=False):
-        current_path = Path(current)
-        directories[:] = sorted(name for name in directories if name != ".git")
-        files = sorted(name for name in files if name != ".plugin-kit-ai.lock")
-        for name in directories:
-            path = current_path / name
-            metadata = path.lstat()
-            require(stat.S_ISDIR(metadata.st_mode), f"projection path {path!s} is not a real directory")
-            entries.append((path.relative_to(root).as_posix(), path, None))
-        for name in files:
-            path = current_path / name
-            metadata = path.lstat()
-            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1, f"projection file {path!s} must be a one-link regular file")
-            file_count += 1
-            total_bytes += metadata.st_size
-            require(file_count <= MAX_PROJECTION_FILES and total_bytes <= MAX_PROJECTION_TREE_BYTES, "ChatGPT projection exceeds snapshot limits")
-            entries.append((path.relative_to(root).as_posix(), path, metadata))
-    digest = hashlib.sha256()
+def _snapshot_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_nlink,
+        metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+
+
+def _open_absolute_directory(path: Path, label: str) -> tuple[Path, list[int]]:
+    require(path.is_absolute(), f"{label} must be an absolute path")
+    require(all(part not in {"", ".", ".."} for part in path.parts[1:]), f"{label} contains an unsafe component")
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors = [os.open(path.anchor, flags)]
+    try:
+        for component in path.parts[1:]:
+            descriptors.append(os.open(component, flags, dir_fd=descriptors[-1]))
+        return path, descriptors
+    except Exception:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+
+
+def _read_snapshot_file(descriptor: int, size: int, label: str) -> bytes:
+    require(0 <= size <= MAX_PROJECTION_TREE_BYTES, f"{label} size is invalid")
+    body = bytearray()
+    while len(body) < size:
+        block = os.read(descriptor, min(1 << 20, size - len(body)))
+        require(bool(block), f"{label} was truncated while reading")
+        body.extend(block)
+    require(os.read(descriptor, 1) == b"", f"{label} grew while reading")
+    return bytes(body)
+
+
+def _stable_tree_snapshot(
+    root: Path, label: str, *, package_contract: bool = False,
+) -> tuple[dict[str, dict[str, Any]], dict[str, bytes]]:
+    """Read and finally revalidate every member through held no-follow descriptors."""
+    try:
+        absolute, ancestry = _open_absolute_directory(root, label)
+    except OSError as error:
+        raise PublicationError(f"{label} path is not a real directory: {error}") from error
+    held: list[int] = []
+    entries: dict[str, dict[str, Any]] = {}
     contents: dict[str, bytes] = {}
-    for relative, path, metadata in sorted(entries, key=lambda item: item[0]):
-        require(relative not in {"", "."} and not relative.startswith("/"), "projection contains an unsafe relative path")
-        require(all(part not in {"", ".", ".."} for part in relative.split("/")), "projection contains an unsafe path segment")
-        if metadata is None:
+    file_count = 0
+    directory_count = 1
+    total_bytes = 0
+    folded_paths: dict[str, str] = {}
+
+    def visible_names(descriptor: int, relative: str) -> list[str]:
+        visible = []
+        for name in os.listdir(descriptor):
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if package_contract and not relative:
+                if name == ".git" or (
+                    name == ".plugin-kit-ai.lock" and not stat.S_ISDIR(metadata.st_mode)
+                ):
+                    continue
+            elif not package_contract and (
+                (name == ".git" and stat.S_ISDIR(metadata.st_mode))
+                or (name == ".plugin-kit-ai.lock" and stat.S_ISREG(metadata.st_mode))
+            ):
+                continue
+            visible.append(name)
+        return sorted(visible)
+
+    def traverse(descriptor: int, relative: str) -> None:
+        nonlocal directory_count, file_count, total_bytes
+        metadata = os.fstat(descriptor)
+        require(stat.S_ISDIR(metadata.st_mode), f"{label} directory {relative or '.'!r} is invalid")
+        entry = {
+            "kind": "dir", "mode": metadata.st_mode, "size": 0,
+            "identity": _snapshot_identity(metadata), "descriptor": descriptor, "children": visible_names(descriptor, relative),
+        }
+        entries[relative or "."] = entry
+        for name in entry["children"]:
+            require(name not in {"", ".", ".."} and "/" not in name, f"{label} contains an unsafe member")
+            child_relative = name if not relative else f"{relative}/{name}"
+            if package_contract:
+                parts = child_relative.split("/")
+                require(len(parts) <= PORTABLE_MAX_DEPTH, f"{label} path exceeds depth {PORTABLE_MAX_DEPTH}: {child_relative!r}")
+                for part in parts:
+                    try:
+                        validate_segment(part)
+                    except ValueError as error:
+                        raise PublicationError(f"{label} has invalid path {child_relative!r}: {error}") from error
+                    require(part.casefold() != ".git", f"{label} contains reserved Git metadata path: {child_relative!r}")
+                require(child_relative.casefold() != ".plugin-kit-ai.lock", f"{label} contains reserved ownership-marker path: {child_relative!r}")
+                folded = child_relative.casefold()
+                require(folded not in folded_paths or folded_paths[folded] == child_relative, f"{label} contains a case-confusable path collision")
+                folded_paths[folded] = child_relative
+            child_metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if stat.S_ISDIR(child_metadata.st_mode):
+                directory_count += 1
+                require(directory_count <= MAX_SNAPSHOT_DIRECTORIES, f"{label} has too many directories")
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=descriptor,
+                )
+                held.append(child)
+                require(_snapshot_identity(os.fstat(child)) == _snapshot_identity(child_metadata), f"{label} directory {child_relative!r} changed while opening")
+                traverse(child, child_relative)
+            else:
+                require(stat.S_ISREG(child_metadata.st_mode) and child_metadata.st_nlink == 1, f"{label} file {child_relative!r} must be a one-link regular file")
+                file_count += 1
+                total_bytes += child_metadata.st_size
+                maximum_files = PORTABLE_MAX_FILES if package_contract else MAX_PROJECTION_FILES
+                maximum_tree = PORTABLE_MAX_TREE_BYTES if package_contract else MAX_PROJECTION_TREE_BYTES
+                require(file_count <= maximum_files and total_bytes <= maximum_tree, f"{label} exceeds snapshot limits")
+                if package_contract:
+                    require(child_metadata.st_size <= PORTABLE_MAX_FILE_BYTES, f"{label} file {child_relative!r} exceeds its size limit")
+                child = os.open(name, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0), dir_fd=descriptor)
+                try:
+                    opened = os.fstat(child)
+                    require(_snapshot_identity(opened) == _snapshot_identity(child_metadata), f"{label} file {child_relative!r} changed while opening")
+                    contents[child_relative] = _read_snapshot_file(child, opened.st_size, f"{label} file {child_relative!r}")
+                    require(_snapshot_identity(os.fstat(child)) == _snapshot_identity(opened), f"{label} file {child_relative!r} changed while reading")
+                    entries[child_relative] = {
+                        "kind": "file", "mode": opened.st_mode, "size": opened.st_size,
+                        "identity": _snapshot_identity(opened),
+                    }
+                finally:
+                    os.close(child)
+
+    def revalidate(relative: str) -> None:
+        entry = entries[relative or "."]
+        if entry["kind"] != "dir":
+            return
+        descriptor = entry["descriptor"]
+        require(_snapshot_identity(os.fstat(descriptor)) == entry["identity"], f"{label} {relative or 'root'} changed after reading")
+        require(visible_names(descriptor, relative) == entry["children"], f"{label} directory {relative or '.'!r} changed after traversal")
+        for name in entry["children"]:
+            child_relative = name if not relative else f"{relative}/{name}"
+            child_entry = entries[child_relative]
+            flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+            if child_entry["kind"] == "dir":
+                flags |= getattr(os, "O_DIRECTORY", 0)
+            reopened = os.open(name, flags, dir_fd=descriptor)
+            try:
+                require(_snapshot_identity(os.fstat(reopened)) == child_entry["identity"], f"{label} member {child_relative!r} changed after reading")
+            finally:
+                os.close(reopened)
+            revalidate(child_relative)
+
+    try:
+        root_descriptor = ancestry[-1]
+        traverse(root_descriptor, "")
+        revalidate("")
+        # Also prove that the original absolute pathname still reaches every held ancestor.
+        identities = [_directory_identity(os.fstat(descriptor)) for descriptor in ancestry]
+        reopened_path, reopened = _open_absolute_directory(absolute, label)
+        try:
+            require(reopened_path == absolute and len(reopened) == len(ancestry), f"{label} authority is incomplete")
+            require(
+                [_directory_identity(os.fstat(descriptor)) for descriptor in reopened] == identities,
+                f"{label} pathname changed while reading",
+            )
+        finally:
+            for descriptor in reversed(reopened):
+                os.close(descriptor)
+        return entries, contents
+    except OSError as error:
+        raise PublicationError(f"{label} changed or contains an unsafe member: {error}") from error
+    finally:
+        for descriptor in reversed(held):
+            os.close(descriptor)
+        for descriptor in reversed(ancestry):
+            os.close(descriptor)
+
+
+def _projection_artifact_snapshot_details(root: Path) -> tuple[str, dict[str, bytes], set[str]]:
+    """Reproduce the released manager's packagesnapshot digest over a stable tree."""
+    entries, contents = _stable_tree_snapshot(root, "ChatGPT projection")
+    digest = hashlib.sha256()
+    for relative in sorted(name for name in entries if name != "."):
+        metadata = entries[relative]
+        if metadata["kind"] == "dir":
             digest.update(b"dir\0" + relative.encode() + b"\0false\0" + b"0\0")
             continue
-        executable = metadata.st_mode & 0o111 != 0
-        body = read_regular_bounded(path, min(MAX_PROJECTION_TREE_BYTES, metadata.st_size + 1), f"projection file {relative!r}")
-        require(len(body) == metadata.st_size, f"projection file {relative!r} changed size while hashing")
-        contents[relative] = body
-        digest.update(f"file\0{relative}\0{'true' if executable else 'false'}\0{metadata.st_size}\0".encode())
-        digest.update(body)
-    root_after = root.lstat()
-    require(
-        (root_before.st_dev, root_before.st_ino, root_before.st_mtime_ns, root_before.st_ctime_ns)
-        == (root_after.st_dev, root_after.st_ino, root_after.st_mtime_ns, root_after.st_ctime_ns),
-        "ChatGPT projection root changed while hashing",
-    )
-    return "sha256:" + digest.hexdigest(), contents
+        executable = metadata["mode"] & 0o111 != 0
+        digest.update(f"file\0{relative}\0{'true' if executable else 'false'}\0{metadata['size']}\0".encode())
+        digest.update(contents[relative])
+    directories = {name for name, metadata in entries.items() if name != "." and metadata["kind"] == "dir"}
+    return "sha256:" + digest.hexdigest(), contents, directories
+
+
+def projection_artifact_snapshot(root: Path) -> tuple[str, dict[str, bytes]]:
+    digest, contents, _ = _projection_artifact_snapshot_details(root)
+    return digest, contents
 
 
 def projection_artifact_digest(root: Path) -> str:
     return projection_artifact_snapshot(root)[0]
+
+
+def authenticated_package_projection(
+    root: Path, release: dict[str, Any], binding: dict[str, Any], product_id: str,
+) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, bytes]]:
+    """Authenticate source package bytes and derive the security-relevant projection."""
+    entries, files = _stable_tree_snapshot(root, "approved source package", package_contract=True)
+    manifest_body = files.get("plugin.json")
+    require(manifest_body is not None, "approved source package plugin.json is missing")
+    manifest = parse_json_bytes(manifest_body, "approved source package plugin.json", max_bytes=MAX_PROJECTION_BYTES)
+    require(isinstance(manifest, dict), "approved source package plugin.json must be an object")
+    require(
+        manifest.get("$schema") == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+        and manifest.get("name") == product_id and manifest.get("version") == release["package_version"],
+        "approved source package identity differs from the signed release",
+    )
+    tree = hashlib.sha256()
+    domain = b"agentplugins.package-tree\x00sha256\x00v1"
+    tree.update(len(domain).to_bytes(8, "big"))
+    tree.update(domain)
+    for relative in sorted(name for name in entries if name != "."):
+        metadata = entries[relative]
+        kind = b"directory" if metadata["kind"] == "dir" else b"file"
+        mode = (
+            b"100755" if metadata["kind"] == "file" and metadata["mode"] & 0o111
+            else b"100644" if metadata["kind"] == "file" else b"040000"
+        )
+        for field in (b"entry", relative.encode(), kind, mode, b""):
+            tree.update(len(field).to_bytes(8, "big"))
+            tree.update(field)
+        body = files.get(relative, b"")
+        tree.update(len(body).to_bytes(8, "big"))
+        if metadata["kind"] == "file":
+            tree.update(body)
+    identity = {
+        "tree_digest": "sha256:" + tree.hexdigest(),
+        "manifest_digest": "sha256:" + hashlib.sha256(manifest_body).hexdigest(),
+    }
+    require(
+        identity == {"tree_digest": release["tree_digest"], "manifest_digest": release["manifest_digest"]},
+        "approved source package bytes differ from the signed release",
+    )
+    source_members = set(entries) - {"."}
+    require(
+        source_members <= {"plugin.json", "mcp.json", "README.md", "NOTICE"}
+        and "README.md" in files and all(entries[name]["kind"] == "file" for name in source_members),
+        "approved source package is outside the supported remote-app projection contract",
+    )
+    mcp_body = files.get("mcp.json")
+    require(mcp_body is not None, "approved source package mcp.json is missing")
+    portable = parse_json_bytes(mcp_body, "approved source package mcp.json", max_bytes=MAX_PROJECTION_BYTES)
+    portable = exact_object(portable, {"mcpServers"}, {"$schema"}, "approved source package mcp.json")
+    require(portable.get("$schema") == "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", "approved source package mcp.json schema is invalid")
+    servers = portable["mcpServers"]
+    require(isinstance(servers, dict) and set(servers) == {binding["mcp_server"]}, "approved source package has ambiguous MCP servers")
+    server = exact_object(servers[binding["mcp_server"]], {"type", "url"}, set(), "approved source package MCP server")
+    require(server["type"] == "streamable-http" and isinstance(server["url"], str), "approved source package MCP transport is invalid")
+    expected_mcp = openai_mcp(portable, product_id)
+    expected_manifest = openai_manifest(manifest, False, True, True)
+    expected_files = {
+        "README.md": files["README.md"],
+        "assets/icon.png": read_regular_bounded(BRAND_ASSETS / "icon.png", MAX_PROJECTION_TREE_BYTES, "approved OpenAI icon"),
+        "assets/logo.png": read_regular_bounded(BRAND_ASSETS / "logo.png", MAX_PROJECTION_TREE_BYTES, "approved OpenAI logo"),
+    }
+    return expected_mcp, server["url"], expected_manifest, expected_files
 
 
 def validate_state(
@@ -430,27 +649,54 @@ def _projection_object(files: dict[str, bytes], name: str, label: str) -> dict[s
     return value
 
 
-def validate_projection(files: dict[str, bytes], binding: dict[str, Any], product_id: str) -> str:
+def validate_projection(
+    files: dict[str, bytes], binding: dict[str, Any], product_id: str,
+    expected_mcp: dict[str, Any], expected_url: str, expected_manifest: dict[str, Any],
+    expected_files: dict[str, bytes], directories: set[str],
+) -> tuple[str, dict[str, str]]:
     manifest = _projection_object(files, ".codex-plugin/plugin.json", "ChatGPT official manifest")
-    require(
-        manifest.get("name") == product_id
-        and manifest.get("apps") == "./.app.json"
-        and manifest.get("mcpServers") == "./.mcp.json"
-        and "hooks" not in manifest,
-        "ChatGPT official manifest does not bind the exact app and MCP projection",
-    )
+    require(manifest == expected_manifest, "ChatGPT official manifest was not derived from the approved source package")
     app = _projection_object(files, ".app.json", "ChatGPT .app.json")
     expected_app = {"apps": {binding["app_key"]: {"id": binding["id"]}}}
     require(app == expected_app, "ChatGPT .app.json differs from the signed target")
     mcp = _projection_object(files, ".mcp.json", "ChatGPT .mcp.json")
+    require(mcp == expected_mcp, "ChatGPT .mcp.json was not derived from the approved source package")
+    expected_members = {
+        ".codex-plugin/plugin.json", ".app.json", ".mcp.json", *expected_files,
+    }
+    require(
+        set(files) == expected_members and directories == {".codex-plugin", "assets"},
+        "ChatGPT projection contains members outside the exact approved transformation",
+    )
+    for name, body in expected_files.items():
+        require(files[name] == body, f"ChatGPT projection file {name!r} differs from the approved transformation")
     servers = exact_object(mcp, {"mcpServers"}, set(), "ChatGPT .mcp.json")["mcpServers"]
     require(isinstance(servers, dict) and set(servers) == {binding["mcp_server"]}, "ChatGPT .mcp.json has ambiguous MCP servers")
     server = exact_object(servers[binding["mcp_server"]], {"url", "type"}, set(), "ChatGPT MCP server")
     require(server["type"] == "http" and isinstance(server["url"], str), "ChatGPT MCP projection is invalid")
-    parsed = urlsplit(server["url"])
+    require(server["url"] == expected_url, "ChatGPT MCP URL differs from the approved source package")
+    parsed = urlsplit(expected_url)
+    try:
+        expected_url.encode("ascii")
+        port = parsed.port
+    except (UnicodeEncodeError, ValueError) as error:
+        raise PublicationError(f"ChatGPT MCP URL is not canonical ASCII HTTPS: {error}") from error
     require(parsed.scheme == "https" and parsed.hostname is not None and parsed.username is None and parsed.password is None and not parsed.query and not parsed.fragment, "ChatGPT MCP URL is unsafe")
-    require(parsed.hostname == parsed.hostname.lower() and parsed.port in (None, 443), "ChatGPT MCP endpoint is not canonical HTTPS")
-    return parsed.hostname
+    path_segments = parsed.path.split("/")[1:]
+    require(
+        parsed.hostname == parsed.hostname.lower() and port is None
+        and parsed.netloc == parsed.hostname and parsed.path.startswith("/")
+        and all(segment not in {"", ".", ".."} for segment in path_segments)
+        and "%" not in parsed.path and "\\" not in parsed.path
+        and expected_url == f"https://{parsed.hostname}{parsed.path}",
+        "ChatGPT MCP endpoint is not canonical HTTPS",
+    )
+    digests = {
+        "app_digest": "sha256:" + hashlib.sha256(files[".app.json"]).hexdigest(),
+        "mcp_digest": "sha256:" + hashlib.sha256(files[".mcp.json"]).hexdigest(),
+        "manifest_digest": "sha256:" + hashlib.sha256(files[".codex-plugin/plugin.json"]).hexdigest(),
+    }
+    return expected_url, digests
 
 
 def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -462,8 +708,13 @@ def _directory_identity(metadata: os.stat_result) -> tuple[int, int]:
 
 
 def _open_authority(path: Path) -> tuple[Path, list[int], int]:
-    absolute = path.resolve(strict=True)
-    require(absolute.is_absolute() and absolute.name not in {"", ".", ".."}, "released CLI path is invalid")
+    require(path.is_absolute(), "released CLI path must be absolute")
+    absolute = path
+    require(
+        absolute.name not in {"", ".", ".."}
+        and all(component not in {"", ".", ".."} for component in absolute.parts[1:]),
+        "released CLI path is invalid",
+    )
     directory_flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptors = [os.open(absolute.anchor, directory_flags)]
     try:
@@ -478,8 +729,11 @@ def _open_authority(path: Path) -> tuple[Path, list[int], int]:
         raise
 
 
-def _revalidate_authority(path: Path, descriptors: list[int], identities: list[tuple[int, int]]) -> None:
-    absolute = path.absolute()
+def _revalidate_authority(
+    path: Path, descriptors: list[int], identities: list[tuple[int, int]],
+    leaf_identity: tuple[int, int, int, int, int],
+) -> None:
+    absolute = path
     require(len(descriptors) == len(identities), "released CLI ancestor authority is incomplete")
     for index, descriptor in enumerate(descriptors):
         require(_directory_identity(os.fstat(descriptor)) == identities[index], "released CLI ancestor authority changed")
@@ -494,6 +748,14 @@ def _revalidate_authority(path: Path, descriptors: list[int], identities: list[t
             require(_directory_identity(os.fstat(reopened)) == identities[index], "released CLI ancestor pathname was replaced")
         finally:
             os.close(reopened)
+    leaf = os.open(
+        absolute.name, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=descriptors[-1],
+    )
+    try:
+        require(_identity(os.fstat(leaf)) == leaf_identity, "released CLI leaf pathname was replaced")
+    finally:
+        os.close(leaf)
 
 
 def _digest_descriptor(descriptor: int) -> tuple[str, tuple[int, int, int, int, int]]:
@@ -553,16 +815,25 @@ def _run_authenticated_binary(descriptor: int) -> subprocess.CompletedProcess[st
 
 
 def validate_binary(path: Path, installer_version: str) -> str:
-    authority_path, ancestors, descriptor = _open_authority(path)
+    try:
+        authority_path, ancestors, descriptor = _open_authority(path)
+    except OSError as error:
+        raise PublicationError(f"released CLI path is unsafe: {error}") from error
     try:
         ancestor_identities = [_directory_identity(os.fstat(item)) for item in ancestors]
         digest, identity = _digest_descriptor(descriptor)
-        _revalidate_authority(authority_path, ancestors, ancestor_identities)
+        try:
+            _revalidate_authority(authority_path, ancestors, ancestor_identities, identity)
+        except OSError as error:
+            raise PublicationError(f"released CLI path changed before version verification: {error}") from error
         try:
             completed = _run_authenticated_binary(descriptor)
         except (OSError, subprocess.SubprocessError) as error:
             raise PublicationError(f"released CLI version check failed: {error}") from error
-        _revalidate_authority(authority_path, ancestors, ancestor_identities)
+        try:
+            _revalidate_authority(authority_path, ancestors, ancestor_identities, identity)
+        except OSError as error:
+            raise PublicationError(f"released CLI path changed during version verification: {error}") from error
         after_digest, after_identity = _digest_descriptor(descriptor)
         require((after_digest, after_identity) == (digest, identity), "released CLI binary changed during version verification")
         require(
@@ -696,19 +967,34 @@ def build(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     state_body = read_regular_bounded(args.state, MAX_EVIDENCE_BYTES, "released CLI state")
     state = strict_state_json_loads(state_body)
     require(isinstance(state, dict), "released CLI state must be an object")
-    managed_digest, projection_files = projection_artifact_snapshot(args.projection_root)
+    expected_mcp, approved_mcp_url, expected_manifest, expected_files = authenticated_package_projection(
+        args.package_root, release, binding, args.product_id,
+    )
+    managed_digest, projection_files, projection_directories = _projection_artifact_snapshot_details(args.projection_root)
     validate_state(
         state, args.projection_root, product_id=args.product_id, distribution=distribution,
         release=release, snapshot=snapshot, snapshot_digest=snapshot_digest,
         binding=binding, installation_id=installation_id, physical_artifact_id=physical_artifact_id,
         managed_digest=managed_digest,
     )
-    endpoint_host = validate_projection(projection_files, binding, args.product_id)
+    mcp_url, projection_digests = validate_projection(
+        projection_files, binding, args.product_id, expected_mcp, approved_mcp_url,
+        expected_manifest, expected_files, projection_directories,
+    )
     binary_digest = validate_binary(args.cli_binary, args.installer_version)
+    endpoint_host = urlsplit(mcp_url).hostname
+    require(endpoint_host is not None, "ChatGPT MCP endpoint has no host")
     source = release["package_source"]
     receipt = {
         "application_id": args.app_id,
         "product_id": args.product_id,
+        "projection": {
+            "app_json_digest": projection_digests["app_digest"],
+            "codex_manifest_digest": projection_digests["manifest_digest"],
+            "managed_digest": managed_digest,
+            "mcp_json_digest": projection_digests["mcp_digest"],
+            "mcp_url": mcp_url,
+        },
         "tuple": {
             "adapter_version": args.installer_version,
             "architecture": "amd64",
@@ -744,6 +1030,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--minimum-sequence", type=int, default=1)
     value.add_argument("--add-evidence", type=Path, required=True)
     value.add_argument("--state", type=Path, required=True)
+    value.add_argument("--package-root", type=Path, required=True)
     value.add_argument("--projection-root", type=Path, required=True)
     value.add_argument("--cli-binary", type=Path, required=True)
     value.add_argument("--installer-version", required=True)
