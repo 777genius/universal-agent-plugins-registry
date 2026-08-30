@@ -461,8 +461,10 @@ class WorkflowContractTests(unittest.TestCase):
                 "from observer.fixed_runner import reviewed_service_identities",
                 "owner_uid,owner_gid=os.geteuid(),os.getegid()\n"
                 "def reviewed_service_identities():\n"
-                "    return {name:(owner_uid,owner_gid,'fixture') for name in "
-                "('codex','cursor','kiro','control','observer','caddy','egress')}",
+                "    identities={name:(owner_uid,owner_gid,'fixture') for name in "
+                "('codex','cursor','kiro','control','observer','caddy')}\n"
+                "    identities['egress']=(1,1,'fixture')\n"
+                "    return identities",
             )
             source = source.replace(
                 'config_gid=grp.getgrnam("uap-observer-adapter-config").gr_gid', "config_gid=owner_gid",
