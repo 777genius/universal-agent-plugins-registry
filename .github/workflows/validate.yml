@@ -45,7 +45,7 @@ jobs:
         run: scripts/build-bridges check
 
   portable-catalog:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +55,22 @@ jobs:
         with:
           python-version: "3.13"
       - run: python3 -m pip install check-jsonschema==0.37.4 cryptography==46.0.3 jsonschema==4.25.1 skills-ref==0.1.1 PyYAML==6.0.3
+      - name: Install the current stable Ubuntu bubblewrap package and record namespace policy
+        run: |
+          test "$RUNNER_OS" = Linux
+          sudo apt-get update
+          candidate="$(apt-cache policy bubblewrap | awk '$1 == "Candidate:" {print $2}')"
+          test -n "$candidate"
+          test "$candidate" != '(none)'
+          sudo apt-get install --yes --no-install-recommends "bubblewrap=$candidate"
+          test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$candidate"
+          /usr/bin/bwrap --version
+          uname -r
+          for setting in /proc/sys/kernel/unprivileged_userns_clone /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; do
+            if test -r "$setting"; then printf '%s=' "$setting"; cat "$setting"; fi
+          done
+      - name: Require Linux child confinement before catalog validation
+        run: python3 -m unittest tests.test_catalog_process_isolation -v
       - run: check-jsonschema --schemafile schemas/1.0.0/plugin.schema.json plugins/*/plugin.json
       - run: check-jsonschema --schemafile schemas/1.0.0/mcp.schema.json plugins/*/mcp.json
       - run: check-jsonschema --schemafile schemas/openai-app-bindings.schema.json compat/openai/app-bindings.json
