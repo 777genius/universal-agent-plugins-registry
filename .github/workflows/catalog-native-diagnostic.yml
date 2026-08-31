@@ -245,6 +245,7 @@ jobs:
                                   target = item.get("target")
                                   matches = [binding for binding in bindings if target in binding.get("affected_surfaces", [binding.get("client_id")])]
                                   output = item.get("output", {})
+                                  plan = output.get("result", {}).get("plan", {}) if isinstance(output.get("result"), dict) else {}
                                   revision = matches[0].get("package_revision", {}) if len(matches) == 1 else {}
                                   comparisons.append({
                                       "target": target, "unique_binding": len(matches) == 1,
@@ -253,6 +254,7 @@ jobs:
                                       "revision_matches_output": revision.get("resolved_revision") == output.get("revision"),
                                       "distribution_matches_installation": revision.get("distribution_id") == directory.get("distribution_id"),
                                       "release_matches_installation": revision.get("release_sequence") == directory.get("desired_release_sequence"),
+                                      "physical_artifact_matches": len(matches) == 1 and matches[0].get("physical_artifact_id") == plan.get("physical_artifact_id"),
                                   })
                           fixed["revision_comparisons"] = comparisons
                       error = value.get("error")
