@@ -144,8 +144,11 @@ them.
    [same-VM reset PR #153](https://github.com/777genius/universal-agent-plugins/pull/153).
    Preserve this advanced coherent PR; do not replace it with a late stack.
    A green fixture suite proves recovery logic, not an actual VM reset.
-2. Merge code and this evidence-plan checkpoint before freezing the final
-   catalog SHA. Run current-main validation and the credential-free Live E2E.
+2. Merge code, this evidence-plan checkpoint, and any accepted Chrome-target
+   schema/site/policy PR from the parallel task before freezing the final
+   catalog SHA. Coordinate that boundary explicitly; do not freeze while an
+   accepted policy change is still pending. Run current-main validation and
+   the credential-free Live E2E.
 3. Confirm old-host machine identity, disk budget below 80%, memory and swap.
    Reuse only the one existing test VM. Prepare and validate exact `0.1.24`
    inputs, then follow the reviewed same-VM reset runbook. No real project,
@@ -1020,7 +1023,7 @@ rewrite and no database service.
 ## 17. Implementation order
 
 ```text
-Safe same-VM reset + current evidence plan
+Safe same-VM reset + current evidence plan + accepted Chrome policy changes
   -> frozen catalog main / verified public CLI 0.1.24
   -> current-main validation and credential-free Live E2E
   -> capacity check and reuse existing isolated VM
