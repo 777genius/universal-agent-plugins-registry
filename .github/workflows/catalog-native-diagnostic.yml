@@ -201,7 +201,31 @@ jobs:
               print(json.dumps(summary, sort_keys=True), flush=True)
           def diagnostic_child(argv, **kwargs):
               result = original_child(argv, **kwargs)
-              if Path(argv[0]).name == "claude" and argv[1:] == ["plugin", "list", "--json"]:
+              if Path(argv[0]).name.startswith("agentplugins_") and len(argv) > 1 and argv[1] == "update":
+                  fixed = {"label": "Released CLI update envelope", "exit": result.returncode,
+                           "stdout_bytes": len(result.stdout.encode()), "stderr_present": bool(result.stderr)}
+                  try:
+                      value = json.loads(result.stdout)
+                      fixed.update(json_valid=isinstance(value, dict), command=value.get("command"), result=value.get("result"))
+                      data = value.get("data")
+                      if isinstance(data, dict):
+                          fixed.update(data_keys=sorted(data), status=data.get("status"), succeeded=data.get("succeeded"),
+                                       failed=data.get("failed"), targets=len(data.get("targets", [])) if isinstance(data.get("targets"), list) else None)
+                          fixed["target_shapes"] = [{
+                              "target": item.get("target"), "status": item.get("status"),
+                              "output_keys": sorted(item.get("output", {})) if isinstance(item.get("output"), dict) else [],
+                              "result_keys": sorted(item.get("output", {}).get("result", {}))
+                                  if isinstance(item.get("output", {}), dict) and isinstance(item.get("output", {}).get("result"), dict) else [],
+                          } for item in data.get("targets", []) if isinstance(item, dict)]
+                      error = value.get("error")
+                      if isinstance(error, dict):
+                          fixed["error_keys"] = sorted(error)
+                          code = error.get("code")
+                          fixed["error_code"] = code if isinstance(code, str) and gate.re.fullmatch(r"[A-Z0-9_.-]{1,80}", code) else None
+                  except (ValueError, TypeError):
+                      fixed["json_valid"] = False
+                  print(json.dumps(fixed, sort_keys=True), flush=True)
+              elif Path(argv[0]).name == "claude" and argv[1:] == ["plugin", "list", "--json"]:
                   summarize("original Claude listing", result)
                   home = (root / "home").resolve(strict=True)
                   config = (home / ".claude").resolve(strict=True)
