@@ -115,7 +115,7 @@ them.
   `sha256:7d2f6da0598cb52a019d06cfe95889a4d3fe0f6f33bd16681c7c448457c2cab6`.
   Discovery sequence 19 is **not** the staged reviewed Directory sequence 19.
   Scheduled refreshes are functioning; do not dispatch a duplicate scan.
-- The current Chrome upstream PR candidate
+- The historical 2026-08-30 Chrome upstream PR candidate
   `ChromeDevTools/chrome-devtools-mcp@7e193aed8baa23c692355237a55237540b36cb2f`
   passed the public `0.1.24` consumer checks in
   [run 33331394696](https://github.com/777genius/universal-agent-plugins/actions/runs/33331394696),
@@ -128,26 +128,28 @@ them.
   [PR #155](https://github.com/777genius/universal-agent-plugins/pull/155):
   `tests/e2e/results/agentplugins-chrome-devtools-multiclient-2026-08-30.json`,
   SHA-256 `3b12546767ae1a8453516e1689031599f9f09d96bf54ad6d46c63d90a111bf77`.
+- Chrome #2623 now targets `02372c4d47ad257773b2b80c7d7fd056d7067be0`; the old eight-client matrix does not transfer to this head.
+  PR #159 records OpenCode `1.18.25` real `new_page`/`take_snapshot` success for the fixed root package and exact Directory bridge bytes in `tests/e2e/results/chrome-devtools-live-clients-2026-08-31.json`, not public short-alias proof.
+  Gemini `0.57.0` connected for MCP discovery only; model execution returned `UNSUPPORTED_CLIENT`, so no Gemini runtime is claimed.
 - ChatGPT's current evidence is visible app activation plus an assistant
   response. Tool attribution is inconclusive. The separate public MCP read is
   authoritative for that endpoint, not proof that ChatGPT invoked it. Keep
   these claims separate and bind any new human attestation to its exact run.
-- The old host was at 83% disk usage on 2026-08-31. Its sole UAP instance,
-  `uap-observer-e2e-e352fcbf`, was stopped. Hosted E2E is blocked until usage is
-  below the agreed 80% limit. No new VM, container, or snapshot is authorized.
+- The old host was at 88% disk usage on 2026-08-31. Its sole UAP instance,
+  `uap-observer-e2e-e352fcbf`, was STOPPED; total LXD usage was 7.8 GB. Remaining owned cleanup cannot bring the host below 80%.
+  Hosted E2E stays blocked until usage is below 80%. No new VM, container, or snapshot is authorized.
   Do not delete preserved profile/authentication archives or other projects
   to make room; only remove independently identified disposable UAP data.
 
 ### 3.3 Remaining execution order
 
-1. Finish exact-head review and Linux CI for
+1. Complete the separate-account GitHub approval and merge for
    [same-VM reset PR #153](https://github.com/777genius/universal-agent-plugins/pull/153).
-   Preserve this advanced coherent PR; do not replace it with a late stack.
+   Exact head `9bd602a35986f3a82433b1f1de3f855f7c4ae4d2` has all CI green and two technical reviews. Main still requires separate-account GitHub approval, not satisfied by chat; neither approval nor merge is complete. Preserve this coherent PR without a late replacement stack.
    A green fixture suite proves recovery logic, not an actual VM reset.
-2. Merge code, this evidence-plan checkpoint, and any accepted Chrome-target
-   schema/site/policy PR from the parallel task before freezing the final
+2. Merge code, this checkpoint, and atomic PR #159 Chrome policy plus its three current Directory source pins before freezing the final
    catalog SHA. Coordinate that boundary explicitly; do not freeze while an
-   accepted policy change is still pending. Run current-main validation and
+   accepted policy/pin change is still pending. CLI/npm remain `0.1.24`; no new CLI release is needed. Run current-main validation and
    the credential-free Live E2E.
 3. Confirm old-host machine identity, disk budget below 80%, memory and swap.
    Reuse only the one existing test VM. Prepare and validate exact `0.1.24`
@@ -173,6 +175,10 @@ them.
 If another code change is required after the freeze, rebind only the affected
 proofs to the new exact SHA. Do not relabel old artifacts or restart already
 proved independent release/platform checks.
+
+After proof, protected `materialize_launch_evidence` mechanically changes main only in `registry/directory.json`, changing its whole-file digest.
+After successful persistence, review a scoped refresh of the three current source pins (production config, validator, expected test digest) before claiming current-main CI green.
+Keep the original publication evidence SHA and proved tuple unchanged; the refreshed current tuple does not authorize rerunning or relabeling historical evidence. Existing code guards remain intact.
 
 ### 3.4 Historical launch checkpoint (superseded)
 
@@ -894,17 +900,17 @@ Start with the three existing bridges:
 Current cohort:
 
 - [Chrome DevTools #2623](https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2623)
-  at current PR head `7e193aed8baa23c692355237a55237540b36cb2f`;
+  at current PR head `02372c4d47ad257773b2b80c7d7fd056d7067be0`;
 - [Cloudflare #465](https://github.com/cloudflare/mcp-server-cloudflare/pull/465)
   at fork head `3897acdb389b453205c559e2b79acc8bd5909bfa`;
 - [GitHub MCP Server #3169](https://github.com/github/github-mcp-server/pull/3169)
   at fork head `14092de9940741511d224e0d7071ac02910bda11`.
 
-All three current heads passed isolated `0.1.24` add, info, and remove checks
+The historical Chrome `7e193aed8baa23c692355237a55237540b36cb2f` and the listed Cloudflare/GitHub heads passed isolated `0.1.24` add, info, and remove checks
 for Codex, Cursor, and Kiro in
 [run 33331394696](https://github.com/777genius/universal-agent-plugins/actions/runs/33331394696).
 That matrix does not claim tool runtime or authentication. The separately
-scoped five-additional-client Chrome evidence is described in section 3.2.
+scoped current-head Chrome lifecycle, OpenCode runtime, and Gemini discovery evidence is described in section 3.2; the historical matrix is not current-head proof.
 
 ## 13. Verification gates
 
@@ -989,7 +995,7 @@ Kill switches:
       earlier desktop/mobile evidence is retained without changing its tuple.
 - [ ] Fresh external fork submission matches frozen main and publication20;
       close the test PR without adding its package to the live Directory.
-- [x] All three upstream packaging PRs remain open and passed their current
+- [x] All three upstream packaging PRs remain open and passed historical
       exact-head `0.1.24` add/info/remove checks; Chrome has separately scoped
       evidence for five additional clients.
 - [x] No install telemetry or implicit source switching is introduced.
@@ -1023,7 +1029,7 @@ rewrite and no database service.
 ## 17. Implementation order
 
 ```text
-Safe same-VM reset + current evidence plan + accepted Chrome policy changes
+Reviewed same-VM reset + current evidence plan + atomic PR159 Chrome policy/source-pin cutover
   -> frozen catalog main / verified public CLI 0.1.24
   -> current-main validation and credential-free Live E2E
   -> capacity check and reuse existing isolated VM
