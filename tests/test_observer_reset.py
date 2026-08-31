@@ -894,6 +894,111 @@ class ObserverResetTests(unittest.TestCase):
                 with self.assertRaisesRegex(reset.ResetError, "pending work"):
                     self.controller().apply(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
                 self.assertTrue(self.path("/opt/uap-observer-current").is_symlink())
+                self.assertEqual(self.systemd.events, [])
+                self.assertFalse(self.controller().journal_path.exists())
+
+    def test_pending_work_arriving_during_stop_restores_old_service_and_allows_rollback(self):
+        before = {unit: dict(state) for unit, state in self.systemd.states.items()}
+        real_stop = self.systemd.stop
+        pending = self.path("/var/lib/uap-observer-human/pending/fixture")
+
+        def stop_and_queue(units):
+            real_stop(units)
+            if "uap-observer-runner.service" in units:
+                pending.write_text("pending test request\n")
+
+        controller = self.controller()
+        with mock.patch.object(self.systemd, "stop", side_effect=stop_and_queue):
+            with self.assertRaisesRegex(reset.ResetError, "pending work"):
+                controller.apply(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
+        self.assertEqual(self.systemd.states, before)
+        self.assertEqual(controller._read_journal()["phase"], "prepared")
+        result = controller.rollback(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
+        self.assertEqual(result["phase"], "rolled_back")
+        self.assertEqual(self.systemd.states, before)
+        self.assertEqual(pending.read_text(), "pending test request\n")
+        self.assertFalse(controller.journal_path.exists())
+
+    def test_legacy_lock_mode_is_normalized_on_the_same_held_inode(self):
+        lock = self.file("/run/lock/uap-observer-install.lock", b"lock\n", 0o644)
+        before = lock.stat()
+        with self.controller().locked() as descriptor:
+            self.assertEqual(os.fstat(descriptor).st_ino, before.st_ino)
+            self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(lock.read_bytes(), b"lock\n")
+
+    def test_journal_parent_is_durable_before_journal_contents(self):
+        controller = self.controller()
+        events = []
+        real_fsync = reset.fsync_directory
+
+        def record_fsync(path):
+            events.append(path)
+            real_fsync(path)
+
+        with mock.patch.object(reset, "fsync_directory", side_effect=record_fsync):
+            controller._write_journal({"fixture": "journal"}, create=True)
+        self.assertIn(controller.journal_dir.parent, events)
+        self.assertLess(events.index(controller.journal_dir.parent), events.index(controller.journal_dir))
+
+    def test_installer_adapter_partials_roll_back_across_each_rename_and_unlink(self):
+        paths = [path for path in reset.PARTIALS if path in reset.HARDLINKED_ADAPTER_PARTIALS]
+        failpoints = [None] + [
+            f"{operation}:{index}"
+            for operation in ("after-candidate-quarantine", "after-delete")
+            for index in range(len(paths))
+        ]
+        for failpoint in failpoints:
+            with self.subTest(failpoint=failpoint):
+                self.tearDown()
+                self.setUp()
+                with self.assertRaises(reset.InjectedFailure):
+                    self.controller(failpoint=FailOnce("after-applied")).apply(
+                        MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE,
+                    )
+                original = self.file(paths[0], b"adapter fixture\n", 0o555)
+                for path in paths[1:]:
+                    os.link(original, self.path(path))
+                if failpoint:
+                    with self.assertRaises(reset.InjectedFailure):
+                        self.controller(failpoint=FailOnce(failpoint)).rollback(
+                            MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE,
+                        )
+                result = self.controller().rollback(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
+                self.assertEqual(result["phase"], "rolled_back")
+                self.controller()._validate_install(OLD_INSTALL, OLD_CLOSURE)
+                self.assertTrue(all(not self.path(path).exists() for path in paths))
+                self.assertEqual(list(self.root.rglob(".uap-observer-reset-*")), [])
+
+    def test_adapter_partial_hardlink_outside_cleanup_is_retained(self):
+        with self.assertRaises(reset.InjectedFailure):
+            self.controller(failpoint=FailOnce("after-applied")).apply(
+                MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE,
+            )
+        paths = [path for path in reset.PARTIALS if path in reset.HARDLINKED_ADAPTER_PARTIALS]
+        original = self.file(paths[0], b"adapter fixture\n", 0o555)
+        for path in paths[1:]:
+            os.link(original, self.path(path))
+        external = self.path("/root/external-adapter")
+        os.link(original, external)
+        with self.assertRaisesRegex(reset.ResetError, "hardlinked.*escapes"):
+            self.controller().rollback(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
+        self.assertEqual(external.read_bytes(), b"adapter fixture\n")
+        self.assertEqual(external.stat().st_nlink, 6)
+        self.controller()._validate_install(OLD_INSTALL, OLD_CLOSURE)
+
+    def test_installer_resolved_tombstone_is_removed_on_rollback(self):
+        with self.assertRaises(reset.InjectedFailure):
+            self.controller(failpoint=FailOnce("after-applied")).apply(
+                MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE,
+            )
+        tombstone = self.mkdir("/opt/uap-observer-source.new.resolved-tombstone", 0o700)
+        (tombstone / "fixture").write_text("resolved installer staging\n")
+        self.assertEqual(
+            self.controller().rollback(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)["phase"],
+            "rolled_back",
+        )
+        self.assertFalse(tombstone.exists())
 
     def test_install_lock_excludes_reset(self):
         lock = self.path("/run/lock/uap-observer-install.lock")
@@ -1527,6 +1632,23 @@ class ObserverResetTests(unittest.TestCase):
         self.assertIn('"--resolve", f"{host}:443:127.0.0.1"', source)
         self.assertIn('"--noproxy", "*"', source)
         self.assertIn('"--proxy", "http://127.0.0.2:8766", "--noproxy", ""', source)
+
+    def test_public_hop_requires_the_observer_get_response_not_a_proxy_error(self):
+        for status in ("404", "200", "403", "502", "000"):
+            with self.subTest(status=status), mock.patch.object(
+                reset.Systemd, "validate_public_hop_contract",
+            ), mock.patch.object(reset.Systemd, "public_hop_pid", return_value=4242), mock.patch.object(
+                reset.Path, "resolve", return_value=Path(f"/opt/uap-observer-closures/{NEW_CLOSURE}/bin/caddy"),
+            ), mock.patch.object(reset.Path, "read_text", return_value="observer.example.test {\n}\n"), mock.patch.object(
+                reset, "metadata", return_value={"kind": "regular", "nlink": 1, "mode": 0o600},
+            ), mock.patch.object(reset, "regular_file_digest"), mock.patch.object(
+                reset.subprocess, "run", return_value=mock.Mock(stdout=status),
+            ):
+                if status == "404":
+                    reset.Systemd().verify_public_hop(NEW_CLOSURE)
+                else:
+                    with self.assertRaisesRegex(reset.ResetError, "observer GET endpoint"):
+                        reset.Systemd().verify_public_hop(NEW_CLOSURE)
 
     def test_installer_accepts_only_reviewed_inherited_fd9(self):
         installer = (ROOT / "deploy/uap-observer-install.sh").read_text()

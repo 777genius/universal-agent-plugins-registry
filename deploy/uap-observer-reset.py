@@ -78,6 +78,7 @@ PREPARED_TREE_DOMAIN = b"uap-observer-reset-prepared-tree-v1\0"
 CLIENTS = ("codex", "cursor", "kiro")
 PARTIALS = (
     "/opt/uap-observer-source.new",
+    "/opt/uap-observer-source.new.resolved-tombstone",
     "/opt/uap-observer-venv.new",
     "/opt/uap-observer-runtime.new",
     "/opt/uap-observer-current.new",
@@ -99,6 +100,13 @@ PARTIALS = (
     "/etc/uap-observer-adapters.json.new",
     "/etc/caddy/Caddyfile.new",
 )
+HARDLINKED_ADAPTER_PARTIALS = frozenset((
+    "/usr/local/libexec/uap-observer-fixed-adapter.new",
+    "/usr/local/libexec/uap-observer-adapter-runtime.new",
+    "/usr/local/libexec/uap-observer-adapter-notion.new",
+    "/usr/local/libexec/uap-observer-adapter-chatgpt.new",
+    "/usr/local/libexec/uap-observer-adapter-consent.new",
+))
 
 
 class ResetError(RuntimeError):
@@ -912,8 +920,8 @@ class Systemd:
             check=True, text=True, env=environment,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        if not result.stdout.isdecimal() or result.stdout == "000":
-            raise ResetError("public Caddy hop endpoint did not respond")
+        if result.stdout != "404":
+            raise ResetError("public Caddy hop did not reach the observer GET endpoint")
 
 
 class RuntimeProbe:
@@ -940,6 +948,9 @@ class RuntimeProbe:
                     continue
                 if b"uap-observer" in cgroups or b"/opt/uap-observer-current/" in command:
                     raise ResetError("observer runtime process remains")
+        self.assert_no_pending_work()
+
+    def assert_no_pending_work(self) -> None:
         for logical in (
             "/var/lib/uap-observer/jobs",
             "/var/lib/uap-observer-human/pending",
@@ -1157,11 +1168,22 @@ class ResetController:
                     if self.owned:
                         os.close(self.descriptor)
                     raise ResetError("another observer install or reset is active") from error
-                observed = metadata(lock_path)
-                if observed["kind"] != "regular" or observed["nlink"] != 1 or observed["uid"] != controller.layout.expected_uid:
+                try:
+                    observed = metadata(lock_path)
+                    opened = metadata_from_stat(os.fstat(self.descriptor))
+                    if (
+                        observed["kind"] != "regular" or observed["nlink"] != 1
+                        or observed["uid"] != controller.layout.expected_uid
+                        or stable_metadata(opened) != stable_metadata(observed)
+                    ):
+                        raise ResetError("observer install lock path metadata differs")
+                    # Older standalone installs created 0644 under umask 022.
+                    # Normalize the held inode, never replace a live lock file.
+                    os.fchmod(self.descriptor, 0o600)
+                except BaseException:
                     if self.owned:
                         os.close(self.descriptor)
-                    raise ResetError("observer install lock path metadata differs")
+                    raise
                 return self.descriptor
 
             def __exit__(self, *_args: Any) -> None:
@@ -1691,7 +1713,10 @@ class ResetController:
     def _entry(self, logical: str, transaction: str, candidate: bool = False) -> dict[str, Any]:
         path = self.layout.path(logical)
         observed = metadata(path)
-        if observed["kind"] == "regular" and observed["nlink"] != 1:
+        if (
+            observed["kind"] == "regular" and observed["nlink"] != 1
+            and not (candidate and logical in HARDLINKED_ADAPTER_PARTIALS)
+        ):
             raise ResetError("managed reset path is hardlinked")
         assert_same_mount_as_parent(path, observed["kind"])
         return {
@@ -1712,6 +1737,8 @@ class ResetController:
         self.journal_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.journal_dir, 0o700)
         validate_root_control(self.journal_dir, self.layout.expected_uid, 0o700, "directory")
+        # Persist the journal directory entry before any managed path moves.
+        fsync_directory(self.journal_dir.parent)
         temporary = self.journal_temporary
         encoded = json.dumps(journal, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
         if temporary.exists() or temporary.is_symlink():
@@ -2209,6 +2236,7 @@ class ResetController:
                 if journal["phase"] not in {"prepared", "quarantining", "applied", "new-ready"}:
                     raise ResetError(f"reset transaction is {journal['phase']}; apply cannot continue")
             else:
+                self.runtime_probe.assert_no_pending_work()
                 states = self._states()
                 prepared = self._prepared()
                 if prepared["manifest"]["catalog_sha"] != catalog:
@@ -2256,7 +2284,17 @@ class ResetController:
                 self.executor.verify_new(self, journal)
                 self._assert_installed_projections(journal["prepared"]["manifest"])
                 return self._status(journal)
-            self._stop_and_quiesce()
+            try:
+                self._stop_and_quiesce()
+            except Exception as primary:
+                if journal["phase"] == "prepared":
+                    try:
+                        self._restore_unmoved_old(journal)
+                    except Exception as restore_error:
+                        raise ResetError(
+                            f"observer stop failed: {primary}; old service restore failed: {restore_error}"
+                        ) from primary
+                raise
             self.failpoint("after-stop")
             if journal["phase"] != "applied":
                 journal["phase"] = "quarantining"
@@ -2382,6 +2420,19 @@ class ResetController:
             journal, journal["old_closure_digest"], daemon_reload=True,
         )
 
+    def _restore_unmoved_old(self, journal: Mapping[str, Any]) -> None:
+        if journal["phase"] != "prepared":
+            raise ResetError("old service restore requires an untouched prepared transaction")
+        self._assert_no_quarantine(journal["transaction_id"])
+        for entry in journal["old"]:
+            source = self.layout.path(entry["source"])
+            if not (source.exists() or source.is_symlink()):
+                raise ResetError("prepared reset source is missing")
+            if stable_metadata(metadata(source)) != stable_metadata(entry["metadata"]):
+                raise ResetError("prepared reset source was substituted")
+        self._validate_install(journal["old_install_identity"], journal["old_closure_digest"])
+        self._restore_units(journal)
+
     def rollback(
         self, machine: str, catalog: str, old_install: str, old_closure: str,
     ) -> dict[str, Any]:
@@ -2427,6 +2478,12 @@ class ResetController:
         self._assert_preserved(journal)
         self._assert_stable_bootstrap(journal)
         self._assert_prepared(journal)
+        if journal["phase"] == "prepared":
+            # No rename is permitted until quarantining is durable. Pending
+            # work must not prevent restoring the untouched old service.
+            self._restore_unmoved_old(journal)
+            self._remove_transaction_roots(journal, "rolled_back")
+            return {"schema_version": SCHEMA_VERSION, "phase": "rolled_back"}
         if journal["phase"] != "rollback-cleanup":
             self._stop_and_quiesce()
             self._prepare_candidate(journal)
