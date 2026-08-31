@@ -97,6 +97,35 @@ jobs:
           for setting in /proc/sys/kernel/unprivileged_userns_clone /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; do
             if test -r "$setting"; then printf '%s=' "$setting"; cat "$setting"; fi
           done
+      - name: Allow user namespaces only for the root-owned bubblewrap executable
+        id: isolation_profile
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$GITHUB_ACTIONS" = true
+          test -f /usr/bin/bwrap
+          test ! -L /usr/bin/bwrap
+          test "$(stat -c '%U:%G:%a' /usr/bin/bwrap)" = root:root:755
+          test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
+          profile=/etc/apparmor.d/uap-catalog-bwrap
+          test ! -e "$profile"
+          test ! -L "$profile"
+          if sudo grep -R -q -F /usr/bin/bwrap /etc/apparmor.d; then
+            echo "An existing bubblewrap AppArmor policy requires review" >&2
+            exit 1
+          else
+            test "$?" -eq 1
+          fi
+          if sudo grep -q '^uap-catalog-bwrap ' /sys/kernel/security/apparmor/profiles; then
+            echo "The catalog AppArmor profile is already loaded" >&2
+            exit 1
+          else
+            test "$?" -eq 1
+          fi
+          sudo /usr/sbin/apparmor_parser --skip-kernel-load --skip-cache tests/e2e/catalog-bwrap.apparmor
+          echo "profile_owned=true" >> "$GITHUB_OUTPUT"
+          sudo install -o root -g root -m 0644 tests/e2e/catalog-bwrap.apparmor "$profile"
+          test "$(stat -c '%U:%G:%a' "$profile")" = root:root:644
+          sudo /usr/sbin/apparmor_parser --add --skip-cache "$profile"
       - name: Require Linux child confinement before any untrusted execution
         run: python3 -m unittest tests.test_catalog_process_isolation -v
       - name: Download and authenticate the exact released CLI before execution
@@ -146,7 +175,7 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, "scripts")
           from catalog_process_isolation import run_isolated
-          root = Path(os.environ["TOOLS_ROOT"])
+          root = Path(os.environ["TOOLS_ROOT"]).resolve()
           root.mkdir(mode=0o700)
           for name in ("home", "tmp", "npm-cache"):
               (root / name).mkdir(mode=0o700)
@@ -223,6 +252,17 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: false
+      - name: Remove only this job's ephemeral AppArmor allowance
+        if: ${{ always() && steps.isolation_profile.outputs.profile_owned == 'true' }}
+        run: |
+          profile=/etc/apparmor.d/uap-catalog-bwrap
+          if test ! -e "$profile" && test ! -L "$profile"; then exit 0; fi
+          test -f "$profile"
+          test ! -L "$profile"
+          status=0
+          sudo /usr/sbin/apparmor_parser --remove --skip-cache "$profile" || status=$?
+          sudo rm -- "$profile"
+          exit "$status"
 
   attest:
     name: Validate canonical data in a fresh job, then attest only those bytes

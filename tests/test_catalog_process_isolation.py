@@ -88,7 +88,7 @@ class GuardTests(unittest.TestCase):
         self.assertIn("--bind", self.command())
 
     def test_tools_are_exposed_readonly_after_temp_hiding(self):
-        tools = self.base / "tools"
+        tools = self.base / "exposure-tools"
         tools.mkdir()
         command = self.command(read_only_paths=(tools,))
         mount = command.index(str(tools))
@@ -163,6 +163,20 @@ print(json.dumps(denied))
         self.assertEqual((self.case / "owned").read_text(), "ok")
         for path in self.targets:
             self.assertEqual(path.read_text(), "trusted")
+
+    def test_nested_user_namespace_is_denied_despite_apparmor_allowance(self):
+        self.run_child("""
+import ctypes, errno, os
+libc = ctypes.CDLL(None, use_errno=True)
+libc.unshare.argtypes = [ctypes.c_int]
+libc.unshare.restype = ctypes.c_int
+before = os.readlink('/proc/self/ns/user')
+result = libc.unshare(0x10000000)  # CLONE_NEWUSER
+error = ctypes.get_errno()
+assert result == -1, 'nested user namespace escaped --disable-userns'
+assert error in (errno.EPERM, errno.ENOSPC), ('unexpected unshare failure', error)
+assert os.readlink('/proc/self/ns/user') == before
+""")
 
     def test_detached_grandchild_dies_when_initial_child_exits(self):
         self.run_child("""

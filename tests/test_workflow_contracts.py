@@ -213,6 +213,76 @@ sys.modules['catalog_process_isolation']=module
                 self.assertEqual(result.returncode == 0, expected, result.stderr.decode())
                 self.assertEqual((root / "calls").read_text(), "install\n" if phase == "install" else "install\naudit\n")
 
+    def test_every_full_python_suite_consumer_prepares_mandatory_linux_isolation(self) -> None:
+        producer = load(CATALOG_READINESS)["jobs"]["produce"]
+        install_name = "Install the current stable Ubuntu bubblewrap package and record namespace policy"
+        required_install = next(step["run"] for step in producer["steps"] if step.get("name") == install_name)
+        consumers = set()
+        for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
+            for name, job in load(path).get("jobs", {}).items():
+                steps = job.get("steps", [])
+                for suite_index, step in enumerate(steps):
+                    if not re.search(r"\bunittest(?:\s+-[^\s]+)*\s+discover\b", step.get("run", "")):
+                        continue
+                    consumers.add((path.name, name))
+                    with self.subTest(workflow=path.name, job=name):
+                        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+                        install = next((item for item in steps[:suite_index] if item.get("name") == install_name), None)
+                        self.assertIsNotNone(install, "full discovery requires bubblewrap setup before the suite")
+                        self.assertEqual(install["run"], required_install)
+                        self.assertNotIn("if", install)
+                        self.assertNotIn("continue-on-error", install)
+                        preflight = next((item for item in steps[:suite_index] if item.get("name", "").startswith("Require Linux child confinement")), None)
+                        self.assertIsNotNone(preflight, "full discovery must not silently skip Linux isolation")
+                        self.assertEqual(preflight["run"], "python3 -m unittest tests.test_catalog_process_isolation -v")
+                        self.assertNotIn("if", preflight)
+                        self.assertNotIn("continue-on-error", preflight)
+                        self.assertLess(steps.index(install), steps.index(preflight))
+                        profile = next((item for item in steps[:steps.index(preflight)] if item.get("id") == "isolation_profile"), None)
+                        self.assertIsNotNone(profile, "Linux isolation requires its per-executable AppArmor allowance")
+                        cleanup = next((item for item in steps[suite_index + 1:] if item.get("name") == "Remove only this job's ephemeral AppArmor allowance"), None)
+                        self.assertIsNotNone(cleanup, "every full-suite consumer must remove its own allowance")
+        self.assertTrue({("pages.yml", "build"), ("validate.yml", "portable-catalog")} <= consumers)
+
+    def test_catalog_apparmor_allowance_is_exact_root_owned_and_always_cleaned(self) -> None:
+        rules = [line.strip() for line in (ROOT / "tests/e2e/catalog-bwrap.apparmor").read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(rules, [
+            "abi <abi/4.0>,", "include <tunables/global>",
+            "profile uap-catalog-bwrap /usr/bin/bwrap flags=(unconfined) {", "userns,", "}",
+        ])
+        jobs = (load(CATALOG_READINESS)["jobs"]["produce"], load(VALIDATE)["jobs"]["portable-catalog"], load(PAGES)["jobs"]["build"])
+        profiles, cleanups = [], []
+        for job in jobs:
+            steps = job["steps"]
+            profile = next(step for step in steps if step.get("id") == "isolation_profile")
+            cleanup = next(step for step in steps if step.get("name") == "Remove only this job's ephemeral AppArmor allowance")
+            preflight = next(step for step in steps if step.get("name", "").startswith("Require Linux child confinement"))
+            self.assertNotIn("if", profile)
+            self.assertNotIn("continue-on-error", profile)
+            self.assertLess(steps.index(profile), steps.index(preflight))
+            self.assertIs(steps[-1], cleanup)
+            self.assertEqual(cleanup["if"], "${{ always() && steps.isolation_profile.outputs.profile_owned == 'true' }}")
+            body = profile["run"]
+            for guard in (
+                'test "$GITHUB_ACTIONS" = true', 'test ! -e "$profile"', 'test ! -L "$profile"',
+                "root:root:755", "root:root:644", "sudo grep -R -q -F /usr/bin/bwrap /etc/apparmor.d",
+                "^uap-catalog-bwrap ", "--skip-kernel-load --skip-cache tests/e2e/catalog-bwrap.apparmor",
+                "sudo install -o root -g root -m 0644", '--add --skip-cache "$profile"',
+            ):
+                self.assertIn(guard, body)
+            self.assertLess(body.index("--skip-kernel-load"), body.index('echo "profile_owned=true"'))
+            self.assertLess(body.index('echo "profile_owned=true"'), body.index("sudo install"))
+            self.assertNotIn("--replace", body)
+            self.assertIn('--remove --skip-cache "$profile" || status=$?', cleanup["run"])
+            self.assertIn('sudo rm -- "$profile"', cleanup["run"])
+            self.assertIn('exit "$status"', cleanup["run"])
+            for forbidden in ("sysctl -w", "/etc/sysctl", "systemctl", "aa-disable", "rm -r", "sudo bwrap", "|| true"):
+                self.assertNotIn(forbidden, body + cleanup["run"])
+            profiles.append(body)
+            cleanups.append(cleanup["run"])
+        self.assertEqual(profiles, [profiles[0]] * 3)
+        self.assertEqual(cleanups, [cleanups[0]] * 3)
+
     def test_catalog_gate_attests_both_canonical_subjects_and_exact_oidc_invocation(self) -> None:
         workflow = load(CATALOG_READINESS)
         producer, attester, verifier = (workflow["jobs"][name] for name in ("produce", "attest", "verify"))
