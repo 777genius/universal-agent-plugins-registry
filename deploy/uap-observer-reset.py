@@ -320,10 +320,17 @@ def assert_same_mount_as_parent(path: Path, kind: str | None = None) -> str:
 
 
 def cleanup_identity(value: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Fields that remain stable while children are deleted during recovery."""
-    return tuple(value.get(field) for field in (
+    """Bind leaf metadata without freezing partially deleted directories.
+
+    Link counts may decrease during cleanup; regular-file aliases are checked
+    separately by the descriptor-based, complete cleanup-scope inventory.
+    """
+    fields = (
         "device", "inode", "kind", "mode", "uid", "gid",
-    ))
+    )
+    if value.get("kind") != "directory":
+        fields += ("size", "mtime_ns", "target")
+    return tuple(value.get(field) for field in fields)
 
 
 def length_prefix(value: bytes) -> bytes:
@@ -2648,7 +2655,10 @@ class ResetController:
         child: int | None = None
         try:
             before = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
-            if cleanup_identity(metadata_from_stat(before)) != cleanup_identity(observed):
+            before_metadata = metadata_from_stat(before)
+            if before_metadata["kind"] == "symlink":
+                before_metadata["target"] = os.readlink(path.name, dir_fd=parent)
+            if cleanup_identity(before_metadata) != cleanup_identity(observed):
                 raise ResetError("reset cleanup root changed while opening parent")
             if observed["kind"] == "symlink":
                 return
@@ -2658,6 +2668,8 @@ class ResetController:
             if observed["kind"] == "directory":
                 flags |= os.O_DIRECTORY
             child = os.open(path.name, flags, dir_fd=parent)
+            if stable_metadata(metadata_from_stat(os.fstat(child))) != stable_metadata(observed):
+                raise ResetError("reset cleanup root was substituted while opening")
             if descriptor_mount_id(child) != descriptor_mount_id(parent):
                 raise ResetError("reset cleanup root is a mount boundary")
             if observed["kind"] == "regular":
@@ -2697,7 +2709,10 @@ class ResetController:
         try:
             parent_mount = descriptor_mount_id(parent_descriptor)
             before = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
-            if cleanup_identity(metadata_from_stat(before)) != cleanup_identity(root_metadata):
+            before_metadata = metadata_from_stat(before)
+            if before_metadata["kind"] == "symlink":
+                before_metadata["target"] = os.readlink(path.name, dir_fd=parent_descriptor)
+            if cleanup_identity(before_metadata) != cleanup_identity(root_metadata):
                 raise ResetError("reset cleanup root changed while opening parent")
             if root_metadata["kind"] != "directory":
                 if root_metadata["kind"] not in {"regular", "symlink"}:
@@ -2715,6 +2730,13 @@ class ResetController:
                     ):
                         raise ResetError("reset cleanup root changed while opening")
                     self._assert_cleanup_link_contained(hardlinks, opened)
+                unlink_metadata = metadata_from_stat(
+                    os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+                )
+                if unlink_metadata["kind"] == "symlink":
+                    unlink_metadata["target"] = os.readlink(path.name, dir_fd=parent_descriptor)
+                if stable_metadata(unlink_metadata) != stable_metadata(before_metadata):
+                    raise ResetError("reset cleanup root was substituted before unlinking")
                 os.unlink(path.name, dir_fd=parent_descriptor)
                 if root_descriptor is not None:
                     key = self._hardlink_key(os.fstat(root_descriptor))
@@ -2733,6 +2755,8 @@ class ResetController:
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=parent_descriptor,
             )
+            if stable_metadata(metadata_from_stat(os.fstat(root_descriptor))) != stable_metadata(root_metadata):
+                raise ResetError("reset cleanup root was substituted while opening")
             root_mount = descriptor_mount_id(root_descriptor)
             if root_mount != parent_mount:
                 raise ResetError("reset cleanup root is a mount boundary")
@@ -2827,6 +2851,8 @@ class ResetController:
                 dir_fd=parent_descriptor,
             )
             try:
+                if stable_metadata(metadata_from_stat(os.fstat(root_descriptor))) != stable_metadata(root_metadata):
+                    raise ResetError("reset cleanup root was substituted before deleting contents")
                 if (
                     descriptor_mount_id(parent_descriptor) != root_mount
                     or descriptor_mount_id(root_descriptor) != root_mount

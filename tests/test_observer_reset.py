@@ -725,6 +725,97 @@ class ObserverResetTests(unittest.TestCase):
             controller.finalize(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE, NEW_INSTALL, NEW_CLOSURE)
         self.assertTrue(controller.journal_path.exists())
 
+    def test_quarantine_symlink_target_is_bound_even_when_stat_identity_is_reused(self):
+        controller = self.controller()
+        controller.apply(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
+        journal = controller._read_journal()
+        entry = journal["old"][0]
+        target = self.path(entry["quarantine"])
+        original_target = entry["metadata"]["target"]
+        target.unlink()
+        target.symlink_to(original_target[:-1] + "f")
+        # Model inode reuse and restored timestamps deterministically: every
+        # stat field matches, but the journal still binds the original target.
+        entry["metadata"] = {**reset.metadata(target), "target": original_target}
+        controller._write_journal(journal)
+        with self.assertRaisesRegex(reset.ResetError, "substituted"):
+            controller.finalize(
+                MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE,
+                NEW_INSTALL, NEW_CLOSURE,
+            )
+        self.assertEqual(controller._read_journal()["phase"], "new-ready")
+        self.assertTrue(target.is_symlink())
+        for old in journal["old"]:
+            quarantine = self.path(old["quarantine"])
+            self.assertTrue(quarantine.exists() or quarantine.is_symlink())
+
+    def test_quarantine_regular_file_mutation_blocks_finalize_before_cleanup(self):
+        controller = self.controller()
+        controller.apply(MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE)
+        journal = controller._read_journal()
+        entry = next(old for old in journal["old"] if old["metadata"]["kind"] == "regular")
+        target = self.path(entry["quarantine"])
+        target.write_bytes(target.read_bytes() + b"substituted\n")
+        self.assertEqual(target.stat().st_ino, entry["metadata"]["inode"])
+        with self.assertRaisesRegex(reset.ResetError, "substituted"):
+            controller.finalize(
+                MACHINE, CATALOG, OLD_INSTALL, OLD_CLOSURE,
+                NEW_INSTALL, NEW_CLOSURE,
+            )
+        self.assertEqual(controller._read_journal()["phase"], "new-ready")
+        self.assertTrue(target.exists())
+        for old in journal["old"]:
+            quarantine = self.path(old["quarantine"])
+            self.assertTrue(quarantine.exists() or quarantine.is_symlink())
+
+    def test_cleanup_reopened_directory_substitution_rejects_before_deleting_contents(self):
+        controller = self.controller()
+        target = self.mkdir("/root/cleanup-target", 0o700)
+        original = self.file("/root/cleanup-target/original", b"original\n")
+        replacement = self.mkdir("/root/cleanup-replacement", 0o700)
+        self.file("/root/cleanup-replacement/foreign", b"untouched\n")
+        saved = target.with_name("cleanup-original")
+        expected = reset.metadata(target)
+        real_open = os.open
+        opens = 0
+
+        def substitute_on_reopen(path, flags, *args, **kwargs):
+            nonlocal opens
+            if path == target.name and flags & os.O_DIRECTORY and "dir_fd" in kwargs:
+                opens += 1
+                if opens == 2:
+                    target.rename(saved)
+                    replacement.rename(target)
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(reset.os, "open", side_effect=substitute_on_reopen):
+            with self.assertRaisesRegex(reset.ResetError, "substituted"):
+                controller._remove_tree(target, expected=expected)
+        self.assertEqual(opens, 2)
+        self.assertEqual((saved / original.name).read_bytes(), b"original\n")
+        self.assertEqual((target / "foreign").read_bytes(), b"untouched\n")
+
+    def test_cleanup_regular_path_substitution_rejects_before_unlink(self):
+        controller = self.controller()
+        target = self.file("/root/cleanup-target", b"original\n")
+        replacement = self.file("/root/cleanup-replacement", b"untouched\n")
+        saved = target.with_name("cleanup-original")
+        expected = reset.metadata(target)
+        real_open = os.open
+
+        def substitute_after_open(path, flags, *args, **kwargs):
+            descriptor = real_open(path, flags, *args, **kwargs)
+            if path == target.name and "dir_fd" in kwargs:
+                target.rename(saved)
+                replacement.rename(target)
+            return descriptor
+
+        with mock.patch.object(reset.os, "open", side_effect=substitute_after_open):
+            with self.assertRaisesRegex(reset.ResetError, "substituted"):
+                controller._remove_tree(target, expected=expected)
+        self.assertEqual(saved.read_bytes(), b"original\n")
+        self.assertEqual(target.read_bytes(), b"untouched\n")
+
     def test_cleanup_never_follows_symlinks_and_rejects_hardlinks_before_any_delete(self):
         for kind in ("symlink", "hardlink"):
             with self.subTest(kind=kind):
