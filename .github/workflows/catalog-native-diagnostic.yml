@@ -200,10 +200,26 @@ jobs:
                   summary["json_valid"] = False
               print(json.dumps(summary, sort_keys=True), flush=True)
           def diagnostic_child(argv, **kwargs):
+              pre_update = []
+              if Path(argv[0]).name.startswith("agentplugins_") and len(argv) > 1 and argv[1] == "update":
+                  state = json.loads((root / "state/state-v2.json").read_text())
+                  for binding in state["installations"][0]["clients"].values():
+                      revision = binding.get("package_revision", {})
+                      evidence = revision.get("catalog_evidence")
+                      pre_update.append({
+                          "client": binding.get("client_id"),
+                          "surfaces": binding.get("affected_surfaces", [binding.get("client_id")]),
+                          "tree_matches": revision.get("tree_digest") == "sha256:9ecf4ff402035206442470907325286174981408a49225af32b9c199ce6e4b99",
+                          "manifest_matches": revision.get("manifest_digest") == "sha256:38c16fbaad139fbdca9ab9fc989047d10b97d7422edee49f3dc35d173fb3e22d",
+                          "distribution_matches": revision.get("distribution_id") == "chrome-devtools-bridge",
+                          "release_sequence": revision.get("release_sequence"),
+                          "evidence_digest": gate.digest(gate.publication.canonical_json(evidence)),
+                      })
               result = original_child(argv, **kwargs)
               if Path(argv[0]).name.startswith("agentplugins_") and len(argv) > 1 and argv[1] == "update":
                   fixed = {"label": "Released CLI update envelope", "exit": result.returncode,
-                           "stdout_bytes": len(result.stdout.encode()), "stderr_present": bool(result.stderr)}
+                           "stdout_bytes": len(result.stdout.encode()), "stderr_present": bool(result.stderr),
+                           "pre_update_bindings": sorted(pre_update, key=lambda item: item["client"])}
                   try:
                       value = json.loads(result.stdout)
                       fixed.update(json_valid=isinstance(value, dict), command=value.get("command"), result=value.get("result"))
@@ -213,6 +229,8 @@ jobs:
                                        failed=data.get("failed"), targets=len(data.get("targets", [])) if isinstance(data.get("targets"), list) else None)
                           fixed["target_shapes"] = [{
                               "target": item.get("target"), "status": item.get("status"),
+                              "mutated": item.get("output", {}).get("result", {}).get("mutated") if isinstance(item.get("output"), dict) else None,
+                              "no_change": item.get("output", {}).get("result", {}).get("no_change") if isinstance(item.get("output"), dict) else None,
                               "output_keys": sorted(item.get("output", {})) if isinstance(item.get("output"), dict) else [],
                               "result_keys": sorted(item.get("output", {}).get("result", {}))
                                   if isinstance(item.get("output", {}), dict) and isinstance(item.get("output", {}).get("result"), dict) else [],
