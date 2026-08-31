@@ -241,6 +241,8 @@ jobs:
                           if pre_installation is not None:
                               bindings = list(pre_installation["clients"].values())
                               directory = pre_installation.get("directory", {})
+                              installation_id = pre_installation.get("installation_id", "")
+                              expected_physical = "chrome-devtools-" + gate.hashlib.sha256(installation_id.encode()).hexdigest()[:12]
                               for item in data.get("targets", []):
                                   target = item.get("target")
                                   matches = [binding for binding in bindings if target in binding.get("affected_surfaces", [binding.get("client_id")])]
@@ -255,6 +257,8 @@ jobs:
                                       "distribution_matches_installation": revision.get("distribution_id") == directory.get("distribution_id"),
                                       "release_matches_installation": revision.get("release_sequence") == directory.get("desired_release_sequence"),
                                       "physical_artifact_matches": len(matches) == 1 and matches[0].get("physical_artifact_id") == plan.get("physical_artifact_id"),
+                                      "stored_physical_expected": len(matches) == 1 and matches[0].get("physical_artifact_id") == expected_physical,
+                                      "planned_physical_expected": plan.get("physical_artifact_id") == expected_physical,
                                   })
                           fixed["revision_comparisons"] = comparisons
                       error = value.get("error")
