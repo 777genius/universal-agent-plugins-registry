@@ -329,6 +329,62 @@ class CatalogContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "listing failed"):
                     gate.native_listing(Path("copilot"), {}, root, "chrome-devtools", False, root=root, readonly=())
 
+    def check_native_diagnostic(self, client, output, expected_stage, *, installed=True, returncode=0):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = argparse.Namespace()
+            completed = subprocess.CompletedProcess([], returncode, output, "private stderr must not escape")
+            callback = lambda phase: gate.lifecycle_step(args, "chrome-devtools", phase)
+            with patch.object(gate, "child", return_value=completed) as child:
+                with self.assertRaises(ValueError):
+                    gate.native_listing(Path(client), {}, root, "chrome-devtools", installed,
+                                        root=root, readonly=(), diagnostic=callback)
+                self.assertEqual(child.call_count, 1)
+            state = "installed" if installed else "removed"
+            self.assertEqual(args.failure_phase, f"lifecycle:chrome-devtools:native_list_{client}_{state}_{expected_stage}")
+            self.assertNotIn("private", args.failure_phase)
+
+    def test_claude_native_json_shape_fails_cleanly_with_bounded_diagnostics(self):
+        self.check_native_diagnostic("claude", '{"private raw value":', "json_decode")
+        for value in ({}, None, True, [None], [42], ["private raw value"], [{}],
+                      [{"id": None}], [{"id": 9}], [{"id": []}], [{"id": ""}]):
+            with self.subTest(value=value):
+                self.check_native_diagnostic("claude", json.dumps(value), "json_shape")
+
+    def test_claude_native_diagnostics_distinguish_exit_matching_scope_and_enabled(self):
+        good = {"id": "chrome-devtools@skills-dir", "scope": "user", "enabled": True}
+        self.check_native_diagnostic("claude", json.dumps([good]), "exit", returncode=7)
+        self.check_native_diagnostic("claude", "[]", "matching")
+        self.check_native_diagnostic("claude", json.dumps([good, good]), "matching")
+        self.check_native_diagnostic("claude", json.dumps([good]), "matching", installed=False)
+        for scope in (None, "project", True, {}):
+            self.check_native_diagnostic("claude", json.dumps([{**good, "scope": scope}]), "scope")
+        for enabled in (None, False, 1, "true", {}):
+            self.check_native_diagnostic("claude", json.dumps([{**good, "enabled": enabled}]), "enabled")
+
+    def test_copilot_native_diagnostics_distinguish_exit_section_format_count(self):
+        good = "Installed plugins:\n  • chrome-devtools@agentplugins-fixture (v1.0.0)\n"
+        self.check_native_diagnostic("copilot", good, "exit", returncode=1)
+        self.check_native_diagnostic("copilot", "private unexpected response", "section")
+        self.check_native_diagnostic("copilot", "Installed plugins:\n  invalid entry\n", "format")
+        self.check_native_diagnostic("copilot", "Installed plugins:\n", "count")
+        self.check_native_diagnostic("copilot", good + "Installed plugins:\n", "section")
+        self.check_native_diagnostic("copilot", good, "count", installed=False)
+
+    def test_successful_native_diagnostics_only_emit_fixed_client_stage_enums(self):
+        cases = (("claude", json.dumps([{"id": "chrome-devtools@skills-dir", "scope": "user", "enabled": True}]), "enabled"),
+                 ("copilot", "Installed plugins:\n  • chrome-devtools@agentplugins-fixture (v1.0.0)\n", "count"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for client, output, last in cases:
+                seen = []
+                with patch.object(gate, "child", return_value=subprocess.CompletedProcess([], 0, output, "")):
+                    gate.native_listing(Path(client), {}, root, "chrome-devtools", True,
+                                        root=root, readonly=(), diagnostic=seen.append)
+                self.assertTrue(set(seen).issubset(gate.LIFECYCLE_STEPS))
+                self.assertEqual(seen[0], f"native_list_{client}_installed_probe")
+                self.assertEqual(seen[-1], f"native_list_{client}_installed_{last}")
+
     def run_first_package_fixture(self, parent: Path, mutation: str | None = None):
         """Only the process boundary is fake; state, files and lifecycle checks are real.
 
