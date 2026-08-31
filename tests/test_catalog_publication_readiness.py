@@ -74,7 +74,7 @@ class CatalogContractTests(unittest.TestCase):
             lambda value: value["rows"].append(value["rows"][0]),
             lambda value: value.update(runtime_claims=True),
             lambda value: value.update(runtime_claims=0),
-            lambda value: value["cli"].update(version="0.1.25"),
+            lambda value: value["cli"].update(version="0.1.26"),
             lambda value: value["context"].update(run_attempt=2),
             lambda value: value["mcp_probes"].pop(),
             lambda value: value["rows"][0]["proof"].update(acquisition_count=True),
@@ -145,7 +145,7 @@ class CatalogContractTests(unittest.TestCase):
         selected = gate.selected(self.snapshot, "chrome-devtools", gate.CHROME)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == selected["distribution_id"])
         for policy in distribution["release_policies"]:
-            policy["minimum_installer_version"] = "0.1.25"
+            policy["minimum_installer_version"] = "0.1.26"
         with self.assertRaisesRegex(ValueError, "newer CLI"):
             gate.plan(self.snapshot)
         self.snapshot = catalog()

@@ -25,7 +25,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 from run_chrome_five_client_lifecycle import EvidenceError, snapshot_roots, seed_clients, validate_doctor
 from run_mcp_e2e import inspector_check
-from two_lane_evidence import PLUGIN_KIT_COMMIT, PLUGIN_KIT_TAG, RELEASED_LINUX_AMD64_DIGEST
 
 ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloudflare-bindings "
                 "cloudflare-docs cloudflare-observability cloudflare-radar context7 docker-hub "
@@ -39,8 +38,9 @@ CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha
                   "run_id", "run_attempt", "directory_origin")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-CLI = {"version": "0.1.24", "tag": PLUGIN_KIT_TAG, "commit": PLUGIN_KIT_COMMIT,
-       "binary_digest": RELEASED_LINUX_AMD64_DIGEST,
+CLI = {"version": "0.1.25", "tag": "agentplugins-v0.1.25",
+       "commit": "d168b28bcdeef0c558bee3935adab25abb9f6267",
+       "binary_digest": "sha256:83f7785383a47b82523ff610893df51ee979d6f444f7de6723b07fbc80cec2e4",
        "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
@@ -132,7 +132,8 @@ def selected(snapshot: dict, alias: str, clients: tuple[str, ...]) -> dict:
     release = next(item for item in distribution["releases"] if item["sequence"] == resolved["release_sequence"])
     policy = next(item for item in distribution["release_policies"] if item["release_sequence"] == release["sequence"])
     floor = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
-    require(floor <= (0, 1, 24), f"{alias}: selected release requires newer CLI")
+    cli_version = tuple(int(part) for part in CLI["version"].split("."))
+    require(floor <= cli_version, f"{alias}: selected release requires newer CLI")
     source = release["package_source"]
     require(SHA.fullmatch(source["revision"]) is not None, f"{alias}: source is not immutable")
     return {"selector": alias, "product_id": resolved["product_id"], "distribution_id": distribution["id"],
