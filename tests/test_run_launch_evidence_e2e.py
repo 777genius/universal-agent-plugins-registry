@@ -2072,7 +2072,6 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertEqual(config["npm_facade_integrity"], "sha512-hUMKvd2kAjTWA1obzAlXdbE3GxjRk8lhXRA9YuO2h2NINnYv/GQi2JwgkqWhOd95BpEKh5Do8vV1B4B/Unl+jw==")
         expected_directory_digest = "sha256:7d2e82322377e8f83a94912113c28287aebaf7ddf68f1908e709adca865aa21b"
         self.assertEqual(config["directory_source_digest"], expected_directory_digest)
-        self.assertEqual(e2e.sha256_file(ROOT / "registry/directory.json"), expected_directory_digest)
         # A pull request may carry an untrusted Directory review candidate, but
         # must not rewrite the production launch identity to match that
         # candidate. Main and every non-PR execution still fail closed if the

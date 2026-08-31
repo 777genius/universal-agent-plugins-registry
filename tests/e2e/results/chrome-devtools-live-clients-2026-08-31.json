@@ -1,5 +1,6 @@
 {
   "evidence_type": "local_chrome_live_client_check_v1",
+  "client": "OpenCode runtime and Gemini MCP discovery",
   "date": "2026-08-31",
   "platform": "darwin-arm64",
   "signed_publication_evidence": false,
@@ -78,5 +79,22 @@
     "OpenCode OpenAI OAuth refresh (returned 401; runtime used a built-in free provider)",
     "public chrome-devtools short alias for newly added clients before signed Directory publication"
   ],
+  "checks": [
+    {"scenario": "fixed root package five-client installation lifecycle", "status": "passed"},
+    {"scenario": "OpenCode model uses root-package Chrome tools", "status": "passed"},
+    {"scenario": "OpenCode model uses exact Directory bridge Chrome tools", "status": "passed"},
+    {"scenario": "Gemini discovers the fixed root MCP server", "status": "passed"},
+    {"scenario": "Gemini model invokes Chrome tools", "status": "auth_required"}
+  ],
+  "cleanup": {
+    "test_installations_removed_with_purge_data": true,
+    "disposable_profiles_and_copied_credentials_deleted": true,
+    "test_browser_processes_remaining": 0,
+    "original_user_profiles_unchanged": true
+  },
+  "privacy": {
+    "sanitized": true,
+    "excluded": ["temporary paths", "account identifiers", "credentials", "tokens", "cookies", "OAuth codes", "OAuth state", "authorization URLs", "operation IDs", "fixture marker values"]
+  },
   "secrets_recorded": false
 }
