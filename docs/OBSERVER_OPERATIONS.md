@@ -957,18 +957,26 @@ or more than one million entries are rejected. The source must be a clean,
 self-contained checkout whose root-owned `.git` directory and object store are
 inside the prepared tree; linked worktrees, alternates, external common dirs,
 and nested linked checkouts are rejected. Never use a workstation profile or
-real project. Create the one-time sentinel
-from the already recorded disposable VM identity; never copy it to another host:
+real project. Capture these current identities at the start of **every** reset
+transaction, including later resets on the same VM:
 
 ```sh
 MACHINE_ID="$(tr -d '\n' </etc/machine-id)"
 OLD_CLOSURE="$(readlink /opt/uap-observer-current | sed 's#^uap-observer-closures/##')"
 OLD_INSTALL="$(cat "/opt/uap-observer-closures/$OLD_CLOSURE/.install-identity")"
+```
+
+Only during first-time setup, create the sentinel from that recorded disposable
+VM identity. Never overwrite an existing sentinel or copy it to another host:
+
+```sh
+(
 umask 077
+set -C
 jq -cn --arg machine_id "$MACHINE_ID" \
   '{machine_id:$machine_id,purpose:"uap-observer-e2e-disposable",schema_version:1}' \
   >/etc/uap-observer-disposable.json
-chmod 0600 /etc/uap-observer-disposable.json
+)
 ```
 
 Keep the installer lock on descriptor 9 through reset, the unchanged installer,
