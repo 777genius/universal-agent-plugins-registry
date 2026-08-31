@@ -143,10 +143,11 @@ them.
 
 ### 3.3 Remaining execution order
 
-1. Complete the separate-account GitHub approval and merge for
+1. Use the merged implementation from
    [same-VM reset PR #153](https://github.com/777genius/universal-agent-plugins/pull/153).
-   Exact head `9bd602a35986f3a82433b1f1de3f855f7c4ae4d2` has all CI green and two technical reviews. Main still requires separate-account GitHub approval, not satisfied by chat; neither approval nor merge is complete. Preserve this coherent PR without a late replacement stack.
-   A green fixture suite proves recovery logic, not an actual VM reset.
+   Reviewed head `9bd602a35986f3a82433b1f1de3f855f7c4ae4d2` passed all CI and two technical reviews; it merged normally, without administrator bypass, as `d8818c82a5345130e4a0c37e713b1422c48cf796` on 2026-08-31.
+   Main's verified solo-owner policy removes second-account approval, while retaining required PRs, strict portable-catalog CI, resolved conversations, and unchanged bypass/immutability and publication protections.
+   The actual same-VM reset has not run. Green fixtures prove recovery logic, not a completed VM reset.
 2. Merge code, this checkpoint, and atomic PR #159 Chrome policy plus its three current Directory source pins before freezing the final
    catalog SHA. Coordinate that boundary explicitly; do not freeze while an
    accepted policy/pin change is still pending. CLI/npm remain `0.1.24`; no new CLI release is needed. Run current-main validation and
