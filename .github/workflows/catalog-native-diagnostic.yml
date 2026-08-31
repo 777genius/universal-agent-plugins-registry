@@ -270,12 +270,15 @@ jobs:
               bindings = list(state["installations"][0]["clients"].values())
               copilot = next(item for item in bindings if "copilot" in item.get("affected_surfaces", [item["client_id"]]))
               lines = observed.get("copilot", [])
-              observed_path = Path(lines[2].removeprefix("      at ")).resolve(strict=True) if len(lines) == 3 else None
+              path_line = lines[2] if len(lines) == 3 else ""
+              prefix = "      from " if path_line.startswith("      from ") else "      at " if path_line.startswith("      at ") else ""
+              observed_path = Path(path_line.removeprefix(prefix)).resolve(strict=True) if prefix else None
               target = Path(copilot["target_locator"]).resolve(strict=True)
               marketplace_file = observed_path / ".github/plugin/marketplace.json" if observed_path else Path("missing")
               marketplace = json.loads(marketplace_file.read_text()) if marketplace_file.is_file() else {}
               print(json.dumps({"label": "Copilot live path binding",
                                 "exact_target_locator": observed_path == target,
+                                "path_label_from": prefix == "      from ",
                                 "observed_under_case": bool(observed_path and observed_path.is_relative_to(root.resolve())),
                                 "observed_contains_target": target.is_relative_to(observed_path) if observed_path else False,
                                 "target_contains_observed": observed_path.is_relative_to(target) if observed_path else False,
