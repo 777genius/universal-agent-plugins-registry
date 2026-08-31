@@ -239,6 +239,16 @@ jobs:
                       "tail_empty": tail == "",
                   }
                   print(json.dumps(fixed, sort_keys=True), flush=True)
+                  structured = original_child([*argv, "--json"], **kwargs)
+                  shape = {"label": "Copilot structured listing", "exit": structured.returncode}
+                  try:
+                      value = json.loads(structured.stdout)
+                      shape.update(json_valid=True, top_type=type(value).__name__)
+                      if isinstance(value, (list, dict)):
+                          shape["top_size"] = len(value)
+                  except (ValueError, TypeError):
+                      shape["json_valid"] = False
+                  print(json.dumps(shape, sort_keys=True), flush=True)
               return result  # A diagnostic comparison must never turn failure into acceptance.
           gate.child = diagnostic_child
           try:
