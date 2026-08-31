@@ -214,6 +214,10 @@ jobs:
                   normalized = result.stdout.replace("\r\n", "\n")
                   lines = normalized.splitlines()
                   old_entry = gate.re.compile(r"[ \t]+•[ \t]+chrome-devtools@[A-Za-z0-9][A-Za-z0-9._-]*[ \t]+\(v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\)[ \t]*")
+                  entry = next((line for line in lines if "•" in line), "")
+                  entry_shape = gate.re.fullmatch(r"[ \t]*•[ \t]+([A-Za-z0-9][A-Za-z0-9._-]*)@([A-Za-z0-9][A-Za-z0-9._-]*)[ \t]*(.*)", entry)
+                  tail = entry_shape.group(3).strip() if entry_shape else ""
+                  semver = r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?"
                   fixed = {
                       "label": "Copilot listing structure", "exit": result.returncode,
                       "lines": len(lines), "installed_colon": any(line.strip() == "Installed plugins:" for line in lines),
@@ -223,6 +227,16 @@ jobs:
                       "unicode_bullets": sum("•" in line for line in lines),
                       "ascii_bullets": sum(line.lstrip().startswith(("- ", "* ")) for line in lines),
                       "ansi_escape_present": "\x1b" in normalized,
+                      "installed_titlecase_colon": any(line.strip() == "Installed Plugins:" for line in lines),
+                      "generic_plugins_colon": any(line.strip() == "Plugins:" for line in lines),
+                      "entry_identity_shape": entry_shape is not None,
+                      "entry_name_exact": bool(entry_shape and entry_shape.group(1) == "chrome-devtools"),
+                      "marketplace_managed_shape": bool(entry_shape and entry_shape.group(2).startswith("agentplugins-")),
+                      "tail_v_parenthesized": gate.re.fullmatch(rf"\(v{semver}\)", tail) is not None,
+                      "tail_parenthesized": gate.re.fullmatch(rf"\({semver}\)", tail) is not None,
+                      "tail_bare_v": gate.re.fullmatch(rf"v{semver}", tail) is not None,
+                      "tail_bare": gate.re.fullmatch(semver, tail) is not None,
+                      "tail_empty": tail == "",
                   }
                   print(json.dumps(fixed, sort_keys=True), flush=True)
               return result  # A diagnostic comparison must never turn failure into acceptance.
