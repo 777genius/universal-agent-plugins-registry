@@ -210,6 +210,21 @@ jobs:
                   compared = original_child(["/usr/bin/env", f"CLAUDE_CONFIG_DIR={config}",
                                              "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", *argv], **alternate)
                   summarize("explicit owned config and home cwd", compared)
+              elif Path(argv[0]).name == "copilot" and argv[1:] == ["plugin", "list"]:
+                  normalized = result.stdout.replace("\r\n", "\n")
+                  lines = normalized.splitlines()
+                  old_entry = gate.re.compile(r"[ \t]+•[ \t]+chrome-devtools@[A-Za-z0-9][A-Za-z0-9._-]*[ \t]+\(v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\)[ \t]*")
+                  fixed = {
+                      "label": "Copilot listing structure", "exit": result.returncode,
+                      "lines": len(lines), "installed_colon": any(line.strip() == "Installed plugins:" for line in lines),
+                      "installed_no_colon": any(line.strip() == "Installed plugins" for line in lines),
+                      "contains_expected_public_name": any("chrome-devtools" in line for line in lines),
+                      "old_entry_matches": sum(old_entry.fullmatch(line) is not None for line in lines),
+                      "unicode_bullets": sum("•" in line for line in lines),
+                      "ascii_bullets": sum(line.lstrip().startswith(("- ", "* ")) for line in lines),
+                      "ansi_escape_present": "\x1b" in normalized,
+                  }
+                  print(json.dumps(fixed, sort_keys=True), flush=True)
               return result  # A diagnostic comparison must never turn failure into acceptance.
           gate.child = diagnostic_child
           try:
