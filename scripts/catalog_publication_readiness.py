@@ -45,8 +45,8 @@ CLI = {"version": "0.1.24", "tag": PLUGIN_KIT_TAG, "commit": PLUGIN_KIT_COMMIT,
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
 NATIVE_LIST_STEPS = {
-    "claude": ("probe", "exit", "json_decode", "json_shape", "matching", "scope", "enabled"),
-    "copilot": ("probe", "exit", "section", "format", "count"),
+    "claude": ("probe", "exit", "json_decode", "json_shape", "matching", "scope", "enabled", "path"),
+    "copilot": ("probe", "exit", "section", "format", "count", "identity", "version", "status", "path"),
 }
 LIFECYCLE_STEPS = frozenset({
     "prepare", "native_version_claude_probe", "native_version_claude_exit", "native_version_claude_format",
@@ -302,7 +302,10 @@ def check_identity(data: dict, selection: dict, ctx: dict) -> None:
         require(directory.get(key) == expected, f"CLI Directory {key} mismatch")
 
 
-def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installed: bool, *, root: Path, readonly: tuple[Path, ...], diagnostic=None) -> None:
+def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installed: bool, *,
+                   root: Path, readonly: tuple[Path, ...], expected_marketplace: str | None = None,
+                   expected_version: str | None = None, expected_path: Path | None = None,
+                   diagnostic=None) -> None:
     require(tool.name in NATIVE_LIST_STEPS, "unknown native listing client")
     def mark(stage):
         require(stage in NATIVE_LIST_STEPS[tool.name], "unknown native listing diagnostic")
@@ -314,6 +317,13 @@ def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installe
     completed = child(argv, root=root, readonly=readonly, env=env, cwd=workspace, timeout=60)
     mark("exit")
     require(completed.returncode == 0, "native plugin listing failed")
+    if installed:
+        require(isinstance(expected_marketplace, str)
+                and re.fullmatch(r"agentplugins-[0-9a-f]{12}", expected_marketplace) is not None
+                and isinstance(expected_version, str) and bool(expected_version), "installed native identity is incomplete")
+        if tool.name == "claude":
+            require(expected_path is not None and expected_path.is_absolute()
+                    and expected_path.resolve().is_relative_to(root.resolve()), "installed Claude path identity is incomplete")
     if tool.name == "claude":
         mark("json_decode")
         values = json.loads(completed.stdout)
@@ -328,6 +338,10 @@ def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installe
             require(matches[0].get("scope") == "user", "Claude plugin not in user scope")
             mark("enabled")
             require(matches[0].get("enabled") is True, "Claude plugin not enabled")
+            mark("path")
+            install_path = matches[0].get("installPath")
+            require(isinstance(install_path, str) and Path(install_path).is_absolute()
+                    and Path(install_path).resolve() == expected_path.resolve(), "Claude plugin path mismatch")
     else:
         # Exact released native_identity.go empty-registry document: normalize
         # CRLF and remove at most one final newline, never arbitrary whitespace.
@@ -337,6 +351,26 @@ def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installe
             require(not installed, "Copilot native listing unexpectedly empty")
             return
         # Same recognized installed-section contract as released .24, not substring logs.
+        live_header = "Live Plugins (loaded from a local marketplace directory, never copied):"
+        lines = document.split("\n")
+        if lines and lines[0] == live_header:
+            mark("section")
+            mark("format")
+            require(len(lines) == 3, "malformed Copilot live listing")
+            entry = re.fullmatch(r"  • ([A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*) \(v([^() ]+)\) \(([^() ]+)\)", lines[1])
+            require(entry is not None and lines[2].startswith("      from "), "malformed Copilot live listing")
+            mark("identity")
+            require(entry[1] == f"{plugin}@{expected_marketplace}", "Copilot live identity mismatch")
+            mark("version")
+            require(entry[2] == expected_version, "Copilot live version mismatch")
+            mark("status")
+            require(entry[3] == "enabled", "Copilot live status mismatch")
+            mark("path")
+            live_path = lines[2][len("      from "):]
+            require(expected_path is not None and Path(live_path).is_absolute()
+                    and Path(live_path).resolve() == expected_path.resolve(), "Copilot live path mismatch")
+            mark("count")
+            return
         section, recognized, entries = False, False, []
         for line in completed.stdout.splitlines():
             if line.strip() == "Installed plugins:":
@@ -348,15 +382,21 @@ def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installe
                 section = False
             if section:
                 mark("format")
-                match = re.fullmatch(r"[ \t]+•[ \t]+([A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*)[ \t]+\(v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\)[ \t]*", line)
+                match = re.fullmatch(r"[ \t]+•[ \t]+([A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*)[ \t]+\(v([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)\)[ \t]*", line)
                 if match:
-                    entries.append(match[1])
+                    entries.append((match[1], match[2]))
                 else:
                     require(line.strip() in ("", "No plugins installed.", "No plugins installed"), "unrecognized Copilot plugin listing")
         mark("section")
         require(recognized, "Copilot native listing section missing")
         mark("count")
-        require(sum(item.split("@")[0] == plugin for item in entries) == int(installed), "Copilot native listing mismatch")
+        matches = [item for item in entries if item[0].split("@")[0] == plugin]
+        require(len(matches) == int(installed), "Copilot native listing mismatch")
+        if installed:
+            mark("identity")
+            require(matches[0][0] == f"{plugin}@{expected_marketplace}", "Copilot native marketplace mismatch")
+            mark("version")
+            require(matches[0][1] == expected_version, "Copilot native version mismatch")
 
 
 def exact_targets(data: dict, clients: tuple) -> list:
@@ -378,6 +418,24 @@ def validate_native_version(client: str, output: str) -> None:
                if client == "copilot" else rf"{expected} \(Claude Code\)")
     first_line = output.splitlines()[0].strip() if output else ""
     require(re.fullmatch(pattern, first_line) is not None, "native CLI version mismatch")
+
+
+def managed_marketplace(physical_artifact_id: str) -> str:
+    require(isinstance(physical_artifact_id, str) and bool(physical_artifact_id.strip()), "physical artifact ID missing")
+    return "agentplugins-" + hashlib.sha256(physical_artifact_id.strip().encode()).hexdigest()[:12]
+
+
+def native_binding(bindings: list[dict], client: str) -> dict:
+    require(client in NATIVE_LIST_STEPS, "unknown native binding client")
+    matches = []
+    for binding in bindings:
+        require(isinstance(binding, dict) and isinstance(binding.get("client_id"), str), "native binding malformed")
+        surfaces = binding.get("affected_surfaces", [binding["client_id"]])
+        require(isinstance(surfaces, list) and all(isinstance(item, str) for item in surfaces), "native binding surfaces malformed")
+        if client in surfaces:
+            matches.append(binding)
+    require(len(matches) == 1, "native client binding is missing or ambiguous")
+    return matches[0]
 
 
 def remove_targets(run, plugin: str, clients: tuple, verify_native_absent) -> dict:
@@ -422,6 +480,12 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     step("validate_add")
     check_identity(data, selection, ctx)
     targets = exact_targets(data, clients)
+    plans = [target.get("output", {}).get("result", {}).get("plan", {}) for target in targets]
+    physical_ids = {plan.get("physical_artifact_id") for plan in plans}
+    require(len(physical_ids) == 1 and all(isinstance(item, str) and bool(item.strip()) for item in physical_ids),
+            "targets do not share one valid physical artifact")
+    physical_artifact_id = next(iter(physical_ids))
+    marketplace = managed_marketplace(physical_artifact_id)
     acquisition = data.get("acquisition", {})
     require(type(acquisition.get("acquisition_count")) is int and acquisition["acquisition_count"] == 1, "not one package acquisition")
     require(acquisition.get("fetched") is True and acquisition.get("validated") is True, "package not acquired and validated")
@@ -461,7 +525,11 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     if "claude" in clients:
         step("native_list_installed")
         for tool in (args.claude, args.copilot):
-            native_listing(tool, env, roots["workspace"], selection["product_id"], True, root=root, readonly=readonly, diagnostic=step)
+            binding = native_binding(bindings, tool.name)
+            native_listing(tool, env, roots["workspace"], selection["product_id"], True,
+                           root=root, readonly=readonly, expected_marketplace=marketplace,
+                           expected_version=selection["package_version"],
+                           expected_path=Path(binding["target_locator"]), diagnostic=step)
     immutable = {name: path for name, path in roots.items() if name != "state"}
     immutable.update({f"owned{index}": path for index, path in enumerate(owned)})
     step("snapshot_before_update")
