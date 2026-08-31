@@ -201,9 +201,11 @@ jobs:
               print(json.dumps(summary, sort_keys=True), flush=True)
           def diagnostic_child(argv, **kwargs):
               pre_update = []
+              pre_installation = None
               if Path(argv[0]).name.startswith("agentplugins_") and len(argv) > 1 and argv[1] == "update":
                   state = json.loads((root / "state/state-v2.json").read_text())
-                  for binding in state["installations"][0]["clients"].values():
+                  pre_installation = state["installations"][0]
+                  for binding in pre_installation["clients"].values():
                       revision = binding.get("package_revision", {})
                       evidence = revision.get("catalog_evidence")
                       pre_update.append({
@@ -235,6 +237,24 @@ jobs:
                               "result_keys": sorted(item.get("output", {}).get("result", {}))
                                   if isinstance(item.get("output", {}), dict) and isinstance(item.get("output", {}).get("result"), dict) else [],
                           } for item in data.get("targets", []) if isinstance(item, dict)]
+                          comparisons = []
+                          if pre_installation is not None:
+                              bindings = list(pre_installation["clients"].values())
+                              directory = pre_installation.get("directory", {})
+                              for item in data.get("targets", []):
+                                  target = item.get("target")
+                                  matches = [binding for binding in bindings if target in binding.get("affected_surfaces", [binding.get("client_id")])]
+                                  output = item.get("output", {})
+                                  revision = matches[0].get("package_revision", {}) if len(matches) == 1 else {}
+                                  comparisons.append({
+                                      "target": target, "unique_binding": len(matches) == 1,
+                                      "tree_matches_output": revision.get("tree_digest") == output.get("tree_digest"),
+                                      "manifest_matches_output": revision.get("manifest_digest") == output.get("manifest_digest"),
+                                      "revision_matches_output": revision.get("resolved_revision") == output.get("revision"),
+                                      "distribution_matches_installation": revision.get("distribution_id") == directory.get("distribution_id"),
+                                      "release_matches_installation": revision.get("release_sequence") == directory.get("desired_release_sequence"),
+                                  })
+                          fixed["revision_comparisons"] = comparisons
                       error = value.get("error")
                       if isinstance(error, dict):
                           fixed["error_keys"] = sorted(error)
