@@ -218,6 +218,10 @@ jobs:
                   entry_shape = gate.re.fullmatch(r"[ \t]*•[ \t]+([A-Za-z0-9][A-Za-z0-9._-]*)@([A-Za-z0-9][A-Za-z0-9._-]*)[ \t]*(.*)", entry)
                   tail = entry_shape.group(3).strip() if entry_shape else ""
                   semver = r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?"
+                  safe_header = lines[0].strip() if lines else ""
+                  if not gate.re.fullmatch(r"[A-Za-z0-9 .,():`'/-]{1,160}", safe_header) or any(value in safe_header for value in ("/home/", "chrome-devtools", "@")):
+                      safe_header = "unsafe-or-unknown"
+                  safe_tail = tail if gate.re.fullmatch(r"[A-Za-z0-9 ._+()\-]{0,100}", tail) else "unsafe-or-unknown"
                   fixed = {
                       "label": "Copilot listing structure", "exit": result.returncode,
                       "lines": len(lines), "installed_colon": any(line.strip() == "Installed plugins:" for line in lines),
@@ -237,6 +241,8 @@ jobs:
                       "tail_bare_v": gate.re.fullmatch(rf"v{semver}", tail) is not None,
                       "tail_bare": gate.re.fullmatch(semver, tail) is not None,
                       "tail_empty": tail == "",
+                      "safe_public_header": safe_header,
+                      "safe_public_entry_tail": safe_tail,
                       # Redact every word/number; retain only punctuation layout
                       # needed to define the public CLI contract.
                       "line_skeletons": [gate.re.sub(r"[A-Za-z0-9_]+", "X", line) for line in lines],
