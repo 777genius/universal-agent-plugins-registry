@@ -237,6 +237,9 @@ jobs:
                       "tail_bare_v": gate.re.fullmatch(rf"v{semver}", tail) is not None,
                       "tail_bare": gate.re.fullmatch(semver, tail) is not None,
                       "tail_empty": tail == "",
+                      # Redact every word/number; retain only punctuation layout
+                      # needed to define the public CLI contract.
+                      "line_skeletons": [gate.re.sub(r"[A-Za-z0-9_]+", "X", line) for line in lines],
                   }
                   print(json.dumps(fixed, sort_keys=True), flush=True)
                   structured = original_child([*argv, "--json"], **kwargs)
