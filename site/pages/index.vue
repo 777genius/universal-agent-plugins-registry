@@ -99,7 +99,7 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
   <div>
     <section class="hero container">
       <div class="hero__copy">
-        <h1>One package.<br /><em>Your agents</em></h1>
+        <h1>One plugin.<br /><em>All your agents</em></h1>
         <p class="hero__lead">One command finds your installed agents and lets you confirm where to set up an Agent Plugins 1.0 package. You can also choose agents manually, then inspect, update, repair, switch, or remove the plugin with the same CLI.</p>
         <div class="hero__actions">
           <NuxtLink class="button button--primary" to="/plugins">Explore {{ registry.plugins.length }} plugins <span aria-hidden="true">→</span></NuxtLink>
