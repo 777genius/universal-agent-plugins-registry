@@ -104,6 +104,8 @@ function fixture(body = Buffer.from("exact tarball bytes")) {
 test("public npm metadata and downloaded pack bind the staged package identity", (t) => {
   const value = fixture();
   assert.equal(validatePackJSON(value.pack, value.version), value.pack[0]);
+  const npm12Pack = { "universal-agent-plugins": value.pack[0] };
+  assert.equal(validatePackJSON(npm12Pack, value.version), value.pack[0]);
   assert.equal(validatePublicMetadata(value.metadata, value.version, value.integrity, value.shasum), value.metadata);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-public-contract-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -112,6 +114,26 @@ test("public npm metadata and downloaded pack bind the staged package identity",
     validateDownloadedTarball(value.pack, root, value.version, value.integrity, value.shasum),
     value.pack[0]
   );
+  assert.equal(
+    validateDownloadedTarball(npm12Pack, root, value.version, value.integrity, value.shasum),
+    value.pack[0]
+  );
+});
+
+test("npm pack JSON rejects ambiguous array and npm 12 object shapes", () => {
+  const value = fixture();
+  for (const invalid of [
+    [],
+    [value.pack[0], value.pack[0]],
+    {},
+    { lookalike: value.pack[0] },
+    { "universal-agent-plugins": value.pack[0], lookalike: value.pack[0] }
+  ]) {
+    assert.throws(
+      () => validatePackJSON(invalid, value.version),
+      /exactly one package record/
+    );
+  }
 });
 
 test("public npm SLSA DSSE binds staged digest and exact UAP workflow tag commit", () => {
