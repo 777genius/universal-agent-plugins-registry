@@ -136,7 +136,7 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
     <section class="client-section container" aria-labelledby="clients-title">
       <p id="clients-title">Supported agents</p>
       <ClientStrip />
-      <p class="client-section__note">The CLI installs or prepares packages for ten agents. ChatGPT uses its app setup when a plugin provides one. Some agents may still ask you to finish activation or sign in.</p>
+      <p class="client-section__note">The CLI installs or prepares packages for supported agents. ChatGPT uses its app setup when a plugin provides one. Some agents may still ask you to finish activation or sign in.</p>
     </section>
 
     <section id="how-it-works" class="how container" aria-labelledby="how-title">

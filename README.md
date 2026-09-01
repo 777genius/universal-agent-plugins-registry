@@ -61,6 +61,7 @@ non-interactive use, pass every target explicitly as one comma-separated value:
 ```bash
 npx universal-agent-plugins add cloudflare-docs --target cursor
 npx universal-agent-plugins add cloudflare-docs --target codex,cursor
+npx universal-agent-plugins add cloudflare-docs --target codex,cursor,kiro
 ```
 
 The CLI resolves and verifies one immutable package once, preflights the whole
