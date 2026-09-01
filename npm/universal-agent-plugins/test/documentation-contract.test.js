@@ -5,6 +5,27 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
+test("npm facade metadata exactly names the UAP product endpoints", () => {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8"));
+  assert.equal(pkg.homepage, "https://777genius.github.io/universal-agent-plugins/");
+  assert.deepEqual(pkg.repository, {
+    type: "git",
+    url: "git+https://github.com/777genius/universal-agent-plugins.git",
+    directory: "npm/universal-agent-plugins"
+  });
+  assert.deepEqual(pkg.bugs, { url: "https://github.com/777genius/universal-agent-plugins/issues" });
+});
+
+test("detached package execution sentinel", (t) => {
+  const expectedRoot = process.env.AGENTPLUGINS_DETACHED_ASSERT_ROOT;
+  if (!expectedRoot) {
+    t.skip("only asserted by the detached staged-package subprocess");
+    return;
+  }
+  assert.equal(path.resolve(__dirname, ".."), path.resolve(expectedRoot));
+  assert.equal(fs.existsSync(path.resolve(__dirname, "../../../README.md")), false);
+});
+
 const documents = [
   ["root README", path.resolve(__dirname, "../../../README.md")],
   ["npm README", path.resolve(__dirname, "../README.md")]
@@ -74,9 +95,12 @@ test("public Agentplugins documentation keeps copyable commands within the CLI c
 });
 
 test("public documentation states the facade and engine ownership boundary", () => {
-  const root = fs.readFileSync(documents[0][1], "utf8");
   const packaged = fs.readFileSync(documents[1][1], "utf8");
-  for (const [label, markdown] of [["root README", root], ["npm README", packaged]]) {
+  const boundaryDocuments = [["npm README", packaged]];
+  if (fs.existsSync(documents[0][1])) {
+    boundaryDocuments.unshift(["root README", fs.readFileSync(documents[0][1], "utf8")]);
+  }
+  for (const [label, markdown] of boundaryDocuments) {
     assert.match(markdown, /product home[\s\S]{0,100}(?:npm facade|facade source)/i, `: facade product ownership missing`);
     assert.match(markdown, /plugin-kit-ai[\s\S]{0,180}(?:Go implementation engine|implementation engine)/i, `: implementation engine ownership missing`);
     assert.match(markdown, /not duplicated/i, `: no-duplicate-engine boundary missing`);

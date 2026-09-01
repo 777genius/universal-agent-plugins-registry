@@ -8,6 +8,7 @@ const path = require("node:path");
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
+const PRODUCER_REPOSITORY = "777genius/plugin-kit-ai";
 const TARGETS = [
   ["darwin-amd64", "darwin", "amd64", ""],
   ["darwin-arm64", "darwin", "arm64", ""],
@@ -116,7 +117,14 @@ function verifyRelease(assetRoot, tag, commit, options = {}) {
     if (Object.keys(manifest).sort().join(",") !== "commit,schema_version,tag") {
       throw new Error("legacy release manifest has unexpected fields");
     }
-    return { ...identity, assets: computed, manifest_schema: 1, gate_eligible: false };
+    return {
+      repository: PRODUCER_REPOSITORY,
+      ...identity,
+      assets: computed,
+      manifest_schema: 1,
+      manifest_sha256: sha256(manifestPath),
+      gate_eligible: false
+    };
   }
   if (manifest.schema_version !== 2 || manifest.version !== identity.version) {
     throw new Error("release manifest schema or version does not match");
@@ -137,7 +145,14 @@ function verifyRelease(assetRoot, tag, commit, options = {}) {
       throw new Error(`release manifest asset metadata mismatch: ${key}`);
     }
   }
-  return { ...identity, assets: computed, manifest_schema: 2, gate_eligible: true };
+  return {
+    repository: PRODUCER_REPOSITORY,
+    ...identity,
+    assets: computed,
+    manifest_schema: 2,
+    manifest_sha256: sha256(manifestPath),
+    gate_eligible: true
+  };
 }
 
 function main() {
@@ -163,4 +178,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { expectedAssets, prepareRelease, verifyRelease };
+module.exports = { PRODUCER_REPOSITORY, expectedAssets, prepareRelease, verifyRelease };

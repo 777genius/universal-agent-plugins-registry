@@ -6,10 +6,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { detectPlatform, expectedAssetName } = require("../lib/platform");
-const { verifyRelease } = require("./release-assets");
+const { PRODUCER_REPOSITORY, verifyRelease } = require("./release-assets");
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const COMMIT = /^[0-9a-f]{40}$/;
+const DIGEST = /^[0-9a-f]{64}$/;
 const PLATFORMS = [
   ["darwin", "x64"],
   ["darwin", "arm64"],
@@ -39,6 +41,151 @@ function validatePackageMetadata(pkg) {
   return packageName;
 }
 
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+}
+
+function requireExactKeys(value, keys, label) {
+  if (!exactKeys(value, keys)) throw new Error(`client E2E evidence ${label} keys are invalid`);
+}
+
+function requireStringArray(value, label) {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry)) {
+    throw new Error(`client E2E evidence ${label} is invalid`);
+  }
+}
+
+function validateEvidenceRecord(body) {
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch (error) {
+    throw new Error(`client E2E evidence JSON is malformed: ${error.message}`);
+  }
+  requireExactKeys(data, ["schema_version", "evidence_kind", "recorded_at", "installer", "package", "environment", "transcript", "claim_boundary"], "record");
+  if (data.schema_version !== 1 || data.evidence_kind !== "agentplugins_client_lifecycle" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(String(data.recorded_at || ""))) {
+    throw new Error("client E2E evidence schema or identity is invalid");
+  }
+  const installer = data.installer;
+  requireExactKeys(installer, ["repository", "commit", "tree", "version", "binary_sha256"], "installer");
+  if (installer.repository !== PRODUCER_REPOSITORY || !COMMIT.test(String(installer.commit || "")) ||
+      !COMMIT.test(String(installer.tree || "")) || !/^\d+\.\d+\.\d+$/.test(String(installer.version || "")) ||
+      !DIGEST.test(String(installer.binary_sha256 || ""))) {
+    throw new Error("client E2E installer identity is invalid");
+  }
+
+  const pkg = data.package;
+  requireExactKeys(pkg, ["selector", "repository", "revision", "name", "version", "tree_digest", "manifest_digest", "acquisition_closure_digest"], "package");
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(pkg.repository || "")) ||
+      !COMMIT.test(String(pkg.revision || "")) || pkg.selector !== `${pkg.repository}@${pkg.revision}` ||
+      typeof pkg.name !== "string" || !pkg.name || typeof pkg.version !== "string" || !pkg.version ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(pkg.tree_digest || "")) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(pkg.manifest_digest || "")) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(pkg.acquisition_closure_digest || ""))) {
+    throw new Error("client E2E package identity is invalid");
+  }
+
+  const environment = data.environment;
+  requireExactKeys(environment, ["os", "arch", "node", "clients", "isolation"], "environment");
+  if (typeof environment.os !== "string" || !environment.os || !["arm64", "amd64"].includes(environment.arch) ||
+      !/^\d+\.\d+\.\d+$/.test(String(environment.node || ""))) {
+    throw new Error("client E2E environment identity is invalid");
+  }
+  requireExactKeys(environment.clients, ["claude", "gemini", "opencode", "cline", "windsurf"], "client inventory");
+  for (const client of Object.values(environment.clients)) {
+    requireExactKeys(client, ["version", "host_surface_detected"], "client inventory entry");
+    if ((client.version !== null && (typeof client.version !== "string" || !client.version)) || client.host_surface_detected !== true) {
+      throw new Error("client E2E inventory did not detect every claimed host surface");
+    }
+  }
+  const isolationKeys = ["fresh_home", "fresh_xdg_roots", "fresh_claude_config", "fresh_gemini_home", "fresh_cline_data", "fresh_agentplugins_state", "user_project_accessed", "user_client_config_mutated"];
+  requireExactKeys(environment.isolation, isolationKeys, "isolation");
+  if (isolationKeys.slice(0, 6).some((key) => environment.isolation[key] !== true) ||
+      isolationKeys.slice(6).some((key) => environment.isolation[key] !== false)) {
+    throw new Error("client E2E isolation or user-project boundary is invalid");
+  }
+
+  if (!Array.isArray(data.transcript) || data.transcript.length !== 7) {
+    throw new Error("client E2E evidence must contain the exact lifecycle transcript");
+  }
+  const [add, discovery, doctor, preflight, repair, remove, postRemove] = data.transcript;
+  const expectedSteps = ["add", "client_discovery", "doctor", "immutable_update_preflight", "repair", "remove", "post_remove"];
+  if (data.transcript.some((entry, index) => !entry || entry.step !== expectedSteps[index])) {
+    throw new Error("client E2E evidence lifecycle step identities or order are invalid");
+  }
+  requireExactKeys(add, ["step", "argv", "exit_code", "result", "status", "acquisition_count", "source_kind", "fetched", "validated", "targets", "shared_identity"], "add step");
+  requireExactKeys(add.targets, ["claude", "gemini", "opencode", "cline", "windsurf"], "add targets");
+  for (const target of Object.values(add.targets)) {
+    requireExactKeys(target, ["outcome", "activation", "verification"], "add target");
+    if (target.outcome !== "passed" || target.activation !== "active" || target.verification !== "installation_verified") {
+      throw new Error("client E2E add target did not pass");
+    }
+  }
+  requireExactKeys(add.shared_identity, ["installation_count", "physical_artifact_id", "same_tree_digest_for_all_targets", "same_manifest_digest_for_all_targets", "same_closure_digest_for_all_targets"], "shared identity");
+  if (add.exit_code !== 0 || add.result !== "success" || add.status !== "completed" || add.acquisition_count !== 1 ||
+      add.source_kind !== "github" || add.fetched !== true || add.validated !== true ||
+      add.shared_identity.installation_count !== 1 || typeof add.shared_identity.physical_artifact_id !== "string" || !add.shared_identity.physical_artifact_id ||
+      ["same_tree_digest_for_all_targets", "same_manifest_digest_for_all_targets", "same_closure_digest_for_all_targets"].some((key) => add.shared_identity[key] !== true)) {
+    throw new Error("client E2E add step did not prove one validated shared acquisition");
+  }
+
+  requireExactKeys(discovery, ["step", "checks"], "client discovery step");
+  requireExactKeys(discovery.checks, ["claude", "gemini_mcp", "gemini_skills", "opencode", "cline", "windsurf"], "client discovery checks");
+  const discoveryKeys = {
+    claude: ["argv", "exit_code", "plugin_id", "plugin_version", "enabled", "skill_count", "mcp_command"],
+    gemini_mcp: ["argv", "exit_code", "server", "transport", "command", "connection"],
+    gemini_skills: ["argv", "exit_code", "enabled_skill_count"],
+    opencode: ["argv", "exit_code", "server", "type", "command", "cwd_bound_to_managed_package", "plugin_root_bound", "plugin_data_bound"],
+    cline: ["config", "transport", "command", "plugin_root_bound", "plugin_data_bound", "projected_skill_count"],
+    windsurf: ["config", "command", "plugin_root_bound", "plugin_data_bound", "skills"]
+  };
+  for (const [key, keys] of Object.entries(discoveryKeys)) {
+    requireExactKeys(discovery.checks[key], keys, `${key} discovery check`);
+  }
+  for (const key of ["claude", "gemini_mcp", "gemini_skills", "opencode"]) {
+    requireStringArray(discovery.checks[key].argv, `${key} discovery argv`);
+    if (discovery.checks[key].exit_code !== 0) throw new Error(`client E2E discovery check did not pass: ${key}`);
+  }
+  if (discovery.checks.cline.plugin_root_bound !== true || discovery.checks.cline.plugin_data_bound !== true ||
+      discovery.checks.windsurf.plugin_root_bound !== true || discovery.checks.windsurf.plugin_data_bound !== true) {
+    throw new Error("client E2E discovery bindings are incomplete");
+  }
+
+  requireExactKeys(doctor, ["step", "argv", "exit_code", "result", "read_only", "installation_count", "projection_drift_findings", "authentication_not_checked_clients"], "doctor step");
+  requireExactKeys(preflight, ["step", "argv", "exit_code", "result", "status", "reason", "succeeded", "failed", "mutated_targets", "postcondition"], "immutable update step");
+  requireExactKeys(repair, ["step", "argv", "exit_code", "result", "status", "succeeded", "failed", "targets"], "repair step");
+  requireExactKeys(remove, ["step", "argv", "exit_code", "result", "status", "succeeded", "failed", "plugin_data_preserved", "targets"], "remove step");
+  requireExactKeys(postRemove, ["step", "checks"], "post-remove step");
+  for (const [entry, command] of [[add, "add"], [doctor, "doctor"], [preflight, "update"], [repair, "repair"], [remove, "remove"]]) {
+    requireStringArray(entry.argv, `${entry.step} argv`);
+    if (entry.argv[0] !== "agentplugins" || entry.argv[1] !== command) {
+      throw new Error(`client E2E evidence ${entry.step} command identity is invalid`);
+    }
+  }
+  requireExactKeys(repair.targets, ["claude", "gemini", "opencode", "cline", "windsurf"], "repair targets");
+  requireExactKeys(remove.targets, ["claude", "gemini", "opencode", "cline", "windsurf"], "remove targets");
+  requireExactKeys(postRemove.checks, ["agentplugins_installation_count", "claude_plugin_count", "gemini_mcp_count", "gemini_skill_count", "opencode_mcp_count", "cline_mcp_count", "cline_skill_count", "windsurf_mcp_count"], "post-remove checks");
+  if (doctor.exit_code !== 0 || doctor.result !== "success" || doctor.read_only !== true || doctor.installation_count !== 1 || doctor.projection_drift_findings !== 0 ||
+      preflight.exit_code !== 1 || preflight.result !== "failure" || preflight.status !== "preflight_failed" || preflight.succeeded !== 0 || preflight.mutated_targets !== 0 ||
+      repair.exit_code !== 0 || repair.result !== "success" || repair.status !== "completed" || repair.succeeded !== 5 || repair.failed !== 0 ||
+      remove.exit_code !== 0 || remove.result !== "success" || remove.status !== "data_retained" || remove.succeeded !== 5 || remove.failed !== 0 || remove.plugin_data_preserved !== true ||
+      Object.values(repair.targets).some((value) => value !== "passed") ||
+      Object.values(remove.targets).some((value) => value !== "external_completed") ||
+      Object.values(postRemove.checks).some((value) => value !== 0)) {
+    throw new Error("client E2E evidence contains an unsuccessful lifecycle result");
+  }
+
+  const claimKeys = ["lifecycle_e2e", "client_discovery_e2e", "browser_tool_runtime_e2e", "model_turn_e2e", "login_e2e", "oauth_e2e", "windsurf_skill_activation_claimed"];
+  requireExactKeys(data.claim_boundary, claimKeys, "claim boundary");
+  if (data.claim_boundary.lifecycle_e2e !== true || data.claim_boundary.client_discovery_e2e !== true ||
+      claimKeys.slice(2).some((key) => data.claim_boundary[key] !== false)) {
+    throw new Error("client E2E claim boundary is invalid");
+  }
+  return data;
+}
+
 function stageEvidence(packageRoot, evidenceRoot) {
   if (!evidenceRoot) {
     throw new Error("release staging requires the checked-in client E2E evidence root");
@@ -51,8 +198,8 @@ function stageEvidence(packageRoot, evidenceRoot) {
     throw new Error("client E2E evidence root must be a real directory");
   }
   const resolvedRoot = fs.realpathSync(evidenceRoot);
-  const destination = path.join(packageRoot, "test", "evidence-root");
-  fs.mkdirSync(destination, { recursive: true });
+  const bodies = {};
+  const digests = {};
   for (const sourceName of EVIDENCE_FILES) {
     const source = path.join(evidenceRoot, sourceName);
     if (!fs.realpathSync(source).startsWith(`${resolvedRoot}${path.sep}`)) {
@@ -62,21 +209,52 @@ function stageEvidence(packageRoot, evidenceRoot) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
       throw new Error(`client E2E evidence is not a regular non-empty file: ${sourceName}`);
     }
+    bodies[sourceName] = fs.readFileSync(source);
+    digests[sourceName] = crypto.createHash("sha256").update(bodies[sourceName]).digest("hex");
+  }
+  const recordName = EVIDENCE_FILES[1];
+  const record = validateEvidenceRecord(bodies[recordName].toString("utf8"));
+  const markdown = bodies[EVIDENCE_FILES[0]].toString("utf8");
+  for (const value of [record.recorded_at, record.installer.commit, record.installer.tree, record.installer.version,
+    record.installer.binary_sha256, record.package.selector, record.package.version, record.package.tree_digest,
+    record.package.manifest_digest, recordName.split(path.sep).join("/"), digests[recordName]]) {
+    if (!markdown.includes(value)) throw new Error("client E2E document does not bind the structured evidence identity and digest");
+  }
+  const destination = path.join(packageRoot, "test", "evidence-root");
+  for (const sourceName of EVIDENCE_FILES) {
     const target = path.join(destination, sourceName);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+    fs.writeFileSync(target, bodies[sourceName], { flag: "wx" });
   }
+  return {
+    schema_version: record.schema_version,
+    kind: record.evidence_kind,
+    recorded_at: record.recorded_at,
+    document_sha256: digests[EVIDENCE_FILES[0]],
+    record_sha256: digests[recordName],
+    installer: { ...record.installer },
+    package: {
+      selector: record.package.selector,
+      revision: record.package.revision,
+      tree_digest: record.package.tree_digest,
+      manifest_digest: record.package.manifest_digest
+    },
+    claim_boundary: { ...record.claim_boundary }
+  };
 }
 
 function stage(packageRoot, assetRoot, version, commit, options = {}) {
   if (!VERSION.test(version)) {
     throw new Error(`invalid release version: ${version}`);
   }
-  verifyRelease(assetRoot, `agentplugins-v${version}`, commit, options);
+  const release = verifyRelease(assetRoot, `agentplugins-v${version}`, commit, options);
+  if (!release.gate_eligible || release.manifest_schema !== 2) {
+    throw new Error("release staging requires a gate-eligible schema-v2 current producer manifest");
+  }
   const pkgPath = path.join(packageRoot, "package.json");
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
   const packageName = validatePackageMetadata(pkg);
-  stageEvidence(packageRoot, options.evidenceRoot);
+  const evidence = stageEvidence(packageRoot, options.evidenceRoot);
   pkg.version = version;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
   const assets = {};
@@ -91,11 +269,22 @@ function stage(packageRoot, assetRoot, version, commit, options = {}) {
     assets[info.key] = { file, sha256: sha256(filePath), size: stat.size };
   }
   const manifest = {
-    schema_version: 1,
+    schema_version: 2,
     version,
     npm_package: packageName,
     repository: "777genius/plugin-kit-ai",
     tag: `agentplugins-v${version}`,
+    producer: {
+      repository: release.repository,
+      tag: release.tag,
+      commit: release.commit,
+      release_manifest: {
+        schema_version: release.manifest_schema,
+        sha256: release.manifest_sha256,
+        version: release.version
+      }
+    },
+    client_evidence: evidence,
     assets
   };
   fs.writeFileSync(path.join(packageRoot, "assets.json"), JSON.stringify(manifest, null, 2) + "\n");
