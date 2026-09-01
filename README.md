@@ -16,9 +16,10 @@ Pick from 26 ready-made abilities: search current documentation, navigate code,
 debug browsers, work with cloud tools, and more. Install one plugin and add
 others only when you need them.
 
-This repository is the product home and public source for the
-`universal-agent-plugins` npm facade, as well as 26 open-source plugins packaged
-for the [Agent Plugins 1.0](https://agent-plugins.org/specification) standard.
+This repository is the product home and public source for the npm facade.
+`universal-agent-plugins` is the npm package. It also contains 26 open-source
+plugins packaged for the
+[Agent Plugins 1.0](https://agent-plugins.org/specification) standard.
 Portable packages use a root `plugin.json`. For OpenAI hosts, CI generates
 official-layout `.codex-plugin/plugin.json` packages under
 [`compat/openai`](compat/openai), validates them with OpenAI's `plugin-creator`,
