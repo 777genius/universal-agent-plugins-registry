@@ -108,6 +108,14 @@ test("public documentation states the facade and engine ownership boundary", () 
   }
 });
 
+test("package documentation labels client evidence historical and commit-pins its source", () => {
+  const markdown = fs.readFileSync(documents[1][1], "utf8");
+  assert.match(markdown, /historical lifecycle evidence collected for[\s\S]{0,80}0\.1\.22/i);
+  assert.match(markdown, /not evidence for the current npm release/i);
+  assert.match(markdown, /https:\/\/github\.com\/777genius\/plugin-kit-ai\/blob\/4b25a45e1574bab7a4f49e48905a3b3b2647e917\/docs\/AGENTPLUGINS_CLIENT_E2E\.md/);
+  assert.doesNotMatch(markdown, /plugin-kit-ai\/blob\/(?:main|master)\/docs\/AGENTPLUGINS_CLIENT_E2E\.md/);
+});
+
 test("copyable direct-source examples use a marked replacement full SHA", () => {
   const placeholder = "0123456789abcdef0123456789abcdef01234567";
   for (const [label, filename] of [documents[1]]) {

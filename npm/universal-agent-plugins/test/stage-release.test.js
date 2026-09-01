@@ -11,7 +11,7 @@ const test = require("node:test");
 
 const { detectPlatform, expectedAssetName } = require("../lib/platform");
 const { prepareRelease, verifyRelease } = require("../scripts/release-assets");
-const { stage, stageEvidence, validatePackageMetadata } = require("../scripts/stage-release");
+const { stage, stageEvidence, validateEvidenceRecord, validatePackageMetadata } = require("../scripts/stage-release");
 
 const COMMIT = "a".repeat(40);
 const HISTORICAL_COMMIT = "5630ccd92aa91c8ac8cafb37eea8752fd82edce0";
@@ -32,23 +32,26 @@ async function fixtureEvidence(root) {
       binary_sha256: "8f417cea031d42b07badbe1b2a37dcd53deb2e5804f99d668f733309ecb4022b"
     },
     package: {
-      selector: `ChromeDevTools/chrome-devtools-mcp@${"c".repeat(40)}`,
+      selector: "ChromeDevTools/chrome-devtools-mcp@cb39d1d835c3baa3eff87501cd8c1de020604789",
       repository: "ChromeDevTools/chrome-devtools-mcp",
-      revision: "c".repeat(40),
+      revision: "cb39d1d835c3baa3eff87501cd8c1de020604789",
       name: "chrome-devtools",
       version: "1.8.0",
-      tree_digest: `sha256:${"d".repeat(64)}`,
-      manifest_digest: `sha256:${"e".repeat(64)}`,
-      acquisition_closure_digest: `sha256:${"f".repeat(64)}`
+      tree_digest: "sha256:3bd47ccd3f990a6fdd8d3e2fa3dac48ac460a9043e0ccf0c5e14522fb4c472ea",
+      manifest_digest: "sha256:b34a4dcd71cd536a7f5a3a51d76d53ae5af3d0ce0f18783e71c7f01da865b867",
+      acquisition_closure_digest: "sha256:d06d41ea4cca87f5731aac72cd9c1bc46e280fd9d84107ed1dcbbbc6e05e02e9"
     },
     environment: {
-      os: "macOS fixture",
+      os: "macOS 15.6.1",
       arch: "arm64",
       node: "24.18.0",
-      clients: Object.fromEntries(["claude", "gemini", "opencode", "cline", "windsurf"].map((name) => [name, {
-        version: ["cline", "windsurf"].includes(name) ? null : "1.0.0",
-        host_surface_detected: true
-      }])),
+      clients: {
+        claude: { version: "2.1.205", host_surface_detected: true },
+        gemini: { version: "0.36.0", host_surface_detected: true },
+        opencode: { version: "1.18.4", host_surface_detected: true },
+        cline: { version: null, host_surface_detected: true },
+        windsurf: { version: null, host_surface_detected: true }
+      },
       isolation: {
         fresh_home: true, fresh_xdg_roots: true, fresh_claude_config: true,
         fresh_gemini_home: true, fresh_cline_data: true, fresh_agentplugins_state: true,
@@ -61,29 +64,30 @@ async function fixtureEvidence(root) {
         acquisition_count: 1, source_kind: "github", fetched: true, validated: true,
         targets: Object.fromEntries(["claude", "gemini", "opencode", "cline", "windsurf"].map((name) => [name,
           { outcome: "passed", activation: "active", verification: "installation_verified" }])),
-        shared_identity: { installation_count: 1, physical_artifact_id: "fixture", same_tree_digest_for_all_targets: true,
+        shared_identity: { installation_count: 1, physical_artifact_id: "chrome-devtools-f7f684ed8c79", same_tree_digest_for_all_targets: true,
           same_manifest_digest_for_all_targets: true, same_closure_digest_for_all_targets: true }
       },
       {
         step: "client_discovery",
         checks: {
-          claude: { argv: ["claude", "plugin", "list"], exit_code: 0, plugin_id: "fixture", plugin_version: "1.8.0",
-            enabled: true, skill_count: 6, mcp_command: ["npx", "fixture"] },
-          gemini_mcp: { argv: ["gemini", "mcp", "list"], exit_code: 0, server: "fixture", transport: "stdio",
-            command: ["npx", "fixture"], connection: "disconnected" },
+          claude: { argv: ["claude", "plugin", "list", "--json"], exit_code: 0, plugin_id: "chrome-devtools@skills-dir", plugin_version: "1.8.0",
+            enabled: true, skill_count: 6, mcp_command: ["npx", "chrome-devtools-mcp@1.8.0"] },
+          gemini_mcp: { argv: ["gemini", "mcp", "list"], exit_code: 0, server: "chrome-devtools", transport: "stdio",
+            command: ["npx", "chrome-devtools-mcp@1.8.0"], connection: "disconnected" },
           gemini_skills: { argv: ["gemini", "skills", "list"], exit_code: 0, enabled_skill_count: 6 },
-          opencode: { argv: ["opencode", "debug", "config"], exit_code: 0, server: "fixture", type: "local",
-            command: ["npx", "fixture"], cwd_bound_to_managed_package: true, plugin_root_bound: true, plugin_data_bound: true },
-          cline: { config: "fixture", transport: "stdio", command: ["npx", "fixture"], plugin_root_bound: true,
+          opencode: { argv: ["opencode", "debug", "config"], exit_code: 0, server: "chrome-devtools", type: "local",
+            command: ["npx", "chrome-devtools-mcp@1.8.0"], cwd_bound_to_managed_package: true, plugin_root_bound: true, plugin_data_bound: true },
+          cline: { config: "mcpServers.chrome-devtools", transport: "stdio", command: ["npx", "chrome-devtools-mcp@1.8.0"], plugin_root_bound: true,
             plugin_data_bound: true, projected_skill_count: 6 },
-          windsurf: { config: "fixture", command: ["npx", "fixture"], plugin_root_bound: true,
+          windsurf: { config: "mcpServers.chrome-devtools", command: ["npx", "chrome-devtools-mcp@1.8.0"], plugin_root_bound: true,
             plugin_data_bound: true, skills: "prepared_only" }
         }
       },
       { step: "doctor", argv: ["agentplugins", "doctor"], exit_code: 0, result: "success", read_only: true,
         installation_count: 1, projection_drift_findings: 0, authentication_not_checked_clients: [] },
       { step: "immutable_update_preflight", argv: ["agentplugins", "update"], exit_code: 1, result: "failure",
-        status: "preflight_failed", reason: "immutable", succeeded: 0, failed: 5, mutated_targets: 0, postcondition: "unchanged" },
+        status: "preflight_failed", reason: "direct full-SHA installations require explicit switch", succeeded: 0, failed: 5, mutated_targets: 0,
+        postcondition: "the exact installation and all five client projections remained installed and unchanged" },
       { step: "repair", argv: ["agentplugins", "repair"], exit_code: 0, result: "success", status: "completed",
         succeeded: 5, failed: 0, targets: Object.fromEntries(["claude", "gemini", "opencode", "cline", "windsurf"].map((name) => [name, "passed"])) },
       { step: "remove", argv: ["agentplugins", "remove"], exit_code: 0, result: "success", status: "data_retained",
@@ -95,24 +99,23 @@ async function fixtureEvidence(root) {
     claim_boundary: { lifecycle_e2e: true, client_discovery_e2e: true, browser_tool_runtime_e2e: false,
       model_turn_e2e: false, login_e2e: false, oauth_e2e: false, windsurf_skill_activation_claimed: false }
   };
-  const recordBody = JSON.stringify(record, null, 2) + "\n";
+  const targets = "claude,gemini,opencode,cline,windsurf";
+  record.transcript[0].argv = ["agentplugins", "add", record.package.selector, "--target", targets, "--format", "json"];
+  record.transcript[2].argv = ["agentplugins", "doctor", "--format", "json"];
+  record.transcript[2].authentication_not_checked_clients = targets.split(",");
+  record.transcript[3].argv = ["agentplugins", "update", record.package.name, "--target", targets, "--format", "json"];
+  record.transcript[4].argv = ["agentplugins", "repair", record.package.name, "--target", targets, "--format", "json"];
+  record.transcript[5].argv = ["agentplugins", "remove", record.package.name, "--target", targets, "--format", "json"];
+  const recordFixture = path.join(__dirname, "fixtures/historical-evidence/agentplugins-client-e2e-2026-08-30.json");
+  assert.deepEqual(record, JSON.parse(await fsp.readFile(recordFixture, "utf8")));
+  const recordBody = await fsp.readFile(recordFixture);
   const recordDigest = crypto.createHash("sha256").update(recordBody).digest("hex");
   await fsp.writeFile(path.join(evidenceRoot, "evidence/agentplugins-client-e2e-2026-08-30.json"), recordBody);
-  await fsp.writeFile(path.join(evidenceRoot, "AGENTPLUGINS_CLIENT_E2E.md"), [
-    "# Fixture evidence",
-    record.recorded_at,
-    record.installer.commit,
-    record.installer.tree,
-    record.installer.version,
-    record.installer.binary_sha256,
-    record.package.selector,
-    record.package.version,
-    record.package.tree_digest,
-    record.package.manifest_digest,
-    "evidence/agentplugins-client-e2e-2026-08-30.json",
-    recordDigest,
-    ""
-  ].join("\n"));
+  assert.equal(recordDigest, "437da1bc7423a85b231be139ff9bfbd7e89c942ef216a61ebde668c08a9c2ee3");
+  await fsp.copyFile(
+    path.join(__dirname, "fixtures/historical-evidence/AGENTPLUGINS_CLIENT_E2E.md"),
+    path.join(evidenceRoot, "AGENTPLUGINS_CLIENT_E2E.md")
+  );
   return evidenceRoot;
 }
 
@@ -153,6 +156,18 @@ test("release staging embeds every exact platform asset hash", async (t) => {
   assert.equal(manifest.producer.commit, COMMIT);
   assert.equal(manifest.producer.release_manifest.sha256, release.manifest_sha256);
   assert.equal(manifest.client_evidence.installer.commit, HISTORICAL_COMMIT);
+  assert.deepEqual(manifest.client_evidence.source, {
+    repository: "777genius/plugin-kit-ai",
+    commit: "4b25a45e1574bab7a4f49e48905a3b3b2647e917",
+    document: {
+      path: "docs/AGENTPLUGINS_CLIENT_E2E.md",
+      sha256: manifest.client_evidence.document_sha256
+    },
+    record: {
+      path: "docs/evidence/agentplugins-client-e2e-2026-08-30.json",
+      sha256: manifest.client_evidence.record_sha256
+    }
+  });
   assert.notEqual(manifest.client_evidence.installer.commit, manifest.producer.commit);
   assert.notEqual(manifest.client_evidence.installer.version, manifest.version);
   assert.equal(Object.keys(manifest.assets).length, 6);
@@ -256,8 +271,52 @@ test("release staging rejects malformed and internally mismatched historical evi
   await fixtureEvidence(root);
   const markdownPath = path.join(evidenceRoot, "AGENTPLUGINS_CLIENT_E2E.md");
   const markdown = await fsp.readFile(markdownPath, "utf8");
-  await fsp.writeFile(markdownPath, markdown.replace(/[0-9a-f]{64}\n$/, `${"0".repeat(64)}\n`));
+  await fsp.writeFile(markdownPath, markdown.replace(
+    "437da1bc7423a85b231be139ff9bfbd7e89c942ef216a61ebde668c08a9c2ee3",
+    "0".repeat(64)
+  ));
   assert.throws(() => stage(packageRoot, assetsRoot, version, COMMIT, { evidenceRoot }), /does not bind/);
+});
+
+test("historical client discovery and boundary claims reject every semantic bypass", async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agentplugins-evidence-semantics-"));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const evidenceRoot = await fixtureEvidence(root);
+  const original = JSON.parse(await fsp.readFile(
+    path.join(evidenceRoot, "evidence/agentplugins-client-e2e-2026-08-30.json"), "utf8"
+  ));
+  const cases = [
+    ["claude enabled", (r) => { r.transcript[1].checks.claude.enabled = false; }],
+    ["claude skill count", (r) => { r.transcript[1].checks.claude.skill_count = 1; }],
+    ["claude command", (r) => { r.transcript[1].checks.claude.mcp_command = ["wrong"]; }],
+    ["Gemini connection", (r) => { r.transcript[1].checks.gemini_mcp.connection = "connected"; }],
+    ["Gemini command", (r) => { r.transcript[1].checks.gemini_mcp.command = ["wrong"]; }],
+    ["Gemini skill count", (r) => { r.transcript[1].checks.gemini_skills.enabled_skill_count = 1; }],
+    ["OpenCode cwd binding", (r) => { r.transcript[1].checks.opencode.cwd_bound_to_managed_package = false; }],
+    ["OpenCode root binding", (r) => { r.transcript[1].checks.opencode.plugin_root_bound = false; }],
+    ["OpenCode data binding", (r) => { r.transcript[1].checks.opencode.plugin_data_bound = false; }],
+    ["OpenCode command", (r) => { r.transcript[1].checks.opencode.command = ["wrong"]; }],
+    ["Cline root binding", (r) => { r.transcript[1].checks.cline.plugin_root_bound = false; }],
+    ["Cline data binding", (r) => { r.transcript[1].checks.cline.plugin_data_bound = false; }],
+    ["Cline skill count", (r) => { r.transcript[1].checks.cline.projected_skill_count = 1; }],
+    ["Cline command", (r) => { r.transcript[1].checks.cline.command = ["wrong"]; }],
+    ["Windsurf root binding", (r) => { r.transcript[1].checks.windsurf.plugin_root_bound = false; }],
+    ["Windsurf data binding", (r) => { r.transcript[1].checks.windsurf.plugin_data_bound = false; }],
+    ["Windsurf activation boundary", (r) => { r.transcript[1].checks.windsurf.skills = "active"; }],
+    ["Windsurf command", (r) => { r.transcript[1].checks.windsurf.command = ["wrong"]; }],
+    ["discovery argv", (r) => { r.transcript[1].checks.claude.argv = ["wrong"]; }],
+    ["doctor argv", (r) => { r.transcript[2].argv = ["agentplugins", "doctor"]; }],
+    ["doctor authentication boundary", (r) => { r.transcript[2].authentication_not_checked_clients = []; }],
+    ["preflight argv", (r) => { r.transcript[3].argv = ["agentplugins", "update"]; }],
+    ["preflight reason", (r) => { r.transcript[3].reason = "wrong but non-empty"; }],
+    ["preflight failed count", (r) => { r.transcript[3].failed = 0; }],
+    ["preflight postcondition", (r) => { r.transcript[3].postcondition = "wrong but non-empty"; }]
+  ];
+  for (const [label, mutate] of cases) {
+    const record = structuredClone(original);
+    mutate(record);
+    assert.throws(() => validateEvidenceRecord(JSON.stringify(record)), /client E2E evidence|client E2E discovery/, label);
+  }
 });
 
 test("identical release bytes at different commits produce distinct fail-closed metadata", async (t) => {
@@ -325,6 +384,48 @@ test("release verification fails closed on checksum, size, and manifest mismatch
   wrongIdentity.commit = "b".repeat(40);
   await fsp.writeFile(manifestPath, JSON.stringify(wrongIdentity));
   assert.throws(() => verifyRelease(root, `agentplugins-v${version}`, COMMIT), /identity does not match/);
+});
+
+test("release staging rejects hardlinked inputs and concurrent release replacement", async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agentplugins-stage-attacks-"));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const makeCase = async (name) => {
+    const caseRoot = path.join(root, name);
+    const packageRoot = path.join(caseRoot, "package");
+    const assetsRoot = path.join(caseRoot, "assets");
+    await fsp.mkdir(packageRoot, { recursive: true });
+    await fsp.mkdir(assetsRoot);
+    await fsp.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+      name: "universal-agent-plugins", version: "0.0.0-development", bin: { agentplugins: "bin/agentplugins.js" }
+    }));
+    const version = "0.1.11";
+    for (const [platform, arch] of [["darwin", "x64"], ["darwin", "arm64"], ["linux", "x64"], ["linux", "arm64"], ["win32", "x64"], ["win32", "arm64"]]) {
+      const info = detectPlatform(platform, arch);
+      await fsp.writeFile(path.join(assetsRoot, expectedAssetName(version, info)), `${info.key}\n`);
+    }
+    prepareRelease(assetsRoot, `agentplugins-v${version}`, COMMIT);
+    return { packageRoot, assetsRoot, version, evidenceRoot: await fixtureEvidence(caseRoot) };
+  };
+
+  const hardlinkCase = await makeCase("hardlink");
+  const source = path.join(hardlinkCase.assetsRoot, `agentplugins_${hardlinkCase.version}_linux_amd64`);
+  await fsp.link(source, path.join(root, "external-hardlink"));
+  assert.throws(() => stage(hardlinkCase.packageRoot, hardlinkCase.assetsRoot, hardlinkCase.version, COMMIT,
+    { evidenceRoot: hardlinkCase.evidenceRoot }), /unaliased file/);
+  assert.equal(fs.existsSync(path.join(hardlinkCase.packageRoot, "assets.json")), false);
+
+  const mutationCase = await makeCase("mutation");
+  assert.throws(() => stage(mutationCase.packageRoot, mutationCase.assetsRoot, mutationCase.version, COMMIT, {
+    evidenceRoot: mutationCase.evidenceRoot,
+    afterInitialReleaseVerification() {
+      const target = path.join(mutationCase.assetsRoot, `agentplugins_${mutationCase.version}_linux_amd64`);
+      const replacement = path.join(mutationCase.assetsRoot, "replacement-in-flight");
+      fs.writeFileSync(replacement, "concurrent replacement");
+      fs.renameSync(replacement, target);
+    }
+  }), /checksum mismatch/);
+  assert.equal(fs.existsSync(path.join(mutationCase.packageRoot, "assets.json")), false);
+  assert.equal(JSON.parse(await fsp.readFile(path.join(mutationCase.packageRoot, "package.json"))).version, "0.0.0-development");
 });
 
 test("legacy manifests are audit-only and never gate eligible", async (t) => {

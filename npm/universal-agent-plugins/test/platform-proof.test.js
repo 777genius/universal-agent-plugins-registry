@@ -9,14 +9,35 @@ const test = require("node:test");
 
 const script = path.resolve(__dirname, "..", "scripts", "platform-proof.js");
 const {
+  assertInstalledShimInvocation,
   assertPublicJSONPathFree,
   frozenReleaseAsset,
+  installedShimInvocation,
   lifecycleCommands,
   lifecycleResult,
   npmInvocation,
   parseBootstrapMode,
   parseLifecycle
 } = require(script);
+
+test("platform proof invokes the installed npm shim and rejects direct bin bypass", () => {
+  const project = path.join(os.tmpdir(), "proof project");
+  const posix = installedShimInvocation(project, ["version"], "linux");
+  assert.equal(posix.command, path.join(project, "node_modules", ".bin", "agentplugins"));
+  assert.equal(posix.shell, false);
+  assert.doesNotThrow(() => assertInstalledShimInvocation(posix, project, "linux"));
+
+  const windows = installedShimInvocation(project, ["version"], "win32");
+  assert.equal(windows.command, path.join(project, "node_modules", ".bin", "agentplugins.cmd"));
+  assert.equal(windows.shell, true);
+  assert.doesNotThrow(() => assertInstalledShimInvocation(windows, project, "win32"));
+
+  assert.throws(() => assertInstalledShimInvocation({
+    command: process.execPath,
+    args: [path.join(project, "node_modules", "universal-agent-plugins", "bin", "agentplugins.js")],
+    shell: false
+  }, project, process.platform), /must execute the installed npm agentplugins shim/);
+});
 
 test("platform proof rejects absolute paths anywhere in public lifecycle JSON", () => {
   const privateRoot = path.join(os.tmpdir(), "agentplugins-private-root");

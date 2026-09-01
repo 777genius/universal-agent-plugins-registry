@@ -66,10 +66,10 @@ Detection checks installed executables and documented configuration surfaces.
 It does not start an agent, log in, complete OAuth, or prove browser/tool
 runtime behavior.
 
-The following matrix describes the current release source. New client support
-is available through `npx` once a release containing this source is published.
-The exact package, source revisions, commands, and limitations are recorded in
-the [isolated client E2E evidence](https://github.com/777genius/plugin-kit-ai/blob/main/docs/AGENTPLUGINS_CLIENT_E2E.md).
+The following matrix describes historical lifecycle evidence collected for
+installer 0.1.22. It is not evidence for the current npm release. The exact
+package, source revisions, commands, and limitations are recorded in the
+[commit-pinned historical client E2E evidence](https://github.com/777genius/plugin-kit-ai/blob/4b25a45e1574bab7a4f49e48905a3b3b2647e917/docs/AGENTPLUGINS_CLIENT_E2E.md).
 
 | Client | Evidence |
 | --- | --- |

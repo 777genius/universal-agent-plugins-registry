@@ -16,6 +16,9 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 const LOCK_TIMEOUT_MS = 30_000;
 const PROOF_MODE = "local-frozen-release-asset-v1";
 const PRODUCER_REPOSITORY = "777genius/plugin-kit-ai";
+const HISTORICAL_EVIDENCE_COMMIT = "4b25a45e1574bab7a4f49e48905a3b3b2647e917";
+const HISTORICAL_EVIDENCE_DOCUMENT_SHA256 = "df6769bf430a337f116cd9df75bcc3ea26df166a016eacf9bc9fbc6cfbf9b100";
+const HISTORICAL_EVIDENCE_RECORD_SHA256 = "437da1bc7423a85b231be139ff9bfbd7e89c942ef216a61ebde668c08a9c2ee3";
 const COMMIT = /^[0-9a-f]{40}$/;
 
 function exactKeys(value, keys) {
@@ -55,12 +58,16 @@ function loadRelease(packageRoot, platformInfo) {
   const evidence = manifest.client_evidence;
   const installer = evidence && evidence.installer;
   const evidencePackage = evidence && evidence.package;
+  const source = evidence && evidence.source;
   const claims = evidence && evidence.claim_boundary;
   const claimKeys = ["lifecycle_e2e", "client_discovery_e2e", "browser_tool_runtime_e2e", "model_turn_e2e", "login_e2e", "oauth_e2e", "windsurf_skill_activation_claimed"];
-  if (!exactKeys(evidence, ["schema_version", "kind", "recorded_at", "document_sha256", "record_sha256", "installer", "package", "claim_boundary"]) ||
+  if (!exactKeys(evidence, ["schema_version", "kind", "recorded_at", "document_sha256", "record_sha256", "source", "installer", "package", "claim_boundary"]) ||
       evidence.schema_version !== 1 || evidence.kind !== "agentplugins_client_lifecycle" ||
       !/^\d{4}-\d{2}-\d{2}$/.test(String(evidence.recorded_at || "")) ||
-      !DIGEST.test(String(evidence.document_sha256 || "")) || !DIGEST.test(String(evidence.record_sha256 || "")) ||
+      evidence.document_sha256 !== HISTORICAL_EVIDENCE_DOCUMENT_SHA256 || evidence.record_sha256 !== HISTORICAL_EVIDENCE_RECORD_SHA256 ||
+      !exactKeys(source, ["repository", "commit", "document", "record"]) || source.repository !== PRODUCER_REPOSITORY || source.commit !== HISTORICAL_EVIDENCE_COMMIT ||
+      !exactKeys(source.document, ["path", "sha256"]) || source.document.path !== "docs/AGENTPLUGINS_CLIENT_E2E.md" || source.document.sha256 !== evidence.document_sha256 ||
+      !exactKeys(source.record, ["path", "sha256"]) || source.record.path !== "docs/evidence/agentplugins-client-e2e-2026-08-30.json" || source.record.sha256 !== evidence.record_sha256 ||
       !exactKeys(installer, ["repository", "commit", "tree", "version", "binary_sha256"]) ||
       installer.repository !== PRODUCER_REPOSITORY || !COMMIT.test(String(installer.commit || "")) ||
       !COMMIT.test(String(installer.tree || "")) || !/^\d+\.\d+\.\d+$/.test(String(installer.version || "")) ||

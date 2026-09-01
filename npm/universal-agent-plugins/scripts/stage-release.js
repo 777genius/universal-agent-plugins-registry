@@ -24,10 +24,14 @@ const EVIDENCE_FILES = [
   "AGENTPLUGINS_CLIENT_E2E.md",
   path.join("evidence", "agentplugins-client-e2e-2026-08-30.json")
 ];
-
-function sha256(file) {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
+const EVIDENCE_SOURCE = {
+  repository: PRODUCER_REPOSITORY,
+  commit: "4b25a45e1574bab7a4f49e48905a3b3b2647e917",
+  document_path: "docs/AGENTPLUGINS_CLIENT_E2E.md",
+  document_sha256: "df6769bf430a337f116cd9df75bcc3ea26df166a016eacf9bc9fbc6cfbf9b100",
+  record_path: "docs/evidence/agentplugins-client-e2e-2026-08-30.json",
+  record_sha256: "437da1bc7423a85b231be139ff9bfbd7e89c942ef216a61ebde668c08a9c2ee3"
+};
 
 function validatePackageMetadata(pkg) {
   if (!pkg || typeof pkg !== "object" || typeof pkg.name !== "string" ||
@@ -41,6 +45,14 @@ function validatePackageMetadata(pkg) {
   return packageName;
 }
 
+function requireSafeStagingFile(file, label, allowMissing = false) {
+  if (allowMissing && !fs.existsSync(file)) return;
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+    throw new Error(`${label} must be a real, unaliased file`);
+  }
+}
+
 function exactKeys(value, keys) {
   return value && typeof value === "object" && !Array.isArray(value) &&
     Object.keys(value).sort().join(",") === [...keys].sort().join(",");
@@ -51,8 +63,15 @@ function requireExactKeys(value, keys, label) {
 }
 
 function requireStringArray(value, label) {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry)) {
+  if (!Array.isArray(value) || value.length === 0 || value.some((entry) => typeof entry !== "string" || !entry)) {
     throw new Error(`client E2E evidence ${label} is invalid`);
+  }
+}
+
+function requireExactArgv(value, expected, label) {
+  requireStringArray(value, label);
+  if (value.join("\0") !== expected.join("\0")) {
+    throw new Error(`client E2E evidence ${label} command identity is invalid`);
   }
 }
 
@@ -144,13 +163,25 @@ function validateEvidenceRecord(body) {
   for (const [key, keys] of Object.entries(discoveryKeys)) {
     requireExactKeys(discovery.checks[key], keys, `${key} discovery check`);
   }
+  requireExactArgv(discovery.checks.claude.argv, ["claude", "plugin", "list", "--json"], "claude discovery argv");
+  requireExactArgv(discovery.checks.gemini_mcp.argv, ["gemini", "mcp", "list"], "gemini_mcp discovery argv");
+  requireExactArgv(discovery.checks.gemini_skills.argv, ["gemini", "skills", "list"], "gemini_skills discovery argv");
+  requireExactArgv(discovery.checks.opencode.argv, ["opencode", "debug", "config"], "opencode discovery argv");
   for (const key of ["claude", "gemini_mcp", "gemini_skills", "opencode"]) {
-    requireStringArray(discovery.checks[key].argv, `${key} discovery argv`);
     if (discovery.checks[key].exit_code !== 0) throw new Error(`client E2E discovery check did not pass: ${key}`);
   }
-  if (discovery.checks.cline.plugin_root_bound !== true || discovery.checks.cline.plugin_data_bound !== true ||
-      discovery.checks.windsurf.plugin_root_bound !== true || discovery.checks.windsurf.plugin_data_bound !== true) {
-    throw new Error("client E2E discovery bindings are incomplete");
+  const nonEmptyCommand = (value) => Array.isArray(value) && value.length > 0 &&
+    value.every((entry) => typeof entry === "string" && entry.length > 0);
+  const expectedCommand = ["npx", `chrome-devtools-mcp@${data.package.version}`];
+  const exactCommand = (value) => nonEmptyCommand(value) && value.join("\0") === expectedCommand.join("\0");
+  const { claude, gemini_mcp: geminiMcp, gemini_skills: geminiSkills, opencode, cline, windsurf } = discovery.checks;
+  if (claude.plugin_id !== "chrome-devtools@skills-dir" || claude.plugin_version !== data.package.version || claude.enabled !== true || claude.skill_count !== 6 || !exactCommand(claude.mcp_command) ||
+      geminiMcp.server !== data.package.name || geminiMcp.transport !== "stdio" || !exactCommand(geminiMcp.command) || geminiMcp.connection !== "disconnected" ||
+      geminiSkills.enabled_skill_count !== 6 ||
+      opencode.server !== data.package.name || opencode.type !== "local" || !exactCommand(opencode.command) || opencode.cwd_bound_to_managed_package !== true || opencode.plugin_root_bound !== true || opencode.plugin_data_bound !== true ||
+      cline.config !== `mcpServers.${data.package.name}` || cline.transport !== "stdio" || !exactCommand(cline.command) || cline.plugin_root_bound !== true || cline.plugin_data_bound !== true || cline.projected_skill_count !== 6 ||
+      windsurf.config !== `mcpServers.${data.package.name}` || !exactCommand(windsurf.command) || windsurf.plugin_root_bound !== true || windsurf.plugin_data_bound !== true || windsurf.skills !== "prepared_only") {
+    throw new Error("client E2E discovery semantic outcomes are incomplete");
   }
 
   requireExactKeys(doctor, ["step", "argv", "exit_code", "result", "read_only", "installation_count", "projection_drift_findings", "authentication_not_checked_clients"], "doctor step");
@@ -158,17 +189,19 @@ function validateEvidenceRecord(body) {
   requireExactKeys(repair, ["step", "argv", "exit_code", "result", "status", "succeeded", "failed", "targets"], "repair step");
   requireExactKeys(remove, ["step", "argv", "exit_code", "result", "status", "succeeded", "failed", "plugin_data_preserved", "targets"], "remove step");
   requireExactKeys(postRemove, ["step", "checks"], "post-remove step");
-  for (const [entry, command] of [[add, "add"], [doctor, "doctor"], [preflight, "update"], [repair, "repair"], [remove, "remove"]]) {
-    requireStringArray(entry.argv, `${entry.step} argv`);
-    if (entry.argv[0] !== "agentplugins" || entry.argv[1] !== command) {
-      throw new Error(`client E2E evidence ${entry.step} command identity is invalid`);
-    }
-  }
+  const targets = "claude,gemini,opencode,cline,windsurf";
+  requireExactArgv(add.argv, ["agentplugins", "add", data.package.selector, "--target", targets, "--format", "json"], "add argv");
+  requireExactArgv(doctor.argv, ["agentplugins", "doctor", "--format", "json"], "doctor argv");
+  requireExactArgv(preflight.argv, ["agentplugins", "update", data.package.name, "--target", targets, "--format", "json"], "immutable_update_preflight argv");
+  requireExactArgv(repair.argv, ["agentplugins", "repair", data.package.name, "--target", targets, "--format", "json"], "repair argv");
+  requireExactArgv(remove.argv, ["agentplugins", "remove", data.package.name, "--target", targets, "--format", "json"], "remove argv");
   requireExactKeys(repair.targets, ["claude", "gemini", "opencode", "cline", "windsurf"], "repair targets");
   requireExactKeys(remove.targets, ["claude", "gemini", "opencode", "cline", "windsurf"], "remove targets");
   requireExactKeys(postRemove.checks, ["agentplugins_installation_count", "claude_plugin_count", "gemini_mcp_count", "gemini_skill_count", "opencode_mcp_count", "cline_mcp_count", "cline_skill_count", "windsurf_mcp_count"], "post-remove checks");
+  requireStringArray(doctor.authentication_not_checked_clients, "doctor authentication boundary");
   if (doctor.exit_code !== 0 || doctor.result !== "success" || doctor.read_only !== true || doctor.installation_count !== 1 || doctor.projection_drift_findings !== 0 ||
-      preflight.exit_code !== 1 || preflight.result !== "failure" || preflight.status !== "preflight_failed" || preflight.succeeded !== 0 || preflight.mutated_targets !== 0 ||
+      doctor.authentication_not_checked_clients.join(",") !== targets ||
+      preflight.exit_code !== 1 || preflight.result !== "failure" || preflight.status !== "preflight_failed" || preflight.reason !== "direct full-SHA installations require explicit switch" || preflight.succeeded !== 0 || preflight.failed !== 5 || preflight.mutated_targets !== 0 || preflight.postcondition !== "the exact installation and all five client projections remained installed and unchanged" ||
       repair.exit_code !== 0 || repair.result !== "success" || repair.status !== "completed" || repair.succeeded !== 5 || repair.failed !== 0 ||
       remove.exit_code !== 0 || remove.result !== "success" || remove.status !== "data_retained" || remove.succeeded !== 5 || remove.failed !== 0 || remove.plugin_data_preserved !== true ||
       Object.values(repair.targets).some((value) => value !== "passed") ||
@@ -186,7 +219,7 @@ function validateEvidenceRecord(body) {
   return data;
 }
 
-function stageEvidence(packageRoot, evidenceRoot) {
+function loadEvidence(evidenceRoot) {
   if (!evidenceRoot) {
     throw new Error("release staging requires the checked-in client E2E evidence root");
   }
@@ -206,7 +239,7 @@ function stageEvidence(packageRoot, evidenceRoot) {
       throw new Error(`client E2E evidence escapes its exact root: ${sourceName}`);
     }
     const stat = fs.lstatSync(source);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.nlink !== 1) {
       throw new Error(`client E2E evidence is not a regular non-empty file: ${sourceName}`);
     }
     bodies[sourceName] = fs.readFileSync(source);
@@ -220,54 +253,80 @@ function stageEvidence(packageRoot, evidenceRoot) {
     record.package.manifest_digest, recordName.split(path.sep).join("/"), digests[recordName]]) {
     if (!markdown.includes(value)) throw new Error("client E2E document does not bind the structured evidence identity and digest");
   }
+  if (digests[EVIDENCE_FILES[0]] !== EVIDENCE_SOURCE.document_sha256 ||
+      digests[recordName] !== EVIDENCE_SOURCE.record_sha256) {
+    throw new Error("client E2E evidence bytes do not match the immutable source locator");
+  }
+  return {
+    bodies,
+    metadata: {
+      schema_version: record.schema_version,
+      kind: record.evidence_kind,
+      recorded_at: record.recorded_at,
+      document_sha256: digests[EVIDENCE_FILES[0]],
+      record_sha256: digests[recordName],
+      source: {
+        repository: EVIDENCE_SOURCE.repository,
+        commit: EVIDENCE_SOURCE.commit,
+        document: { path: EVIDENCE_SOURCE.document_path, sha256: digests[EVIDENCE_FILES[0]] },
+        record: { path: EVIDENCE_SOURCE.record_path, sha256: digests[recordName] }
+      },
+      installer: { ...record.installer },
+      package: {
+        selector: record.package.selector,
+        revision: record.package.revision,
+        tree_digest: record.package.tree_digest,
+        manifest_digest: record.package.manifest_digest
+      },
+      claim_boundary: { ...record.claim_boundary }
+    }
+  };
+}
+
+function writeEvidence(packageRoot, loaded) {
   const destination = path.join(packageRoot, "test", "evidence-root");
   for (const sourceName of EVIDENCE_FILES) {
     const target = path.join(destination, sourceName);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, bodies[sourceName], { flag: "wx" });
+    fs.writeFileSync(target, loaded.bodies[sourceName], { flag: "wx" });
   }
-  return {
-    schema_version: record.schema_version,
-    kind: record.evidence_kind,
-    recorded_at: record.recorded_at,
-    document_sha256: digests[EVIDENCE_FILES[0]],
-    record_sha256: digests[recordName],
-    installer: { ...record.installer },
-    package: {
-      selector: record.package.selector,
-      revision: record.package.revision,
-      tree_digest: record.package.tree_digest,
-      manifest_digest: record.package.manifest_digest
-    },
-    claim_boundary: { ...record.claim_boundary }
-  };
+  return loaded.metadata;
+}
+
+function stageEvidence(packageRoot, evidenceRoot) {
+  return writeEvidence(packageRoot, loadEvidence(evidenceRoot));
 }
 
 function stage(packageRoot, assetRoot, version, commit, options = {}) {
   if (!VERSION.test(version)) {
     throw new Error(`invalid release version: ${version}`);
   }
-  const release = verifyRelease(assetRoot, `agentplugins-v${version}`, commit, options);
-  if (!release.gate_eligible || release.manifest_schema !== 2) {
+  const initialRelease = verifyRelease(assetRoot, `agentplugins-v${version}`, commit, options);
+  if (!initialRelease.gate_eligible || initialRelease.manifest_schema !== 2) {
     throw new Error("release staging requires a gate-eligible schema-v2 current producer manifest");
   }
   const pkgPath = path.join(packageRoot, "package.json");
+  const packageRootStat = fs.lstatSync(packageRoot);
+  if (!packageRootStat.isDirectory() || packageRootStat.isSymbolicLink()) {
+    throw new Error("staged npm package root must be a real directory");
+  }
+  requireSafeStagingFile(pkgPath, "staged npm package.json");
+  requireSafeStagingFile(path.join(packageRoot, "assets.json"), "staged npm assets.json", true);
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
   const packageName = validatePackageMetadata(pkg);
-  const evidence = stageEvidence(packageRoot, options.evidenceRoot);
-  pkg.version = version;
-  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-  const assets = {};
-  for (const [platform, arch] of PLATFORMS) {
-    const info = detectPlatform(platform, arch);
-    const file = expectedAssetName(version, info);
-    const filePath = path.join(assetRoot, file);
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
-      throw new Error(`release asset is not a regular non-empty file: ${file}`);
-    }
-    assets[info.key] = { file, sha256: sha256(filePath), size: stat.size };
+  const loadedEvidence = loadEvidence(options.evidenceRoot);
+  if (options.afterInitialReleaseVerification) options.afterInitialReleaseVerification();
+  const release = verifyRelease(assetRoot, `agentplugins-v${version}`, commit, options);
+  if (JSON.stringify(release.assets) !== JSON.stringify(initialRelease.assets) ||
+      release.manifest_sha256 !== initialRelease.manifest_sha256) {
+    throw new Error("release directory changed during staging");
   }
+  const assets = Object.fromEntries(PLATFORMS.map(([platform, arch]) => {
+    const info = detectPlatform(platform, arch);
+    const record = release.assets[info.key];
+    if (!record || record.file !== expectedAssetName(version, info)) throw new Error(`verified release asset record is missing: ${info.key}`);
+    return [info.key, { ...record }];
+  }));
   const manifest = {
     schema_version: 2,
     version,
@@ -284,9 +343,12 @@ function stage(packageRoot, assetRoot, version, commit, options = {}) {
         version: release.version
       }
     },
-    client_evidence: evidence,
+    client_evidence: loadedEvidence.metadata,
     assets
   };
+  pkg.version = version;
+  writeEvidence(packageRoot, loadedEvidence);
+  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
   fs.writeFileSync(path.join(packageRoot, "assets.json"), JSON.stringify(manifest, null, 2) + "\n");
   return manifest;
 }
@@ -317,4 +379,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { stage, stageEvidence, validatePackageMetadata };
+module.exports = { stage, stageEvidence, validateEvidenceRecord, validatePackageMetadata };

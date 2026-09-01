@@ -71,6 +71,19 @@ function npmInvocation(args, platform = process.platform, execPath = process.exe
   return { command: execPath, args: [npmCLI, ...args] };
 }
 
+function installedShimInvocation(project, args, platform = process.platform) {
+  const shim = path.join(project, "node_modules", ".bin", platform === "win32" ? "agentplugins.cmd" : "agentplugins");
+  return { command: shim, args, shell: platform === "win32" };
+}
+
+function assertInstalledShimInvocation(invocation, project, platform = process.platform) {
+  const expected = installedShimInvocation(project, [], platform).command;
+  if (!invocation || path.resolve(invocation.command) !== path.resolve(expected) ||
+      invocation.shell !== (platform === "win32")) {
+    fail("platform proof must execute the installed npm agentplugins shim");
+  }
+}
+
 function parseLifecycle(value) {
   if (value !== "true" && value !== "false") {
     fail("lifecycle must be exactly true or false");
@@ -222,14 +235,19 @@ function main() {
     fail("public release bootstrap must not receive a local proof asset directory");
   }
 
-  const shim = path.join(project, "node_modules", ".bin", process.platform === "win32" ? "agentplugins.cmd" : "agentplugins");
+  const shim = installedShimInvocation(project, [], process.platform).command;
   if (!fs.existsSync(shim)) fail("npm did not create the agentplugins executable shim");
-  const launcher = path.join(packageRoot, "bin", "agentplugins.js");
   const commandOptions = { cwd: project, env };
-  const invoke = (args) => run(process.execPath, [launcher, ...args], commandOptions);
+  const invoke = (args) => {
+    const invocation = installedShimInvocation(project, args);
+    assertInstalledShimInvocation(invocation, project);
+    return run(invocation.command, invocation.args, { ...commandOptions, shell: invocation.shell });
+  };
   const privateRoots = [root, process.env.GITHUB_WORKSPACE, process.env.RUNNER_TEMP];
   const invokeJSON = (args) => {
-    const output = jsonCommand(process.execPath, [launcher, ...args, "--format", "json"], commandOptions);
+    const invocation = installedShimInvocation(project, [...args, "--format", "json"]);
+    assertInstalledShimInvocation(invocation, project);
+    const output = jsonCommand(invocation.command, invocation.args, { ...commandOptions, shell: invocation.shell });
     assertPublicJSONPathFree(output, `agentplugins ${args[0]} JSON`, privateRoots);
     return output;
   };
@@ -292,6 +310,7 @@ function main() {
     bootstrap_source: bootstrapMode,
     proofs: {
       npm_install_ignore_scripts: true,
+      installed_npm_shim_executed: true,
       launcher_cold_bootstrap: true,
       local_frozen_asset_bootstrap: bootstrapMode === "local_frozen_asset",
       anonymous_public_release_download: bootstrapMode === "public_release_download",
@@ -321,4 +340,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { assertPublicJSONPathFree, frozenReleaseAsset, lifecycleCommands, lifecycleResult, npmInvocation, parseBootstrapMode, parseLifecycle };
+module.exports = { assertInstalledShimInvocation, assertPublicJSONPathFree, frozenReleaseAsset, installedShimInvocation, lifecycleCommands, lifecycleResult, npmInvocation, parseBootstrapMode, parseLifecycle };

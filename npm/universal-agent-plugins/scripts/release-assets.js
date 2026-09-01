@@ -22,6 +22,21 @@ function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function regularUnaliasedFile(file, label) {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.nlink !== 1) {
+    throw new Error(`${label} is not a regular, non-empty, unaliased file`);
+  }
+  return stat;
+}
+
+function validateReleaseRoot(assetRoot) {
+  const stat = fs.lstatSync(assetRoot);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("release root must be a real directory");
+  }
+}
+
 function releaseIdentity(tag, commit) {
   if (!/^agentplugins-v\d+\.\d+\.\d+$/.test(tag)) {
     throw new Error(`invalid stable release tag: ${tag}`);
@@ -42,12 +57,13 @@ function expectedAssets(version) {
 
 function assetMetadata(assetRoot, version) {
   const assets = {};
+  const identities = new Set();
   for (const [key, file] of Object.entries(expectedAssets(version))) {
     const filePath = path.join(assetRoot, file);
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
-      throw new Error(`release asset is not a regular non-empty file: ${file}`);
-    }
+    const stat = regularUnaliasedFile(filePath, `release asset ${file}`);
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (identities.has(identity)) throw new Error(`release asset is aliased: ${file}`);
+    identities.add(identity);
     assets[key] = { file, sha256: sha256(filePath), size: stat.size };
   }
   return assets;
@@ -98,8 +114,11 @@ function verifyChecksums(assetRoot, expectedNames) {
 }
 
 function verifyRelease(assetRoot, tag, commit, options = {}) {
+  validateReleaseRoot(assetRoot);
   const identity = releaseIdentity(tag, commit);
   const manifestPath = path.join(assetRoot, "release-manifest.json");
+  regularUnaliasedFile(manifestPath, "release manifest");
+  regularUnaliasedFile(path.join(assetRoot, "checksums.txt"), "release checksums");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   if (manifest.tag !== identity.tag || manifest.commit !== identity.commit) {
     throw new Error("release manifest identity does not match the exact tag and commit");
