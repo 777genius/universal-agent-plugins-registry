@@ -15,6 +15,25 @@ def load(path: Path):
 
 
 class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
+    def test_every_node_job_uses_the_exact_minimum_supported_runtime(self):
+        publish = load(PUBLISH)
+        proof = load(PROOF)
+
+        def setup_node_versions(job):
+            return [
+                step.get("with", {}).get("node-version")
+                for step in job["steps"]
+                if step.get("uses", "").startswith("actions/setup-node@")
+            ]
+
+        self.assertEqual(setup_node_versions(publish["jobs"]["stage"]), ["22.23.2"])
+        self.assertEqual(setup_node_versions(publish["jobs"]["publish"]), ["22.23.2"])
+        self.assertEqual(setup_node_versions(proof["jobs"]["native-proof"]), ["22.23.2"])
+        self.assertEqual(
+            re.findall(r'node-version:\s*["\']?([^"\'\s]+)', PUBLISH.read_text() + PROOF.read_text()),
+            ["22.23.2", "22.23.2", "22.23.2"],
+        )
+
     def test_publish_is_manual_version_serialized_and_verify_only_by_default(self):
         workflow = load(PUBLISH)
         dispatch = workflow[True]["workflow_dispatch"]["inputs"]
@@ -95,6 +114,13 @@ class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
         })
         self.assertTrue(workflow["jobs"]["native-proof"]["strategy"]["fail-fast"] is False)
         self.assertNotRegex(PROOF.read_text(), r"(?i)qemu|docker|virtualbox|vmware")
+
+    def test_six_platform_job_consumes_installed_npm_shim_evidence(self):
+        body = PROOF.read_text()
+        self.assertIn("proof.proofs?.installed_npm_shim_executed !== true", body)
+        self.assertIn("six-platform evidence did not prove installed npm shim execution", body)
+        script = (ROOT / "npm/universal-agent-plugins/scripts/platform-proof.js").read_text()
+        self.assertIn("installed_npm_shim_executed: true", script)
 
     def test_public_proof_is_anonymous_isolated_and_exercises_lifecycle(self):
         publish = load(PUBLISH)

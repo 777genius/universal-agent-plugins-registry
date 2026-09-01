@@ -77,7 +77,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.20.0"
+          node-version: "22.23.2"
       - name: Validate exact release inputs and checked-out UAP tag
         shell: bash
         env:
@@ -145,6 +145,14 @@ jobs:
           node npm/universal-agent-plugins/scripts/platform-proof.js \
             "$tarball" "$VERSION" "$TARGET" true \
             "$RUNNER_TEMP/proof-$TARGET.json" "$PLUGIN_KIT_COMMIT" "$bootstrap" "$release_root"
+          node - "$RUNNER_TEMP/proof-$TARGET.json" <<'NODE'
+          const fs = require("node:fs");
+          const proof = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (proof.schema_version !== 1 || proof.target !== process.env.TARGET ||
+              proof.proofs?.installed_npm_shim_executed !== true) {
+            throw new Error("six-platform evidence did not prove installed npm shim execution");
+          }
+          NODE
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agentplugins-${{ inputs.version }}-${{ inputs.package_source || 'public-npm' }}-${{ matrix.target }}-proof

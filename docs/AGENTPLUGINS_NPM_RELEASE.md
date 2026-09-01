@@ -15,6 +15,8 @@ Start **Publish universal-agent-plugins to npm** manually at the exact UAP tag
 
 Leave `verify_only` enabled first. The workflow fails unless all three versions
 match, both tags resolve exactly, and the plugin-kit-ai release is immutable.
+All stage, native proof, and publish jobs use Node `22.23.2`, the minimum
+supported Node release for this package.
 It authenticates the six binaries, `checksums.txt`, and
 `release-manifest.json`, including API names and sizes, checksums, manifest
 metadata, and GitHub attestations from
@@ -30,8 +32,9 @@ backward, is rejected. Concurrency serializes duplicate version attempts.
 After publication, the same six native runners reacquire the public npm package
 anonymously. Each proof creates an isolated HOME, XDG, npm cache, temporary
 directory, and synthetic project, then proves `version`, read-only `doctor`,
-public `search`, and an add/info/update/remove lifecycle. Nothing runs in a real
-user project.
+public `search`, and an add/info/update/remove lifecycle through the installed
+npm shim. The uploaded proof must record `installed_npm_shim_executed: true`.
+Nothing runs in a real user project.
 
 Publication is irreversible: npm versions are immutable. If a post-publication
 proof exposes a defect, do not overwrite a version or dist-tag it away. Correct
