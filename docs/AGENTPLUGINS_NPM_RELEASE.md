@@ -15,8 +15,10 @@ Start **Publish universal-agent-plugins to npm** manually at the exact UAP tag
 
 Leave `verify_only` enabled first. The workflow fails unless all three versions
 match, both tags resolve exactly, and the plugin-kit-ai release is immutable.
-All stage, native proof, and publish jobs use Node `22.23.2`, the minimum
-supported Node release for this package.
+All stage, native proof, and publish jobs use Node `22.23.2`, the pinned current
+Node 22 LTS CI and release runtime. The user-facing package contract remains
+Node 22 or newer (`engines.node` is `>=22`); `22.23.2` is not the minimum
+package version.
 It authenticates the six binaries, `checksums.txt`, and
 `release-manifest.json`, including API names and sizes, checksums, manifest
 metadata, and GitHub attestations from
@@ -37,8 +39,26 @@ npm shim. The uploaded proof must record `installed_npm_shim_executed: true`.
 Nothing runs in a real user project.
 
 Publication is irreversible: npm versions are immutable. If a post-publication
-proof exposes a defect, do not overwrite a version or dist-tag it away. Correct
-the issue and publish a higher fix-forward version through the complete workflow.
+proof exposes a defect, do not overwrite or unpublish the version, and do not
+move npm `latest` backward. Correct the issue and publish a higher fix-forward
+version through the complete workflow.
+
+Until the fix-forward release is ready, the exact non-destructive fallback is
+the already published `0.1.26`. Run it without changing the global install:
+
+```bash
+npx universal-agent-plugins@0.1.26 doctor
+```
+
+Or install that exact version globally and use its installed shim:
+
+```bash
+npm install --global universal-agent-plugins@0.1.26
+agentplugins doctor
+```
+
+These commands select immutable `0.1.26` directly; they do not change any npm
+dist-tag and do not unpublish any release.
 
 The native runner matrix is intentionally a GitHub check. Local static and Node
 tests validate its contract, but the six OS/architecture executions, trusted

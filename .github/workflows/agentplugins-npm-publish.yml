@@ -40,6 +40,8 @@ jobs:
     outputs:
       tarball_artifact: ${{ steps.names.outputs.tarball_artifact }}
       release_artifact: ${{ steps.names.outputs.release_artifact }}
+      tarball_integrity: ${{ steps.pack.outputs.tarball_integrity }}
+      tarball_shasum: ${{ steps.pack.outputs.tarball_shasum }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,6 +67,11 @@ jobs:
           test "$GITHUB_REF" = "refs/tags/$UAP_TAG"
           test "$(git rev-parse "refs/tags/$UAP_TAG^{commit}")" = "$(git rev-parse HEAD)"
           test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$GITHUB_REPOSITORY" = "777genius/universal-agent-plugins"
+          test "$(gh api repos/777genius/universal-agent-plugins --jq .default_branch)" = main
+          git fetch --no-tags --force https://github.com/777genius/universal-agent-plugins.git \
+            refs/heads/main:refs/remotes/public/main
+          git merge-base --is-ancestor HEAD refs/remotes/public/main
           object_type=$(gh api "repos/777genius/plugin-kit-ai/git/ref/tags/$PLUGIN_KIT_TAG" --jq .object.type)
           object_sha=$(gh api "repos/777genius/plugin-kit-ai/git/ref/tags/$PLUGIN_KIT_TAG" --jq .object.sha)
           while test "$object_type" = tag; do
@@ -131,6 +138,7 @@ jobs:
               --deny-self-hosted-runners
           done
       - name: Stage and test the npm package without changing the source tree
+        id: pack
         env:
           VERSION: ${{ inputs.version }}
           PLUGIN_KIT_COMMIT: ${{ inputs.plugin_kit_commit }}
@@ -145,6 +153,8 @@ jobs:
           mkdir "$RUNNER_TEMP/npm-tarball"
           npm pack "$stage_root" --ignore-scripts --json --pack-destination "$RUNNER_TEMP/npm-tarball" \
             > "$RUNNER_TEMP/npm-tarball/pack.json"
+          node npm/universal-agent-plugins/scripts/npm-public-contract.js stage-outputs \
+            "$RUNNER_TEMP/npm-tarball/pack.json" "$GITHUB_OUTPUT" "$VERSION"
       - name: Inspect the exact tarball and reject embedded binaries or lifecycle scripts
         env:
           VERSION: ${{ inputs.version }}
@@ -232,6 +242,8 @@ jobs:
       package_source: staged_artifact
       tarball_artifact: ${{ needs.stage.outputs.tarball_artifact }}
       release_artifact: ${{ needs.stage.outputs.release_artifact }}
+      expected_integrity: ${{ needs.stage.outputs.tarball_integrity }}
+      expected_shasum: ${{ needs.stage.outputs.tarball_shasum }}
 
   publish:
     if: ${{ inputs.verify_only == false }}
@@ -281,7 +293,7 @@ jobs:
 
   public-six-platform-proof:
     if: ${{ inputs.verify_only == false }}
-    needs: publish
+    needs: [stage, publish]
     uses: ./.github/workflows/agentplugins-platform-proof.yml
     with:
       uap_tag: ${{ inputs.uap_tag }}
@@ -289,3 +301,5 @@ jobs:
       plugin_kit_tag: ${{ inputs.plugin_kit_tag }}
       plugin_kit_commit: ${{ inputs.plugin_kit_commit }}
       package_source: public_npm
+      expected_integrity: ${{ needs.stage.outputs.tarball_integrity }}
+      expected_shasum: ${{ needs.stage.outputs.tarball_shasum }}

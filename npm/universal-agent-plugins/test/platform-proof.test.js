@@ -9,6 +9,7 @@ const test = require("node:test");
 
 const script = path.resolve(__dirname, "..", "scripts", "platform-proof.js");
 const {
+  assertAssetManifest,
   assertContext7Search,
   assertInstalledShimInvocation,
   assertPublicJSONPathFree,
@@ -21,6 +22,35 @@ const {
   parseBootstrapMode,
   parseLifecycle
 } = require(script);
+
+test("platform proof binds assets.json producer commit in staged and public modes", () => {
+  const version = "1.2.3";
+  const commit = "a".repeat(40);
+  const manifest = {
+    schema_version: 2,
+    version,
+    npm_package: "universal-agent-plugins",
+    repository: "777genius/plugin-kit-ai",
+    tag: `agentplugins-v${version}`,
+    producer: {
+      repository: "777genius/plugin-kit-ai",
+      tag: `agentplugins-v${version}`,
+      commit
+    },
+    assets: { "linux-amd64": { file: "agentplugins", size: 1, sha256: "0".repeat(64) } }
+  };
+  assert.equal(assertAssetManifest(manifest, version, commit, "linux-amd64"), manifest.assets["linux-amd64"]);
+  for (const mutate of [
+    (value) => { value.producer.commit = "b".repeat(40); },
+    (value) => { value.producer.tag = "agentplugins-v9.9.9"; },
+    (value) => { value.producer.repository = "lookalike/repository"; },
+    (value) => { delete value.producer; }
+  ]) {
+    const invalid = structuredClone(manifest);
+    mutate(invalid);
+    assert.throws(() => assertAssetManifest(invalid, version, commit, "linux-amd64"), /expected commit/);
+  }
+});
 
 test("platform proof invokes the installed npm shim and rejects direct bin bypass", () => {
   const project = path.join(os.tmpdir(), "proof project");

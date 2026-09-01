@@ -15,7 +15,7 @@ def load(path: Path):
 
 
 class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
-    def test_every_node_job_uses_the_exact_minimum_supported_runtime(self):
+    def test_every_node_job_uses_the_pinned_current_node_22_lts_runtime(self):
         publish = load(PUBLISH)
         proof = load(PROOF)
 
@@ -33,6 +33,13 @@ class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
             re.findall(r'node-version:\s*["\']?([^"\'\s]+)', PUBLISH.read_text() + PROOF.read_text()),
             ["22.23.2", "22.23.2", "22.23.2"],
         )
+        package = load(ROOT / "npm/universal-agent-plugins/package.json")
+        self.assertEqual(package["engines"], {"node": ">=22"})
+        npm_readme = (ROOT / "npm/universal-agent-plugins/README.md").read_text()
+        self.assertIn("Node.js 22 or newer", npm_readme)
+        release_doc = (ROOT / "docs/AGENTPLUGINS_NPM_RELEASE.md").read_text()
+        self.assertIn("pinned current\nNode 22 LTS CI and release runtime", release_doc)
+        self.assertIn("22.23.2` is not the minimum\npackage version", release_doc)
 
     def test_publish_is_manual_version_serialized_and_verify_only_by_default(self):
         workflow = load(PUBLISH)
@@ -68,6 +75,16 @@ class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
         self.assertIn('test "$PLUGIN_KIT_TAG" = "agentplugins-v$VERSION"', body)
         self.assertIn('test "$GITHUB_REF" = "refs/tags/$UAP_TAG"', body)
         self.assertIn('test "$GITHUB_SHA" = "$(git rev-parse HEAD)"', body)
+
+    def test_caller_and_reusable_proof_require_public_main_ancestry(self):
+        for path in (PUBLISH, PROOF):
+            body = path.read_text()
+            self.assertIn('test "$GITHUB_REPOSITORY" = "777genius/universal-agent-plugins"', body)
+            self.assertIn("gh api repos/777genius/universal-agent-plugins --jq .default_branch", body)
+            self.assertIn("https://github.com/777genius/universal-agent-plugins.git", body)
+            self.assertIn("refs/heads/main:refs/remotes/public/main", body)
+            self.assertIn("git merge-base --is-ancestor HEAD refs/remotes/public/main", body)
+            self.assertLess(body.index("git fetch --no-tags --force"), body.index("git merge-base --is-ancestor"))
 
     def test_publish_is_downstream_of_every_native_gate_and_uses_oidc_provenance(self):
         workflow = load(PUBLISH)
@@ -125,18 +142,49 @@ class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
     def test_public_proof_is_anonymous_isolated_and_exercises_lifecycle(self):
         publish = load(PUBLISH)
         public = publish["jobs"]["public-six-platform-proof"]
-        self.assertEqual(public["needs"], "publish")
+        self.assertEqual(set(public["needs"]), {"stage", "publish"})
         self.assertEqual(public["with"]["package_source"], "public_npm")
+        self.assertEqual(public["with"]["expected_integrity"], "${{ needs.stage.outputs.tarball_integrity }}")
+        self.assertEqual(public["with"]["expected_shasum"], "${{ needs.stage.outputs.tarball_shasum }}")
         proof_body = PROOF.read_text()
         self.assertIn("env -i", proof_body)
         self.assertIn("HOME=", proof_body)
         self.assertIn("XDG_CONFIG_HOME=", proof_body)
         self.assertIn("NPM_CONFIG_CACHE=", proof_body)
+        self.assertIn("npm-public-contract.js metadata", proof_body)
+        self.assertIn("npm-public-contract.js attestation", proof_body)
+        self.assertIn("npm-public-contract.js download", proof_body)
+        self.assertIn("https://registry.npmjs.org/universal-agent-plugins/$VERSION", proof_body)
+        self.assertIn("https://registry.npmjs.org/-/npm/v1/attestations/universal-agent-plugins@$VERSION", proof_body)
+        self.assertIn('"$UAP_TAG" "$GITHUB_SHA"', proof_body)
+        self.assertIn('npm audit signatures --prefix "$proof_root/audit" --json --include-attestations', proof_body)
+        self.assertIn("npm-public-contract.js audit", proof_body)
         script = (ROOT / "npm/universal-agent-plugins/scripts/platform-proof.js").read_text()
         for command in ('["version"]', '["doctor"]', '["search", "context7"]',
                         '["info", "platform-proof-synthetic"', 'lifecycleCommands(synthetic)'):
             self.assertIn(command, script)
         self.assertIn("isolated_add_info_update_remove", script)
+
+    def test_stage_exports_exact_pack_digests_and_public_proof_consumes_them(self):
+        workflow = load(PUBLISH)
+        stage = workflow["jobs"]["stage"]
+        self.assertEqual(stage["outputs"]["tarball_integrity"], "${{ steps.pack.outputs.tarball_integrity }}")
+        self.assertEqual(stage["outputs"]["tarball_shasum"], "${{ steps.pack.outputs.tarball_shasum }}")
+        pack = next(step for step in stage["steps"] if step.get("id") == "pack")
+        self.assertIn("npm pack", pack["run"])
+        self.assertIn("npm-public-contract.js stage-outputs", pack["run"])
+        proof = workflow["jobs"]["six-platform-proof"]["with"]
+        self.assertEqual(proof["expected_integrity"], "${{ needs.stage.outputs.tarball_integrity }}")
+        self.assertEqual(proof["expected_shasum"], "${{ needs.stage.outputs.tarball_shasum }}")
+
+    def test_release_runbook_has_exact_non_destructive_0126_fallback(self):
+        body = (ROOT / "docs/AGENTPLUGINS_NPM_RELEASE.md").read_text()
+        self.assertIn("npx universal-agent-plugins@0.1.26 doctor", body)
+        self.assertIn("npm install --global universal-agent-plugins@0.1.26", body)
+        self.assertIn("agentplugins doctor", body)
+        self.assertRegex(body, r"do not\s+move npm `latest` backward")
+        self.assertRegex(body, r"do not overwrite or unpublish")
+        self.assertIn("do not change any npm\ndist-tag", body)
 
     def test_all_third_party_actions_are_commit_pinned(self):
         for path in (PUBLISH, PROOF):

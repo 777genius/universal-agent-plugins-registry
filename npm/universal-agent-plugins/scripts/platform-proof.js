@@ -116,6 +116,21 @@ function frozenReleaseAsset(releaseAssetsRoot, expectedCommit, version, expected
   return file;
 }
 
+function assertAssetManifest(manifest, version, expectedCommit, expectedTarget) {
+  if (!manifest || manifest.schema_version !== 2 || manifest.version !== version ||
+      manifest.npm_package !== "universal-agent-plugins" ||
+      manifest.repository !== "777genius/plugin-kit-ai" ||
+      manifest.tag !== `agentplugins-v${version}` ||
+      manifest.producer?.repository !== "777genius/plugin-kit-ai" ||
+      manifest.producer.tag !== `agentplugins-v${version}` ||
+      manifest.producer.commit !== expectedCommit) {
+    fail("npm asset manifest does not match the exact package, producer tag, and expected commit");
+  }
+  const pinned = manifest.assets?.[expectedTarget];
+  if (!pinned) fail(`tarball has no exact pin for ${expectedTarget}`);
+  return pinned;
+}
+
 function lifecycleCommands(synthetic) {
   return [
     ["add", synthetic, "--target", "cursor"],
@@ -241,8 +256,7 @@ function main() {
     fail("installed tarball version or no-install-script invariant is invalid");
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "assets.json"), "utf8"));
-  const pinned = manifest.assets?.[expectedTarget];
-  if (!pinned || manifest.version !== version) fail(`tarball has no exact pin for ${expectedTarget}`);
+  const pinned = assertAssetManifest(manifest, version, expectedCommit, expectedTarget);
   if (fs.existsSync(cache)) fail("binary cache was not cold before the launcher ran");
 
   if (bootstrapMode === "local_frozen_asset") {
@@ -366,6 +380,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertAssetManifest,
   assertContext7Search,
   assertInstalledShimInvocation,
   assertPublicJSONPathFree,
