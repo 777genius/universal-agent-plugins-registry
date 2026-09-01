@@ -13,6 +13,7 @@ if (!plugin) {
 const availableClients = clients.filter(client => plugin.client_support.clients.includes(client.id))
 const initialTarget = availableClients.find(client => client.id === 'cursor')?.id ?? availableClients[0]?.id
 const targets = ref<ClientID[]>(initialTarget ? [initialTarget] : [])
+const iconURL = pluginIcon(plugin)
 const resolution = computed(() => resolveDistribution(plugin, targets.value))
 const installCandidate = computed(() => current.value ? resolution.value.distribution : undefined)
 const authLabel = computed(() => authenticationLabel(installCandidate.value, targets.value, plugin.authentication))
@@ -34,7 +35,7 @@ useHead({ link: [{ rel: 'canonical', href: canonical }] })
     <div class="plugin-page__grid">
       <article class="plugin-profile">
         <div class="plugin-profile__heading">
-          <span class="plugin-profile__icon"><img :src="pluginIcon(plugin)" alt="" width="54" height="54" /></span>
+          <span v-if="iconURL" class="plugin-profile__icon"><img :src="iconURL" alt="" width="54" height="54" /></span>
           <div><div class="plugin-profile__meta"><span class="source-pill">{{ installCandidate ? 'Install candidate' : expired ? 'Stale Directory · history only' : !published ? 'Review preview · history only' : 'Unavailable provenance' }}<template v-if="installCandidate"> · {{ installCandidate.label }}</template></span><span v-if="installCandidate">v{{ installCandidate.version }} · release {{ installCandidate.release_sequence }}</span></div><h1>{{ plugin.display_name }}</h1></div>
         </div>
         <p class="plugin-profile__description">{{ plugin.description }}</p>
@@ -55,7 +56,7 @@ useHead({ link: [{ rel: 'canonical', href: canonical }] })
           <h2>Product release history</h2>
           <p>Historical records below are not the selected install candidate.</p>
           <ul class="distribution-list">
-            <li v-for="item in plugin.distributions" :key="item.id"><strong>{{ item.id }}</strong> — {{ item.label }}<span v-if="item.id === plugin.declared_default_distribution"> (Declared default source)</span><ul><li v-for="release in item.releases" :key="release.release_sequence"><strong>Historical release {{ release.release_sequence }} · v{{ release.version }}</strong> — {{ item.status }} / {{ release.release_status }}<br /><small>{{ release.source.repository }}@{{ release.source.revision }}//{{ release.source.path }}</small><ul><li v-for="target in release.targets" :key="target.client">{{ target.client }} — {{ deliveryLabel(target.delivery) }}; {{ targetAuthenticationLabel(target.authentication) }}; scopes: {{ target.scopes.join(', ') }}<template v-if="target.app_binding">; app key <code>{{ target.app_binding.app_key }}</code>, app ID <code>{{ target.app_binding.id }}</code>, MCP server <code>{{ target.app_binding.mcp_server }}</code></template></li></ul></li></ul></li>
+            <li v-for="item in plugin.distributions" :key="item.id"><strong>{{ item.id }}</strong> — {{ item.label }}<span v-if="item.id === plugin.declared_default_distribution"> (Declared default source)</span><ul><li v-for="release in item.releases" :key="release.release_sequence"><strong>Historical release {{ release.release_sequence }} · v{{ release.version }}</strong> — {{ item.status }} / {{ release.release_status }}<br /><small>{{ release.source.repository }}@{{ release.source.revision }}//{{ release.source.path }}</small><ul><li v-for="target in release.targets" :key="target.client">{{ target.client }} — {{ deliveryLabel(target.delivery) }}; {{ targetAuthenticationLabel(target.authentication) }}; scopes: {{ target.scopes.join(', ') }}<template v-if="target.app_binding">; ChatGPT setup available</template></li></ul></li></ul></li>
           </ul>
         </div>
         <div v-if="installCandidate" class="status-card">

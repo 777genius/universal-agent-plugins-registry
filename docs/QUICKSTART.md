@@ -4,13 +4,15 @@ Install one Agent Plugins 1.0 package, not the whole Directory. You need Node.js
 22 or newer:
 
 ```bash
-npx universal-agent-plugins add cloudflare-docs --target codex,cursor,kiro
+npx universal-agent-plugins add cloudflare-docs
 ```
 
 The CLI shows the exact package, source, and complete target plan before
-changing anything. Explicit commands and targets are consent; there is no
-hidden `--yes` flag. In an interactive terminal you can use the accessible
-multiselect, or name targets directly:
+changing anything. In an interactive terminal it detects installed supported
+agents and selects all of them by default for you to confirm. ChatGPT is
+selected separately because it cannot be detected locally. Explicit commands
+and targets are consent; there is no hidden `--yes` flag. In scripts and other
+non-interactive use, name targets directly:
 
 ```bash
 npx universal-agent-plugins add cloudflare-docs --target cursor
@@ -27,7 +29,7 @@ Supported targets:
 | Target | What the CLI does | Remaining user step |
 | --- | --- | --- |
 | `codex` | Generates a personal OpenAI marketplace package | Runs no hidden UI actions; prints exact Codex activation steps |
-| `chatgpt` | Prepares a projected package only when the selected release has a verified app binding | Install or select the registered personal app manually in ChatGPT Plugins, then start a new chat |
+| `chatgpt` | Prepares the package when the selected release has a verified ChatGPT connection | Select the app in ChatGPT, connect it, then start a new chat |
 | `cursor` | Places the native package in Cursor's local plugin directory | Reload Cursor, then verify the plugin appears |
 | `copilot` | Registers a managed marketplace, installs, and verifies through Copilot CLI | Nothing when successful |
 | `vscode` | Installs automatically through Copilot CLI when available | Otherwise prints the exact `chat.pluginLocations` setting |
@@ -84,8 +86,8 @@ packaged. Full-SHA GitHub references and local paths are `direct source`
 installs that bypass Directory source selection. Community packages and bridges
 are not official vendor packages.
 
-Cloudflare Docs is currently the only Directory release with a verified ChatGPT
-app binding:
+Cloudflare Docs is currently the only Directory plugin with a verified ChatGPT
+connection:
 
 ```bash
 npx universal-agent-plugins add cloudflare-docs --target chatgpt
