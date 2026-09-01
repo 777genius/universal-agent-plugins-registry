@@ -281,6 +281,11 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
         rendered = json.dumps(job, sort_keys=True)
         self.assertIn("universal-agent-plugins@${AGENTPLUGINS_VERSION}", rendered)
         self.assertIn("@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}", rendered)
+        self.assertIn(
+            "allowScripts[@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}]=true",
+            rendered,
+        )
+        self.assertNotIn("--ignore-scripts", rendered)
         self.assertIn("run_chrome_five_client_lifecycle.py", rendered)
         self.assertIn("chrome-five-client-evidence", rendered)
         self.assertIn('(cd "$EVIDENCE_ROOT" && sha256sum evidence.json > evidence.sha256)', workflow_source)

@@ -110,6 +110,14 @@ jobs:
               return subprocess.run(command, env=env, cwd=cwd, check=True, capture_output=True,
                                     text=True, timeout=180)
 
+          def single_package_metadata(raw):
+              parsed = json.loads(raw)
+              if isinstance(parsed, list):
+                  assert len(parsed) == 1
+                  parsed = parsed[0]
+              assert isinstance(parsed, dict)
+              return parsed
+
           def snapshot():
               result = {}
               for name in ("home", "state", "workspace", "config", "cache", "tmp"):
@@ -126,7 +134,7 @@ jobs:
               return result
 
           metadata = invoke(["npm", "view", f"universal-agent-plugins@{version}", "--json"])
-          package = json.loads(metadata.stdout)
+          package = single_package_metadata(metadata.stdout)
           assert package["version"] == version and package["dist"]["integrity"] == integrity
           invoke(["npm", "install", "--prefix", str(tools), "--no-audit", "--no-fund",
                   f"universal-agent-plugins@{version}"])
@@ -572,6 +580,12 @@ jobs:
         run: |
           test "$(npm view "universal-agent-plugins@${AGENTPLUGINS_VERSION}" dist.integrity)" = "$AGENTPLUGINS_NPM_INTEGRITY"
           test "$(npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity)" = "$CLAUDE_CODE_NPM_INTEGRITY"
+          mkdir -p "$TOOLS_ROOT"
+          (
+            cd "$TOOLS_ROOT"
+            npm init --yes >/dev/null
+            npm pkg set "allowScripts[@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}]=true" --json
+          )
           npm install --prefix "$TOOLS_ROOT" --no-audit --no-fund \
             "universal-agent-plugins@${AGENTPLUGINS_VERSION}" \
             "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"

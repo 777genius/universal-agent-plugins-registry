@@ -1858,6 +1858,25 @@ sys.modules['catalog_process_isolation']=module
         for forbidden in ("GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN", "add context7"):
             self.assertNotIn(forbidden, body)
 
+        step = next(step for step in job["steps"]
+                    if step.get("name") == "Prove the exact public facade and read-only empty-state doctor")
+        source = step["run"].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        parsed = ast.parse(source)
+        definitions = ast.Module(
+            body=[node for node in parsed.body
+                  if isinstance(node, ast.FunctionDef) and node.name == "single_package_metadata"],
+            type_ignores=[],
+        )
+        namespace = {"json": json}
+        exec(compile(definitions, "upstream-package-e2e.yml", "exec"), namespace)
+        normalize = namespace["single_package_metadata"]
+        package = {"version": "0.1.34", "dist": {"integrity": "sha512:test"}}
+        self.assertEqual(normalize(json.dumps(package)), package)
+        self.assertEqual(normalize(json.dumps([package])), package)
+        for invalid in ([], [package, package], "package", 1, None):
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                normalize(json.dumps(invalid))
+
     def upstream_inline_contract(self):
         workflow = load(ROOT / ".github/workflows/upstream-package-e2e.yml")
         step = next(step for step in workflow["jobs"]["install-lifecycle"]["steps"]
