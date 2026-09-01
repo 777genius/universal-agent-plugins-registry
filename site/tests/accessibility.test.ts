@@ -34,6 +34,9 @@ describe('focused catalog accessibility contract', () => {
     assert.match(multiselect, /<img v-if="option\.icon"[^>]+alt=""/)
     assert.match(panel, /All installed agents \(recommended\)/)
     assert.match(multiselect, /autoOption\.label/)
+    assert.match(panel, /defineModel<boolean>\('autoDetect'/)
+    assert.match(detail, /v-model:auto-detect="autoDetect"/)
+    assert.match(detail, /current\.value && !autoDetect\.value \? resolution\.value\.distribution/)
   })
 
   it('places a compact target selector above the exact generated command', () => {
@@ -79,7 +82,7 @@ describe('focused catalog accessibility contract', () => {
     assert.match(home, /!current\.value.*pluginCommands/)
     assert.match(card, /current\.value \? resolution\.value\.distribution : undefined/)
     assert.match(panel, /current\.value && targets\.value\.length && \(autoDetect\.value \|\| hasCompleteSource\.value\) \? pluginCommands/)
-    assert.match(detail, /current\.value \? resolution\.value\.distribution : undefined/)
+    assert.match(detail, /current\.value && !autoDetect\.value \? resolution\.value\.distribution : undefined/)
     for (const view of [home, card, panel, detail]) assert.match(view, /review (?:data|preview)/i)
   })
 

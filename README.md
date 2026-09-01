@@ -51,11 +51,12 @@ documentation and requires no account. You need Node.js 22 or newer:
 npx universal-agent-plugins add cloudflare-docs
 ```
 
-In an interactive terminal the CLI detects installed supported agents and
-selects all of them by default for you to confirm. ChatGPT is selected
-separately because it cannot be detected locally. The npm launcher requires
-Node.js 22+. In scripts and other non-interactive use, pass every target
-explicitly as one comma-separated value:
+In an interactive terminal the CLI detects installed supported agents, skips
+clients the package cannot serve from one release, and selects the compatible
+set for you to confirm. ChatGPT is included when its desktop app is detected
+and the package provides a verified connection; you can also select it
+explicitly. The npm launcher requires Node.js 22+. In scripts and other
+non-interactive use, pass every target explicitly as one comma-separated value:
 
 ```bash
 npx universal-agent-plugins add cloudflare-docs --target cursor

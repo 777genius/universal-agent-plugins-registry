@@ -5,9 +5,9 @@ import { deliveryLabel, expectedDistribution, resolveDistribution } from '~/util
 
 const props = defineProps<{ plugin: RegistryPlugin }>()
 const targets = defineModel<ClientID[]>('targets', { required: true })
+const autoDetect = defineModel<boolean>('autoDetect', { required: true })
 const { asset } = useSite()
 const { current, expired, published } = useDirectoryStatus()
-const autoDetect = ref(true)
 const autoOption = {
   label: 'All installed agents (recommended)',
   summary: 'All installed agents',

@@ -9,10 +9,12 @@ npx universal-agent-plugins add cloudflare-docs
 
 The CLI shows the exact package, source, and complete target plan before
 changing anything. In an interactive terminal it detects installed supported
-agents and selects all of them by default for you to confirm. ChatGPT is
-selected separately because it cannot be detected locally. Explicit commands
-and targets are consent; there is no hidden `--yes` flag. In scripts and other
-non-interactive use, name targets directly:
+agents, skips clients the package cannot serve from one release, and selects
+the compatible set for you to confirm. ChatGPT is included when its desktop app
+is detected and the package provides a verified ChatGPT connection; you can
+also select it explicitly. Explicit commands and targets are consent; there is
+no hidden `--yes` flag. In scripts and other non-interactive use, name targets
+directly:
 
 ```bash
 npx universal-agent-plugins add cloudflare-docs --target cursor
@@ -39,6 +41,12 @@ Supported targets:
 | `opencode` | Writes the managed MCP configuration | Nothing when successful |
 | `cline` | Writes the managed MCP configuration | Reload the extension when prompted |
 | `windsurf` | Prepares the package without claiming UI activation | Follow the exact MCP or skills activation hint |
+
+For ChatGPT, the plugin publisher registers its remote connection and the
+Directory verifies that the package points to that connection. You do not
+create or copy an app ID. After the CLI prepares the package, select it in
+ChatGPT, connect it, and start a new chat. Availability can depend on your
+ChatGPT account or workspace.
 
 Lifecycle commands use the same explicit target or comma-separated targets:
 
