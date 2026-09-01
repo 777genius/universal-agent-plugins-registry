@@ -426,6 +426,24 @@ test("release staging rejects hardlinked inputs and concurrent release replaceme
   }), /checksum mismatch/);
   assert.equal(fs.existsSync(path.join(mutationCase.packageRoot, "assets.json")), false);
   assert.equal(JSON.parse(await fsp.readFile(path.join(mutationCase.packageRoot, "package.json"))).version, "0.0.0-development");
+
+  const postCheckCase = await makeCase("post-check-replacement");
+  const validated = verifyRelease(postCheckCase.assetsRoot, `agentplugins-v${postCheckCase.version}`, COMMIT);
+  const staged = stage(postCheckCase.packageRoot, postCheckCase.assetsRoot, postCheckCase.version, COMMIT, {
+    evidenceRoot: postCheckCase.evidenceRoot,
+    afterReleaseSnapshotVerification() {
+      for (const [platform, arch] of [["darwin", "x64"], ["darwin", "arm64"], ["linux", "x64"],
+        ["linux", "arm64"], ["win32", "x64"], ["win32", "arm64"]]) {
+        const info = detectPlatform(platform, arch);
+        fs.writeFileSync(path.join(postCheckCase.assetsRoot, expectedAssetName(postCheckCase.version, info)), `replacement-${info.key}\n`);
+      }
+      prepareRelease(postCheckCase.assetsRoot, `agentplugins-v${postCheckCase.version}`, COMMIT);
+    }
+  });
+  const replaced = verifyRelease(postCheckCase.assetsRoot, `agentplugins-v${postCheckCase.version}`, COMMIT);
+  assert.notEqual(replaced.manifest_sha256, validated.manifest_sha256);
+  assert.equal(staged.producer.release_manifest.sha256, validated.manifest_sha256);
+  assert.deepEqual(staged.assets, validated.assets);
 });
 
 test("legacy manifests are audit-only and never gate eligible", async (t) => {

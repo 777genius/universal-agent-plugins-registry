@@ -3,6 +3,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const { detectPlatform, expectedAssetName } = require("../lib/platform");
@@ -297,6 +298,23 @@ function stageEvidence(packageRoot, evidenceRoot) {
   return writeEvidence(packageRoot, loadEvidence(evidenceRoot));
 }
 
+function snapshotRelease(assetRoot, release, version, commit, options) {
+  const snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentplugins-release-"));
+  try {
+    const names = [
+      ...Object.values(release.assets).map((asset) => asset.file),
+      "release-manifest.json",
+      "checksums.txt"
+    ];
+    for (const name of names) {
+      fs.copyFileSync(path.join(assetRoot, name), path.join(snapshotRoot, name), fs.constants.COPYFILE_EXCL);
+    }
+    return verifyRelease(snapshotRoot, `agentplugins-v${version}`, commit, options);
+  } finally {
+    fs.rmSync(snapshotRoot, { recursive: true, force: true });
+  }
+}
+
 function stage(packageRoot, assetRoot, version, commit, options = {}) {
   if (!VERSION.test(version)) {
     throw new Error(`invalid release version: ${version}`);
@@ -316,11 +334,12 @@ function stage(packageRoot, assetRoot, version, commit, options = {}) {
   const packageName = validatePackageMetadata(pkg);
   const loadedEvidence = loadEvidence(options.evidenceRoot);
   if (options.afterInitialReleaseVerification) options.afterInitialReleaseVerification();
-  const release = verifyRelease(assetRoot, `agentplugins-v${version}`, commit, options);
+  const release = snapshotRelease(assetRoot, initialRelease, version, commit, options);
   if (JSON.stringify(release.assets) !== JSON.stringify(initialRelease.assets) ||
       release.manifest_sha256 !== initialRelease.manifest_sha256) {
     throw new Error("release directory changed during staging");
   }
+  if (options.afterReleaseSnapshotVerification) options.afterReleaseSnapshotVerification();
   const assets = Object.fromEntries(PLATFORMS.map(([platform, arch]) => {
     const info = detectPlatform(platform, arch);
     const record = release.assets[info.key];
