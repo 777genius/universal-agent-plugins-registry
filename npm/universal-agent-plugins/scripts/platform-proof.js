@@ -265,11 +265,16 @@ function main() {
   const firstMtime = stat.mtimeMs;
   const list = invokeJSON(["list"]);
   const doctor = invokeJSON(["doctor"]);
+  const search = invokeJSON(["search", "context7"]);
   if (list.schema_version !== 1 || list.command !== "list" || list.data.installations.length !== 0) {
     fail("clean list contract failed");
   }
   if (doctor.schema_version !== 1 || doctor.command !== "doctor" || doctor.data.read_only !== true) {
     fail("read-only doctor contract failed");
+  }
+  if (search.schema_version !== 1 || search.command !== "search" || search.result !== "success" ||
+      !search.data || typeof search.data !== "object") {
+    fail("public catalog search contract failed");
   }
   const dryRun = invokeJSON(["add", synthetic, "--target", "cursor", "--dry-run"]);
   if (dryRun.schema_version !== 1 || dryRun.command !== "add" || dryRun.data.dry_run !== true) {
@@ -283,10 +288,15 @@ function main() {
     const [addCommand, completeCommand, updateCommand, removeCommand] = lifecycleCommands(synthetic);
     const add = invokeJSON(addCommand);
     const complete = invokeJSON(completeCommand);
+    const info = invokeJSON(["info", "platform-proof-synthetic", "--target", "cursor"]);
     const update = invokeJSON(updateCommand);
     const remove = invokeJSON(removeCommand);
     const addResult = lifecycleResult(add, "add", "cursor");
     const completeResult = lifecycleResult(complete, "add", "cursor");
+    if (info.schema_version !== 1 || info.command !== "info" || info.result !== "success" ||
+        !info.data || typeof info.data !== "object") {
+      fail("isolated synthetic info contract failed");
+    }
     const updateResult = lifecycleResult(update, "update", "cursor");
     const removeResult = lifecycleResult(remove, "remove", "cursor");
     if (addResult.mutated !== true || addResult.activation.authentication !== "not_checked" ||
@@ -319,10 +329,11 @@ function main() {
       version: true,
       list: true,
       doctor_read_only: true,
+      public_catalog_search: true,
       synthetic_add_dry_run: true,
       warm_cache: true,
       warm_cache_without_proof_source: true,
-      isolated_add_update_remove: lifecycle
+      isolated_add_info_update_remove: lifecycle
     }
   };
   mkdir(path.dirname(path.resolve(resultArg)));
