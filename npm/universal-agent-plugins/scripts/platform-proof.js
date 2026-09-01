@@ -145,6 +145,26 @@ function lifecycleResult(output, command, target) {
   return targets[0].output.result;
 }
 
+function assertContext7Search(output) {
+  if (output?.schema_version !== 1 || output.command !== "search" || output.result !== "success" ||
+      !output.data || typeof output.data !== "object" || !Array.isArray(output.data.results) ||
+      !output.data.results.some((result) => result?.product_id === "context7" &&
+        result.distribution_id === "777genius/context7")) {
+    fail("public catalog search did not contain the expected context7 product and distribution");
+  }
+}
+
+function assertSyntheticInfo(output) {
+  const clients = output?.data?.clients;
+  if (output?.schema_version !== 1 || output.command !== "info" || output.result !== "success" ||
+      !output.data || typeof output.data !== "object" || output.data.name !== "platform-proof-synthetic" ||
+      output.data.version !== "1.0.0" || !Array.isArray(clients) || clients.length !== 1 ||
+      clients[0]?.client_id !== "cursor" || clients[0].activation !== "active" ||
+      clients[0].package_revision?.version !== "1.0.0") {
+    fail("isolated synthetic info did not prove identity, Cursor target, installed version, and active state");
+  }
+}
+
 function main() {
   const [tarballArg, version, expectedTarget, lifecycleArg, resultArg, expectedCommit, bootstrapModeArg, releaseAssetsArg] = process.argv.slice(2);
   if (!tarballArg || !version || !expectedTarget || !lifecycleArg || !resultArg || !expectedCommit || !bootstrapModeArg || !releaseAssetsArg) {
@@ -272,10 +292,7 @@ function main() {
   if (doctor.schema_version !== 1 || doctor.command !== "doctor" || doctor.data.read_only !== true) {
     fail("read-only doctor contract failed");
   }
-  if (search.schema_version !== 1 || search.command !== "search" || search.result !== "success" ||
-      !search.data || typeof search.data !== "object") {
-    fail("public catalog search contract failed");
-  }
+  assertContext7Search(search);
   const dryRun = invokeJSON(["add", synthetic, "--target", "cursor", "--dry-run"]);
   if (dryRun.schema_version !== 1 || dryRun.command !== "add" || dryRun.data.dry_run !== true) {
     fail("synthetic add dry-run contract failed");
@@ -293,10 +310,7 @@ function main() {
     const remove = invokeJSON(removeCommand);
     const addResult = lifecycleResult(add, "add", "cursor");
     const completeResult = lifecycleResult(complete, "add", "cursor");
-    if (info.schema_version !== 1 || info.command !== "info" || info.result !== "success" ||
-        !info.data || typeof info.data !== "object") {
-      fail("isolated synthetic info contract failed");
-    }
+    assertSyntheticInfo(info);
     const updateResult = lifecycleResult(update, "update", "cursor");
     const removeResult = lifecycleResult(remove, "remove", "cursor");
     if (addResult.mutated !== true || addResult.activation.authentication !== "not_checked" ||
@@ -351,4 +365,16 @@ if (require.main === module) {
   }
 }
 
-module.exports = { assertInstalledShimInvocation, assertPublicJSONPathFree, frozenReleaseAsset, installedShimInvocation, lifecycleCommands, lifecycleResult, npmInvocation, parseBootstrapMode, parseLifecycle };
+module.exports = {
+  assertContext7Search,
+  assertInstalledShimInvocation,
+  assertPublicJSONPathFree,
+  assertSyntheticInfo,
+  frozenReleaseAsset,
+  installedShimInvocation,
+  lifecycleCommands,
+  lifecycleResult,
+  npmInvocation,
+  parseBootstrapMode,
+  parseLifecycle
+};

@@ -236,6 +236,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: npm
+    concurrency:
+      group: agentplugins-npm-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -254,6 +257,9 @@ jobs:
           set -euo pipefail
           test -z "${NPM_TOKEN:-}"
           test -z "${NODE_AUTH_TOKEN:-}"
+          tarball=$(find "$RUNNER_TEMP/npm-tarball" -maxdepth 1 -type f -name '*.tgz' | head -n 1)
+          test -n "$tarball"
+          test "$(find "$RUNNER_TEMP/npm-tarball" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')" = 1
           npm view universal-agent-plugins versions --json > "$RUNNER_TEMP/npm-versions.json"
           node -e 'const v=require(process.argv[1]); if ((Array.isArray(v)?v:[v]).includes(process.env.VERSION)) process.exit(1)' "$RUNNER_TEMP/npm-versions.json"
           npm dist-tag ls universal-agent-plugins > "$RUNNER_TEMP/npm-tags.txt"
@@ -268,9 +274,6 @@ jobs:
             if (next[i] < latest[i] || i === 2) throw new Error("refusing to move latest backward");
           }
           NODE
-          tarball=$(find "$RUNNER_TEMP/npm-tarball" -maxdepth 1 -type f -name '*.tgz' | head -n 1)
-          test -n "$tarball"
-          test "$(find "$RUNNER_TEMP/npm-tarball" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')" = 1
           npm publish "$tarball" --access public --provenance --tag latest
 
   public-six-platform-proof:

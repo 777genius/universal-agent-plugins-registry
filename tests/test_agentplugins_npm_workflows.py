@@ -63,6 +63,25 @@ class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
         self.assertIn("npm view universal-agent-plugins versions", body)
         self.assertIn("npm dist-tag ls universal-agent-plugins", body)
 
+    def test_publish_lock_serializes_all_versions_and_eligibility_is_rechecked_last(self):
+        workflow = load(PUBLISH)
+        self.assertIn("inputs.version", workflow["concurrency"]["group"])
+        self.assertEqual(workflow["concurrency"]["cancel-in-progress"], False)
+        publish = workflow["jobs"]["publish"]
+        self.assertEqual(publish["concurrency"], {
+            "group": "agentplugins-npm-publish",
+            "cancel-in-progress": False,
+        })
+        body = "\n".join(step.get("run", "") for step in publish["steps"])
+        tarball = body.index('tarball=$(find "$RUNNER_TEMP/npm-tarball"')
+        versions = body.index("npm view universal-agent-plugins versions")
+        tags = body.index("npm dist-tag ls universal-agent-plugins")
+        publication = body.index('npm publish "$tarball"')
+        self.assertLess(tarball, versions)
+        self.assertLess(versions, tags)
+        self.assertLess(tags, publication)
+        self.assertRegex(body, r"(?m)^NODE\nnpm publish \"\$tarball\"")
+
     def test_proof_matrix_is_six_native_hosted_architectures(self):
         workflow = load(PROOF)
         matrix = workflow["jobs"]["native-proof"]["strategy"]["matrix"]["include"]
