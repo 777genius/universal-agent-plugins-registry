@@ -195,6 +195,9 @@ test('renders target authentication distinctly and keeps it tied to multiselect 
 
   await search.fill('Atlassian')
   const atlassian = page.locator('.plugin-card').filter({ hasText: 'Atlassian' })
+  await atlassian.getByRole('button', { name: /Choose clients for Atlassian:/ }).click()
+  await page.getByRole('checkbox', { name: /Cursor/ }).click()
+  await page.keyboard.press('Escape')
   await expect(atlassian.locator('.plugin-card__auth')).toHaveText('Authentication required')
 
   await page.goto('plugins/atlassian')

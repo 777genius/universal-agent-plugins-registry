@@ -17,7 +17,9 @@ const targets = ref<(typeof clients)[number]['id'][]>(initialTarget ? [initialTa
 const autoDetect = ref(true)
 const resolution = computed(() => resolveDistribution(props.plugin, targets.value))
 const selectedDistribution = computed(() => isDiscovered.value || current.value ? resolution.value.distribution : undefined)
-const canInstall = computed(() => current.value && (autoDetect.value ? props.plugin.installable : Boolean(selectedDistribution.value)))
+const canInstall = computed(() => isDiscovered.value
+  ? props.plugin.installable && (autoDetect.value || Boolean(selectedDistribution.value))
+  : current.value && (autoDetect.value ? props.plugin.installable : Boolean(selectedDistribution.value)))
 const command = computed(() => canInstall.value ? pluginCommands(props.plugin, autoDetect.value ? undefined : targets.value).add : '')
 const iconURL = computed(() => pluginIcon(props.plugin))
 const autoOption = {
