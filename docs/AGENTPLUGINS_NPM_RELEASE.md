@@ -47,7 +47,7 @@ Until the fix-forward release is ready, the exact non-destructive fallback is
 the already published `0.1.26`. Run it without changing the global install:
 
 ```bash
-npx universal-agent-plugins@0.1.26 doctor
+npm exec --package=universal-agent-plugins@0.1.26 -- agentplugins doctor
 ```
 
 Or install that exact version globally and use its installed shim:

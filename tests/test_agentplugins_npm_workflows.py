@@ -179,7 +179,9 @@ class AgentpluginsNpmWorkflowContractTests(unittest.TestCase):
 
     def test_release_runbook_has_exact_non_destructive_0126_fallback(self):
         body = (ROOT / "docs/AGENTPLUGINS_NPM_RELEASE.md").read_text()
-        self.assertIn("npx universal-agent-plugins@0.1.26 doctor", body)
+        self.assertIn(
+            "npm exec --package=universal-agent-plugins@0.1.26 -- agentplugins doctor", body
+        )
         self.assertIn("npm install --global universal-agent-plugins@0.1.26", body)
         self.assertIn("agentplugins doctor", body)
         self.assertRegex(body, r"do not\s+move npm `latest` backward")
