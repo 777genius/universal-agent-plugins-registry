@@ -109,7 +109,7 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
       </div>
       <div class="hero__demo">
         <div class="hero__window">
-          <div class="hero__window-top"><span /><span /><span /><b>Quick start</b></div>
+          <div class="hero__window-top"><b>Quick start</b></div>
           <div class="hero__window-body">
             <p>Install {{ demoPlugin.display_name }} for {{ selectedHeroNames }}</p>
             <div class="hero-command-row">

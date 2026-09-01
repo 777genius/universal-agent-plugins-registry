@@ -98,8 +98,6 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .hero__demo { position: relative; }
 .hero__window { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 20px; background: color-mix(in srgb, var(--surface-solid) 88%, transparent); box-shadow: var(--shadow); transform: perspective(1100px) rotateY(-3deg) rotateX(2deg); }
 .hero__window-top { min-height: 48px; padding: 0 17px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-raised) 70%, transparent); }
-.hero__window-top > span { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
-.hero__window-top span:first-child { background: var(--coral); }
 .hero__window-top b { margin-left: auto; color: var(--subtle); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; }
 .hero__window-body { padding: 26px; }
 .hero__window-body > p { margin: 0 0 11px; color: var(--muted); font-size: .78rem; }
