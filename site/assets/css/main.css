@@ -259,13 +259,13 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .plugin-card__title-link { color: inherit; text-decoration: none; }.plugin-card__title-link:hover { color: var(--primary-bright); }
 .plugin-card__icon, .plugin-profile__icon { display: grid; place-items: center; border: 1px solid var(--line); background: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
 .plugin-card__icon { width: 40px; height: 40px; flex: 0 0 auto; border-radius: 11px; }.plugin-card__icon img { max-width: 26px; max-height: 26px; object-fit: contain; }
-.source-pill { width: fit-content; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--subtle); font: 700 .59rem "SFMono-Regular", monospace; letter-spacing: .06em; text-transform: uppercase; }
+.source-pill { width: fit-content; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--subtle); font: 700 .59rem SFMono-Regular, monospace; letter-spacing: .06em; text-transform: uppercase; }
 .plugin-card__identity { min-height: 40px; display: flex; align-items: center; gap: 10px; }
 .plugin-card__identity--with-ribbon { padding-right: 102px; }
 .plugin-card__identity-copy { min-width: 0; }
 .plugin-card h3 { margin: 0; overflow: hidden; font-size: 1rem; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
 .plugin-card__source-label { margin: 6px 0 0; color: var(--subtle); font-size: .66rem; font-weight: 700; }
-.plugin-card__ribbon { position: absolute; top: 14px; right: 0; min-width: 104px; padding: 6px 9px 6px 11px; border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--line)); border-right: 0; border-radius: 8px 0 0 8px; color: var(--primary-bright); background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 16%, var(--surface-solid)), var(--surface-solid)); box-shadow: -8px 8px 24px rgba(0,0,0,.16); font: 750 .52rem "SFMono-Regular", monospace; letter-spacing: .045em; text-align: center; text-transform: uppercase; }
+.plugin-card__ribbon { position: absolute; top: 14px; right: 0; min-width: 104px; padding: 6px 9px 6px 11px; border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--line)); border-right: 0; border-radius: 8px 0 0 8px; color: var(--primary-bright); background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 16%, var(--surface-solid)), var(--surface-solid)); box-shadow: -8px 8px 24px rgba(0,0,0,.16); font: 750 .52rem SFMono-Regular, monospace; letter-spacing: .045em; text-align: center; text-transform: uppercase; }
 .plugin-card__ribbon::after { content: ""; position: absolute; right: 0; bottom: -6px; border-width: 3px; border-style: solid; border-color: color-mix(in srgb, var(--primary) 35%, transparent) transparent transparent color-mix(in srgb, var(--primary) 35%, transparent); }
 .plugin-card__ribbon--muted { color: var(--subtle); border-color: var(--line); background: var(--surface-solid); }
 .plugin-card__description { margin: 10px 0 12px; display: -webkit-box; overflow: hidden; color: var(--muted); font-size: .76rem; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
