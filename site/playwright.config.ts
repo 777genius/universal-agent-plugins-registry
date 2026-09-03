@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
-const baseURL = 'http://127.0.0.1:4173/universal-agent-plugins/'
+const baseURL = process.env.PLAYWRIGHT_BASE_URL
+  ?? 'http://127.0.0.1:4173/universal-agent-plugins-registry/'
 const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
 
 export default defineConfig({

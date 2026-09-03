@@ -12,8 +12,8 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:contracts
-NUXT_APP_BASE_URL=/universal-agent-plugins/ pnpm generate
-NUXT_APP_BASE_URL=/universal-agent-plugins/ pnpm check:links
+NUXT_APP_BASE_URL=/universal-agent-plugins-registry/ pnpm generate
+NUXT_APP_BASE_URL=/universal-agent-plugins-registry/ pnpm check:links
 pnpm test:browser
 ```
 

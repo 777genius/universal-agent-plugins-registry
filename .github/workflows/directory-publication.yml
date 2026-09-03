@@ -68,6 +68,7 @@ concurrency:
 
 env:
   LEDGER_BRANCH: directory-publication-ledger
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
 
 jobs:
   authenticate-completed-state:
@@ -733,8 +734,9 @@ jobs:
       - name: Generate from the exact signed snapshot
         working-directory: trusted-source/site
         env:
-          NUXT_APP_BASE_URL: /universal-agent-plugins/
-          NUXT_PUBLIC_SITE_URL: https://777genius.github.io/universal-agent-plugins
+          NUXT_APP_BASE_URL: /universal-agent-plugins-registry/
+          NUXT_PUBLIC_SITE_URL: https://777genius.github.io/universal-agent-plugins-registry
+          NUXT_PUBLIC_REPOSITORY_URL: https://github.com/777genius/universal-agent-plugins-registry
           UAP_SIGNED_SNAPSHOT_PATH: ${{ runner.temp }}/signed-snapshot.json
         run: |
           test ! -e "../../ledger"

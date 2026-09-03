@@ -29,6 +29,7 @@ from build_registry import (
     validated_package_facts,
 )
 from upstream_promotion import PromotionError, git, pretty, read_object, require, sha256
+from repository_identity import active_registry_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -242,7 +243,7 @@ def apply_bridge_release(directory: dict[str, Any], plan: dict[str, Any]) -> Non
     require(SHA_RE.fullmatch(previous_revision) is not None, "previous locked bridge revision is invalid")
     unresolved = [
         item for item in distribution["releases"]
-        if item["package_source"]["repository"] == "777genius/universal-agent-plugins"
+        if item["package_source"]["repository"] == active_registry_repository()
         and item["package_source"]["revision"] is None
     ]
     require(
@@ -259,7 +260,7 @@ def apply_bridge_release(directory: dict[str, Any], plan: dict[str, Any]) -> Non
     distribution["releases"].append({
         "sequence": sequence, "package_version": package["version"], "manifest_name": plan["product_id"],
         "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-        "package_source": {"repository": "777genius/universal-agent-plugins", "revision": None, "path": package["path"]},
+        "package_source": {"repository": active_registry_repository(), "revision": None, "path": package["path"]},
         "build_provenance": {
             "upstream_repository": plan["upstream"]["repository"],
             "upstream_revision": plan["upstream"]["merge_sha"],
@@ -302,7 +303,7 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
     args.directory.write_bytes(pretty(directory))
     result["materialization"] = {
         "artifact": {
-            "repository": "777genius/universal-agent-plugins", "revision": args.artifact_revision,
+            "repository": active_registry_repository(), "revision": args.artifact_revision,
             "path": args.artifact_path, "digest": sha256(args.materialization.read_bytes()),
         },
         "run": materialization["run"], "clients": materialization["clients"],
@@ -404,7 +405,7 @@ def verify_pr(
     artifact = review.get("materialization", {}).get("artifact", {})
     require(
         artifact == {
-            "repository": "777genius/universal-agent-plugins", "revision": bridge_commit,
+            "repository": active_registry_repository(), "revision": bridge_commit,
             "path": raw_path, "digest": sha256((repository / raw_path).read_bytes()),
         },
         "locked bridge review does not bind the exact evidence commit",

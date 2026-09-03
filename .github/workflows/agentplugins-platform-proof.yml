@@ -62,6 +62,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
+
 jobs:
   native-proof:
     name: ${{ matrix.target }} / ${{ inputs.package_source || 'public_npm' }}
@@ -113,9 +116,9 @@ jobs:
           test "$GITHUB_REF" = "refs/tags/$UAP_TAG"
           test "$(git rev-parse "refs/tags/$UAP_TAG^{commit}")" = "$(git rev-parse HEAD)"
           test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
-          test "$GITHUB_REPOSITORY" = "777genius/universal-agent-plugins"
-          test "$(gh api repos/777genius/universal-agent-plugins --jq .default_branch)" = main
-          git fetch --no-tags --force https://github.com/777genius/universal-agent-plugins.git \
+          test "$GITHUB_REPOSITORY" = "777genius/universal-agent-plugins-registry"
+          test "$(gh api repos/777genius/universal-agent-plugins-registry --jq .default_branch)" = main
+          git fetch --no-tags --force https://github.com/777genius/universal-agent-plugins-registry.git \
             refs/heads/main:refs/remotes/public/main
           git merge-base --is-ancestor HEAD refs/remotes/public/main
           [[ "$EXPECTED_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]]

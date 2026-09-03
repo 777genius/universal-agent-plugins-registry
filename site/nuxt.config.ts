@@ -18,9 +18,10 @@ if (!signedSnapshotPath && process.env.CI && process.env.GITHUB_EVENT_NAME !== '
 }
 
 const siteUrl = (process.env.NUXT_PUBLIC_SITE_URL
-  ?? 'https://777genius.github.io/universal-agent-plugins').replace(/\/$/, '')
+  ?? 'https://777genius.github.io/universal-agent-plugins-registry').replace(/\/$/, '')
 const baseURL = process.env.NUXT_APP_BASE_URL ?? '/'
-const repositoryUrl = 'https://github.com/777genius/universal-agent-plugins'
+const repositoryUrl = process.env.NUXT_PUBLIC_REPOSITORY_URL
+  ?? 'https://github.com/777genius/universal-agent-plugins-registry'
 const discoveryKeyID = process.env.NUXT_PUBLIC_DISCOVERY_KEY_ID ?? 'uap-discovery-2026-01'
 const discoveryPublicKey = process.env.NUXT_PUBLIC_DISCOVERY_PUBLIC_KEY ?? 'IxWvGuscXR9crlCrGyBQZNqroYNVPbBA1B3pnjSffhc='
 // Production HTML is finalized after prerendering so script-src contains the

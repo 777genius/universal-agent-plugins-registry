@@ -8,6 +8,7 @@ permissions:
   contents: read
 
 env:
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
   AGENTPLUGINS_VERSION: "0.1.34"
   AGENTPLUGINS_COMMIT: 5ee12c478f7194686b30efbdac83b613a3f3d68a
   AGENTPLUGINS_NPM_INTEGRITY: sha512-x4LoUwRJpPHzYaOUMSo1lbGxxEPozJSMShGLI/qa4aOrvasIP/hjEVfYSEtSDmuGfhRpCnOfa0RCufrOmSkndg==
@@ -201,7 +202,7 @@ jobs:
             version: 1.0.0
           - id: reviewed-chrome-short-alias
             source: chrome-devtools
-            repository: 777genius/universal-agent-plugins
+            repository: 777genius/universal-agent-plugins-registry
             revision: signed-directory-release
             plugin: chrome-devtools
             version: 1.7.0-uap.1
@@ -369,6 +370,7 @@ jobs:
                       "record_count": record_count, "search_digest": projection["digest"]}
 
           def directory_identity(sandbox, data, installation):
+              import os
               # Only inspect the production cache written and signature-verified by the released CLI.
               cache = json.loads((sandbox / "state/directory-v1-cache.json").read_text())
               raw = base64.b64decode(cache["snapshot"], validate=True)
@@ -393,7 +395,8 @@ jobs:
               assert release["tree_digest"] == data["tree_digest"] == "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed"
               assert release["manifest_digest"] == data["manifest_digest"] == "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265"
               source = release["package_source"]
-              assert source["repository"] == "777genius/universal-agent-plugins" and source["path"] == "plugins/chrome-devtools"
+              expected_repository = os.environ.get("UAP_ACTIVE_REPOSITORY", "777genius/universal-agent-plugins")
+              assert source["repository"] == expected_repository and source["path"] == "plugins/chrome-devtools"
               assert len(source["revision"]) == 40 and int(source["revision"], 16) >= 0
               assert data["revision"] == installation["source"]["resolved_revision"] == source["revision"]
               assert installation["source"]["package_subpath"] == source["path"]

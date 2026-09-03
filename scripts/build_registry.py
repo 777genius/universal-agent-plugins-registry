@@ -41,6 +41,7 @@ from validate_catalog import (
     ValidationError, normalized_executable_basename, validate_mcp, validate_plugin,
     validate_skills,
 )
+from repository_identity import active_registry_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,7 @@ REPOSITORY_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CATEGORY_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+DEFAULT_REPOSITORY = active_registry_repository()
 REGISTRY_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 DESCRIPTOR_FIELDS = {"schema_version", "repository", "revision", "path", "categories"}
 APPROVED_ARCHIVE_HOSTS = {"codeload.github.com"}
@@ -872,7 +874,7 @@ def load_directory_source_at_revision(revision: str) -> dict[str, object] | None
 
 
 def external_release_map(
-    source: dict[str, object], repository: str = "777genius/universal-agent-plugins",
+    source: dict[str, object], repository: str = DEFAULT_REPOSITORY,
 ) -> dict[tuple[str, int], dict[str, object]]:
     return {
         (distribution["id"], release["sequence"]): release
@@ -1000,7 +1002,7 @@ def releases_requiring_validation(
 
 def validate_historical_bridge_eligibility(
     source: dict[str, object], base_source: dict[str, object] | None, *,
-    repository: str = "777genius/universal-agent-plugins",
+    repository: str = DEFAULT_REPOSITORY,
 ) -> None:
     """Fail closed when a historical local bridge lacks versioned recipes."""
     if base_source is None:
@@ -1038,7 +1040,7 @@ def validate_historical_bridge_eligibility(
 def validate_changed_local_releases(
     source: dict[str, object], base_source: dict[str, object] | None = None, *,
     repository_root: Path = ROOT,
-    repository: str = "777genius/universal-agent-plugins",
+    repository: str = DEFAULT_REPOSITORY,
     acquirer=None,  # type: ignore[no-untyped-def]
 ) -> list[tuple[str, int]]:
     """Validate changed/newly eligible local bindings from their exact bytes."""
@@ -1092,7 +1094,7 @@ def validate_changed_local_releases(
 
 def validate_changed_external_releases(
     source: dict[str, object], base_source: dict[str, object] | None = None, *,
-    repository: str = "777genius/universal-agent-plugins",
+    repository: str = DEFAULT_REPOSITORY,
     repository_overrides: dict[str, Path] | None = None,
     acquirer=None,  # type: ignore[no-untyped-def]
 ) -> list[tuple[str, int]]:
@@ -1419,7 +1421,7 @@ validate_external_release_package = validate_release_package
 
 def validate_active_local_runtime_closures(
     source: dict[str, object], *, repository_root: Path = ROOT,
-    repository: str = "777genius/universal-agent-plugins",
+    repository: str = DEFAULT_REPOSITORY,
 ) -> None:
     """Fail closed for every active local release that can launch live npx."""
     for distribution in source["distributions"]:
@@ -1449,7 +1451,7 @@ def validate_active_local_runtime_closures(
 
 def validate_bridge_bindings(
     source: dict[str, object], *, repository_root: Path = ROOT,
-    repository: str = "777genius/universal-agent-plugins",
+    repository: str = DEFAULT_REPOSITORY,
     build_reports: list[dict[str, object]] | None = None,
 ) -> None:
     """Bind every local bridge release to one recipe and one build result.
@@ -1582,7 +1584,7 @@ def _positive_materialization_clients(
 def validate_directory(
     source: dict[str, object], *, verify_packages: bool = True,
     repository_root: Path = ROOT,
-    repository: str = "777genius/universal-agent-plugins",
+    repository: str = DEFAULT_REPOSITORY,
     bridge_build_reports: list[dict[str, object]] | None = None,
 ) -> None:
     _validate_source_schema(source)
