@@ -727,3 +727,49 @@ what remains externally gated.
   references the pre-rename repository identity. Rebind it to
   `777genius/universal-agent-plugins` and workflow
   `agentplugins-npm-publish.yml` before attempting the immutable 0.1.37 publish.
+
+## 19. Current site and release checkpoint (2026-09-03)
+
+The rename and public-site integration are now implemented on the CLI main
+branch and verified through the normal GitHub Pages workflow:
+
+- CLI PR #88 merged at `1401e44ac46b5efa870a29193299b4bd560a5060` after the
+  required test, Ubuntu/Windows smoke, documentation, CodeQL, dependency, and
+  vulnerability checks passed. The landing page now presents **Universal Agent
+  Plugins** as the product and shows the explicit one-command lifecycle with
+  comma-separated targets (for example, `--target codex,cursor`).
+- Pages run `33731389982` built and deployed the landing page, docs, and the
+  signed compatibility mirror from one verified staging step. Production
+  checks returned HTTP 200 for `latest.json`, padded signed snapshots and
+  envelopes, the Discovery search projection, and `MIRROR_METADATA.json`.
+- The compatibility mirror generator fix is merged (CLI PR #87,
+  `9440c257b0eb1cf4c84cfac6fd69eda820808902`) and its Actions run
+  `33726683042` passed. This removes the earlier snapshot-path mismatch; the
+  normal Pages workflow now stages the same signed paths on every deployment.
+- Production Registry sequence 27 contains 26 products and 30 distributions.
+  Discovery sequence 27 contains 2,875 schema-conformant records. These are
+  signed index entries and popularity/discovery signals, not manual runtime
+  certification.
+- Release `agentplugins-v0.1.37` is public, non-draft, and contains six native
+  binaries, checksums, and the release manifest. The six-platform proof remains
+  valid at the release commit.
+- No OAuth, vendor-account model turn, or real user project was used. Local
+  checks used disposable homes and synthetic packages; hosted checks used
+  GitHub-hosted runners only.
+
+### Remaining external gate
+
+The only launch-critical item not proven in this checkpoint is the public npm
+install/lifecycle. npm's trusted publisher is still bound to the pre-rename
+repository identity. Once the package owner rebinds it to repository
+`777genius/universal-agent-plugins`, workflow `agentplugins-npm-publish.yml`,
+and environment `npm-agentplugins`, publish one new immutable version and rerun
+the disposable `add`, `info`, `update`, and `remove` flow for explicit
+`codex,cursor,kiro` targets. Until then, documentation must not claim that the
+public npm package is already at 0.1.37.
+
+The static mirror intentionally has no database: the signed Registry and
+Discovery snapshots are generated from committed catalog data and copied into
+the CLI Pages artifact during deployment. Discovery refreshes are therefore
+auditable GitHub Actions changes, while the CLI remains usable with an explicit
+repository/path source even when a package is not in the index.
