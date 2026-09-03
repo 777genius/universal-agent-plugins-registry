@@ -138,6 +138,19 @@ The following facts were re-read from the public repositories on 2026-09-03:
   are green, but it is not part of this launch closure and must be reviewed as a
   release-workflow change before merge.
 
+The exact-tag npm staging rehearsal also passed on GitHub Actions run
+`33737256138` (`agentplugins-v0.1.37`, `publish=false`). It verified the public
+release identity and attestations and produced the expected
+`universal-agent-plugins-0.1.37.tgz` artifact:
+
+```text
+integrity: sha512-F0Eq6dm8oLuobLspT0dKjt+cj5uVjsHdsIAEa3yhQkkYz7IWbWk7EAY/6gw/jweXrPGG/eTslmS0/U2mSvoL4A==
+shasum:    4f870572aa3e197764fc7aa9d65cfd81dacbbb03
+```
+
+This proves release staging only; it does not claim that npm has accepted the
+package or issued public provenance.
+
 ## 5. Remaining launch gate
 
 Only the npm cutover is still externally gated:
