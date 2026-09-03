@@ -394,7 +394,8 @@ jobs:
               assert release["tree_digest"] == data["tree_digest"] == "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed"
               assert release["manifest_digest"] == data["manifest_digest"] == "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265"
               source = release["package_source"]
-              assert source["repository"] == "777genius/universal-agent-plugins-registry" and source["path"] == "plugins/chrome-devtools"
+              expected_repository = os.environ.get("UAP_ACTIVE_REPOSITORY", "777genius/universal-agent-plugins")
+              assert source["repository"] == expected_repository and source["path"] == "plugins/chrome-devtools"
               assert len(source["revision"]) == 40 and int(source["revision"], 16) >= 0
               assert data["revision"] == installation["source"]["resolved_revision"] == source["revision"]
               assert installation["source"]["package_subpath"] == source["path"]
