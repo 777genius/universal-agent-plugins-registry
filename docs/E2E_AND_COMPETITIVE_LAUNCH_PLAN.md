@@ -151,6 +151,13 @@ shasum:    4f870572aa3e197764fc7aa9d65cfd81dacbbb03
 This proves release staging only; it does not claim that npm has accepted the
 package or issued public provenance.
 
+The staged tarball was then installed into a fresh disposable project and run as
+`agentplugins 0.1.37`. A synthetic package completed `add -> info -> update ->
+repair -> remove` for explicit `codex,cursor` targets; every operation returned
+success, the final `list` was empty, and retained data was explicitly purged in
+the same sandbox. This proves the exact staged bytes and clean-project lifecycle;
+it is not evidence that the public npm registry has accepted `0.1.37`.
+
 ## 5. Remaining launch gate
 
 Only the npm cutover is still externally gated:
@@ -299,6 +306,8 @@ as environment limitations, not fixed by changing production contracts.
 - [x] Public CLI Discovery search works without package execution.
 - [x] Public npm `0.1.35` add/info/update/repair/remove proof exists for explicit
       Codex/Cursor targets in a fresh home.
+- [x] Exact staged `0.1.37` tarball lifecycle passes in a fresh disposable
+      project for explicit Codex/Cursor targets; retained data is purged.
 - [x] Local/exact Git installs and fail-closed trust separation are covered by CI.
 - [x] Multi-target planning, rollback, ownership cleanup, and no-real-project
       safety contracts are covered by focused tests and CI.
