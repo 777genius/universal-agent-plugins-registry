@@ -35,8 +35,8 @@ The CLI repository is the product home and npm facade source. Its facade install
 `universal-agent-plugins` is the npm package; `agentplugins` is the installed
 command. The CLI's `upstream`, `community bridge`, `community`, and `direct source`
 labels describe where a package came from. A catalog entry is not official vendor
-software, and it is not an official vendor package. A `materialized or installed package does not by
-itself prove` that its service, OAuth flow, or runtime tool call works.
+software or an official vendor package. A materialized or installed package does
+not by itself prove that its service, OAuth flow, or runtime tool call works.
 
 ## Supported clients
 
