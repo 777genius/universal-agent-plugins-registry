@@ -707,3 +707,23 @@ what remains externally gated.
 4. Only after those gates pass, mark the corresponding acceptance items in
    Section 14 complete. Discovery popularity is an index signal, not runtime
    certification.
+
+## 18. Follow-up checkpoint after the 0.1.37 release (2026-09-03)
+
+- PR #86 is merged at CLI main `d46dd76feda39177a5f7fccd45419a13b2a6db8f`.
+  Release run `33725125998` passed validation, six native platform runtime
+  proofs, aggregate verification, and promotion. Public release
+  `agentplugins-v0.1.37` is non-draft and contains the six binaries, checksums,
+  and release manifest.
+- The compatibility mirror workflow `33725342015` completed successfully, but
+  a post-deploy contract check found that its generator wrote snapshots beside
+  `latest.json` while the signed pointer names `snapshots/<stem>.json`. PR #87
+  fixes the generator to emit the exact signed paths and adds a regression test;
+  do not claim old-path compatibility until that PR is merged and the mirror is
+  rerun.
+- The six-platform proof is an exact staged-package/native-binary proof. Public
+  npm installation and lifecycle remain blocked only by npm trusted-publisher
+  configuration: the package is already owned at npm, but its publisher still
+  references the pre-rename repository identity. Rebind it to
+  `777genius/universal-agent-plugins` and workflow
+  `agentplugins-npm-publish.yml` before attempting the immutable 0.1.37 publish.
