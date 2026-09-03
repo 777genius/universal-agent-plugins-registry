@@ -32,6 +32,12 @@ can name several agents, but it never changes every detected client silently.
 
 The CLI repository is the product home and npm facade source. Its facade installs the `agentplugins` binary; `plugin-kit-ai` remains the shared Go implementation engine during the staged rename, and the engine is not duplicated in this registry.
 
+`universal-agent-plugins` is the npm package; `agentplugins` is the installed
+command. The CLI's `upstream`, `community bridge`, `community`, and `direct source`
+labels describe where a package came from. A catalog entry is not official vendor
+software, and it is not an official vendor package. A `materialized or installed package does not by
+itself prove` that its service, OAuth flow, or runtime tool call works.
+
 ## Supported clients
 
 |  |  |  |
@@ -61,12 +67,17 @@ All 26 packages pass standard schema validation. Historical evidence includes
 Installation coverage is broader than runtime coverage; see the test matrix and
 verification report for exact boundaries.
 
-The CLI is not limited to this Directory. External packages do not need to be
-copied into it. Use a local package or a pinned GitHub source:
+Evidence is intentionally separated: runtime-tested, OAuth-tested, read-only,
+and not-proven are different claims. Figma OAuth was tested separately in Codex
+only. ChatGPT and Copilot claims are narrower and follow the client-specific
+activation steps shown in the matrix.
+
+The CLI is not limited to this Directory. External packages do not need to be copied into it. Use a local package or a pinned GitHub source:
 
 ```bash
 npx universal-agent-plugins add ./my-plugin --target cursor
-npx universal-agent-plugins add owner/repository@0123456789abcdef0123456789abcdef01234567//path/to/plugin --target cursor
+SOURCE=owner/repository@0123456789abcdef0123456789abcdef01234567//path/to/plugin
+npx universal-agent-plugins add "$SOURCE" --target cursor
 ```
 
 ## Submit a package
