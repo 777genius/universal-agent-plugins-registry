@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { chromium, expect } from '@playwright/test'
 
 const base = new URL(process.env.PUBLIC_SITE_ORIGIN ?? 'https://777genius.github.io/universal-agent-plugins-registry/')
+if (!base.pathname.endsWith('/')) base.pathname += '/'
 const evidenceRoot = process.env.EVIDENCE_ROOT
 assert(evidenceRoot, 'EVIDENCE_ROOT is required')
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
