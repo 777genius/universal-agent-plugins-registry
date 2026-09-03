@@ -349,9 +349,7 @@ and protection against turning unreviewed results into short-name defaults.
 - Schema validation, prepared files, and native projection are not runtime
   passes. Runtime requires discovery, a bounded read-only call where applicable,
   and cleanup.
-- Kiro ACP 2.20.0 capability probes are recorded separately; capability probes do
-  not replace the five-result launch matrix. Their sequence is not asserted until
-  the ordered external evidence exists.
+- Kiro ACP 2.20.0 capability probes are recorded separately; capability probes do not replace the five-result launch matrix. Their sequence is not asserted until the ordered external evidence exists.
 - ChatGPT remains a separately scoped client claim; Cloudflare Docs evidence does
   not generalize to all packages or ChatGPT Work.
 
