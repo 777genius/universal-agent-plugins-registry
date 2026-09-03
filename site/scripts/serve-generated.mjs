@@ -3,7 +3,9 @@ import { createServer } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
 
 const root = resolve(process.cwd(), '.output/public')
-const base = '/universal-agent-plugins/'
+const base = (process.env.NUXT_APP_BASE_URL ?? '/universal-agent-plugins-registry/')
+  .replace(/^\/?/, '/')
+  .replace(/\/?$/, '/')
 const mime = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
