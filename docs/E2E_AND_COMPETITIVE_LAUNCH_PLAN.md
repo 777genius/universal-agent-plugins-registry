@@ -100,7 +100,7 @@ public tuple is:
 
 - CLI main: `8d97867c5c8be2f0652d78fed62f0f1f8f82dcb6` (public E2E hardening
   merged after the 0.1.44 release).
-- Registry main: `7bac02c4243b2094427aaf79fa78ebadd62abdc0`.
+- Registry main: `71663a043bb7c3e79e485fd5c494434d1771a864`.
 - Public GitHub release: [`agentplugins-v0.1.44`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.44), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
 - npm: `universal-agent-plugins@0.1.44` is public and is the `latest` tag. The
   Trusted Publisher workflow is working; no token workaround is used.
@@ -114,12 +114,13 @@ public tuple is:
   from a fresh home without executing an indexed package.
 - A fresh isolated exact-source lifecycle passed for `context7` on OpenCode:
   `add -> info -> repair -> remove`. Repair restored a deliberately modified
-  managed file from the pinned source commit, and remove left no active client
-  binding while retaining ownership-verified data.
+  client projection from the pinned source commit, and remove left no active
+  client binding while retaining ownership-verified data.
 - The public npm workflow proves synthetic multi-target
   `add -> info -> update -> remove` for explicit `codex,cursor,kiro` targets.
   The merged E2E hardening workflow also proves immutable-source repair for a
-  reviewed public package; this applies to future publishes after 0.1.44.
+  reviewed public package in the future-publish lane; the 0.1.44 package itself
+  remains immutable.
 - No real user project, OAuth credential, vendor account, Docker container, new
   VM, LXC instance, or snapshot was used. Heavy checks ran on GitHub-hosted CI;
   local checks used disposable homes and synthetic or public reviewed packages.
@@ -317,13 +318,13 @@ as manually runtime-tested unless the corresponding E2E evidence is present.
 ```text
 CLI main SHA: 8d97867c5c8be2f0652d78fed62f0f1f8f82dcb6
 GitHub release/tag: agentplugins-v0.1.44 (six platform builds and native runtime E2E green)
-Registry main SHA: 7bac02c4243b2094427aaf79fa78ebadd62abdc0
+Registry main SHA: 71663a043bb7c3e79e485fd5c494434d1771a864
 Directory: sequence 29, publication 33768064981, snapshot sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1
 Directory source/ledger: 1388c89521bca4b53454776b584ee0c4996b31c0 / a08ffff17deafe1a01098fc46d847c827e025f5c
 Discovery: sequence 30, 2,875 records, HTTP 200 pointers/snapshot/envelope/search
 Catalog readiness: 260 explicit target rows, 4 MCP package probes, 11 source-policy cases, all passed in fresh credential-free roots
 Pages: HTTP 200, 68 same-origin assets checked, 0 asset failures, 0 legacy-base references
 CLI search: public Directory/Discovery sequence 30, deterministic results, reviewed context7 first
-npm: 0.1.44 public latest with Trusted Publisher provenance; synthetic 3-target lifecycle and immutable-source repair proof green
+npm: 0.1.44 public latest with Trusted Publisher provenance; synthetic 3-target lifecycle and merged future-publish immutable-source repair lane green
 OAuth/account runtime: not claimed by this checkpoint
 ```
