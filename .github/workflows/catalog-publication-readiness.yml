@@ -20,6 +20,10 @@ permissions:
   contents: read
 
 env:
+  # Reusable workflows do not inherit caller-level env values. Keep the
+  # repository identity explicit so the fail-closed context check cannot fall
+  # back to the legacy catalog name during production readiness.
+  UAP_ACTIVE_REPOSITORY: 777genius/universal-agent-plugins-registry
   PUBLICATION_ID: ${{ inputs.publication_id }}
   PUBLICATION_SEQUENCE: ${{ inputs.sequence }}
   SNAPSHOT_DIGEST: ${{ inputs.snapshot_digest }}
