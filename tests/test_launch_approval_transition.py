@@ -96,7 +96,7 @@ class LaunchApprovalTransitionTests(unittest.TestCase):
 
     def _validate(
         self, current: str, marker: str | None = None,
-        repository: str = "777genius/universal-agent-plugins",
+        repository: str = "777genius/universal-agent-plugins-registry",
         environment: str = "directory-publication",
     ) -> str:
         return launch_approval.validate(

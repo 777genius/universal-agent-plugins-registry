@@ -1961,7 +1961,7 @@ with tempfile.TemporaryDirectory() as temporary:
         observation = {
             "schema_version": 2, "kind": "binary", "os": "linux", "architecture": "amd64",
             "node_major": None, "executed": True, "version": "0.1.24",
-            "catalog_repository": e2e.TRUSTED_CATALOG_REPOSITORY, "catalog_sha": "b" * 40,
+            "catalog_repository": "777genius/universal-agent-plugins-registry", "catalog_sha": "b" * 40,
             "cli_release_repository": e2e.TRUSTED_CLI_RELEASE_REPOSITORY,
             "cli_release_tag": e2e.TRUSTED_CLI_RELEASE_TAG,
             "github_release_identity": {
@@ -2060,7 +2060,7 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertIn("/registry/directory.json text eol=lf", attributes)
         self.assertIn("/tests/e2e/launch-scenarios.json text eol=lf", attributes)
         config = e2e.read_production_config()
-        self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins")
+        self.assertEqual(config["catalog_repository"], "777genius/universal-agent-plugins-registry")
         self.assertEqual(config["cli_release_repository"], "777genius/plugin-kit-ai")
         self.assertEqual(config["cli_release_tag"], "agentplugins-v0.1.24")
         self.assertEqual(config["cli_release_commit"], e2e.TRUSTED_CLI_RELEASE_COMMIT)
@@ -2089,16 +2089,17 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertEqual(frozen_v1["properties"]["cli_release_tag"]["const"], "agentplugins-v0.1.18")
         self.assertNotIn("repository", config)
         observer = json.loads((ROOT / "deploy/uap-observer.json").read_text())
+        catalog_repository = config["catalog_repository"]
         self.assertEqual(observer["cli_release_tag"], e2e.TRUSTED_CLI_RELEASE_TAG)
         self.assertEqual(observer["policies"], [{
-            "repository": e2e.TRUSTED_CATALOG_REPOSITORY,
+            "repository": catalog_repository,
             "repository_id": e2e.TRUSTED_CATALOG_REPOSITORY_ID,
             "repository_owner_id": e2e.TRUSTED_CATALOG_REPOSITORY_OWNER_ID,
             "ref": e2e.TRUSTED_OBSERVER_REF,
             "ref_type": "branch",
             "environment": e2e.TRUSTED_OBSERVER_ENVIRONMENT,
-            "workflow_ref": e2e.TRUSTED_OBSERVER_WORKFLOW_REF,
-            "job_workflow_ref": e2e.TRUSTED_OBSERVER_JOB_WORKFLOW_REF,
+            "workflow_ref": f"{catalog_repository}/.github/workflows/directory-publication.yml@{e2e.TRUSTED_OBSERVER_REF}",
+            "job_workflow_ref": f"{catalog_repository}/.github/workflows/launch-evidence-e2e.yml@{e2e.TRUSTED_OBSERVER_REF}",
             "workflow": "Signed Directory publication",
             "event_names": ["push", "schedule", "workflow_dispatch"],
             "job_name_suffix": "protected-observer-inputs",

@@ -177,6 +177,8 @@ jobs:
           - {runner: windows-11-arm, os: windows, architecture: arm64, asset: agentplugins_0.1.24_windows_arm64.exe}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     permissions:
       contents: read
       attestations: read
@@ -246,6 +248,8 @@ jobs:
     if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     permissions:
       contents: read
       attestations: read
@@ -349,6 +353,8 @@ jobs:
     needs: [native-release, node22-npm-facade]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     permissions:
       actions: read
       contents: read
@@ -432,6 +438,8 @@ jobs:
     if: inputs.consent && inputs.publication_id != '' && inputs.publication_sequence != '' && inputs.publication_snapshot_digest != '' && inputs.publication_source_commit != '' && inputs.publication_ledger_commit != '' && (inputs.caller_event_name == 'push' || inputs.caller_event_name == 'schedule' || inputs.caller_event_name == 'workflow_dispatch') && inputs.caller_ref == 'refs/heads/main' && inputs.caller_workflow_ref == format('{0}/.github/workflows/directory-publication.yml@refs/heads/main', github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     permissions:
       actions: read
       contents: read
@@ -500,6 +508,8 @@ jobs:
     needs: [node22-npm-facade, aggregate-one-release]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     environment: stable-launch-e2e
     permissions:
       actions: read
@@ -717,6 +727,8 @@ jobs:
     needs: [native-release, node22-npm-facade, aggregate-one-release, protected-observer-inputs]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     permissions:
       actions: read
       contents: read
@@ -870,6 +882,8 @@ jobs:
     needs: [enforced-stable-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     environment: stable-launch-e2e
     permissions:
       actions: read
@@ -953,6 +967,8 @@ jobs:
     needs: [attest-stable-evidence, source-policy-conformance]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
     permissions:
       actions: read
       contents: read

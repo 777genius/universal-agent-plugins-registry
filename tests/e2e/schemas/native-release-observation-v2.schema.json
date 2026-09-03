@@ -11,7 +11,7 @@
     "node_major": {"type": ["integer", "null"]},
     "executed": {"const": true},
     "version": {"const": "0.1.24"},
-    "catalog_repository": {"const": "777genius/universal-agent-plugins"},
+    "catalog_repository": {"const": "777genius/universal-agent-plugins-registry"},
     "catalog_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
     "cli_release_repository": {"const": "777genius/plugin-kit-ai"},
     "cli_release_tag": {"const": "agentplugins-v0.1.24"},

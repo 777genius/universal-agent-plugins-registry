@@ -18,14 +18,14 @@
   "runner_timeout_seconds": 840,
   "policies": [
     {
-      "repository": "777genius/universal-agent-plugins",
+      "repository": "777genius/universal-agent-plugins-registry",
       "repository_id": "1326737541",
       "repository_owner_id": "13103045",
       "ref": "refs/heads/main",
       "ref_type": "branch",
       "environment": "stable-launch-e2e",
-      "workflow_ref": "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main",
-      "job_workflow_ref": "777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
+      "workflow_ref": "777genius/universal-agent-plugins-registry/.github/workflows/directory-publication.yml@refs/heads/main",
+      "job_workflow_ref": "777genius/universal-agent-plugins-registry/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
       "workflow": "Signed Directory publication",
       "event_names": ["push", "schedule", "workflow_dispatch"],
       "job_name_suffix": "protected-observer-inputs"

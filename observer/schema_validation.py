@@ -15,15 +15,15 @@ from .canonical import ARTIFACT_NAMES
 SCHEMA_ROOT = Path(__file__).parents[1] / "tests" / "e2e" / "schemas"
 BASE_URI = "https://uap.invalid/schemas/"
 GITHUB_ATTESTATION_IDENTITY = {
-    "subject": "repo:777genius@13103045/universal-agent-plugins@1326737541:environment:stable-launch-e2e",
-    "repository": "777genius/universal-agent-plugins",
+    "subject": "repo:777genius@13103045/universal-agent-plugins-registry@1326737541:environment:stable-launch-e2e",
+    "repository": "777genius/universal-agent-plugins-registry",
     "repository_owner": "777genius",
     "repository_id": "1326737541",
     "repository_owner_id": "13103045",
     "ref": "refs/heads/main",
     "environment": "stable-launch-e2e",
-    "workflow_ref": "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main",
-    "job_workflow_ref": "777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
+    "workflow_ref": "777genius/universal-agent-plugins-registry/.github/workflows/directory-publication.yml@refs/heads/main",
+    "job_workflow_ref": "777genius/universal-agent-plugins-registry/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
     "workflow": "launch-evidence-e2e.yml",
     "job": "protected-observer-inputs",
 }

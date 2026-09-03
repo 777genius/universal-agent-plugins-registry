@@ -212,7 +212,7 @@ class NativeObservationProducerV2Tests(unittest.TestCase):
                 "commit": native.V2_COMMIT,
                 "assets": {"linux-amd64": {"file": asset_name, "sha256": checksum, "size": len(body)}},
             },
-            "catalog_repository": "777genius/universal-agent-plugins",
+            "catalog_repository": "777genius/universal-agent-plugins-registry",
             "github": {"sha": "a" * 40},
             "cli_release_repository": "777genius/plugin-kit-ai",
             "cli_release_tag": native.V2_TAG,
