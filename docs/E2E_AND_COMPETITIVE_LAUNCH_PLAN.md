@@ -98,9 +98,9 @@ manual certification or runtime proof.
 The previous release and publisher notes remain in Git history. The current
 public tuple is:
 
-- CLI main: `15b1096668eb77b99c563cb61e3077a59c0492a9` (the pending E2E PR is
-  based on this exact main).
-- Registry main: `1388c89521bca4b53454776b584ee0c4996b31c0`.
+- CLI main: `8d97867c5c8be2f0652d78fed62f0f1f8f82dcb6` (public E2E hardening
+  merged after the 0.1.44 release).
+- Registry main: `7bac02c4243b2094427aaf79fa78ebadd62abdc0`.
 - Public GitHub release: [`agentplugins-v0.1.44`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.44), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
 - npm: `universal-agent-plugins@0.1.44` is public and is the `latest` tag. The
   Trusted Publisher workflow is working; no token workaround is used.
@@ -118,20 +118,17 @@ public tuple is:
   binding while retaining ownership-verified data.
 - The public npm workflow proves synthetic multi-target
   `add -> info -> update -> remove` for explicit `codex,cursor,kiro` targets.
-  PR #98 is the in-flight hardening change that adds the immutable-source repair
-  lane to that same workflow; it is not part of the already-published 0.1.44
-  evidence until merged and green.
+  The merged E2E hardening workflow also proves immutable-source repair for a
+  reviewed public package; this applies to future publishes after 0.1.44.
 - No real user project, OAuth credential, vendor account, Docker container, new
   VM, LXC instance, or snapshot was used. Heavy checks ran on GitHub-hosted CI;
   local checks used disposable homes and synthetic or public reviewed packages.
 
 ## 5. Remaining external item
 
-There is no release or npm-authentication blocker. The only in-flight change is
-the reviewed PR that extends the public npm contract job with immutable-source
-repair proof and corrects generated Action references after the repository rename.
-After its required checks pass, merge it normally; it applies to future package
-publishes and does not require another release solely for documentation.
+There is no release, npm-authentication, or code E2E blocker. The public
+repair-proof workflow and renamed Action references are merged. No additional
+release is required solely for this E2E closure.
 
 ## 6. E2E matrix
 
@@ -275,7 +272,6 @@ as environment limitations, not fixed by changing production contracts.
 
 ```text
 re-read exact main/release/feed pointers
-  -> merge the reviewed public repair-proof workflow
   -> keep the signed feeds and npm release tuple immutable
   -> announce only the claims supported by this checklist
 ```
@@ -319,9 +315,9 @@ as manually runtime-tested unless the corresponding E2E evidence is present.
 ### Final production checkpoint (2026-09-03)
 
 ```text
-CLI main SHA: 15b1096668eb77b99c563cb61e3077a59c0492a9
+CLI main SHA: 8d97867c5c8be2f0652d78fed62f0f1f8f82dcb6
 GitHub release/tag: agentplugins-v0.1.44 (six platform builds and native runtime E2E green)
-Registry main SHA: 1388c89521bca4b53454776b584ee0c4996b31c0
+Registry main SHA: 7bac02c4243b2094427aaf79fa78ebadd62abdc0
 Directory: sequence 29, publication 33768064981, snapshot sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1
 Directory source/ledger: 1388c89521bca4b53454776b584ee0c4996b31c0 / a08ffff17deafe1a01098fc46d847c827e025f5c
 Discovery: sequence 30, 2,875 records, HTTP 200 pointers/snapshot/envelope/search
