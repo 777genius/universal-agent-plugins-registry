@@ -1,6 +1,6 @@
 # Universal Agent Plugins: final architecture and E2E launch plan
 
-Status: corrected, implementation-aware plan reviewed 2026-09-03.
+Status: implemented and E2E-closed 2026-09-04.
 
 This is the authoritative plan for the completed repository split and the
 production E2E closure. Historical evidence is kept in Git history; this file
@@ -93,14 +93,16 @@ static Pages mirror is a byte-for-byte verified cache, not a second registry.
 Discovery is an index of schema-conformant packages and popularity signals, not
 manual certification or runtime proof.
 
-## 4. Current production closure (verified 2026-09-03)
+## 4. Current production closure (verified 2026-09-04)
 
 The previous release and publisher notes remain in Git history. The current
 public tuple is:
 
-- CLI main: `8d97867c5c8be2f0652d78fed62f0f1f8f82dcb6` (public E2E hardening
-  merged after the 0.1.44 release).
-- Registry main: `71663a043bb7c3e79e485fd5c494434d1771a864`.
+- CLI main: `b842323c2babfbd984328e637f723a5d8dc7a95d` (public lifecycle E2E
+  hardening and all renamed Action references merged after the 0.1.44 release).
+- Registry evidence checkpoint: `c53462a82183575d8fcf60a81be8cc3c2e719f7a`.
+  This documentation-only closure may advance registry `main` without changing
+  the signed production tuple below.
 - Public GitHub release: [`agentplugins-v0.1.44`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.44), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
 - npm: `universal-agent-plugins@0.1.44` is public and is the `latest` tag. The
   Trusted Publisher workflow is working; no token workaround is used.
@@ -313,12 +315,12 @@ Do not include tokens, cookies, private filesystem paths, account names, or raw
 OAuth material. A package being indexed or schema-valid must never be described
 as manually runtime-tested unless the corresponding E2E evidence is present.
 
-### Final production checkpoint (2026-09-03)
+### Final production checkpoint (2026-09-04)
 
 ```text
-CLI main SHA: 8d97867c5c8be2f0652d78fed62f0f1f8f82dcb6
+CLI main SHA: b842323c2babfbd984328e637f723a5d8dc7a95d
 GitHub release/tag: agentplugins-v0.1.44 (six platform builds and native runtime E2E green)
-Registry main SHA: 71663a043bb7c3e79e485fd5c494434d1771a864
+Registry evidence checkpoint: c53462a82183575d8fcf60a81be8cc3c2e719f7a
 Directory: sequence 29, publication 33768064981, snapshot sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1
 Directory source/ledger: 1388c89521bca4b53454776b584ee0c4996b31c0 / a08ffff17deafe1a01098fc46d847c827e025f5c
 Discovery: sequence 30, 2,875 records, HTTP 200 pointers/snapshot/envelope/search
