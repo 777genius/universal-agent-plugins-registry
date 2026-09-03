@@ -2,11 +2,9 @@
 
 Status: corrected, implementation-aware plan reviewed 2026-09-03.
 
-This is the authoritative plan for the already completed repository split and the
-remaining public E2E closure. It replaces older drafts that treated the rename,
-release `0.1.36`, or Directory sequence 13 as future work. Historical evidence is
-kept in Git history; this file describes the current contract and the shortest
-safe path to completion.
+This is the authoritative plan for the completed repository split and the
+production E2E closure. Historical evidence is kept in Git history; this file
+records the current contract and the exact evidence that is safe to publish.
 
 ## 1. Product boundary
 
@@ -99,20 +97,25 @@ manual certification or runtime proof.
 
 The following facts were re-read from the public repositories on 2026-09-03:
 
-- CLI main: `1401e44ac46b5efa870a29193299b4bd560a5060`.
-- Registry main: `edb9150062276c7087513941a8d25311f6729953`.
-- Public GitHub release: [`agentplugins-v0.1.37`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.37), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
-- Release validation and six-platform run: `33725125998` (green).
-- Pages integration run: `33731389982` (green), including product site and
-  signed compatibility mirror.
-- Registry Directory sequence 27: 26 products and 30 distributions.
-- Registry Discovery sequence 27: 2,875 records. Latest pointers, padded
-  snapshots, envelopes, search projection, and mirror metadata return HTTP 200;
-  local signature verification passes.
+- CLI main: `cb621264b52d326cdd01ec7e3e08cf4b7e96d0bb`.
+- Registry main after publication marker: `79713adc45e300a4be0fb689717efc989d866919`.
+- Public GitHub release: [`agentplugins-v0.1.40`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.40), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
+- Release validation and six-platform runtime E2E: `33771708394` (green).
+- Signed Directory publication: `33768064981` (green), including fresh
+  catalog-only readiness, provenance attestation, Pages promotion, and
+  post-deploy observation.
+- Directory sequence 29: 26 products and 30 distributions. Public snapshot
+  digest: `sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1`.
+  Publication source is `79713adc45e300a4be0fb689717efc989d866919`; the
+  materialized ledger is `a08ffff17deafe1a01098fc46d847c827e025f5c`.
+- Discovery sequence 29: 2,875 records. Latest pointers, padded snapshots,
+  envelopes, search projection, and mirror metadata return HTTP 200; the
+  published signature and object closure verify.
 - The CLI product page is branded **Universal Agent Plugins** and documents
   explicit multi-target commands such as `--target codex,cursor`.
 - The public npm package currently remains `universal-agent-plugins@0.1.35`.
-  `npm view` confirms `latest=0.1.35` and the renamed repository/homepage.
+  `npm view` confirms `latest=0.1.35`. The exact `0.1.39` publish workflow
+  reached npm but was rejected with `ENEEDAUTH`; no token workaround was used.
 - Production CLI search was proven from a fresh home without downloading a
   package:
 
@@ -121,7 +124,7 @@ The following facts were re-read from the public repositories on 2026-09-03:
     --format json --trust all --client codex
   ```
 
-  It returned Directory/Discovery sequence 27, ten deterministic results, and
+    It returned Directory/Discovery sequence 29, ten deterministic results, and
   reviewed `context7` first.
 - Public npm `0.1.35` lifecycle was proven in a fresh canonical `/private/tmp`
   home for explicit `codex,cursor` targets: `add -> info -> update -> repair ->
@@ -158,9 +161,10 @@ success, the final `list` was empty, and retained data was explicitly purged in
 the same sandbox. This proves the exact staged bytes and clean-project lifecycle;
 it is not evidence that the public npm registry has accepted `0.1.37`.
 
-## 5. Remaining launch gate
+## 5. Remaining external item
 
-Only the npm cutover is still externally gated:
+The core Directory/Discovery and CLI E2E closure is complete. The only separate
+external item is npm publication of the newer facade release:
 
 1. In npm package settings, rebind the single Trusted Publisher for
    `universal-agent-plugins` to repository `777genius/universal-agent-plugins`,
@@ -170,10 +174,10 @@ Only the npm cutover is still externally gated:
    The configuration must allow the `npm publish` action.
 2. Read the publisher configuration back before publishing. Do not use a token
    workaround and do not leave two publishers enabled.
-3. Publish one immutable `0.1.37` package from the exact released main commit.
+3. Publish one immutable `0.1.40` package from the exact released main commit.
 4. Verify npm provenance, tarball contents, repository/homepage metadata, and
    the `latest` tag.
-5. Repeat the disposable lifecycle against `0.1.37` for explicit targets. Run
+5. Repeat the disposable lifecycle against `0.1.40` for explicit targets. Run
    successful Codex/Cursor lifecycle on supported runners; where Kiro ACP is not
    available, require an explicit preflight failure with zero mutation rather
    than claiming a runtime pass.
@@ -182,12 +186,11 @@ This gate requires npm owner/settings access. It cannot be completed safely from
 GitHub or the local filesystem alone. No other code change should be made to
 work around it.
 
-The first fully approved publish attempt was run as GitHub Actions
-`33739090061`. Exact release staging and attestation checks passed; the publish
-job reached npm, emitted a signed provenance statement, and npm rejected the
-package upload with `404 Not Found`. `npm view` still reports no `0.1.37` and
-`latest=0.1.35`. This is the expected symptom of a Trusted Publisher/repository
-identity mismatch, not a package or release-integrity failure. No token was used.
+The latest approved publish attempt was run as GitHub Actions
+`33762480326`. Exact release staging and attestation checks passed, but npm
+rejected the upload with `ENEEDAUTH`. `npm view` still reports
+`latest=0.1.35`. This is an npm publisher-configuration issue, not a package or
+release-integrity failure. No token was used.
 
 ## 6. E2E matrix
 
@@ -308,9 +311,9 @@ as environment limitations, not fixed by changing production contracts.
       separate.
 - [x] Agent Plugins 1.0 `plugin.json` is authoritative; `plugin.yaml` is legacy
       authoring input only.
-- [x] Six native `agentplugins-v0.1.37` artifacts, checksums, and manifest are
+- [x] Six native `agentplugins-v0.1.40` artifacts, checksums, and manifest are
       public and verified.
-- [x] Directory 27 and Discovery 27 are signed, complete, public, and distinct;
+- [x] Directory 29 and Discovery 29 are signed, complete, public, and distinct;
       Discovery has 2,875 records at the recorded checkpoint.
 - [x] CLI Pages product site and byte-for-byte compatibility mirror are green.
 - [x] Public CLI Discovery search works without package execution.
@@ -321,22 +324,20 @@ as environment limitations, not fixed by changing production contracts.
 - [x] Local/exact Git installs and fail-closed trust separation are covered by CI.
 - [x] Multi-target planning, rollback, ownership cleanup, and no-real-project
       safety contracts are covered by focused tests and CI.
-- [ ] npm Trusted Publisher is rebound to the renamed CLI repository.
-- [ ] npm `0.1.37` is published with provenance and verified from a clean project.
-- [ ] Post-publish `0.1.37` lifecycle evidence is recorded here.
-- [ ] Final post-cutover smoke is green for GitHub, Pages, Registry, Actions, and
-      npm at the same documented release tuple.
+- [ ] npm Trusted Publisher publish permission is repaired for the renamed CLI
+      repository.
+- [ ] npm `0.1.40` is published with provenance and verified from a clean project.
+- [ ] Post-publish `0.1.40` lifecycle evidence is recorded here.
+- [x] Final GitHub, Pages, Registry, and Actions smoke is green at the Directory
+      sequence 29 production tuple. npm remains the only external item.
 
 ## 11. Delivery order from the current state
 
 ```text
 re-read exact main/release/feed pointers
-  -> npm owner rebinds Trusted Publisher
-  -> publish immutable npm 0.1.37 with provenance
-  -> clean-project multi-target lifecycle
-  -> append exact evidence and digests in a small docs PR
-  -> run required checks and merge
-  -> announce only claims supported by the checklist
+  -> (optional) repair npm Trusted Publisher and publish immutable 0.1.40
+  -> (optional) clean-project 0.1.40 lifecycle
+  -> announce Directory/Discovery and CLI claims already supported by this checklist
 ```
 
 Do not create another registry, database, VM, snapshot, installer engine, or
@@ -357,7 +358,7 @@ wait for a second real consumer or a confirmed repeated compatibility need.
 
 ## 13. Evidence update template
 
-When the npm gate is completed, append one short dated entry containing:
+When the npm item is completed, append one short dated entry containing:
 
 ```text
 CLI main SHA:
@@ -374,3 +375,19 @@ Rollback/failure-path result:
 Do not include tokens, cookies, private filesystem paths, account names, or raw
 OAuth material. A package being indexed or schema-valid must never be described
 as manually runtime-tested unless the corresponding E2E evidence is present.
+
+### Final production checkpoint (2026-09-03)
+
+```text
+CLI main SHA: cb621264b52d326cdd01ec7e3e08cf4b7e96d0bb
+GitHub release/tag: agentplugins-v0.1.40 (six platform builds and native runtime E2E green)
+Registry main SHA: 79713adc45e300a4be0fb689717efc989d866919
+Directory: sequence 29, publication 33768064981, snapshot sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1
+Directory source/ledger: 79713adc45e300a4be0fb689717efc989d866919 / a08ffff17deafe1a01098fc46d847c827e025f5c
+Discovery: sequence 29, 2,875 records, HTTP 200 pointers/snapshot/envelope/search
+Catalog readiness: 260 explicit target rows, 4 MCP package probes, 11 source-policy cases, all passed in fresh credential-free roots
+Pages: HTTP 200, 68 same-origin assets checked, 0 asset failures, 0 legacy-base references
+CLI search: public Directory/Discovery sequence 29, deterministic results, reviewed context7 first
+npm: 0.1.39 publish attempted by Actions but rejected ENEEDAUTH; v0.1.40 GitHub release is green; public npm latest remains 0.1.35
+OAuth/account runtime: not claimed by this checkpoint
+```
