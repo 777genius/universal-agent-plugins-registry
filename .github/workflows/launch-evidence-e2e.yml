@@ -113,6 +113,9 @@ permissions:
   contents: read
 
 env:
+  # Keep live evidence bound to the renamed registry repository. Local fixture
+  # tests intentionally use the historical fallback when this is unset.
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
   AGENTPLUGINS_VERSION: "0.1.24"
 
 concurrency:

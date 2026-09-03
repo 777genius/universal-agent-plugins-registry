@@ -633,9 +633,12 @@ def authoritative_repository_copilot_evidence(
 
 def read_production_config() -> dict[str, Any]:
     value = json.loads(PRODUCTION_CONFIG.read_text())
+    configured_catalog_repository = value.get("catalog_repository")
+    live_catalog_repository = os.environ.get("UAP_ACTIVE_REPOSITORY", "").strip()
     if (
         value.get("schema_version") != 1
-        or value.get("catalog_repository") != TRUSTED_CATALOG_REPOSITORY
+        or configured_catalog_repository != "777genius/universal-agent-plugins-registry"
+        or (live_catalog_repository and configured_catalog_repository != live_catalog_repository)
         or value.get("cli_release_repository") != TRUSTED_CLI_RELEASE_REPOSITORY
         or value.get("cli_release_tag") != TRUSTED_CLI_RELEASE_TAG
         or value.get("cli_release_commit") != TRUSTED_CLI_RELEASE_COMMIT

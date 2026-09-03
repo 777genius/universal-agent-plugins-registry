@@ -10,7 +10,7 @@ for that release dependency.
 
 Live runs take neither repository nor release-tag identity from the caller.
 `tests/e2e/production-launch.json` fixes the catalog repository to
-`777genius/universal-agent-plugins` and the binary release repository/tag to
+`777genius/universal-agent-plugins-registry` and the binary release repository/tag to
 `777genius/plugin-kit-ai` / `agentplugins-v0.1.24` at release ID `379284682`.
 This makes the immutable
 upstream CLI manifest an explicit prerequisite for evidence at the exact catalog

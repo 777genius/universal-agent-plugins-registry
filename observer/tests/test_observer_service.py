@@ -106,14 +106,14 @@ class Fixture:
         numbers = self.rsa_key.public_key().public_numbers()
         self.kid = "fixture-rsa-key"
         self.policy = IdentityPolicy(
-            repository="777genius/universal-agent-plugins",
+            repository="777genius/universal-agent-plugins-registry",
             repository_id="1326737541",
             repository_owner_id="13103045",
             ref="refs/heads/main",
             ref_type="branch",
             environment="stable-launch-e2e",
-            workflow_ref="777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main",
-            job_workflow_ref="777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
+            workflow_ref="777genius/universal-agent-plugins-registry/.github/workflows/directory-publication.yml@refs/heads/main",
+            job_workflow_ref="777genius/universal-agent-plugins-registry/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
             workflow="Signed Directory publication",
             event_names=("push", "workflow_dispatch"),
             job_name_suffix="protected-observer-inputs",
@@ -165,7 +165,7 @@ class Fixture:
     def claims(self, *, jti: str = "fixture-jti-0001", **changes: Any) -> dict[str, Any]:
         claims = {
             "iss": self.config.issuer, "aud": self.config.audience,
-            "sub": "repo:777genius@13103045/universal-agent-plugins@1326737541:environment:stable-launch-e2e",
+            "sub": "repo:777genius@13103045/universal-agent-plugins-registry@1326737541:environment:stable-launch-e2e",
             "iat": self.now - 10, "nbf": self.now - 10, "exp": self.now + 300, "jti": jti,
             "repository": self.policy.repository, "repository_owner": "777genius",
             "repository_id": self.policy.repository_id,
@@ -223,12 +223,12 @@ def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
     digest = "sha256:" + "9" * 64
     observed = "2026-08-23T12:00:00Z"
     github = {
-        "subject": "repo:777genius@13103045/universal-agent-plugins@1326737541:environment:stable-launch-e2e",
-        "repository": "777genius/universal-agent-plugins", "repository_owner": "777genius",
+        "subject": "repo:777genius@13103045/universal-agent-plugins-registry@1326737541:environment:stable-launch-e2e",
+        "repository": "777genius/universal-agent-plugins-registry", "repository_owner": "777genius",
         "repository_id": "1326737541", "repository_owner_id": "13103045",
         "ref": "refs/heads/main", "environment": "stable-launch-e2e",
-        "workflow_ref": "777genius/universal-agent-plugins/.github/workflows/directory-publication.yml@refs/heads/main",
-        "job_workflow_ref": "777genius/universal-agent-plugins/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
+        "workflow_ref": "777genius/universal-agent-plugins-registry/.github/workflows/directory-publication.yml@refs/heads/main",
+        "job_workflow_ref": "777genius/universal-agent-plugins-registry/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
         "sha": "a" * 40, "run_id": "1001", "run_attempt": "2",
         "workflow": "launch-evidence-e2e.yml", "job": "protected-observer-inputs",
         "challenge": challenge,
@@ -276,7 +276,7 @@ def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
     runtime_plugins = ("agent-code-navigator", "context7", "cloudflare-docs", "chrome-devtools")
     external = {
         "schema_version": 1, "challenge": challenge,
-        "catalog_repository": "777genius/universal-agent-plugins",
+        "catalog_repository": "777genius/universal-agent-plugins-registry",
         "fork_owner": "fixture-owner", "fork_repository": "fixture-owner/universal-agent-plugins",
         "pr_number": 123, "pr_url": "https://github.com/777genius/universal-agent-plugins/pull/123",
         "head_sha": "2" * 40, "base_sha": "a" * 40, "merge_commit_sha": None,
@@ -286,7 +286,7 @@ def artifacts(challenge: str = "a" * 64) -> dict[str, Any]:
         "observed_at": observed,
         "immutable_artifact": {"digest": digest, "reference": "urn:" + digest},
         "binding": {
-            "catalog_repository": "777genius/universal-agent-plugins", "catalog_sha": "a" * 40,
+            "catalog_repository": "777genius/universal-agent-plugins-registry", "catalog_sha": "a" * 40,
             "directory_snapshot_digest": "sha256:" + "c" * 64, "directory_sequence": 1,
             "directory_publication_id": "fixture-publication", "directory_source_commit": "4" * 40,
             "release_repository": "777genius/plugin-kit-ai", "release_tag": "agentplugins-v0.1.24",
