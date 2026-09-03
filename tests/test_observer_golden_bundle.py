@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -55,9 +56,16 @@ class GoldenObserverBundleTest(unittest.TestCase):
             harness.github_run_attempt = request["github"]["run_attempt"]
             harness.consent = exact["consent.json"]
             harness.consent_digest = launch.sha256_file(paths["consent.json"])
-            primary = harness._load_attestations(paths["runtime-attestations.json"], allow_external_pr=True)
-            notion = harness._load_attestations(paths["notion-oauth-attestations.json"])
-            chatgpt = harness._load_attestations(paths["chatgpt-cloudflare-attestation.json"])
+            with mock.patch.multiple(
+                launch,
+                TRUSTED_CATALOG_REPOSITORY="777genius/universal-agent-plugins-registry",
+                TRUSTED_OBSERVER_SUBJECT="repo:777genius@13103045/universal-agent-plugins-registry@1326737541:environment:stable-launch-e2e",
+                TRUSTED_OBSERVER_WORKFLOW_REF="777genius/universal-agent-plugins-registry/.github/workflows/directory-publication.yml@refs/heads/main",
+                TRUSTED_OBSERVER_JOB_WORKFLOW_REF="777genius/universal-agent-plugins-registry/.github/workflows/launch-evidence-e2e.yml@refs/heads/main",
+            ):
+                primary = harness._load_attestations(paths["runtime-attestations.json"], allow_external_pr=True)
+                notion = harness._load_attestations(paths["notion-oauth-attestations.json"])
+                chatgpt = harness._load_attestations(paths["chatgpt-cloudflare-attestation.json"])
             self.assertEqual((len(primary), len(notion), len(chatgpt)), (12, 3, 1))
             rows = []
             for record in [*primary.values(), *notion.values(), *chatgpt.values()]:
