@@ -284,7 +284,7 @@ gh api repos/777genius/universal-agent-plugins/commits/main --jq .sha
 gh api repos/777genius/universal-agent-plugins-registry/commits/main --jq .sha
 gh run list --repo 777genius/universal-agent-plugins --limit 20
 gh run list --repo 777genius/universal-agent-plugins-registry --limit 20
-gh release view agentplugins-v0.1.37 --repo 777genius/universal-agent-plugins
+gh release view agentplugins-v0.1.40 --repo 777genius/universal-agent-plugins
 npm view universal-agent-plugins version dist-tags repository.url homepage
 ```
 
