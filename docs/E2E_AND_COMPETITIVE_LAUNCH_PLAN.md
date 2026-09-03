@@ -1,821 +1,337 @@
-# Universal Agent Plugins: repository split, E2E, and launch plan
+# Universal Agent Plugins: final architecture and E2E launch plan
 
-Status: corrected implementation plan, reviewed 2026-09-03
+Status: corrected, implementation-aware plan reviewed 2026-09-03.
 
-This document is the execution contract for the repository rename and the remaining
-end-to-end work. It supersedes the older plan that still described 0.1.18 and
-Directory sequence 13.
+This is the authoritative plan for the already completed repository split and the
+remaining public E2E closure. It replaces older drafts that treated the rename,
+release `0.1.36`, or Directory sequence 13 as future work. Historical evidence is
+kept in Git history; this file describes the current contract and the shortest
+safe path to completion.
 
-This is a gated implementation plan, not an instruction to rename repositories
-immediately. The rename is the final cutover step and may start only after the
-preparation, compatibility, and rollback checks below are green.
+## 1. Product boundary
 
-## 1. Final decision
+The public product has two deliberately separate repositories:
 
-The two public repositories have different jobs:
-
-| Repository | Public role | What lives there |
+| Repository | User-facing job | Authoritative contents |
 | --- | --- | --- |
-| 777genius/universal-agent-plugins | User-facing product | Go CLI engine, lifecycle, adapters, SDK, canonical npm facade, releases, product README |
-| 777genius/universal-agent-plugins-registry | Community catalog | 26 reviewed packages, bridges, signed Directory and Discovery Index, site, submission workflow |
+| [`777genius/universal-agent-plugins`](https://github.com/777genius/universal-agent-plugins) | Install and lifecycle manager | Go engine, Agent Plugins loader, client adapters, SDK, npm facade, releases, product README |
+| [`777genius/universal-agent-plugins-registry`](https://github.com/777genius/universal-agent-plugins-registry) | Community directory | Reviewed packages, community bridges, signed Directory/Discovery feeds, static site, submission workflow |
 
-The current repositories will be renamed in place. GitHub's documented redirects
-cover repository web links and Git clone/fetch/push operations; repository IDs,
-issues, stars, forks, tags, releases, and commit history must be measured in the
-baseline and verified again after each rename:
+The rename is complete and must not be repeated:
 
-~~~text
-777genius/plugin-kit-ai
-  -> 777genius/universal-agent-plugins
-
-777genius/universal-agent-plugins
-  -> 777genius/universal-agent-plugins-registry
-~~~
-
-The rename is staged. GitHub redirects normal repository and Git traffic, but
-project-site URLs are not automatically redirected and Action `uses:` references
-to an action in a renamed repository fail. Reusing the old name also ends the old-name
-redirect, so compatibility must be prepared before the second rename. See the
-official GitHub rename rules:
-https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository
-
-### Non-negotiable invariants
-
-- plugin.json remains the installed Agent Plugins 1.0 package authority.
-- plugin.yaml is legacy authoring input only; it is never installed as part of an
-  Agent Plugin package and cannot override plugin.json.
-- Agent Plugins 1.0 is the production contract. Agent Plugins 1.1 is parse-only
-  experimental coverage until its specification is stable; it is not advertised
-  as production support.
-- universal-agent-plugins is the only active publisher of the npm package with
-  that name. The installed binary remains agentplugins.
-- plugin-kit-ai remains the Go module path for this migration. Do not change
-  go.mod or Go imports in the rename release.
-  The module path is an API contract; see the [Go Modules Reference](https://go.dev/ref/mod#go-mod-file).
-- plugin-kit-ai and plugin-kit-ai-runtime remain separate legacy npm packages.
-- The registry is the only writer of reviewed Directory and Discovery data.
-- Directory and Discovery are optional discovery services, not package
-  requirements. Local paths and immutable Git selectors must keep working when
-  either service is unavailable.
-- A compatibility mirror is a verified byte-for-byte cache of signed feed files,
-  never a second registry and never an independently editable source of truth.
-- A short name resolves only to a reviewed Directory default. Discovery results
-  always use a publisher-qualified exact-SHA selector.
-- Targets are explicit. A command may target several selected clients
-  (--target codex,cursor), but the CLI never silently installs everywhere.
-- Existing add, info, update, repair, switch, outdated, validate, search, and
-  remove lifecycle and rollback semantics remain intact.
-- Schema validity, installation, activation, OAuth, and runtime/tool health are
-  separate evidence states; a green schema or install check never implies a
-  runtime or OAuth pass.
-- No OAuth, telemetry, package execution, Docker, browser, or system-package
-  installation is implicit.
-- Multi-target planning is deterministic and complete before mutation. If one
-  selected client fails, the CLI reports the failing target and rolls back targets
-  already changed, subject to the existing journal/recovery contract.
-
-## 2. Corrections to the previous plan
-
-1. The old 0.1.18 and sequence-13 statements are historical, not the current
-   baseline. A read-only check on 2026-09-03 observed package 0.1.35, Directory
-   sequence 27 with 26 products, and Discovery sequence 25 with 2,676 complete
-   records. These are dated observations only; all pointers, counts, and digests
-   are re-read at cutover and none are predicted.
-2. A Pages mirror alone does not preserve old installations. After the old
-   repository name is reused, an old source such as
-   777genius/universal-agent-plugins@SHA//plugins/context7 would resolve to the
-   CLI repository. Required old registry commits must therefore remain reachable
-   in the renamed CLI repository through a read-only compatibility history branch
-   or tags, and the old CLI must be tested against it.
-3. Downstream Action changes cannot be merged before the target repository exists.
-   Prepare them first, then merge them immediately after the second rename.
-4. A registry source can be upstream or a community bridge. Those states must be
-   explicit in the signed record so a bridge is never presented as an upstream
-   package by accident.
-
-## 3. Options
-
-### Option A - staged in-place rename with compatibility history and mirror (selected)
-
-🎯 10/10   🛡️ 9/10   🧠 7/10
-Approximate meaningful changes: 2,500-4,500 lines plus generated artifacts.
-
-This delivers the requested public identity while retaining repository IDs and
-history. The unavoidable risk is a short cutover window for Pages, Actions, and
-external links.
-
-### Option B - keep current names and create a new CLI repository
-
-🎯 8/10   🛡️ 10/10   🧠 5/10
-Approximate changes: 1,500-3,000 lines.
-
-Safer redirects, but it leaves two similarly named products and does not deliver
-the requested primary repository name.
-
-### Option C - move the complete engine into a new monorepo
-
-🎯 6/10   🛡️ 7/10   🧠 10/10
-Approximate changes: 10,000-20,000 lines.
-
-Unnecessary migration of the Go module, legacy generators, package workflows, and
-external consumers. Rejected for this launch.
-
-## 4. Phase 0 - immutable baseline and freeze
-
-### Steps
-
-1. Use fresh shallow clones for inspection and clean implementation worktrees;
-   never use a dirty checkout as authoritative state.
-2. Record a secret-free migration manifest with repository IDs, old and target
-   names, exact main SHAs, tags, releases, branch protection, environments,
-   Pages source/custom domains, Apps, webhooks, deploy keys, Action paths,
-   npm metadata/trusted publisher, and active workflow runs.
-3. Record the exact Directory and Discovery pointers, signed sequences,
-   source commits, snapshot/envelope/search digests, signing key IDs, and every
-   package source repository/SHA/path needed by existing installations.
-4. Confirm universal-agent-plugins-registry is still unused immediately before
-   the first rename. Do not create a placeholder repository.
-5. Freeze release and Directory/Discovery publication dispatches for the short
-   rename window. Keep ordinary PR validation enabled.
-6. Audit open PRs and Dependabot branches. Refresh or close failed stale updates
-   after the new identity is stable; never merge them as part of cutover.
-7. Check hosting capacity. Current hosts are above the 80% disk safety threshold,
-   so GitHub-hosted CI and lightweight disposable local tests are the default.
-   Do not create another VM, LXC, snapshot, or delete foreign data.
-
-Store the complete secret-free manifest as a short-lived private CI/release
-artifact and retain its SHA-256 plus a redacted checklist in the migration issue.
-Never commit tokens, cookies, private paths, or account identifiers. The artifact
-must be sufficient to reproduce every pre/post comparison without exposing
-credentials.
-
-### Acceptance
-
-- The manifest is reproducible without secrets.
-- No active writer can publish against a moving identity.
-- Every old package source required for compatibility has an exact SHA and path.
-
-## 5. Phase 1 - prepare the CLI repository before rename
-
-Work in plugin-kit-ai while it still has its current name. Keep changes in focused
-PRs under roughly 2,000 changed lines.
-
-### Canonical npm facade
-
-- Make npm/agentplugins the sole source for the universal-agent-plugins package.
-- Port the current hardened facade from the registry package with attribution and
-  a source-commit note; remove the stale duplicate only after smoke tests pass.
-- Keep plugin-kit-ai and plugin-kit-ai-runtime package names and workflows.
-- Keep package name universal-agent-plugins, binary agentplugins, and the one-command UX:
-
-~~~bash
-npx universal-agent-plugins add context7 --target cursor
-~~~
-
-### Product README and metadata
-
-Adapt the clear structure and language of the current catalog README; do not copy
-catalog-only claims literally. The first screen explains installer/lifecycle
-manager, then shows one command, multi-target examples, supported clients,
-update/repair/remove, troubleshooting, and a registry link.
-
-Update description, topics, badges, issue/security links, npm repository/homepage/
-bugs fields, and all active product links. State that client activation and OAuth
-remain client-specific and that a 2,500+ Discovery count is not runtime proof.
-
-### Standard loader and conformance boundary
-
-- Keep the lossless Agent Plugins 1.0 package model (`plugin.json`, `mcp.json`,
-  skills, and supported components) separate from client adapters.
-- Run a pinned Agent Plugins 1.0 conformance corpus in CI for every loader change.
-  Keep the corpus revision and pass/fail totals in the evidence artifact; do not
-  publish a claim to an external discussion without explicit maintainer approval.
-- A CI-only Agent Plugins 1.1 inspection lane may report how a working-draft
-  fixture would be handled. The production loader continues to reject 1.1 and
-  the lane must not change production resolution, signing, or short-name defaults
-  until the 1.1 specification is published and separately reviewed.
-
-### Release and Pages preparation
-
-- Replace hard-coded release URLs with GITHUB_REPOSITORY or a checked repository-ID
-  allowlist accepting both names only during migration.
-- Keep release tag prefixes and legacy package workflows stable.
-- Make site base path and repository URL environment-driven.
-- Add the compatibility feed job described in Phase 3, but do not deploy it until
-  a post-rename signed registry snapshot has been verified.
-- Keep signing and npm credentials out of pull-request jobs.
-
-### Preserve old registry Git objects
-
-Before the registry name is reused:
-
-1. Fetch registry main and any non-main refs containing every old package source
-   SHA and the current npm provenance source commit.
-2. Push those objects into the future CLI repository under a protected,
-   read-only branch such as compat/registry-history-before-rename.
-3. Add immutable compatibility tags only for source SHAs not reachable from that
-   branch. This branch is never a build or publication input.
-4. Verify from the public repository that every old repository@SHA//path can be
-   fetched and that its plugin.json tree digest matches the recorded Directory
-   release.
-
-This preserves source addressability, not every old GitHub web URL. Historical
-PR, issue, Action, and release links may still need updating after name reuse.
-
-## 6. Phase 2 - prepare the registry repository
-
-Work in the current universal-agent-plugins repository.
-
-- Change active configs, schemas, site metadata, badges, submission docs, and
-  workflow self-checks to 777genius/universal-agent-plugins-registry.
-- Change canonical Pages URL to
-  https://777genius.github.io/universal-agent-plugins-registry/.
-- Update package source metadata for packages physically kept in this repository.
-  Regenerate records only in a new signed sequence after cutover.
-- Keep the root README about the community directory and link to the CLI.
-- Disable the registry-side npm publisher after the engine facade is verified;
-  never leave two workflows able to publish the same package.
-- Keep the static generated Discovery index and last-known-good pointer. Do not
-  add a database or API service in this phase.
-
-### Registry source model and precedence
-
-- `upstream` means the pinned upstream repository commit physically contains the
-  package's standard files. A `community-bridge` is a generated
-  plugin.json/mcp.json package built from a pinned upstream commit while an
-  upstream packaging PR is pending. A bridge is not a fork of the runtime source.
-- A bridge records its upstream repository, exact commit, package path, generated
-  file digests, and attribution. The registry owns the generated bridge metadata;
-  it does not silently copy or execute upstream code.
-- For a reviewed short name, an `upstream` record wins over a bridge only in a
-  newly signed Directory sequence after the upstream files and tests are verified.
-  The previous bridge sequence remains immutable. If two records disagree on an
-  ID, path, or digest, publication fails closed and requires an explicit mapping
-  decision; there is no arbitrary last-write-wins behavior.
-- Discovery never receives short-name precedence. It always exposes a
-  publisher-qualified repository, exact commit, and package path.
-
-Historical snapshots, envelopes, ledger tags, release assets, attestations, and
-evidence are immutable. They are never rewritten just to change a URL.
-
-## 7. Phase 3 - compatibility contract
-
-### Old CLI feed paths
-
-The current 0.1.35 binary defaults to:
-
-~~~text
-https://777genius.github.io/universal-agent-plugins/registry/schemas/1/
-https://777genius.github.io/universal-agent-plugins/discovery/
-~~~
-
-After the second rename those paths belong to the CLI Pages site. It must publish
-the exact signed Directory and Discovery trees at those paths, including pointers,
-snapshots, envelopes, keys, and search projections. The root HTML may be the CLI
-product page; JSON paths remain compatibility assets.
-
-### New CLI defaults
-
-The renamed CLI release changes production defaults to:
-
-~~~text
-https://777genius.github.io/universal-agent-plugins-registry/registry/schemas/1/
-https://777genius.github.io/universal-agent-plugins-registry/discovery/
-~~~
-
-AGENTPLUGINS_DIRECTORY_ORIGIN and AGENTPLUGINS_DISCOVERY_ORIGIN remain available
-for tests and private mirrors. Production defaults are never changed by a remote
-response.
-
-### Mirror rules
-
-- The registry is the only writer. After a successful registry Pages publication,
-  its workflow sends a `repository_dispatch` event containing the exact source
-  commit and Directory/Discovery sequences. A scheduled or manual reconciliation
-  job is a fallback for a lost event; it never advances a mirror from an
-  unverified or older source.
-- The dispatch payload is only a wake-up hint. The mirror job re-fetches public
-  pointers and verifies their signatures and digests; it never trusts a payload
-  to identify or authorize bytes, and it never dispatches back to the registry.
-- The job fetches the public pointer, verifies signature, sequence, key ID,
-  source commit, and digest, then copies bytes without reserialization.
-- It stages the complete candidate tree, validates every referenced object, and
-  swaps the Pages artifact only after all checks pass. Invalid, incomplete,
-  expired, or unverifiable candidates abort before Pages deployment and leave the
-  previous mirror active.
-- The mirror job has no signing key and cannot alter reviewed mappings.
-- The active mirrored sequence and source commit are recorded in a small
-  machine-readable marker so a delayed event cannot overwrite a newer mirror.
-- Capture the first compatibility mirror before the second rename and test it
-  immediately after cutover.
-
-Preserved: old feed paths, old exact source SHAs/paths, installed state and
-recorded distribution, and normal Git clone/fetch/push redirects while GitHub
-still provides them.
-
-Not promised: old web routes after name reuse, automatic source switching, or
-historical provenance rewritten as if it came from the new repository ID.
-
-## 8. Phase 4 - cutover sequence
-
-Merge the CLI and registry preparation PRs, require green checks, and capture
-their exact merge SHAs before starting either rename. The rename window has no
-open migration patch that still changes release identity.
-
-The two rename calls are independent. Stop on any mismatch.
-
-### Step 1 - rename the registry
-
-~~~text
+```text
+plugin-kit-ai           -> universal-agent-plugins
 universal-agent-plugins -> universal-agent-plugins-registry
-~~~
+```
 
-Poll until the original repository ID is visible under the new name. Verify
-branch, PRs, issues, environments, Pages, releases, tags, and the new Pages URL.
-Publish no new sequence until these checks pass.
+The original GitHub repository IDs and commit history are retained. The Go module
+path remains `github.com/777genius/plugin-kit-ai`; changing it is a separate,
+breaking API migration and is not part of this launch.
 
-### Step 2 - rename the CLI engine
+### Non-negotiable contracts
 
-~~~text
-plugin-kit-ai -> universal-agent-plugins
-~~~
+- `plugin.json` is the installed Agent Plugins 1.0 package authority.
+- `mcp.json`, skills, and supported components are loaded losslessly before a
+  client adapter is selected.
+- `plugin.yaml` is legacy `plugin-kit-ai` authoring input only. It is not part of
+  an installed Agent Plugin and cannot override `plugin.json`.
+- Agent Plugins 1.1 is parse-only experimental coverage until its specification
+  is stable. It cannot affect signing, short-name defaults, or production install.
+- The CLI command is `agentplugins`; the npm facade is
+  `universal-agent-plugins`. The facade delegates to the checked Go binary.
+- A short name resolves only to a reviewed Directory default. Discovery results
+  always retain publisher, repository, exact commit, package path, and digest.
+- Targets are explicit. `--target codex,cursor` means those two clients; the CLI
+  never silently installs into every detected client.
+- Directory/Discovery are optional discovery services. Explicit local paths and
+  immutable Git selectors continue to work when either feed is unavailable.
+- Schema validity, preparation, installation, activation, OAuth, and runtime
+  health are separate evidence states. No green schema check is a runtime claim.
+- No OAuth, telemetry, package execution, Docker, or system-package installation
+  is implicit.
+- Multi-target planning is complete before mutation. If a selected target fails,
+  changed targets are rolled back using the existing journal/recovery contract.
 
-Verify the original engine repository ID, Go source, tags/releases, legacy
-packages, Action path, environments, and Pages settings. Dispatch the prepared
-compatibility Pages build.
+## 2. Architecture decision
 
-### Step 3 - update consumers
+### Selected: split product and registry, shared lifecycle engine
 
-GitHub does not redirect `uses:` calls to an action in a renamed repository. Merge
-the prepared updates in every internal consumer found by the Phase 0 manifest
-and a fresh `rg`/GitHub audit (13 was the initial observation, not a fixed
-allowlist) from
-777genius/plugin-kit-ai/... to 777genius/universal-agent-plugins/.... Keep the
-action directory name setup-plugin-kit-ai for now; renaming that path is a
-separate breaking-change decision. Warn external Action consumers in release
-notes.
+🎯 10/10   🛡️ 9/10   🧠 4/10  Approximate maintenance scope: 0-600 lines per
+release/compatibility change.
 
-### Step 4 - restore publication
+The CLI owns parsing, planning, lifecycle, rollback, and client adapters. The
+registry owns reviewed metadata and generated signed feeds. The registry never
+duplicates the Go engine or npm facade.
 
-After both repositories and Pages are verified:
+### Rejected alternatives
 
-1. Rebind the single npm trusted-publisher configuration for
-   `universal-agent-plugins` from the old repository/workflow to the renamed
-   repository and exact workflow/environment, then read it back and verify the
-   OIDC workflow identity before publishing. Do not delete the old configuration
-   first and leave a gap; npm allows one trusted publisher per package and the
-   existing configuration can be edited in place. See
-   https://docs.npmjs.com/trusted-publishers/.
-2. Verify Apps, webhooks, deploy keys, and environment references.
-3. Re-enable registry publication and Discovery schedules.
+1. **Move the complete engine and catalog into one monorepo.**
+   🎯 6/10   🛡️ 7/10   🧠 10/10  Approx. 10,000-20,000 lines. This needlessly
+   changes the Go module, legacy packages, release graph, and external consumers.
+2. **Keep a second CLI implementation in the registry.**
+   🎯 4/10   🛡️ 5/10   🧠 8/10  Approx. 1,000-3,000 lines. Two installers would
+   drift in state, rollback, security fixes, and release provenance.
 
-## 9. Phase 5 - release and signed data
+## 3. Source and trust model
 
-### CLI release 0.1.36
+The registry has three distinct source states:
 
-0.1.35 remains immutable. Release 0.1.36 from the renamed CLI repository with new
-defaults and metadata.
+- **upstream**: the pinned upstream repository itself contains the standard files;
+- **community bridge**: generated `plugin.json`/`mcp.json` metadata built from a
+  pinned upstream commit while an upstream packaging PR is pending;
+- **local/exact**: a user-provided path or immutable Git selector, outside the
+  reviewed short-name namespace.
 
-Required evidence:
+A bridge is not a fork of upstream runtime code. Its signed record stores the
+upstream URL, exact commit, package path, generated-file digests, attribution, and
+bridge status. Promotion from bridge to upstream is a new signed Directory
+sequence; historical bridge bytes are immutable.
 
-- one exact source commit for all six native artifacts;
-- checksums and release manifest match every downloaded artifact;
-- npm tarball contains the canonical facade and has trusted-publisher provenance;
-- clean-project bootstrap on supported macOS, Linux, and Windows;
-- add -> info -> update -> repair -> remove in a disposable sandbox for explicit
-  codex,cursor,kiro targets;
-- no real user project, OAuth token, cookie, or private identity.
-- one deliberate multi-target failure in a disposable home proving no partial
-  client state remains after rollback.
+The registry is the only writer of reviewed Directory and Discovery data. The
+static Pages mirror is a byte-for-byte verified cache, not a second registry.
+Discovery is an index of schema-conformant packages and popularity signals, not
+manual certification or runtime proof.
 
-### New signed sequences
+## 4. Implemented baseline (verified)
 
-From the renamed registry:
+The following facts were re-read from the public repositories on 2026-09-03:
 
-1. Append a new signed Directory sequence; do not edit historical sequence 27.
-2. Generate the next complete Discovery sequence from the exact registry main;
-   preserve the previous pointer on a partial scan.
-3. Deploy Pages and verify pointers, signatures, keys, source commit, and digests.
-4. Refresh the CLI compatibility mirror from those exact public bytes.
+- CLI main: `1401e44ac46b5efa870a29193299b4bd560a5060`.
+- Registry main: `edb9150062276c7087513941a8d25311f6729953`.
+- Public GitHub release: [`agentplugins-v0.1.37`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.37), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
+- Release validation and six-platform run: `33725125998` (green).
+- Pages integration run: `33731389982` (green), including product site and
+  signed compatibility mirror.
+- Registry Directory sequence 27: 26 products and 30 distributions.
+- Registry Discovery sequence 27: 2,875 records. Latest pointers, padded
+  snapshots, envelopes, search projection, and mirror metadata return HTTP 200;
+  local signature verification passes.
+- The CLI product page is branded **Universal Agent Plugins** and documents
+  explicit multi-target commands such as `--target codex,cursor`.
+- The public npm package currently remains `universal-agent-plugins@0.1.35`.
+  `npm view` confirms `latest=0.1.35` and the renamed repository/homepage.
+- Production CLI search was proven from a fresh home without downloading a
+  package:
 
-### Old/new compatibility E2E
+  ```bash
+  AGENTPLUGINS_HOME=<fresh-temp-home> agentplugins search context7 \
+    --format json --trust all --client codex
+  ```
 
-In fresh disposable homes and projects:
+  It returned Directory/Discovery sequence 27, ten deterministic results, and
+  reviewed `context7` first.
+- Public npm `0.1.35` lifecycle was proven in a fresh canonical `/private/tmp`
+  home for explicit `codex,cursor` targets: `add -> info -> update -> repair ->
+  remove -> list`, with zero active installations at the end. Remove retained
+  ownership-verified data and reported the explicit purge command.
+- A Kiro-inclusive macOS dry-run failed closed before mutation because automatic
+  Kiro ACP containment is unavailable on macOS. This is an intentional safe
+  result, not a Kiro runtime pass.
+- No real user project, OAuth credential, vendor account, Docker container, new
+  VM, LXC instance, or snapshot was used. Heavy checks ran on GitHub-hosted CI;
+  local checks used disposable homes and synthetic packages.
+- Registry Dependabot PR [#156](https://github.com/777genius/universal-agent-plugins-registry/pull/156)
+  is a separate `actions/setup-go` v7 dependency update. Its applicable checks
+  are green, but it is not part of this launch closure and must be reviewed as a
+  release-workflow change before merge.
 
-| Binary | Expected origin | Required proof |
-| --- | --- | --- |
-| universal-agent-plugins@0.1.35 | Old CLI paths on the CLI mirror | Resolve reviewed package, fetch old exact-SHA source, add/info/remove, no state leak |
-| universal-agent-plugins@0.1.36 | New registry Pages URL | Resolve reviewed and discovered selectors, add/info/update/remove, exact source and state |
+## 5. Remaining launch gate
 
-Also test cold/warm/offline cache, tampered pointer/envelope/snapshot, unknown
-key, expired snapshot, rollback sequence, incomplete Discovery retention,
-explicit source switching, old SHA reachability, search without package execution,
-and protection against turning unreviewed results into short-name defaults. Test
-bridge-to-upstream promotion as a new signed sequence and verify that historical
-bridge bytes remain unchanged.
+Only the npm cutover is still externally gated:
 
-## 10. E2E and worker policy
+1. In npm package settings, rebind the single Trusted Publisher for
+   `universal-agent-plugins` to repository `777genius/universal-agent-plugins`,
+   workflow `agentplugins-npm-publish.yml`, environment `npm-agentplugins`.
+2. Read the publisher configuration back before publishing. Do not use a token
+   workaround and do not leave two publishers enabled.
+3. Publish one immutable `0.1.37` package from the exact released main commit.
+4. Verify npm provenance, tarball contents, repository/homepage metadata, and
+   the `latest` tag.
+5. Repeat the disposable lifecycle against `0.1.37` for explicit targets. Run
+   successful Codex/Cursor lifecycle on supported runners; where Kiro ACP is not
+   available, require an explicit preflight failure with zero mutation rather
+   than claiming a runtime pass.
 
-- Heavy checks use GitHub Actions where possible so the user's Mac is not loaded.
-- Hosted subscription workers are used only after a fresh machine-id,
-  memory/swap, and disk check shows the single existing sandbox is safe. No new
-  VM or snapshot. Each parallel job gets an isolated worktree and ownership.
-- Implementation uses gpt-5.6-sol medium reasoning. xhigh is reserved for
-  architecture planning and independent exact-head review.
-- An unknown provider or billing result is inspected once before retry. Retry
-  only the smallest idempotent phase after a transient failure.
-- Schema validation, prepared files, and native projection are not runtime
-  passes. Runtime requires discovery, a bounded read-only call where applicable,
-  and cleanup.
-- Kiro ACP 2.20.0 capability probes are recorded separately; capability probes do not replace the five-result launch matrix. Their sequence is not asserted until the ordered external evidence exists.
-- ChatGPT remains a separately scoped client claim; Cloudflare Docs evidence does
-  not generalize to all packages or ChatGPT Work.
+This gate requires npm owner/settings access. It cannot be completed safely from
+GitHub or the local filesystem alone. No other code change should be made to
+work around it.
 
-## 11. User-facing cleanup
+## 6. E2E matrix
 
-### CLI repository
+### Discovery and feed integrity
 
-- Description begins with: Secure CLI to install, update, repair, and remove
-  Agent Plugins 1.0 across your AI agents.
-- README begins with one-command Quick Start, multi-target examples, supported
-  client matrix, lifecycle commands, troubleshooting, and registry link.
-- Let GitHub naturally identify Go as the primary language; do not add generated
-  Python just to influence the classifier.
-- Explain one command for one or several selected agents, not implicit all-agent
-  installation.
+- Fetch `latest.json`, the referenced snapshot, envelope, signing key, and search
+  projection from both public origins.
+- Verify signature, key ID, sequence, source commit, digest, schema, and complete
+  object closure before accepting a candidate.
+- Verify a delayed/older event cannot replace a newer mirror; invalid, expired,
+  mixed, or incomplete candidates leave the last-good mirror active.
+- Confirm short-name resolution uses reviewed Directory only, while Discovery
+  remains publisher-qualified and exact-SHA.
 
-### Registry repository
+### Installer lifecycle
 
-- README and site describe community catalog, reviewed versus unreviewed status,
-  PR submission, and the CLI link.
-- Show trust status before stars. Stars are informational popularity, not quality
-  or runtime proof.
-- Keep generated index and site here; do not duplicate the Go engine or npm facade.
-- Label every package card and install result as `upstream` or `community bridge`
-  when the distinction is relevant; never use popularity stars as a trust signal.
+For every release candidate, use a new disposable home and test project:
 
-## 12. Security, rollback, and edge cases
+```text
+add -> info -> update -> repair -> remove -> list
+```
 
-Security controls:
+Use explicit targets (`codex,cursor`, then a separate Kiro preflight where
+available). Assert exact source commit, package path, tree digest, distribution
+identity, client state, rollback journal, and final cleanup. Do not execute an
+unreviewed Discovery package merely to test resolution.
 
-- Signing and npm credentials are environment-scoped and unavailable to PR jobs.
-- Repository-ID and workflow checks accept both names only in the migration window,
-  then narrow to the new identity.
-- Compatibility history is immutable/read-only and excluded from builds.
-- Every install records repository, revision, package path, tree digest, and
-  distribution identity before mutation.
-- Discovery never executes package code, scripts, containers, dependencies, or MCP.
-- A bridge generator may read upstream files, but it never executes upstream
-  install scripts or dependencies during indexing.
+Kiro ACP `2.20.0` capability probes are recorded separately; capability probes do not replace the five-result launch matrix. Their sequence is not asserted until ordered external evidence exists.
 
-Rollback:
+### Failure and compatibility lanes
 
-- Before the second rename, revert preparation PRs normally.
-- Between renames, stop and repair the exact failed step; do not release.
-- After both renames, prefer workflow/package reverts and publication kill switches
-  over renaming back. Reusing names again can destroy redirects and worsen an outage.
+- one deliberate multi-target failure proves no partial client state remains;
+- local path and immutable Git installs work with Directory/Discovery disabled;
+- cold cache, warm cache, and offline cache preserve deterministic behavior;
+- tampered pointer/envelope/snapshot, unknown key, expired snapshot, stale
+  sequence, incomplete Discovery, and conflicting duplicate IDs fail closed;
+- bridge-to-upstream promotion changes only a new signed sequence;
+- old exact source SHAs remain fetchable from the compatibility history/mirror;
+- cancellation or crash during mutation leaves journal recovery safe and
+  ownership-verified cleanup complete.
 
-Kill switches:
+## 7. Mirror and release rules
 
-- stop Directory/Discovery pointer advancement while keeping the last complete
-  signed snapshot;
-- disable Discovery resolution while reviewed Directory and direct exact-SHA
-  installs continue;
-- stop the mirror job without deleting its last good assets;
-- pause npm publication and keep the last immutable package;
-- suspend a bad distribution in a higher signed sequence.
+- Registry publication generates signed data from committed catalog inputs.
+- A successful Registry Pages publish may wake the CLI mirror with a
+  `repository_dispatch`; the payload is only a hint. The mirror re-fetches and
+  verifies public bytes and never trusts the payload as authorization.
+- The mirror has no signing key and cannot edit mappings. It stages a complete
+  tree and swaps only after all checks pass.
+- A delayed event can never lower the active sequence. The last complete signed
+  snapshot remains available during a failed scan or deploy.
+- `AGENTPLUGINS_DIRECTORY_ORIGIN` and `AGENTPLUGINS_DISCOVERY_ORIGIN` are test and
+  private-mirror overrides. A remote response never rewrites production defaults.
+- Generated snapshots are not hand-edited. Historical sequences, envelopes,
+  release assets, attestations, and evidence are immutable.
 
-Required explicit handling:
+## 8. Security and operational edge cases
 
-- GitHub API eventual consistency or an occupied target name;
-- one Pages deploy succeeding while the other fails;
-- old exact SHA not reachable after compatibility import;
-- npm publisher still bound to the old repository/workflow;
-- uses: consumers failing after rename;
-- unsigned, expired, mixed, or stale mirror;
-- repository rename/transfer/archive changing a Discovery record;
-- duplicate names across reviewed and unreviewed layers;
-- partial publication or stale latest.json;
-- bridge/upstream identity conflict or a bridge promoted without a new signed
-  sequence;
-- OAuth/activation failure after preparation;
-- cancellation or crash during a multi-target mutation;
-- old GitHub web links and old npm provenance pointing at a reused name.
+The implementation must fail closed for:
 
-## 13. Verification commands
+- occupied or renamed repository identities, stale GitHub redirects, broken
+  `uses:` references, missing Pages deployment, and npm publisher mismatch;
+- unsigned, expired, mixed-key, stale, or partial feed trees;
+- duplicate product IDs, duplicate package paths, bridge/upstream identity
+  conflicts, and a bridge promoted without a new sequence;
+- source repository transfer, archive, deletion, force-push, or a missing exact
+  commit;
+- unsupported client, missing activation capability, OAuth denial, cancelled
+  browser flow, or unavailable Kiro ACP;
+- permission errors, interrupted downloads, cancellation, crash, timeout, and
+  process restart during multi-target mutation;
+- `/tmp` versus `/private/tmp` identity differences on macOS;
+- stale cache after a successful update, and remove retaining data until the
+  user explicitly requests purge.
 
-Run against fresh clones and exact commits:
+Never solve these cases by weakening source isolation, silently selecting another
+client, executing package code during indexing, or accepting a partial mutation.
 
-~~~bash
+## 9. Verification commands
+
+Run only against fresh clones, exact commits, and disposable homes:
+
+```bash
 gh api repos/777genius/universal-agent-plugins
-gh api repos/777genius/plugin-kit-ai
 gh api repos/777genius/universal-agent-plugins-registry
+gh api repos/777genius/universal-agent-plugins/commits/main --jq .sha
+gh api repos/777genius/universal-agent-plugins-registry/commits/main --jq .sha
 gh run list --repo 777genius/universal-agent-plugins --limit 20
 gh run list --repo 777genius/universal-agent-plugins-registry --limit 20
-git ls-remote https://github.com/777genius/universal-agent-plugins.git
-git ls-remote https://github.com/777genius/universal-agent-plugins-registry.git
-npm view universal-agent-plugins version repository.url homepage dist-tags
-npm view universal-agent-plugins@0.1.35 dist.integrity dist.attestations
-npm view universal-agent-plugins@0.1.36 dist.integrity dist.attestations
-~~~
+gh release view agentplugins-v0.1.37 --repo 777genius/universal-agent-plugins
+npm view universal-agent-plugins version dist-tags repository.url homepage
+```
 
-For each Pages origin, verify with curl -fsS:
+Registry focused gates:
 
-~~~text
-registry/schemas/1/latest.json
-registry/schemas/1/snapshots/<sequence>.json
-registry/schemas/1/snapshots/<sequence>.envelope.json
-discovery/latest.json
-discovery/snapshots/<sequence>.json
-discovery/search/<sequence>.json
-~~~
-
-Run focused tests before one exact-head full CI:
-
-~~~bash
+```bash
 python3 scripts/build_bridges.py check
 python3 scripts/build_registry.py --check
 python3 -m unittest tests.test_build_bridges tests.test_build_registry
 python3 -m unittest tests.test_workflow_contracts tests.test_run_launch_evidence_e2e
-~~~
-
-In the engine repository run pinned Go contract suites, npm facade smoke tests,
-the six-platform release workflow, and the old/new disposable lifecycle matrix.
-
-## 14. Acceptance checklist
-
-- [x] universal-agent-plugins is the CLI repository with the original engine ID/history.
-- [x] universal-agent-plugins-registry is the catalog with the original catalog ID/history.
-- [x] The canonical npm facade exists only in the CLI repository; legacy packages
-      remain independently publishable.
-- [x] Go module path github.com/777genius/plugin-kit-ai still builds.
-- [x] Old registry SHAs are reachable from the renamed CLI and old 0.1.35
-      exact-source install passes.
-- [x] Old and new feed paths verify the expected signed bytes.
-- [x] Local and immutable Git installs work without Directory or Discovery access.
-- [ ] New 0.1.37 has six-platform artifacts, checksums, npm provenance, and
-      clean-project lifecycle evidence.
-- [ ] npm has one active trusted publisher for universal-agent-plugins.
-- [x] All known internal uses: consumers point to the renamed CLI repository.
-- [x] New Directory and Discovery sequences are appended, signed, complete, and
-      public; historical sequences are unchanged.
-- [x] Discovery remains static, reproducible, and visibly distinct from Directory.
-- [x] Every reviewed source has an explicit upstream/bridge state and a pinned
-      repository, commit, package path, and digest.
-- [x] The pinned Agent Plugins 1.0 corpus gate is green; any 1.1 lane is CI-only,
-      clearly experimental, and cannot affect production resolution.
-- [x] Mirror dispatch/reconciliation is monotonic, byte-for-byte, and fail-closed.
-- [x] Reviewed/unreviewed results cannot be confused and explicit multi-target
-  installation never mutates implicit clients; a failed target leaves no partial
-  state after rollback.
-- [ ] Pages, repository, npm, Action, and registry smoke checks are green on
-      exact post-cutover commits.
-- [x] No credentials, private paths, OAuth tokens, or real user projects appear
-      in evidence.
-
-The checklist is assessed against the evidence recorded in Sections 19-21. The
-only unchecked launch items are the new 0.1.37 npm publication/provenance and
-the resulting exact post-cutover npm smoke; the existing public 0.1.35 package
-has a separate lifecycle proof below.
-
-## 15. Estimate and order
-
-Overall confidence is 🎯 9/10, reliability 🛡️ 9/10, complexity 🧠 7/10.
-
-Expected meaningful changes: 2,500-4,500 lines:
-
-- engine facade, README, metadata, workflow preparation: 900-1,600;
-- registry identity/site/workflow preparation: 400-900;
-- compatibility history, mirror, and regression tests: 600-1,200;
-- consumer references, migration checks, and release tests: 600-1,000,
-  excluding generated snapshots and lockfiles.
-
-Execution order:
-
-~~~text
-baseline/freeze
-  -> CLI preparation PR(s)
-  -> registry preparation PR(s)
-  -> compatibility history and mirror tests
-  -> rename registry
-  -> verify registry Pages
-  -> rename CLI engine
-  -> deploy compatibility Pages
-  -> update Action consumers and npm trusted publisher
-  -> release CLI 0.1.36
-  -> append Directory/Discovery sequences
-  -> old/new E2E and evidence
-~~~
-
-This is intentionally smaller than a monorepo rewrite. Existing Go engine,
-lifecycle, adapters, signed feeds, and static site remain in service; only
-product ownership, repository identity, package publishing, and registry
-boundaries change.
-
-## 16. Implementation checkpoint (2026-09-03)
-
-The first production-facing vertical slice is now implemented and verified:
-
-- Engine PR #79 (`728d066`) adds the signed Directory/Discovery compatibility
-  mirror. It validates the existing signatures and trust anchors, preserves
-  exact feed bytes, enforces monotonic sequences, and deploys only from a
-  verified staging tree. It does not contain a signing key.
-- Engine PR #80 (`e936e8d`) makes Universal Agent Plugins the user-facing
-  product name while keeping the historical Go module path and browser cache
-  key compatible with existing installs.
-- Registry PR #217 (`72bb6d8`) makes the Discovery builder collapse exact
-  duplicate identities and fail closed on conflicting duplicates. This fixed
-  the production scan failure without weakening validation.
-- Signed Discovery Actions run `33706680463` on exact main `72bb6d8` published
-  sequence 26. Production Pages currently serve 2,836 records. Directory
-  sequence 27 remains available alongside the separate Discovery feed.
-- Read-only production asset checks returned HTTP 200 for both latest pointers,
-  the signed snapshots, both envelopes, and the Discovery search projection.
-  Local signature verification against the source-commit trust file passed:
-  `verified Discovery sequence 26 with 2836 records`.
-- A fresh disposable local sandbox ran the public npm
-  `universal-agent-plugins@0.1.20` selector
-  `discovery:0x7067/pstack` through add, info, update, and remove for explicit
-  `codex,cursor,kiro` targets. The final `agentplugins search pstack` resolved
-  Directory sequence 2 and Discovery sequence 26.
-- A second disposable sandbox on the old hosted observer was attempted with
-  the same explicit targets. Acquisition failed because that host's isolated
-  Git environment intentionally removes credential helpers and its public
-  GitHub egress requires authentication. This is recorded as an environment
-  limitation, not bypassed by weakening source isolation; the local lifecycle
-  proof remains valid.
-
-The following claims remain intentionally separate from this checkpoint:
-
-- no OAuth or vendor-account runtime proof was added;
-- no real user project was touched;
-- the repository rename/cutover remains a separately gated migration step;
-- Discovery records are schema-validated and signed, but are not presented as
-  manual runtime reviews or official certification.
-
-## 17. Current implementation and E2E checkpoint (2026-09-03)
-
-This section supersedes the historical checkpoint above for the current launch
-decision. It records what is actually proven on the public repositories and
-what remains externally gated.
-
-### Implemented and green
-
-- The CLI repository is `777genius/universal-agent-plugins`; the catalog is
-  `777genius/universal-agent-plugins-registry`. The historical Go module path
-  remains `github.com/777genius/plugin-kit-ai` for compatibility.
-- CLI PRs #83, #84, and #85 are merged. They fix the upstream Context7 proof,
-  enable the single npm trusted-publisher workflow, and repair the aggregate
-  release contract field. The six native platform jobs, aggregate proof, and
-  promotion all passed in Actions run `33721839429` at main commit
-  `439dd2e33b4d0be0d80d921c8894dd1ccebaa1e3`.
-- Public GitHub release `agentplugins-v0.1.36` is immutable, non-draft, and
-  contains six binaries, checksums, and a release manifest. Each binary asset
-  was verified against its checksum and GitHub attestation.
-- PR #86 fixes the macOS `/tmp` versus `/private/tmp` symlink identity edge
-  case in managed Codex cleanup. Its focused provider tests pass locally; the
-  PR's Windows smoke check is still completing and must be green before merge.
-- Production Registry Pages are reachable at the renamed origin. Directory
-  sequence 27 contains 26 products and 30 distributions. Discovery sequence
-  27 contains 2,875 schema-conformant records; latest, padded snapshot,
-  envelope, and search assets returned HTTP 200 and local signature checking
-  passed (`verified Discovery sequence 27 with 2875 records`).
-
-### External gates still open
-
-- The first npm publish attempt was stopped by the old environment tag policy;
-  that policy is now corrected. The retry reached npm and generated provenance,
-  but npm rejected the package because the trusted publisher is still bound to
-  the old repository identity (`repository_id` 1326737541). Rebind the package
-  publisher in npm Settings to `777genius/universal-agent-plugins`, workflow
-  `agentplugins-npm-publish.yml`, environment `npm-agentplugins`, then publish a
-  new immutable version (0.1.37). No token was used or copied as a workaround.
-- The public npm add/info/update/remove lifecycle is therefore not claimed yet.
-  After 0.1.37 is published, rerun the disposable multi-target lifecycle for
-  explicit `codex,cursor,kiro` targets and record the exact package version.
-- The renamed Registry Pages assets are green. The old CLI-repository feed paths
-  currently return 404; either deploy the planned signed compatibility mirror or
-  explicitly remove the old paths from the acceptance checklist before launch.
-- No OAuth, vendor-account model turn, or real user project is part of this
-  evidence. All local checks use disposable synthetic plugin data and isolated
-  temporary homes.
-
-### Safe next actions
-
-1. Wait for PR #86's remaining Windows check and merge only its tested cleanup
-   fix; do not widen runtime contracts.
-2. Rebind npm trusted publishing, tag `agentplugins-v0.1.37` at the merged main,
-   run the existing six-platform release workflow, and verify the public npm
-   lifecycle from a clean sandbox.
-3. Add the compatibility mirror (or remove the obsolete-path requirement), then
-   append the exact run IDs, SHA, package integrity, and lifecycle JSON here.
-4. Only after those gates pass, mark the corresponding acceptance items in
-   Section 14 complete. Discovery popularity is an index signal, not runtime
-   certification.
-
-## 18. Follow-up checkpoint after the 0.1.37 release (2026-09-03)
-
-- PR #86 is merged at CLI main `d46dd76feda39177a5f7fccd45419a13b2a6db8f`.
-  Release run `33725125998` passed validation, six native platform runtime
-  proofs, aggregate verification, and promotion. Public release
-  `agentplugins-v0.1.37` is non-draft and contains the six binaries, checksums,
-  and release manifest.
-- The compatibility mirror workflow `33725342015` completed successfully, but
-  a post-deploy contract check found that its generator wrote snapshots beside
-  `latest.json` while the signed pointer names `snapshots/<stem>.json`. PR #87
-  fixes the generator to emit the exact signed paths and adds a regression test;
-  do not claim old-path compatibility until that PR is merged and the mirror is
-  rerun.
-- The six-platform proof is an exact staged-package/native-binary proof. Public
-  npm installation and lifecycle remain blocked only by npm trusted-publisher
-  configuration: the package is already owned at npm, but its publisher still
-  references the pre-rename repository identity. Rebind it to
-  `777genius/universal-agent-plugins` and workflow
-  `agentplugins-npm-publish.yml` before attempting the immutable 0.1.37 publish.
-
-## 19. Current site and release checkpoint (2026-09-03)
-
-The rename and public-site integration are now implemented on the CLI main
-branch and verified through the normal GitHub Pages workflow:
-
-- CLI PR #88 merged at `1401e44ac46b5efa870a29193299b4bd560a5060` after the
-  required test, Ubuntu/Windows smoke, documentation, CodeQL, dependency, and
-  vulnerability checks passed. The landing page now presents **Universal Agent
-  Plugins** as the product and shows the explicit one-command lifecycle with
-  comma-separated targets (for example, `--target codex,cursor`).
-- Pages run `33731389982` built and deployed the landing page, docs, and the
-  signed compatibility mirror from one verified staging step. Production
-  checks returned HTTP 200 for `latest.json`, padded signed snapshots and
-  envelopes, the Discovery search projection, and `MIRROR_METADATA.json`.
-- The compatibility mirror generator fix is merged (CLI PR #87,
-  `9440c257b0eb1cf4c84cfac6fd69eda820808902`) and its Actions run
-  `33726683042` passed. This removes the earlier snapshot-path mismatch; the
-  normal Pages workflow now stages the same signed paths on every deployment.
-- Production Registry sequence 27 contains 26 products and 30 distributions.
-  Discovery sequence 27 contains 2,875 schema-conformant records. These are
-  signed index entries and popularity/discovery signals, not manual runtime
-  certification.
-- Release `agentplugins-v0.1.37` is public, non-draft, and contains six native
-  binaries, checksums, and the release manifest. The six-platform proof remains
-  valid at the release commit.
-- No OAuth, vendor-account model turn, or real user project was used. Local
-  checks used disposable homes and synthetic packages; hosted checks used
-  GitHub-hosted runners only.
-
-### Remaining external gate
-
-The existing public npm 0.1.35 lifecycle is proven in Section 21. The
-remaining launch gate is publishing the new 0.1.37 package with provenance.
-npm's trusted publisher is still bound to the pre-rename repository identity.
-Once the package owner rebinds it to repository
-`777genius/universal-agent-plugins`, workflow `agentplugins-npm-publish.yml`,
-and environment `npm-agentplugins`, publish one new immutable version and rerun
-the disposable `add`, `info`, `update`, and `remove` flow for explicit
-`codex,cursor,kiro` targets against 0.1.37. Until then, documentation must not
-claim that the public npm package is already at 0.1.37.
-
-The static mirror intentionally has no database: the signed Registry and
-Discovery snapshots are generated from committed catalog data and copied into
-the CLI Pages artifact during deployment. Discovery refreshes are therefore
-auditable GitHub Actions changes, while the CLI remains usable with an explicit
-repository/path source even when a package is not in the index.
-
-## 20. Production CLI discovery search proof (2026-09-03)
-
-Using the `agentplugins` binary built from CLI main `1401e44`, a fresh temporary
-`AGENTPLUGINS_HOME`, and no package download, the following command completed
-against the public Pages mirror:
-
-```bash
-agentplugins search context7 --format json --trust all --client codex
 ```
 
-The signed response reported Directory sequence 27 and Discovery sequence 27,
-with Discovery available and 10 deterministic results (2 reviewed Directory
-entries and 8 unreviewed Discovery entries). The reviewed `context7` alias was
-ranked first and produced the normal install selector. This proves the public
-search path and trust separation; it does not turn unreviewed Discovery records
-into runtime certification.
+CLI gates include pinned Go contract tests, npm facade smoke tests, six-platform
+release validation, public search, and the disposable lifecycle matrix. GitHub
+Actions is authoritative for Linux/Windows and for platform-specific checks;
+macOS-only failures caused by Darwin path or namespace semantics must be recorded
+as environment limitations, not fixed by changing production contracts.
 
-## 21. Public npm 0.1.35 lifecycle proof (2026-09-03)
+## 10. Acceptance checklist
 
-The published `universal-agent-plugins@0.1.35` tarball was installed into a
-fresh temporary prefix and executed from a canonical `/private/tmp` home (the
-canonical path avoids macOS `/tmp` symlink identity ambiguity). With no real
-agent configuration present, the explicit lifecycle completed for `codex,cursor`:
+- [x] Repository roles and names are final; original IDs/history are retained.
+- [x] CLI remains Go-based with the compatible `plugin-kit-ai` module path.
+- [x] Canonical npm facade exists only in the CLI repository; legacy packages are
+      separate.
+- [x] Agent Plugins 1.0 `plugin.json` is authoritative; `plugin.yaml` is legacy
+      authoring input only.
+- [x] Six native `agentplugins-v0.1.37` artifacts, checksums, and manifest are
+      public and verified.
+- [x] Directory 27 and Discovery 27 are signed, complete, public, and distinct;
+      Discovery has 2,875 records at the recorded checkpoint.
+- [x] CLI Pages product site and byte-for-byte compatibility mirror are green.
+- [x] Public CLI Discovery search works without package execution.
+- [x] Public npm `0.1.35` add/info/update/repair/remove proof exists for explicit
+      Codex/Cursor targets in a fresh home.
+- [x] Local/exact Git installs and fail-closed trust separation are covered by CI.
+- [x] Multi-target planning, rollback, ownership cleanup, and no-real-project
+      safety contracts are covered by focused tests and CI.
+- [ ] npm Trusted Publisher is rebound to the renamed CLI repository.
+- [ ] npm `0.1.37` is published with provenance and verified from a clean project.
+- [ ] Post-publish `0.1.37` lifecycle evidence is recorded here.
+- [ ] Final post-cutover smoke is green for GitHub, Pages, Registry, Actions, and
+      npm at the same documented release tuple.
+
+## 11. Delivery order from the current state
 
 ```text
-add context7 --target codex,cursor        success / external_completed
-info context7                             success; exact source + seq27 recorded
-update context7 --target codex,cursor     success / external_completed
-repair context7 --target codex,cursor     success / external_completed
-remove context7 --target codex,cursor     success / data_retained
-list                                      success; zero active installations
+re-read exact main/release/feed pointers
+  -> npm owner rebinds Trusted Publisher
+  -> publish immutable npm 0.1.37 with provenance
+  -> clean-project multi-target lifecycle
+  -> append exact evidence and digests in a small docs PR
+  -> run required checks and merge
+  -> announce only claims supported by the checklist
 ```
 
-The remove operation retained ownership-verified plugin data by design and
-reported the explicit purge command. The Kiro-inclusive dry-run in the same
-fresh sandbox failed closed before mutation because automatic Kiro ACP
-containment is unavailable on macOS; the Codex and Cursor targets were not
-partially changed by that failed group preflight. This is public npm lifecycle
-evidence for 0.1.35, not a claim that 0.1.37 is already published.
+Do not create another registry, database, VM, snapshot, installer engine, or
+parallel npm publisher for this launch. The next architectural expansion should
+wait for a second real consumer or a confirmed repeated compatibility need.
+
+## 12. Rollback and ownership
+
+- Pause npm publication without deleting the last immutable package.
+- Stop Directory/Discovery pointer advancement while serving the last complete
+  signed snapshot.
+- Stop the mirror job without deleting its last-good assets.
+- Suspend a bad distribution in a higher signed sequence.
+- Prefer a narrow workflow/package revert over renaming repositories back; name
+  reuse can destroy redirects and make recovery worse.
+- Keep all temporary homes, staging files, and test projects disposable and
+  ownership-labelled. Remove only exact UAP-owned transient data after a run.
+
+## 13. Evidence update template
+
+When the npm gate is completed, append one short dated entry containing:
+
+```text
+CLI main SHA:
+Registry main SHA:
+GitHub release/tag:
+npm version + provenance URL:
+Directory sequence + digest:
+Discovery sequence + record count + digest:
+Pages/mirror verification:
+Clean-home lifecycle result per target:
+Rollback/failure-path result:
+```
+
+Do not include tokens, cookies, private filesystem paths, account names, or raw
+OAuth material. A package being indexed or schema-valid must never be described
+as manually runtime-tested unless the corresponding E2E evidence is present.
