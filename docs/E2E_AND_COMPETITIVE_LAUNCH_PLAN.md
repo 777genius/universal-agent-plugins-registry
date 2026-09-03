@@ -544,34 +544,39 @@ the six-platform release workflow, and the old/new disposable lifecycle matrix.
 
 ## 14. Acceptance checklist
 
-- [ ] universal-agent-plugins is the CLI repository with the original engine ID/history.
-- [ ] universal-agent-plugins-registry is the catalog with the original catalog ID/history.
-- [ ] The canonical npm facade exists only in the CLI repository; legacy packages
+- [x] universal-agent-plugins is the CLI repository with the original engine ID/history.
+- [x] universal-agent-plugins-registry is the catalog with the original catalog ID/history.
+- [x] The canonical npm facade exists only in the CLI repository; legacy packages
       remain independently publishable.
-- [ ] Go module path github.com/777genius/plugin-kit-ai still builds.
-- [ ] Old registry SHAs are reachable from the renamed CLI and old 0.1.35
+- [x] Go module path github.com/777genius/plugin-kit-ai still builds.
+- [x] Old registry SHAs are reachable from the renamed CLI and old 0.1.35
       exact-source install passes.
-- [ ] Old and new feed paths verify the expected signed bytes.
-- [ ] Local and immutable Git installs work without Directory or Discovery access.
-- [ ] New 0.1.36 has six-platform artifacts, checksums, npm provenance, and
+- [x] Old and new feed paths verify the expected signed bytes.
+- [x] Local and immutable Git installs work without Directory or Discovery access.
+- [ ] New 0.1.37 has six-platform artifacts, checksums, npm provenance, and
       clean-project lifecycle evidence.
 - [ ] npm has one active trusted publisher for universal-agent-plugins.
-- [ ] All known internal uses: consumers point to the renamed CLI repository.
-- [ ] New Directory and Discovery sequences are appended, signed, complete, and
+- [x] All known internal uses: consumers point to the renamed CLI repository.
+- [x] New Directory and Discovery sequences are appended, signed, complete, and
       public; historical sequences are unchanged.
-- [ ] Discovery remains static, reproducible, and visibly distinct from Directory.
-- [ ] Every reviewed source has an explicit upstream/bridge state and a pinned
+- [x] Discovery remains static, reproducible, and visibly distinct from Directory.
+- [x] Every reviewed source has an explicit upstream/bridge state and a pinned
       repository, commit, package path, and digest.
-- [ ] The pinned Agent Plugins 1.0 corpus gate is green; any 1.1 lane is CI-only,
+- [x] The pinned Agent Plugins 1.0 corpus gate is green; any 1.1 lane is CI-only,
       clearly experimental, and cannot affect production resolution.
-- [ ] Mirror dispatch/reconciliation is monotonic, byte-for-byte, and fail-closed.
-- [ ] Reviewed/unreviewed results cannot be confused and explicit multi-target
+- [x] Mirror dispatch/reconciliation is monotonic, byte-for-byte, and fail-closed.
+- [x] Reviewed/unreviewed results cannot be confused and explicit multi-target
   installation never mutates implicit clients; a failed target leaves no partial
   state after rollback.
 - [ ] Pages, repository, npm, Action, and registry smoke checks are green on
       exact post-cutover commits.
-- [ ] No credentials, private paths, OAuth tokens, or real user projects appear
+- [x] No credentials, private paths, OAuth tokens, or real user projects appear
       in evidence.
+
+The checklist is assessed against the evidence recorded in Sections 19-21. The
+only unchecked launch items are the new 0.1.37 npm publication/provenance and
+the resulting exact post-cutover npm smoke; the existing public 0.1.35 package
+has a separate lifecycle proof below.
 
 ## 15. Estimate and order
 
@@ -759,14 +764,15 @@ branch and verified through the normal GitHub Pages workflow:
 
 ### Remaining external gate
 
-The only launch-critical item not proven in this checkpoint is the public npm
-install/lifecycle. npm's trusted publisher is still bound to the pre-rename
-repository identity. Once the package owner rebinds it to repository
+The existing public npm 0.1.35 lifecycle is proven in Section 21. The
+remaining launch gate is publishing the new 0.1.37 package with provenance.
+npm's trusted publisher is still bound to the pre-rename repository identity.
+Once the package owner rebinds it to repository
 `777genius/universal-agent-plugins`, workflow `agentplugins-npm-publish.yml`,
 and environment `npm-agentplugins`, publish one new immutable version and rerun
 the disposable `add`, `info`, `update`, and `remove` flow for explicit
-`codex,cursor,kiro` targets. Until then, documentation must not claim that the
-public npm package is already at 0.1.37.
+`codex,cursor,kiro` targets against 0.1.37. Until then, documentation must not
+claim that the public npm package is already at 0.1.37.
 
 The static mirror intentionally has no database: the signed Registry and
 Discovery snapshots are generated from committed catalog data and copied into
@@ -790,3 +796,26 @@ entries and 8 unreviewed Discovery entries). The reviewed `context7` alias was
 ranked first and produced the normal install selector. This proves the public
 search path and trust separation; it does not turn unreviewed Discovery records
 into runtime certification.
+
+## 21. Public npm 0.1.35 lifecycle proof (2026-09-03)
+
+The published `universal-agent-plugins@0.1.35` tarball was installed into a
+fresh temporary prefix and executed from a canonical `/private/tmp` home (the
+canonical path avoids macOS `/tmp` symlink identity ambiguity). With no real
+agent configuration present, the explicit lifecycle completed for `codex,cursor`:
+
+```text
+add context7 --target codex,cursor        success / external_completed
+info context7                             success; exact source + seq27 recorded
+update context7 --target codex,cursor     success / external_completed
+repair context7 --target codex,cursor     success / external_completed
+remove context7 --target codex,cursor     success / data_retained
+list                                      success; zero active installations
+```
+
+The remove operation retained ownership-verified plugin data by design and
+reported the explicit purge command. The Kiro-inclusive dry-run in the same
+fresh sandbox failed closed before mutation because automatic Kiro ACP
+containment is unavailable on macOS; the Codex and Cursor targets were not
+partially changed by that failed group preflight. This is public npm lifecycle
+evidence for 0.1.35, not a claim that 0.1.37 is already published.
