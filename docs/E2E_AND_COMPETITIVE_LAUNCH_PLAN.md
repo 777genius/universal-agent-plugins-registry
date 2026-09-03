@@ -165,6 +165,9 @@ Only the npm cutover is still externally gated:
 1. In npm package settings, rebind the single Trusted Publisher for
    `universal-agent-plugins` to repository `777genius/universal-agent-plugins`,
    workflow `agentplugins-npm-publish.yml`, environment `npm-agentplugins`.
+   The package owner can do this in npm Settings or with the authenticated npm
+   CLI (`npm trust github`); see the [npm Trusted Publishers guide](https://docs.npmjs.com/trusted-publishers/).
+   The configuration must allow the `npm publish` action.
 2. Read the publisher configuration back before publishing. Do not use a token
    workaround and do not leave two publishers enabled.
 3. Publish one immutable `0.1.37` package from the exact released main commit.
@@ -178,6 +181,13 @@ Only the npm cutover is still externally gated:
 This gate requires npm owner/settings access. It cannot be completed safely from
 GitHub or the local filesystem alone. No other code change should be made to
 work around it.
+
+The first fully approved publish attempt was run as GitHub Actions
+`33739090061`. Exact release staging and attestation checks passed; the publish
+job reached npm, emitted a signed provenance statement, and npm rejected the
+package upload with `404 Not Found`. `npm view` still reports no `0.1.37` and
+`latest=0.1.35`. This is the expected symptom of a Trusted Publisher/repository
+identity mismatch, not a package or release-integrity failure. No token was used.
 
 ## 6. E2E matrix
 
