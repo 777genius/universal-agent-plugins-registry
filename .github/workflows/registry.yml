@@ -12,7 +12,9 @@ on:
       - "scripts/build_agentplugins_catalog.py"
       - "scripts/portable_paths.py"
       - "scripts/validate_catalog.py"
+      - "scripts/repository_identity.py"
       - "tests/test_build_registry.py"
+      - "tests/test_repository_identity.py"
       - ".github/workflows/registry.yml"
   push:
     branches: [main]
@@ -26,7 +28,9 @@ on:
       - "scripts/build_agentplugins_catalog.py"
       - "scripts/portable_paths.py"
       - "scripts/validate_catalog.py"
+      - "scripts/repository_identity.py"
       - "tests/test_build_registry.py"
+      - "tests/test_repository_identity.py"
 
 permissions:
   contents: read

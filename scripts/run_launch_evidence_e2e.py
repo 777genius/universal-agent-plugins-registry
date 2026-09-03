@@ -64,6 +64,7 @@ from observe_launch_scenario import (  # noqa: E402
     validate_scenario_target_contract,
     validate_cli_envelope,
 )
+from repository_identity import active_registry_repository  # noqa: E402
 from two_lane_evidence import (  # noqa: E402
     PLUGIN_KIT_COMMIT,
     PLUGIN_KIT_TAG,
@@ -89,9 +90,8 @@ PRODUCTION_DIRECTORY_TRUST = ROOT / "registry" / "publication" / "trusted-keys.j
 RELEASE_MANIFEST_NAME = "release-manifest.json"
 RELEASE_CHECKSUMS_NAME = "checksums.txt"
 RELEASE_MANIFEST_SCHEMA = ROOT / "schemas" / "e2e" / "release-manifest.schema.json"
-TRUSTED_CATALOG_REPOSITORY = "777genius/universal-agent-plugins"
-TRUSTED_CATALOG_REPOSITORY_OWNER = "777genius"
-TRUSTED_CATALOG_REPOSITORY_NAME = "universal-agent-plugins"
+TRUSTED_CATALOG_REPOSITORY = active_registry_repository()
+TRUSTED_CATALOG_REPOSITORY_OWNER, TRUSTED_CATALOG_REPOSITORY_NAME = TRUSTED_CATALOG_REPOSITORY.split("/", 1)
 TRUSTED_CATALOG_REPOSITORY_ID = "1326737541"
 TRUSTED_CATALOG_REPOSITORY_OWNER_ID = "13103045"
 TRUSTED_OBSERVER_REF = "refs/heads/main"

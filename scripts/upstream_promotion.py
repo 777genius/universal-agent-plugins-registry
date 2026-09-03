@@ -21,12 +21,13 @@ from build_registry import (
     CLIENT_IDS, RegistryError, directory_preview, directory_search, encoded,
     validate_directory, validate_registry_path,
 )
+from repository_identity import active_registry_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 BRANCH_RE = re.compile(r"^automation/upstream-promotion-([a-z0-9]+(?:-[a-z0-9]+)*)-([0-9a-f]{12})$")
-WORKFLOW = "777genius/universal-agent-plugins/.github/workflows/upstream-promotion-observer.yml"
+WORKFLOW = f"{active_registry_repository()}/.github/workflows/upstream-promotion-observer.yml"
 MAX_JSON_BYTES = 262_144
 
 
@@ -164,14 +165,15 @@ def select(args: argparse.Namespace) -> dict[str, Any]:
     products = {item["id"]: item for item in directory.get("products", [])}
     distributions = {item["id"]: item for item in directory.get("distributions", [])}
     diagnostics = []
-    open_pulls = gh_value(args.gh, "repos/777genius/universal-agent-plugins/pulls?state=open&per_page=100")
+    repository = active_registry_repository()
+    open_pulls = gh_value(args.gh, f"repos/{repository}/pulls?state=open&per_page=100")
     require(isinstance(open_pulls, list) and len(open_pulls) <= 100, "GitHub returned an invalid open-PR set")
     reserved = []
     for item in open_pulls:
         require(isinstance(item, dict), "GitHub returned an invalid open PR")
         head = item.get("head") if isinstance(item.get("head"), dict) else {}
         repository = head.get("repo") if isinstance(head.get("repo"), dict) else {}
-        if repository.get("full_name") == "777genius/universal-agent-plugins" and BRANCH_RE.fullmatch(str(head.get("ref", ""))):
+        if repository.get("full_name") == active_registry_repository() and BRANCH_RE.fullmatch(str(head.get("ref", ""))):
             reserved.append(item.get("number"))
     if reserved:
         return {
@@ -236,7 +238,7 @@ def review_record(args: argparse.Namespace) -> dict[str, Any]:
     observed_at = raw.get("observed_at")
     require(isinstance(observed_at, str), "materialization observed_at is absent")
     artifact = {
-        "repository": "777genius/universal-agent-plugins", "revision": args.artifact_revision,
+        "repository": active_registry_repository(), "revision": args.artifact_revision,
         "path": args.artifact_path, "digest": sha256(artifact_body),
     }
     evidence = []

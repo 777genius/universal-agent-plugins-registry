@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { chromium, expect } from '@playwright/test'
 
-const base = new URL('https://777genius.github.io/universal-agent-plugins/')
+const base = new URL(process.env.PUBLIC_SITE_ORIGIN ?? 'https://777genius.github.io/universal-agent-plugins-registry/')
 const evidenceRoot = process.env.EVIDENCE_ROOT
 assert(evidenceRoot, 'EVIDENCE_ROOT is required')
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
@@ -25,7 +25,7 @@ try {
         // Navigating from Home to Plugins can cancel the previous page's redundant
         // background refresh after its signed last-known-good cache is already visible.
         const expectedNavigationAbort = failure === 'net::ERR_ABORTED' &&
-          new URL(request.url()).pathname === '/universal-agent-plugins/discovery/latest.json'
+          new URL(request.url()).pathname === new URL('discovery/latest.json', base).pathname
         if (!expectedNavigationAbort) errors.push(`${request.url()}: ${failure}`)
       })
       page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()}: ${response.url()}`) })
@@ -68,7 +68,7 @@ try {
       assert.equal(directoryEnvelope.sequence, registry.snapshot_sequence)
       assert.equal(directoryEnvelope.snapshot_digest, digest(directoryRaw))
       const cached = await page.evaluate(async () => {
-        const entry = new URL('discovery/.browser-lkg.json', `${location.origin}/universal-agent-plugins/`)
+        const entry = new URL('discovery/.browser-lkg.json', `${location.origin}${new URL('.', location.href).pathname}`)
         const response = await (await caches.open('uap-discovery-v1')).match(entry)
         if (!response?.ok) throw new Error('No signature-verified browser Discovery cache')
         return response.json()

@@ -9,13 +9,16 @@ import os
 import platform
 import re
 import subprocess
+import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repository_identity import active_registry_repository
 
-MARKETPLACE_SOURCE = "777genius/universal-agent-plugins"
+MARKETPLACE_SOURCE = active_registry_repository()
 MARKETPLACE_NAME = "universal-agent-plugins"
 PLUGIN_ID = f"context7@{MARKETPLACE_NAME}"
 INSPECTOR = "@modelcontextprotocol/inspector@2.1.0"

@@ -56,7 +56,7 @@ jobs:
         env:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
-          test "$GITHUB_REPOSITORY" = 777genius/universal-agent-plugins
+          test "$GITHUB_REPOSITORY" = 777genius/universal-agent-plugins-registry
           test "$GITHUB_REF" = refs/heads/main
           test "$WORKFLOW_SHA" = "$GITHUB_SHA"
           test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/directory-publication.yml@refs/heads/main"

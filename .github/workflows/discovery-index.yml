@@ -37,6 +37,7 @@ concurrency:
 env:
   LEDGER_BRANCH: directory-publication-ledger
   FEED_PATH: discovery
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
 
 jobs:
   publisher-preflight:
@@ -507,7 +508,7 @@ jobs:
           EXPECTED_SEQUENCE: ${{ needs.sign-and-publish.outputs.sequence }}
         run: |
           python3 scripts/observe_discovery_index.py \
-            --origin https://777genius.github.io/universal-agent-plugins/discovery \
+            --origin https://777genius.github.io/universal-agent-plugins-registry/discovery \
             --trusted-keys registry/discovery/trusted-keys.json \
             --minimum-sequence "${EXPECTED_SEQUENCE}" \
             --output "$RUNNER_TEMP/discovery-observation.json"

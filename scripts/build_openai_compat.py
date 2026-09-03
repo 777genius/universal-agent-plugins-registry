@@ -21,6 +21,7 @@ from openai_app_bindings import (
     load_app_bindings,
     validate_binding_target,
 )
+from repository_identity import active_registry_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ PORTABLE_ROOT = ROOT / "plugins"
 OPENAI_ROOT = ROOT / "compat" / "openai" / "plugins"
 MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 BRAND_ASSETS = ROOT / "assets"
-LOCAL_REPOSITORY = "777genius/universal-agent-plugins"
+LOCAL_REPOSITORY = active_registry_repository()
 OPENAI_PACKAGE_TARGET = "codex"
 PLUGIN_ROOT = "${PLUGIN_ROOT}"
 RESOURCE_BOUNDARIES = frozenset(" \t\r\n:;,|\"'`()[]{}")

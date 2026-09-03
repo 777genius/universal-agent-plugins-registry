@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from build_openai_compat import OPENAI_MCP_AUTH
 from openai_app_bindings import load_app_bindings
 from portable_paths import validate_tree
+from repository_identity import active_registry_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,8 +23,8 @@ OUTPUTS = {
     2: ROOT / "catalog" / "v2" / "catalog.json",
 }
 SCHEMAS = {
-    1: "https://github.com/777genius/universal-agent-plugins/schemas/catalog-v1.schema.json",
-    2: "https://github.com/777genius/universal-agent-plugins/schemas/catalog-v2.schema.json",
+    version: f"https://github.com/{active_registry_repository()}/schemas/catalog-v{version}.schema.json"
+    for version in (1, 2)
 }
 CATALOG_VERSIONS = {1: "0.1.0", 2: "0.2.1"}
 PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
@@ -223,7 +224,7 @@ def build(
         "$schema": SCHEMAS[schema_version],
         "schema_version": schema_version,
         "catalog_version": CATALOG_VERSIONS[schema_version],
-        "repository": "777genius/universal-agent-plugins",
+        "repository": active_registry_repository(),
         "revision": revision,
         "published_at": published_at,
         "plugins": entries,

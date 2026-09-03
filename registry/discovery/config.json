@@ -9,7 +9,7 @@
       "paths": []
     },
     {
-      "repository": "777genius/universal-agent-plugins",
+      "repository": "777genius/universal-agent-plugins-registry",
       "paths": [
         "plugins"
       ]

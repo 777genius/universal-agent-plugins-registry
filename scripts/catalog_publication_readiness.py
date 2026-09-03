@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 from run_chrome_five_client_lifecycle import EvidenceError, snapshot_roots, seed_clients, validate_doctor
 from run_mcp_e2e import inspector_check
+from repository_identity import active_registry_repository
 
 ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloudflare-bindings "
                 "cloudflare-docs cloudflare-observability cloudflare-radar context7 docker-hub "
@@ -115,7 +116,7 @@ def context(args: argparse.Namespace, snapshot: dict, identity: dict) -> dict:
     result = {key: getattr(args, key) for key in CONTEXT_FIELDS}
     for key in ("source_sha", "workflow_sha", "signed_ledger_sha", "materialized_ledger_sha"):
         require(isinstance(result[key], str) and SHA.fullmatch(result[key]) is not None, f"invalid {key}")
-    require(result["repository"] == "777genius/universal-agent-plugins", "wrong repository")
+    require(result["repository"] == active_registry_repository(), "wrong repository")
     for key in ("sequence", "run_attempt"):
         require(type(result[key]) is int and result[key] > 0, f"invalid {key}")
     require(isinstance(result["run_id"], str) and re.fullmatch(r"[1-9][0-9]*", result["run_id"]), "invalid run ID")
