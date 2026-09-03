@@ -647,3 +647,63 @@ The following claims remain intentionally separate from this checkpoint:
 - the repository rename/cutover remains a separately gated migration step;
 - Discovery records are schema-validated and signed, but are not presented as
   manual runtime reviews or official certification.
+
+## 17. Current implementation and E2E checkpoint (2026-09-03)
+
+This section supersedes the historical checkpoint above for the current launch
+decision. It records what is actually proven on the public repositories and
+what remains externally gated.
+
+### Implemented and green
+
+- The CLI repository is `777genius/universal-agent-plugins`; the catalog is
+  `777genius/universal-agent-plugins-registry`. The historical Go module path
+  remains `github.com/777genius/plugin-kit-ai` for compatibility.
+- CLI PRs #83, #84, and #85 are merged. They fix the upstream Context7 proof,
+  enable the single npm trusted-publisher workflow, and repair the aggregate
+  release contract field. The six native platform jobs, aggregate proof, and
+  promotion all passed in Actions run `33721839429` at main commit
+  `439dd2e33b4d0be0d80d921c8894dd1ccebaa1e3`.
+- Public GitHub release `agentplugins-v0.1.36` is immutable, non-draft, and
+  contains six binaries, checksums, and a release manifest. Each binary asset
+  was verified against its checksum and GitHub attestation.
+- PR #86 fixes the macOS `/tmp` versus `/private/tmp` symlink identity edge
+  case in managed Codex cleanup. Its focused provider tests pass locally; the
+  PR's Windows smoke check is still completing and must be green before merge.
+- Production Registry Pages are reachable at the renamed origin. Directory
+  sequence 27 contains 26 products and 30 distributions. Discovery sequence
+  27 contains 2,875 schema-conformant records; latest, padded snapshot,
+  envelope, and search assets returned HTTP 200 and local signature checking
+  passed (`verified Discovery sequence 27 with 2875 records`).
+
+### External gates still open
+
+- The first npm publish attempt was stopped by the old environment tag policy;
+  that policy is now corrected. The retry reached npm and generated provenance,
+  but npm rejected the package because the trusted publisher is still bound to
+  the old repository identity (`repository_id` 1326737541). Rebind the package
+  publisher in npm Settings to `777genius/universal-agent-plugins`, workflow
+  `agentplugins-npm-publish.yml`, environment `npm-agentplugins`, then publish a
+  new immutable version (0.1.37). No token was used or copied as a workaround.
+- The public npm add/info/update/remove lifecycle is therefore not claimed yet.
+  After 0.1.37 is published, rerun the disposable multi-target lifecycle for
+  explicit `codex,cursor,kiro` targets and record the exact package version.
+- The renamed Registry Pages assets are green. The old CLI-repository feed paths
+  currently return 404; either deploy the planned signed compatibility mirror or
+  explicitly remove the old paths from the acceptance checklist before launch.
+- No OAuth, vendor-account model turn, or real user project is part of this
+  evidence. All local checks use disposable synthetic plugin data and isolated
+  temporary homes.
+
+### Safe next actions
+
+1. Wait for PR #86's remaining Windows check and merge only its tested cleanup
+   fix; do not widen runtime contracts.
+2. Rebind npm trusted publishing, tag `agentplugins-v0.1.37` at the merged main,
+   run the existing six-platform release workflow, and verify the public npm
+   lifecycle from a clean sandbox.
+3. Add the compatibility mirror (or remove the obsolete-path requirement), then
+   append the exact run IDs, SHA, package integrity, and lifecycle JSON here.
+4. Only after those gates pass, mark the corresponding acceptance items in
+   Section 14 complete. Discovery popularity is an index signal, not runtime
+   certification.
