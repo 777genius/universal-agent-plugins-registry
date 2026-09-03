@@ -30,7 +30,8 @@ breaking API migration and is not part of this launch.
 
 ### Non-negotiable contracts
 
-- `plugin.json` is the installed Agent Plugins 1.0 package authority.
+- [`Agent Plugins 1.0`](https://agent-plugins.org/specification) `plugin.json` is
+  the installed package authority.
 - `mcp.json`, skills, and supported components are loaded losslessly before a
   client adapter is selected.
 - `plugin.yaml` is legacy `plugin-kit-ai` authoring input only. It is not part of
@@ -39,6 +40,8 @@ breaking API migration and is not part of this launch.
   is stable. It cannot affect signing, short-name defaults, or production install.
 - The CLI command is `agentplugins`; the npm facade is
   `universal-agent-plugins`. The facade delegates to the checked Go binary.
+- `plugin-kit-ai` and `plugin-kit-ai-runtime` remain separate legacy npm
+  packages; they are not silently republished under the facade name.
 - A short name resolves only to a reviewed Directory default. Discovery results
   always retain publisher, repository, exact commit, package path, and digest.
 - Targets are explicit. `--target codex,cursor` means those two clients; the CLI
@@ -181,6 +184,10 @@ Use explicit targets (`codex,cursor`, then a separate Kiro preflight where
 available). Assert exact source commit, package path, tree digest, distribution
 identity, client state, rollback journal, and final cleanup. Do not execute an
 unreviewed Discovery package merely to test resolution.
+
+Conformance-corpus results are CI evidence only. Do not post them to an external
+discussion (including Agent Plugins conformance discussions) without an explicit
+maintainer approval.
 
 Kiro ACP `2.20.0` capability probes are recorded separately; capability probes do not replace the five-result launch matrix. Their sequence is not asserted until ordered external evidence exists.
 
