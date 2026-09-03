@@ -773,3 +773,20 @@ Discovery snapshots are generated from committed catalog data and copied into
 the CLI Pages artifact during deployment. Discovery refreshes are therefore
 auditable GitHub Actions changes, while the CLI remains usable with an explicit
 repository/path source even when a package is not in the index.
+
+## 20. Production CLI discovery search proof (2026-09-03)
+
+Using the `agentplugins` binary built from CLI main `1401e44`, a fresh temporary
+`AGENTPLUGINS_HOME`, and no package download, the following command completed
+against the public Pages mirror:
+
+```bash
+agentplugins search context7 --format json --trust all --client codex
+```
+
+The signed response reported Directory sequence 27 and Discovery sequence 27,
+with Discovery available and 10 deterministic results (2 reviewed Directory
+entries and 8 unreviewed Discovery entries). The reviewed `context7` alias was
+ranked first and produced the normal install selector. This proves the public
+search path and trust separation; it does not turn unreviewed Discovery records
+into runtime certification.
