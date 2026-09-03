@@ -370,6 +370,7 @@ jobs:
                       "record_count": record_count, "search_digest": projection["digest"]}
 
           def directory_identity(sandbox, data, installation):
+              import os
               # Only inspect the production cache written and signature-verified by the released CLI.
               cache = json.loads((sandbox / "state/directory-v1-cache.json").read_text())
               raw = base64.b64decode(cache["snapshot"], validate=True)
