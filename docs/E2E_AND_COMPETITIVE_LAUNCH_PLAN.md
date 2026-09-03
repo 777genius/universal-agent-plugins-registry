@@ -118,7 +118,9 @@ public tuple is:
   binding while retaining ownership-verified data.
 - The public npm workflow proves synthetic multi-target
   `add -> info -> update -> remove` for explicit `codex,cursor,kiro` targets.
-  PR #98 adds the immutable-source repair lane to that same workflow.
+  PR #98 is the in-flight hardening change that adds the immutable-source repair
+  lane to that same workflow; it is not part of the already-published 0.1.44
+  evidence until merged and green.
 - No real user project, OAuth credential, vendor account, Docker container, new
   VM, LXC instance, or snapshot was used. Heavy checks ran on GitHub-hosted CI;
   local checks used disposable homes and synthetic or public reviewed packages.
