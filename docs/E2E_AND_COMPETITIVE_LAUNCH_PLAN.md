@@ -15,7 +15,7 @@ The two public repositories have different jobs:
 | 777genius/universal-agent-plugins | User-facing product | Go CLI engine, lifecycle, adapters, SDK, canonical npm facade, releases, product README |
 | 777genius/universal-agent-plugins-registry | Community catalog | 26 reviewed packages, bridges, signed Directory and Discovery Index, site, submission workflow |
 
-The current repositories are renamed in place, preserving their GitHub repository
+The current repositories will be renamed in place, preserving their GitHub repository
 IDs, issues, stars, forks, tags, and commit history:
 
 ~~~text
