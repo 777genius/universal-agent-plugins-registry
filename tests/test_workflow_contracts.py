@@ -2015,7 +2015,7 @@ sys.modules['catalog_process_isolation']=module
         job = workflow["jobs"]["install-lifecycle"]
         self.assertEqual(job["strategy"]["matrix"]["package"][-1], {
             "id": "reviewed-chrome-short-alias", "source": "chrome-devtools",
-            "repository": "777genius/universal-agent-plugins", "revision": "signed-directory-release",
+            "repository": "777genius/universal-agent-plugins-registry", "revision": "signed-directory-release",
             "plugin": "chrome-devtools", "version": "1.7.0-uap.1"})
         install = next(step for step in job["steps"] if step.get("name") == "Install exact public npm wrapper without credentials")
         self.assertNotIn("env", install)
@@ -2087,7 +2087,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('pnpm exec playwright install --with-deps chromium', body)
         for forbidden in ("GH_TOKEN", "UAP_SIGNED_SNAPSHOT_PATH", "pnpm generate"):
             self.assertNotIn(forbidden, body)
-        for required in ('https://777genius.github.io/universal-agent-plugins/',
+        for required in ('https://777genius.github.io/universal-agent-plugins-registry/',
                          'registry.snapshot_sequence >= 20', 'discovery.sequence >= 20',
                          'discovery.records.length >= 2000', 'navigator.clipboard.readText()',
                          'recently found community packages',
@@ -2095,7 +2095,7 @@ sys.modules['catalog_process_isolation']=module
                          'assert.deepEqual(errors, [])', 'width: 390', 'width: 1440',
                          "'.plugin-card__ribbon', { hasText: /^Reviewed plugin$/",
                          "failure === 'net::ERR_ABORTED'",
-                         "pathname === '/universal-agent-plugins/discovery/latest.json'",
+                         "new URL('discovery/latest.json', base).pathname",
                          '![502, 503, 504].includes(status)',
                          'attempt <= 4',
                          'discovery:upstash/context7//plugins/agent-plugins/context7'):
