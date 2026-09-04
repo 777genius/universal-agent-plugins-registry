@@ -808,7 +808,8 @@ def build_candidate(
                 require(immutable == old_immutable, f"{label}: published immutable release fields changed")
                 require(package_source["repository"] == old["package_source"]["repository"] and package_source["path"] == old["package_source"]["path"], f"{label}: published package source changed")
                 if in_repository:
-                    require(package_source["revision"] in (None, old["package_source"]["revision"]), f"{label}: published source revision changed")
+                    if policy["status"] != "revoked":
+                        require(package_source["revision"] in (None, old["package_source"]["revision"]), f"{label}: published source revision changed")
                 else:
                     require(package_source["revision"] == old["package_source"]["revision"], f"{label}: published external source revision changed")
                 release["package_source"] = copy.deepcopy(old["package_source"])
