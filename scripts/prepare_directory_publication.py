@@ -43,6 +43,7 @@ from directory_publication import (
 )
 from directory_publication_cas import CasError, validate_marker
 from sequence_boundaries import parse_public_sequence
+from repository_identity import is_checkout_owned_repository
 from publication_trust_policy import (
     load_publication_trust_config,
     validate_publication_eligibility_trust,
@@ -131,7 +132,7 @@ def validate_local_evidence_anchor(
     artifacts = [
         item["artifact"] for item in evidence
         if item.get("trust", {}).get("kind") == "reviewed_external"
-        and item["artifact"]["repository"].casefold() == local_repository
+        and is_checkout_owned_repository(item["artifact"]["repository"].casefold(), local_repository)
     ]
     if not artifacts:
         return
@@ -598,7 +599,7 @@ def validate_reproduced_bridges(
                 continue
             local = [
                 release for release in distribution["releases"]
-                if release["package_source"]["repository"] == repository
+                if is_checkout_owned_repository(release["package_source"]["repository"], repository)
             ]
             if not local:
                 continue
@@ -695,7 +696,7 @@ def validate_signing_boundary_packages(
             distribution = distributions[identity[0]]
             release = next(item for item in distribution["releases"] if item["sequence"] == identity[1])
             package_source = release["package_source"]
-            if package_source["repository"] != repository:
+            if not is_checkout_owned_repository(package_source["repository"], repository):
                 continue  # Central external reacquisition handled above.
             revision = package_source["revision"]
             require(
@@ -703,7 +704,7 @@ def validate_signing_boundary_packages(
                 f"{identity[0]}@{identity[1]}: historical source requires a full pinned revision",
             )
             temporary = acquire_external(
-                repository, revision, package_source["path"], repository_root,
+                package_source["repository"], revision, package_source["path"], repository_root,
             )
             try:
                 validate_release_package(
@@ -800,13 +801,15 @@ def build_candidate(
             old = prior.get(identity)
             prior_for_distribution = [item for (distribution_id, _), item in prior.items() if distribution_id == distribution["id"]]
             package_source = release["package_source"]
-            in_repository = package_source["repository"] == config["repository"]
+            in_repository = is_checkout_owned_repository(package_source["repository"], config["repository"])
             if old is not None:
                 immutable = {key: value for key, value in release.items() if key not in ("published_at", "package_source")}
                 old_immutable = {key: value for key, value in old.items() if key not in ("published_at", "package_source")}
                 require(immutable == old_immutable, f"{label}: published immutable release fields changed")
                 require(package_source["repository"] == old["package_source"]["repository"] and package_source["path"] == old["package_source"]["path"], f"{label}: published package source changed")
-                if not in_repository:
+                if in_repository:
+                    require(package_source["revision"] in (None, old["package_source"]["revision"]), f"{label}: published source revision changed")
+                else:
                     require(package_source["revision"] == old["package_source"]["revision"], f"{label}: published external source revision changed")
                 release["package_source"] = copy.deepcopy(old["package_source"])
                 release["published_at"] = old["published_at"]
@@ -863,6 +866,10 @@ def build_candidate(
                         require(
                             reviewed_revision is None and reviewed_published_at is None,
                             f"{label}: new in-repository release must have an unresolved revision and no published_at",
+                        )
+                        require(
+                            package_source["repository"] == config["repository"],
+                            f"{label}: new unresolved release must use the publishing repository identity",
                         )
                         release["published_at"] = None
                         # Review source cannot author an eligible binding. Only an

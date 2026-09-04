@@ -21,7 +21,7 @@ from openai_app_bindings import (
     load_app_bindings,
     validate_binding_target,
 )
-from repository_identity import active_registry_repository
+from repository_identity import active_registry_repository, is_checkout_owned_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -464,7 +464,7 @@ def exact_selected_package(
 
     distribution, release = selected_release(directory, selection)
     package_source = release["package_source"]
-    if package_source["repository"] != LOCAL_REPOSITORY:
+    if not is_checkout_owned_repository(package_source["repository"], LOCAL_REPOSITORY):
         return None
     try:
         package_path = validate_registry_path(package_source["path"])
