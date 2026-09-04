@@ -41,7 +41,7 @@ from validate_catalog import (
     ValidationError, normalized_executable_basename, validate_mcp, validate_plugin,
     validate_skills,
 )
-from repository_identity import active_registry_repository
+from repository_identity import active_registry_repository, is_checkout_owned_repository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -880,7 +880,7 @@ def external_release_map(
         (distribution["id"], release["sequence"]): release
         for distribution in source["distributions"]
         for release in distribution["releases"]
-        if release["package_source"]["repository"] != repository
+        if not is_checkout_owned_repository(release["package_source"]["repository"], repository)
     }
 
 
@@ -1014,7 +1014,7 @@ def validate_historical_bridge_eligibility(
             continue
         local = [
             release for release in distribution["releases"]
-            if release["package_source"]["repository"] == repository
+            if is_checkout_owned_repository(release["package_source"]["repository"], repository)
         ]
         if not local:
             continue
@@ -1056,7 +1056,7 @@ def validate_changed_local_releases(
         distribution = distributions[identity[0]]
         release = next(item for item in distribution["releases"] if item["sequence"] == identity[1])
         package_source = release["package_source"]
-        if package_source["repository"] != repository:
+        if not is_checkout_owned_repository(package_source["repository"], repository):
             continue
         label = f"{identity[0]}@{identity[1]}"
         revision = package_source["revision"]
@@ -1073,7 +1073,7 @@ def validate_changed_local_releases(
             temporary = None
             try:
                 temporary = acquirer(
-                    repository, revision, package_source["path"], repository_root,
+                    package_source["repository"], revision, package_source["path"], repository_root,
                 )
                 validate_release_package(
                     Path(temporary.name) / "checkout" / package_source["path"],
@@ -1432,7 +1432,7 @@ def validate_active_local_runtime_closures(
             package_source = release["package_source"]
             if (
                 policy["status"] != "active"
-                or package_source["repository"] != repository
+                or not is_checkout_owned_repository(package_source["repository"], repository)
                 or package_source["revision"] is not None
             ):
                 continue
@@ -1465,7 +1465,7 @@ def validate_bridge_bindings(
     from build_bridges import BridgeError, load_recipe, recipe_ids, validate_components
 
     local_release_exists = any(
-        release["package_source"]["repository"] == repository
+        is_checkout_owned_repository(release["package_source"]["repository"], repository)
         for distribution in source["distributions"]
         for release in distribution["releases"]
     )
@@ -1477,7 +1477,7 @@ def validate_bridge_bindings(
             continue
         local_releases = [
             release for release in distribution["releases"]
-            if release["package_source"]["repository"] == repository
+            if is_checkout_owned_repository(release["package_source"]["repository"], repository)
         ]
         if not local_releases:
             continue
@@ -1665,7 +1665,7 @@ def validate_directory(
                 current_tuples.add(evidence_tuple)
             package_source = release["package_source"]
             if package_source["revision"] is None:
-                require(package_source["repository"] == repository, f"{distribution['id']}@{sequence}: only an in-repository release may await post-merge revision binding")
+                require(is_checkout_owned_repository(package_source["repository"], repository), f"{distribution['id']}@{sequence}: only an in-repository release may await post-merge revision binding")
                 require(package_source["path"] == f"plugins/{product_id}", f"{distribution['id']}@{sequence}: unresolved in-repository release must use the canonical product package path")
                 require("published_at" not in release, f"{distribution['id']}@{sequence}: unresolved release cannot claim a publication time")
             if distribution["kind"] == "community_bridge":
@@ -1679,7 +1679,7 @@ def validate_directory(
             # bytes in this checkout. Bound historical releases are immutable
             # at their recorded commit and may intentionally differ after the
             # canonical product path moves to a newer distribution.
-            if verify_packages and package_source["repository"] == repository and package_source["revision"] is None:
+            if verify_packages and is_checkout_owned_repository(package_source["repository"], repository) and package_source["revision"] is None:
                 package_root = repository_root / package_source["path"]
                 require(package_root.is_dir(), f"{distribution['id']}@{sequence}: package path is missing")
                 required = required_components(products_by_id[product_id])

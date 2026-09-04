@@ -460,14 +460,14 @@ class PublicationLifecycleTests(unittest.TestCase):
         directory = json.loads((ROOT / "registry" / "directory.json").read_bytes())
         artifacts = [
             artifact for artifact in config["trusted_external_evidence"]
-            if artifact["repository"] == config["repository"]
+            if prepare.is_checkout_owned_repository(artifact["repository"], config["repository"])
         ]
         self.assertTrue(artifacts)
         reviewed_directory_artifacts = {
             json.dumps(item["artifact"], sort_keys=True)
             for item in directory["evidence"]
             if item["trust"]["kind"] == "reviewed_external"
-            and item["artifact"]["repository"] == config["repository"]
+            and prepare.is_checkout_owned_repository(item["artifact"]["repository"], config["repository"])
         }
         self.assertEqual(
             reviewed_directory_artifacts, {json.dumps(item, sort_keys=True) for item in artifacts},
