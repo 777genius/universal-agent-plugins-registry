@@ -1,38 +1,32 @@
 {
   "name": "cloudflare-observability",
-  "version": "0.1.0",
-  "description": "Community package for the official Cloudflare hosted MCP plugin for logs, analytics, and production debugging through Cloudflare's remote observability server.",
+  "version": "0.5.5-uap.1",
+  "description": "Community package for Cloudflare Observability MCP. Query Workers logs and analytics through Cloudflare's hosted Observability MCP server.",
   "author": {
     "name": "777genius",
     "url": "https://github.com/777genius"
   },
-  "homepage": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
-  "repository": "https://github.com/777genius/universal-agent-plugins",
+  "homepage": "https://github.com/cloudflare/mcp-server-cloudflare/tree/main/apps/workers-observability",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
   "license": "Apache-2.0",
   "keywords": [
-    "agent-plugins",
-    "ai-agents",
-    "analytics",
-    "cloud",
     "cloudflare",
-    "debugging",
-    "devops",
-    "mcp",
     "observability",
-    "plugins"
+    "mcp",
+    "workers"
   ],
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Cloudflare Observability",
     "shortDescription": "Cloudflare logs MCP",
-    "longDescription": "Community package for the official Cloudflare hosted MCP plugin for logs, analytics, and production debugging through Cloudflare's remote observability server.",
+    "longDescription": "Community package for Cloudflare Observability MCP. Query Workers logs and analytics through Cloudflare's hosted Observability MCP server.",
     "developerName": "777genius",
     "category": "Developer Tools",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "websiteURL": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+    "websiteURL": "https://github.com/cloudflare/mcp-server-cloudflare/tree/main/apps/workers-observability",
     "defaultPrompt": [
       "Use Cloudflare Observability for this task."
     ],

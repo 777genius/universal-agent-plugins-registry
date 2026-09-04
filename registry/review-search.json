@@ -15,7 +15,7 @@
     },
     {
       "product_id": "cloudflare",
-      "text": "cloudflare community package for the official cloudflare api mcp plugin for token-efficient access to the cloudflare api through cloudflare's hosted code mode server. cloudflare agent-plugins ai-agents api cloud cloudflare devops mcp plugins workers"
+      "text": "cloudflare community package for cloudflare's 13 platform skills and api mcp server. build, test, and deploy applications with guidance from cloudflare/skills. cloudflare agent-plugins ai-agents api cloud cloudflare devops mcp plugins workers"
     },
     {
       "product_id": "cloudflare-bindings",

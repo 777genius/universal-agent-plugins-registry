@@ -1,0 +1,11 @@
+Cloudflare Observability community bridge
+
+Configuration evidence: cloudflare/mcp-server-cloudflare
+Commit: db9084730dd45ebb6ac4dd5d3181d189cc96e98d
+Paths: README.md and apps/workers-observability/package.json
+Upstream license: Apache-2.0
+License evidence: LICENSE, SHA-256 62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a
+
+No upstream server source is redistributed. Configuration and package
+documentation are independently assembled by 777genius.
+Not authored, published, or endorsed as a distribution by Cloudflare.

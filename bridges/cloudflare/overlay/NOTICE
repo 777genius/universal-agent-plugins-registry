@@ -1,0 +1,15 @@
+Cloudflare skills community bridge
+
+Includes skills, supporting files and MCP configuration from cloudflare/skills
+at commit 9177f9a0bafc1ab61a0dae8dca57a8eb4d9f636d.
+Copyright and attribution notices in the upstream files are retained.
+Upstream license: Apache-2.0; the complete license is included as LICENSE.
+
+Changes by 777genius:
+- Community package manifest and installation documentation.
+- Moved the cloudflare and turnstile-spin skill reference lists from the
+  nonstandard frontmatter key `references` into ordinary Markdown links.
+  Reference content and the original skill instructions are preserved.
+
+This package is independently assembled, not authored, published or endorsed
+as a distribution by Cloudflare. The upstream skills remain Cloudflare's work.

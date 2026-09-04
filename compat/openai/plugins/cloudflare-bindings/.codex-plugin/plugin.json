@@ -1,35 +1,32 @@
 {
   "name": "cloudflare-bindings",
-  "version": "0.1.0",
-  "description": "Community package for the official Cloudflare Workers Bindings MCP integration for storage, AI, and compute primitives.",
+  "version": "0.5.5-uap.1",
+  "description": "Community package for Cloudflare Bindings MCP. Manage Workers platform resources through Cloudflare's hosted Bindings MCP server.",
   "author": {
     "name": "777genius",
     "url": "https://github.com/777genius"
   },
-  "homepage": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
-  "repository": "https://github.com/777genius/universal-agent-plugins",
+  "homepage": "https://github.com/cloudflare/mcp-server-cloudflare/tree/main/apps/workers-bindings",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
   "license": "Apache-2.0",
   "keywords": [
-    "agent-plugins",
-    "ai-agents",
-    "bindings",
     "cloudflare",
+    "bindings",
     "mcp",
-    "plugins",
     "workers"
   ],
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Cloudflare Bindings",
     "shortDescription": "Workers bindings MCP",
-    "longDescription": "Community package for the official Cloudflare Workers Bindings MCP integration for storage, AI, and compute primitives.",
+    "longDescription": "Community package for Cloudflare Bindings MCP. Manage Workers platform resources through Cloudflare's hosted Bindings MCP server.",
     "developerName": "777genius",
     "category": "Developer Tools",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "websiteURL": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+    "websiteURL": "https://github.com/cloudflare/mcp-server-cloudflare/tree/main/apps/workers-bindings",
     "defaultPrompt": [
       "Use Cloudflare Bindings for this task."
     ],

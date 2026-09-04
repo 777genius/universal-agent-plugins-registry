@@ -1,37 +1,35 @@
 {
   "name": "cloudflare",
-  "version": "0.1.0",
-  "description": "Community package for the official Cloudflare API MCP plugin for token-efficient access to the Cloudflare API through Cloudflare's hosted Code Mode server.",
+  "version": "1.0.0-uap.1",
+  "description": "Community package for Cloudflare's platform skills and API MCP server. Build, test, and deploy applications with the complete portable skill collection from cloudflare/skills.",
   "author": {
     "name": "777genius",
     "url": "https://github.com/777genius"
   },
-  "homepage": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
-  "repository": "https://github.com/777genius/universal-agent-plugins",
+  "homepage": "https://github.com/cloudflare/skills",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
   "license": "Apache-2.0",
   "keywords": [
-    "agent-plugins",
-    "ai-agents",
-    "api",
-    "cloud",
+    "agents",
     "cloudflare",
-    "devops",
     "mcp",
-    "plugins",
-    "workers"
+    "skills",
+    "workers",
+    "wrangler"
   ],
+  "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Cloudflare",
     "shortDescription": "Cloudflare API MCP",
-    "longDescription": "Community package for the official Cloudflare API MCP plugin for token-efficient access to the Cloudflare API through Cloudflare's hosted Code Mode server.",
+    "longDescription": "Community package for Cloudflare's platform skills and API MCP server. Build, test, and deploy applications with the complete portable skill collection from cloudflare/skills.",
     "developerName": "777genius",
     "category": "Developer Tools",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "websiteURL": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+    "websiteURL": "https://github.com/cloudflare/skills",
     "defaultPrompt": [
       "Use Cloudflare for this task."
     ],

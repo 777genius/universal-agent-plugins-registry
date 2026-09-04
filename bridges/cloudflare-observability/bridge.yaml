@@ -1,0 +1,26 @@
+schema_version: 1
+product_id: cloudflare-observability
+distribution_id: 777genius/cloudflare-observability-bridge
+upstream:
+  repository: cloudflare/mcp-server-cloudflare
+  revision: db9084730dd45ebb6ac4dd5d3181d189cc96e98d
+  license:
+    spdx: Apache-2.0
+    attribution_paths:
+      - path: LICENSE
+        sha256: sha256:62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a
+  provenance:
+    paths:
+      - path: README.md
+        sha256: sha256:56e30f1b322cc5fe02437866ea47432fc45da1e2f71e4fa3e09207b59bd9f843
+      - path: apps/workers-observability/package.json
+        sha256: sha256:806448bd7cacbf6bc59519c2613526dbbd7f0bdea9cbbf40efc7478e022a2830
+copy: []
+overlay: overlay
+overlay_replacements: []
+output: plugins/cloudflare-observability
+executable_paths: []
+expected_version: 0.5.5-uap.1
+components:
+  mcp_servers: [cloudflare-observability]
+  skills: []
