@@ -1021,7 +1021,10 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(CANONICAL_PRODUCT_IDS, {path.name for path in registry.ROOT.joinpath("plugins").iterdir() if path.is_dir()})
         alternatives = {
             "chrome-devtools": ["777genius/chrome-devtools", "777genius/chrome-devtools-bridge"],
+            "cloudflare": ["777genius/cloudflare", "777genius/cloudflare-bridge"],
+            "cloudflare-bindings": ["777genius/cloudflare-bindings", "777genius/cloudflare-bindings-bridge"],
             "cloudflare-docs": ["777genius/cloudflare-docs", "777genius/cloudflare-docs-bridge"],
+            "cloudflare-observability": ["777genius/cloudflare-observability", "777genius/cloudflare-observability-bridge"],
             "context7": ["777genius/context7", "upstash/context7"],
             "github": ["777genius/github", "777genius/github-bridge"],
         }
@@ -1104,6 +1107,11 @@ class DirectoryDomainTests(unittest.TestCase):
                     and distribution["id"]
                     not in {"upstash/context7", "777genius/cloudflare-docs", "777genius/github"}
                 ):
+                    expected_minimum = "0.1.26"
+                if distribution["id"] in {
+                    "777genius/cloudflare-bridge", "777genius/cloudflare-bindings-bridge",
+                    "777genius/cloudflare-observability-bridge",
+                }:
                     expected_minimum = "0.1.26"
                 self.assertEqual(policy["minimum_installer_version"], expected_minimum)
             release = distribution["releases"][0]
@@ -1217,7 +1225,11 @@ class DirectoryDomainTests(unittest.TestCase):
                 policy = next(item for item in distribution["release_policies"] if item["release_sequence"] == resolved["release_sequence"])
                 by_client = {target["client"]: target for target in policy["targets"]}
                 self.assertEqual({client: by_client[client]["delivery"] for client in clients}, expected_delivery)
-                self.assertEqual(policy["minimum_installer_version"], "0.1.26")
+                minimum = "0.1.26" if distribution["id"] in {
+                    "777genius/cloudflare-bridge", "777genius/cloudflare-bindings-bridge",
+                    "777genius/cloudflare-observability-bridge",
+                } else "0.1.26"
+                self.assertEqual(policy["minimum_installer_version"], minimum)
 
     def test_chrome_preview_preserves_complete_target_resolution_without_runtime_claims(self) -> None:
         source = self.source()

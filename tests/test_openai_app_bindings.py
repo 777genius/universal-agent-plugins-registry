@@ -750,6 +750,28 @@ class OpenAIAppBindingTests(unittest.TestCase):
                         ),
                     )
 
+    def test_generated_projection_preserves_and_removes_portable_legal_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            output = root / "output"
+            source.mkdir()
+            output.mkdir()
+            (source / "LICENSE").write_bytes(b"license bytes\n")
+            (source / "NOTICE").write_bytes(b"attribution bytes\n")
+
+            builder.copy_portable_legal_files(source, output)
+
+            self.assertEqual((output / "LICENSE").read_bytes(), b"license bytes\n")
+            self.assertEqual((output / "NOTICE").read_bytes(), b"attribution bytes\n")
+
+            (source / "LICENSE").unlink()
+            (source / "NOTICE").unlink()
+            builder.copy_portable_legal_files(source, output)
+
+            self.assertFalse((output / "LICENSE").exists())
+            self.assertFalse((output / "NOTICE").exists())
+
     def test_generated_plugin_rejects_missing_plugin_root_resource(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

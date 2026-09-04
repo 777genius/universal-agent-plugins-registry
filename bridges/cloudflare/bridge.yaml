@@ -1,0 +1,53 @@
+schema_version: 1
+product_id: cloudflare
+distribution_id: 777genius/cloudflare-bridge
+upstream:
+  repository: cloudflare/skills
+  revision: 9177f9a0bafc1ab61a0dae8dca57a8eb4d9f636d
+  license:
+    spdx: Apache-2.0
+    attribution_paths:
+      - path: LICENSE
+        sha256: sha256:58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd
+  provenance:
+    paths:
+      - path: plugin.json
+        sha256: sha256:4ccb9de51993b5db32880a5a166f97bcb0211884f1cab5d50366a36af48a757f
+      - path: mcp.json
+        sha256: sha256:97531ff2cc2ab86f3d60e2f728efd853869608c314c8fb0426fc1eaf30e6c7cf
+copy:
+  - source: skills
+    destination: skills
+  - source: mcp.json
+    destination: mcp.json
+  - source: LICENSE
+    destination: LICENSE
+overlay: overlay
+overlay_replacements:
+  - path: skills/cloudflare/SKILL.md
+    upstream_sha256: sha256:183987945e4885006cc8dbdcd923e19d13667618d496b3be666973ded2665f92
+  - path: skills/turnstile-spin/SKILL.md
+    upstream_sha256: sha256:0d8df415c594c96ca5a4d393b70681d95d92365465e0eb14af3ab2eaa76d800b
+output: plugins/cloudflare
+executable_paths:
+  - skills/turnstile-spin/scripts/auth-probe.sh
+  - skills/turnstile-spin/scripts/persist-skill.sh
+  - skills/turnstile-spin/scripts/validate.sh
+  - skills/turnstile-spin/scripts/widget-create.sh
+expected_version: 1.0.0-uap.1
+components:
+  mcp_servers: [cloudflare]
+  skills:
+    - agents-sdk
+    - cloudflare-email-service
+    - cloudflare-one-migrations
+    - cloudflare-one
+    - cloudflare
+    - durable-objects
+    - sandbox-migrate-to-next
+    - sandbox-next
+    - sandbox-stable
+    - turnstile-spin
+    - web-perf
+    - workers-best-practices
+    - wrangler

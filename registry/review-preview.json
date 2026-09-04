@@ -762,7 +762,7 @@
     {
       "id": "cloudflare",
       "display_name": "Cloudflare",
-      "description": "Community package for the official Cloudflare API MCP plugin for token-efficient access to the Cloudflare API through Cloudflare's hosted Code Mode server.",
+      "description": "Community package for Cloudflare's 13 platform skills and API MCP server. Build, test, and deploy applications with guidance from cloudflare/skills.",
       "aliases": [
         "cloudflare"
       ],
@@ -777,8 +777,9 @@
         "plugins",
         "workers"
       ],
-      "default_distribution": "777genius/cloudflare",
+      "default_distribution": "777genius/cloudflare-bridge",
       "fallback_order": [
+        "777genius/cloudflare-bridge",
         "777genius/cloudflare"
       ],
       "target_resolutions": [
@@ -789,7 +790,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -799,7 +800,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -809,7 +810,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -819,7 +820,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -829,7 +830,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -839,7 +840,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -849,7 +850,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -859,7 +860,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -869,7 +870,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -879,7 +880,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         },
         {
@@ -925,7 +926,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare",
+          "distribution_id": "777genius/cloudflare-bridge",
           "release_sequence": 1
         }
       ],
@@ -990,6 +991,68 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:3c882fefc11319f5f51753786b53fe0da3978f45d6797dccdcc9f283f61424a5",
           "manifest_digest": "sha256:9bec7cfed2ecb217145c2a02658296670a328416566433518b4da0246e91d382"
+        },
+        {
+          "id": "777genius/cloudflare-bridge",
+          "kind": "community_bridge",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "1.0.0-uap.1",
+          "components": [
+            "mcp",
+            "skills"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/cloudflare"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:29e6dee60be2acf06370ed182de228f101eb5d643809b87019d84e1b27f3408b",
+          "manifest_digest": "sha256:ed0c1776a5ff085de37447f8f0c28ed04148dce47c7dffabb550b08989e97465"
         }
       ]
     },
@@ -1009,8 +1072,9 @@
         "plugins",
         "workers"
       ],
-      "default_distribution": "777genius/cloudflare-bindings",
+      "default_distribution": "777genius/cloudflare-bindings-bridge",
       "fallback_order": [
+        "777genius/cloudflare-bindings-bridge",
         "777genius/cloudflare-bindings"
       ],
       "target_resolutions": [
@@ -1021,7 +1085,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1031,7 +1095,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1041,7 +1105,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1051,7 +1115,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1061,7 +1125,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1071,7 +1135,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1081,7 +1145,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1091,7 +1155,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1101,7 +1165,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1111,7 +1175,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         },
         {
@@ -1157,7 +1221,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-bindings",
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
           "release_sequence": 1
         }
       ],
@@ -1222,6 +1286,67 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:f5355538e1558c47e51f2249a753fc179352a27e17de213ee6763c4eeac763b5",
           "manifest_digest": "sha256:6b945cf035f784216e71425cf7b6ca477b27a2069d2580e9713a65f5ec2ca0bf"
+        },
+        {
+          "id": "777genius/cloudflare-bindings-bridge",
+          "kind": "community_bridge",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "0.5.5-uap.1",
+          "components": [
+            "mcp"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/cloudflare-bindings"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:19408ffd451d109a345e3aa6e46de029efc730971576933e2649c1859f5f5936",
+          "manifest_digest": "sha256:b666db9fbf269ca6f333209f47be3ca99aaf8ca7d16c5d8907703c4a2bf8ba64"
         }
       ]
     },
@@ -1571,8 +1696,9 @@
         "observability",
         "plugins"
       ],
-      "default_distribution": "777genius/cloudflare-observability",
+      "default_distribution": "777genius/cloudflare-observability-bridge",
       "fallback_order": [
+        "777genius/cloudflare-observability-bridge",
         "777genius/cloudflare-observability"
       ],
       "target_resolutions": [
@@ -1583,7 +1709,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1593,7 +1719,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1603,7 +1729,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1613,7 +1739,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1623,7 +1749,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1633,7 +1759,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1643,7 +1769,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1653,7 +1779,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1663,7 +1789,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1673,7 +1799,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         },
         {
@@ -1719,7 +1845,7 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/cloudflare-observability",
+          "distribution_id": "777genius/cloudflare-observability-bridge",
           "release_sequence": 1
         }
       ],
@@ -1784,6 +1910,67 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:59d64ca296d700a78c134a5947eacff8f91fa64b07f910f90476c3e4fe03c1e7",
           "manifest_digest": "sha256:41573bb020202619d72fe2cbbf35c56cb5ed4b885b17867ffd2e4a74ebcb5064"
+        },
+        {
+          "id": "777genius/cloudflare-observability-bridge",
+          "kind": "community_bridge",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "0.5.5-uap.1",
+          "components": [
+            "mcp"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/cloudflare-observability"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:e3455b86762215fbff2363094fbde3224033eeeb7b3994d4e3d3824afd37c5db",
+          "manifest_digest": "sha256:ceb9033ca2ae731cea03bee513ed394b2053e58bbf8e8c8f1f3f184af1c6d719"
         }
       ]
     },

@@ -120,6 +120,17 @@ def dump(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
+def copy_portable_legal_files(portable_root: Path, output: Path) -> None:
+    """Preserve top-level license and attribution files in host projections."""
+    for name in ("LICENSE", "NOTICE"):
+        source = portable_root / name
+        target = output / name
+        if source.is_file() and not source.is_symlink():
+            shutil.copy2(source, target)
+        else:
+            target.unlink(missing_ok=True)
+
+
 def display_name(name: str) -> str:
     """Return the user-facing name for a portable package."""
     special = {
@@ -585,6 +596,7 @@ def build(output_root: Path, marketplace_path: Path) -> None:
             assets.mkdir(parents=True, exist_ok=True)
             shutil.copy2(BRAND_ASSETS / "icon.png", assets / "icon.png")
             shutil.copy2(BRAND_ASSETS / "logo.png", assets / "logo.png")
+            copy_portable_legal_files(portable_root, output)
             shutil.copy2(portable_root / "README.md", output / "README.md")
             entries.append(
                 {
