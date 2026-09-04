@@ -62,6 +62,33 @@ class RegistryRenameBoundaryTests(unittest.TestCase):
             with self.assertRaisesRegex(publication.PublicationError, "revision changed"):
                 self.candidate(source, root, previous)
 
+    def test_revoked_legacy_release_reuses_authoritative_signed_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.source(root, LEGACY)
+            distribution = source["distributions"][0]
+            distribution["status"] = "suspended"
+            distribution["release_policies"][0]["status"] = "revoked"
+            release = distribution["releases"][0]
+            release["package_source"]["revision"] = "a" * 40
+            previous = copy.deepcopy(source)
+            signed = previous["distributions"][0]["releases"][0]
+            signed["package_source"]["revision"] = "b" * 40
+            signed["published_at"] = "2026-08-20T00:00:00Z"
+
+            with mock.patch.object(prepare, "acquire_external", side_effect=AssertionError("revoked release must remain offline")):
+                candidate = self.candidate(source, root, previous)
+            actual = candidate["distributions"][0]["releases"][0]
+            self.assertEqual(actual["package_source"], signed["package_source"])
+            self.assertEqual(actual["published_at"], signed["published_at"])
+
+            distribution["status"] = "active"
+            distribution["release_policies"][0]["status"] = "active"
+            previous["distributions"][0]["status"] = "active"
+            previous["distributions"][0]["release_policies"][0]["status"] = "active"
+            with self.assertRaisesRegex(publication.PublicationError, "published source revision changed"):
+                self.candidate(source, root, previous)
+
     def test_broadened_legacy_reacquisition_retains_exact_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
