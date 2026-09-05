@@ -65,6 +65,7 @@ READ_ONLY_PLUGINS = {
     "cloudflare-radar",
     "context7",
     "docker-hub",
+    "firecrawl",
     "greptile",
     "hubspot-crm",
 }
@@ -89,6 +90,7 @@ SHORT_DESCRIPTIONS = {
     "docker-hub": "Docker Hub discovery",
     "figma": "Figma design context",
     "firebase": "Firebase development MCP",
+    "firecrawl": "Web search and scraping MCP",
     "github": "GitHub workflows MCP",
     "gitlab": "GitLab workflows MCP",
     "greptile": "Repository intelligence",

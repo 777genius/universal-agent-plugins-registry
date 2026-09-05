@@ -404,6 +404,35 @@
     },
     {
       "schema_version": 1,
+      "id": "firecrawl",
+      "display_name": "Firecrawl",
+      "description": "Community package for Firecrawl MCP. Search, scrape, and parse public web content through Firecrawl's hosted server.",
+      "manifest_name": "firecrawl",
+      "aliases": [
+        "firecrawl"
+      ],
+      "reserved_aliases": [
+        "firecrawl"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "mcp",
+        "research",
+        "scraping",
+        "search"
+      ],
+      "minimum_capabilities": {
+        "skills": "optional",
+        "mcp": "required"
+      },
+      "default_distribution": "777genius/firecrawl-bridge",
+      "distributions": [
+        "777genius/firecrawl-bridge"
+      ]
+    },
+    {
+      "schema_version": 1,
       "id": "github",
       "display_name": "GitHub",
       "description": "Community package for GitHub MCP Server. Work with repositories, issues, pull requests, reviews, and code search through GitHub's hosted MCP endpoint.",
@@ -3108,6 +3137,107 @@
               "scopes": [
                 "user"
               ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "777genius/firecrawl-bridge",
+      "product_id": "firecrawl",
+      "kind": "community_bridge",
+      "status": "active",
+      "packager": "777genius",
+      "releases": [
+        {
+          "sequence": 1,
+          "package_version": "3.24.1",
+          "manifest_name": "firecrawl",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/firecrawl"
+          },
+          "build_provenance": {
+            "upstream_repository": "firecrawl/firecrawl-mcp-server",
+            "upstream_revision": "518e9299817aca118f0b3f5dded4c5fe7889d24e"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:a99ca95c810a29494ab55e6a1b827d88b89f27a3572f10e7918098914d1570ad",
+          "manifest_digest": "sha256:5dd4a55467b3149a3cd253b465796b1f021d66eab9244b8faed627b0209f4bf6",
+          "components": [
+            "mcp"
+          ]
+        }
+      ],
+      "release_policies": [
+        {
+          "release_sequence": 1,
+          "status": "active",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": ["user"],
               "delivery": "prepared"
             }
           ],

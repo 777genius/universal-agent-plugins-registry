@@ -35,6 +35,7 @@ CANONICAL_PRODUCT_IDS = {
     "docker-hub",
     "figma",
     "firebase",
+    "firecrawl",
     "github",
     "gitlab",
     "greptile",
@@ -1026,6 +1027,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "cloudflare-docs": ["777genius/cloudflare-docs", "777genius/cloudflare-docs-bridge"],
             "cloudflare-observability": ["777genius/cloudflare-observability", "777genius/cloudflare-observability-bridge"],
             "context7": ["777genius/context7", "upstash/context7"],
+            "firecrawl": ["777genius/firecrawl-bridge"],
             "github": ["777genius/github", "777genius/github-bridge"],
         }
         products = {item["id"]: item for item in source["products"]}
@@ -1132,6 +1134,10 @@ class DirectoryDomainTests(unittest.TestCase):
             self.assertEqual(registry.resolve_directory(source, product, ["codex"])["distribution_id"], bridge)
             legacy = f"777genius/{product}"
             self.assertEqual(registry.resolve_directory(source, legacy, ["codex"])["distribution_id"], legacy)
+        self.assertEqual(
+            registry.resolve_directory(source, "firecrawl", ["codex"])["distribution_id"],
+            "777genius/firecrawl-bridge",
+        )
         chrome = registry.resolve_directory(source, "chrome-devtools", ["codex"])
         self.assertEqual((chrome["distribution_id"], chrome["release_sequence"]), ("777genius/chrome-devtools-bridge", 2))
         with self.assertRaisesRegex(registry.RegistryError, r"777genius/chrome-devtools: distribution is suspended"):
@@ -1510,6 +1516,7 @@ class DirectoryDomainTests(unittest.TestCase):
         expected = {
             "777genius/chrome-devtools-bridge": ("ChromeDevTools/chrome-devtools-mcp", "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"),
             "777genius/cloudflare-docs-bridge": ("cloudflare/mcp-server-cloudflare", "0c51a6fbcf9a2fae80120287e8238fb947cdc2df"),
+            "777genius/firecrawl-bridge": ("firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e"),
             "777genius/github-bridge": ("github/github-mcp-server", "fcdd664099f957c4a7dc183d9381cef191e8c8a9"),
         }
         for distribution_id, provenance in expected.items():
@@ -2058,6 +2065,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "cloudflare-docs",
             "context7",
             "docker-hub",
+            "firecrawl",
         }
         targets = [
             (distribution, target)

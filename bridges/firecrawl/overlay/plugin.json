@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "firecrawl",
+  "version": "3.24.1",
+  "description": "Community package for Firecrawl MCP. Search, scrape, and parse public web content through Firecrawl's hosted server.",
+  "author": {"name": "777genius", "url": "https://github.com/777genius"},
+  "homepage": "https://docs.firecrawl.dev/mcp-server",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
+  "license": "MIT",
+  "keywords": ["firecrawl", "mcp", "research", "scraping", "search"]
+}

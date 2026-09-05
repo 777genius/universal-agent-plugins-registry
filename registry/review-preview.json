@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "product_count": 26,
+  "product_count": 27,
   "products": [
     {
       "id": "agent-code-navigator",
@@ -3221,6 +3221,237 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:f29d3dffebdc119f57a32b29461863ecde25aaed11aa8e5473d3cc857d3e5eb0",
           "manifest_digest": "sha256:ae8b10620d67a17a08e8aeb80910a66436b86f26716854b520ad3b414b2af3b2"
+        }
+      ]
+    },
+    {
+      "id": "firecrawl",
+      "display_name": "Firecrawl",
+      "description": "Community package for Firecrawl MCP. Search, scrape, and parse public web content through Firecrawl's hosted server.",
+      "aliases": [
+        "firecrawl"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "mcp",
+        "research",
+        "scraping",
+        "search"
+      ],
+      "default_distribution": "777genius/firecrawl-bridge",
+      "fallback_order": [
+        "777genius/firecrawl-bridge"
+      ],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        }
+      ],
+      "distributions": [
+        {
+          "id": "777genius/firecrawl-bridge",
+          "kind": "community_bridge",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "3.24.1",
+          "components": [
+            "mcp"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/firecrawl"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:a99ca95c810a29494ab55e6a1b827d88b89f27a3572f10e7918098914d1570ad",
+          "manifest_digest": "sha256:5dd4a55467b3149a3cd253b465796b1f021d66eab9244b8faed627b0209f4bf6"
         }
       ]
     },

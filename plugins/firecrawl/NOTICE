@@ -1,0 +1,15 @@
+Firecrawl community bridge
+
+This Agent Plugins package was independently assembled by 777genius. It is not
+authored, published, sponsored, or endorsed by Firecrawl.
+
+Upstream project: firecrawl/firecrawl-mcp-server
+Pinned revision: 518e9299817aca118f0b3f5dded4c5fe7889d24e
+Upstream version: 3.24.1
+Upstream license: MIT
+License evidence: LICENSE (SHA-256 9c12811442b47e27f690be7cf0252f6bf93ddee18476f13e0fc6b4badb09c22c)
+Endpoint evidence: README.md (SHA-256 29446469f7d25038a4d80b7c714a7cac6e1f5389c3742f434055af07caf3664e)
+Version evidence: package.json (SHA-256 e19e164c665bc2be971f2b0c08b34ae502f101855dd278f8a7d422189e46ee5f)
+
+No upstream source or executable bytes are copied into this package. The
+upstream files above are provenance evidence only.

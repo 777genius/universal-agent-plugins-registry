@@ -149,6 +149,18 @@
       "category": "Developer Tools"
     },
     {
+      "name": "firecrawl",
+      "source": {
+        "source": "local",
+        "path": "./compat/openai/plugins/firecrawl"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "github",
       "source": {
         "source": "local",

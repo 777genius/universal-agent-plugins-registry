@@ -50,6 +50,10 @@
       "text": "firebase google firebase mcp integration. manage firestore databases, authentication, cloud functions, hosting, and storage. build and manage your firebase backend directly from your development workflow. firebase agent-plugins ai-agents firebase firestore mcp plugins"
     },
     {
+      "product_id": "firecrawl",
+      "text": "firecrawl community package for firecrawl mcp. search, scrape, and parse public web content through firecrawl's hosted server. firecrawl agent-plugins ai-agents mcp research scraping search"
+    },
+    {
       "product_id": "github",
       "text": "github community package for github mcp server. work with repositories, issues, pull requests, reviews, and code search through github's hosted mcp endpoint. github agent-plugins ai-agents auth github mcp plugins"
     },
