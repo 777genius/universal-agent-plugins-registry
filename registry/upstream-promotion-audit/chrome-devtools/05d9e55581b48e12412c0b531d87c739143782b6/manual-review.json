@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "promotion_kind": "locked_bridge",
+  "auto_merge": false,
+  "manual_review_required": true,
+  "risk_signals": [
+    "upstream_runtime_uses_live_npx",
+    "new_upstream_runtime_bytes"
+  ],
+  "product_id": "chrome-devtools",
+  "distribution_id": "777genius/chrome-devtools-bridge",
+  "release_sequence": 3,
+  "minimum_installer_version": "0.1.26",
+  "upstream": {
+    "repository": "ChromeDevTools/chrome-devtools-mcp",
+    "pull_request": 2623,
+    "reviewed_head_sha": "59380dd5c1af79973081d7b594262e86e24eb0b3",
+    "merge_sha": "05d9e55581b48e12412c0b531d87c739143782b6",
+    "merged_at": "2026-09-02T07:59:47Z",
+    "package_path": "."
+  },
+  "runtime": {
+    "npm_package": "chrome-devtools-mcp",
+    "version": "1.8.0",
+    "integrity": "sha512-Wrm9z0/5WbVs778apjWgYRkpe9bvYQWjK2zVRwqoPAtz1IHQ5+GvotM07UGXJcfrA0rj6Gt1Pnn5+w/Tf1nU4w==",
+    "package_lock_sha256": "sha256:516a32b742395eceefffbb45e5d04faa9b200923b370f01948de385a392cff34",
+    "entrypoint": "node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js"
+  },
+  "package": {
+    "path": "plugins/chrome-devtools",
+    "version": "1.8.0-uap.1",
+    "tree_digest": "sha256:96cbf3be3f037e802a46c11c8221b76cef7a1aa9ebc95746938bd89fb410feb5",
+    "manifest_digest": "sha256:9944e9506213597655e3fd18cfa843ecc167bbb8f8c60ee1daf441cbb792d5e2",
+    "components": [
+      "mcp"
+    ]
+  },
+  "previous_revision": "994c4233fbb9b97416644d84ca456acaf78f0cf9",
+  "materialization": {
+    "artifact": {
+      "repository": "777genius/universal-agent-plugins",
+      "revision": "a81f8e0a8b2a572b1ce59c152f8c7f4f226ea9dc",
+      "path": "evidence/upstream-promotions/chrome-devtools/05d9e55581b48e12412c0b531d87c739143782b6/materialization.json",
+      "digest": "sha256:50ee353c2c4157a03726b1844e107ad4ce5af1b0beec59ec0ec52a7dab9836bf"
+    },
+    "run": {
+      "attempt": "1",
+      "id": "33976609729",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "source_sha": "994c4233fbb9b97416644d84ca456acaf78f0cf9"
+    },
+    "clients": [
+      "codex",
+      "cursor",
+      "kiro"
+    ]
+  }
+}

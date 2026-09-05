@@ -1290,7 +1290,7 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins",
-            "revision": null,
+            "revision": "994c4233fbb9b97416644d84ca456acaf78f0cf9",
             "path": "plugins/chrome-devtools"
           },
           "build_provenance": {
@@ -1300,6 +1300,27 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed",
           "manifest_digest": "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 3,
+          "package_version": "1.8.0-uap.1",
+          "manifest_name": "chrome-devtools",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins",
+            "revision": null,
+            "path": "plugins/chrome-devtools"
+          },
+          "build_provenance": {
+            "upstream_repository": "ChromeDevTools/chrome-devtools-mcp",
+            "upstream_revision": "05d9e55581b48e12412c0b531d87c739143782b6"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:96cbf3be3f037e802a46c11c8221b76cef7a1aa9ebc95746938bd89fb410feb5",
+          "manifest_digest": "sha256:9944e9506213597655e3fd18cfa843ecc167bbb8f8c60ee1daf441cbb792d5e2",
           "components": [
             "mcp"
           ]
@@ -1356,6 +1377,94 @@
         },
         {
           "release_sequence": 2,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 3,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
@@ -3212,61 +3321,81 @@
             {
               "client": "codex",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "cursor",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "copilot",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "vscode",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "prepared"
             },
             {
               "client": "kiro",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "claude",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "gemini",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "opencode",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "cline",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "windsurf",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "prepared"
             }
           ],
@@ -4587,61 +4716,81 @@
             {
               "client": "codex",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "cursor",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "copilot",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "vscode",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "prepared"
             },
             {
               "client": "kiro",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "claude",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "gemini",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "opencode",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "cline",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "managed"
             },
             {
               "client": "windsurf",
               "authentication": "not_required",
-              "scopes": ["user"],
+              "scopes": [
+                "user"
+              ],
               "delivery": "prepared"
             }
           ],
