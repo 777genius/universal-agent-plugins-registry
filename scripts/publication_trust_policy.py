@@ -234,15 +234,19 @@ def validate_publication_eligibility_trust(
         passed: set[str] = set()
         for evidence_id in policy["current_evidence"]:
             observation = evidence_by_id[evidence_id]
+            trust_kind = observation.get("trust", {}).get("kind")
             if (
                 observation["distribution_id"] == distribution["id"]
                 and observation["release_sequence"] == release["sequence"]
                 and observation["package_tree_digest"] == release["tree_digest"]
                 and observation.get("level") == "materialization"
                 and observation.get("outcome") == "passed"
-                and observation.get("trust", {}).get("kind") == "github_actions"
+                and trust_kind in {"github_actions", "reviewed_external"}
             ):
-                trusted_workflow_policy(observation, config, evidence_id)
+                if trust_kind == "github_actions":
+                    trusted_workflow_policy(observation, config, evidence_id)
+                else:
+                    trusted_external_artifact_policy(observation, config, evidence_id)
                 client = observation.get("client")
                 if isinstance(client, str):
                     passed.add(client)
