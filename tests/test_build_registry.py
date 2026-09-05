@@ -45,6 +45,7 @@ CANONICAL_PRODUCT_IDS = {
     "linear",
     "neon",
     "notion",
+    "playwright",
     "sentry",
     "statsig",
     "stripe",
@@ -1028,6 +1029,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "cloudflare-observability": ["777genius/cloudflare-observability", "777genius/cloudflare-observability-bridge"],
             "context7": ["777genius/context7", "upstash/context7"],
             "firecrawl": ["777genius/firecrawl-bridge"],
+            "playwright": ["777genius/playwright-bridge"],
             "github": ["777genius/github", "777genius/github-bridge"],
         }
         products = {item["id"]: item for item in source["products"]}
@@ -1137,6 +1139,10 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(
             registry.resolve_directory(source, "firecrawl", ["codex"])["distribution_id"],
             "777genius/firecrawl-bridge",
+        )
+        self.assertEqual(
+            registry.resolve_directory(source, "playwright", ["codex"])["distribution_id"],
+            "777genius/playwright-bridge",
         )
         chrome = registry.resolve_directory(source, "chrome-devtools", ["codex"])
         self.assertEqual((chrome["distribution_id"], chrome["release_sequence"]), ("777genius/chrome-devtools-bridge", 2))
@@ -1517,6 +1523,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "777genius/chrome-devtools-bridge": ("ChromeDevTools/chrome-devtools-mcp", "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"),
             "777genius/cloudflare-docs-bridge": ("cloudflare/mcp-server-cloudflare", "0c51a6fbcf9a2fae80120287e8238fb947cdc2df"),
             "777genius/firecrawl-bridge": ("firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e"),
+            "777genius/playwright-bridge": ("microsoft/playwright-mcp", "8a13ef8e9f7385a0f89477922127f31cbfde9761"),
             "777genius/github-bridge": ("github/github-mcp-server", "fcdd664099f957c4a7dc183d9381cef191e8c8a9"),
         }
         for distribution_id, provenance in expected.items():
@@ -2066,6 +2073,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "context7",
             "docker-hub",
             "firecrawl",
+            "playwright",
         }
         targets = [
             (distribution, target)

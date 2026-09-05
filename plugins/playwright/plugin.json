@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "playwright",
+  "version": "0.0.80",
+  "description": "Community package for Playwright MCP. Automate browsers and inspect web pages through Playwright.",
+  "author": {"name": "777genius", "url": "https://github.com/777genius"},
+  "homepage": "https://github.com/microsoft/playwright-mcp",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
+  "license": "Apache-2.0",
+  "keywords": ["automation", "browser", "mcp", "playwright", "testing"]
+}

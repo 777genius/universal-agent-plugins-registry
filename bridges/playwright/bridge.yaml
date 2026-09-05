@@ -1,0 +1,26 @@
+schema_version: 1
+product_id: playwright
+distribution_id: 777genius/playwright-bridge
+upstream:
+  repository: microsoft/playwright-mcp
+  revision: 8a13ef8e9f7385a0f89477922127f31cbfde9761
+  license:
+    spdx: Apache-2.0
+    attribution_paths:
+      - path: LICENSE
+        sha256: sha256:9a7110fc2d2f964038e5dc49128f908f29f47a574c961cba16085914e879cbda
+  provenance:
+    paths:
+      - path: README.md
+        sha256: sha256:b0b2f8812e78c48810bd6431b3dd77d4c80eaceca3eaa929553814a9646f0002
+      - path: package.json
+        sha256: sha256:4419e25dd95397dc7fb79771716f327bd9c186b0dc8013903ef197fb89d4c55d
+copy: []
+overlay: overlay
+overlay_replacements: []
+output: plugins/playwright
+executable_paths: []
+expected_version: 0.0.80
+components:
+  mcp_servers: [playwright]
+  skills: []

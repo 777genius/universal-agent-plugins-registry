@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "package": "@playwright/mcp",
+  "version": "0.0.80",
+  "entrypoint": "node_modules/@playwright/mcp/cli.js",
+  "package_lock_sha256": "sha256:1c10c6b0e0c7009fdc88fff6d4e295293d1f4f99c4b38bb7412a37504bf4ab7c",
+  "omit_optional": false
+}
