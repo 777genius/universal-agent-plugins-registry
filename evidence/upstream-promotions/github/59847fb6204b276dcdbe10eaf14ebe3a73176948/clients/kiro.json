@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "promotion/github/59847fb6204b/kiro",
+  "product_id": "github",
+  "distribution_id": "github/github",
+  "release_sequence": 1,
+  "package_tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0",
+  "manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1",
+  "source_repository": "github/github-mcp-server",
+  "source_revision": "59847fb6204b276dcdbe10eaf14ebe3a73176948",
+  "source_path": "agent-plugin",
+  "level": "materialization",
+  "outcome": "passed",
+  "client": "kiro",
+  "client_version": "isolated-configuration-fixture",
+  "installer_version": "0.1.26",
+  "adapter_version": "agentplugins-0.1.26",
+  "os": "linux",
+  "architecture": "amd64",
+  "dependency_identity": "agentplugins@0.1.26",
+  "observed_at": "2026-09-05T22:52:38Z"
+}
