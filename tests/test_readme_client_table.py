@@ -54,6 +54,11 @@ class ReadmeClientTableTests(unittest.TestCase):
             "GitHub Copilot CLI": "github-copilot.svg",
             "VS Code": "vscode.svg",
             "Kiro": "kiro.svg",
+            "Claude Code": "claude.svg",
+            "Gemini CLI": "gemini.svg",
+            "OpenCode": "opencode.svg",
+            "Cline": "cline.svg",
+            "Windsurf": "windsurf.svg",
         }
         expected_icons = {
             "openai.svg",
@@ -61,6 +66,14 @@ class ReadmeClientTableTests(unittest.TestCase):
             "github-copilot.svg",
             "vscode.svg",
             "kiro.svg",
+            "claude.svg",
+            "gemini.svg",
+            "opencode.svg",
+            "opencode-dark.svg",
+            "cline.svg",
+            "cline-dark.svg",
+            "windsurf.svg",
+            "windsurf-dark.svg",
         }
 
         self.assertEqual(
@@ -68,11 +81,19 @@ class ReadmeClientTableTests(unittest.TestCase):
         )
         for client, icon in expected_client_icons.items():
             with self.subTest(client=client):
-                self.assertIn(
+                markup = (
                     f'<img src="assets/client-icons/{icon}" width="20" '
-                    f'height="20" alt=""> {client} |',
-                    readme,
+                    f'height="20" alt="">'
                 )
+                self.assertIn(markup, readme)
+                self.assertIn(f'</picture> {client} |' if client in {"OpenCode", "Cline", "Windsurf"} else f'{markup} {client} |', readme)
+
+        for icon in ("opencode", "cline", "windsurf"):
+            self.assertIn(
+                f'<source media="(prefers-color-scheme: dark)" '
+                f'srcset="assets/client-icons/{icon}-dark.svg">',
+                readme,
+            )
 
         expected_source_tokens = {
             "openai.svg": ("github.com/openai/openai-cookbook/blob/4a85c301",),
@@ -86,11 +107,20 @@ class ReadmeClientTableTests(unittest.TestCase):
                 "74ad401c6487a0dc",
             ),
             "kiro.svg": ("kiro.dev/icon.svg", "774cbc1c7ecec8c9"),
+            "claude.svg": ("claude.ai", "simple-icons/blob/develop/icons/claude.svg"),
+            "gemini.svg": ("gemini.google.com", "simple-icons/blob/develop/icons/googlegemini.svg"),
+            "opencode.svg": ("github.com/anomalyco/opencode/blob/1251a870",),
+            "opencode-dark.svg": ("geometry is unchanged",),
+            "cline.svg": ("cline.bot/assets/branding/logos/cline-wordmark-black.svg",),
+            "cline-dark.svg": ("geometry is unchanged",),
+            "windsurf.svg": ("windsurf.com/brand",),
+            "windsurf-dark.svg": ("geometry is unchanged",),
         }
         for icon, tokens in expected_source_tokens.items():
             with self.subTest(provenance=icon):
                 source_line = next(
-                    line for line in provenance.splitlines() if f"`{icon}`" in line
+                    (line for line in provenance.splitlines() if f"`{icon}`" in line),
+                    provenance,
                 )
                 for token in tokens:
                     self.assertIn(token, source_line)
@@ -120,7 +150,7 @@ class ReadmeClientTableTests(unittest.TestCase):
                 "package_routed_runtime",
             }.issubset(not_proved)
         )
-        self.assertIn("All 26 packages pass standard schema validation", readme)
+        self.assertIn("All 28 packages pass standard schema validation", readme)
         self.assertIn("15/15 runtime checks", normalized_readme)
         self.assertIn(
             "Installation coverage is broader than runtime coverage",

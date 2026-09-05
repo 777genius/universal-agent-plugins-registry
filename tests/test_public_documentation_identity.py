@@ -174,7 +174,7 @@ class PublicDocumentationIdentityTests(unittest.TestCase):
     def test_readme_keeps_evidence_claims_narrow(self) -> None:
         readme = (ROOT / "README.md").read_text()
         normalized = " ".join(readme.split())
-        self.assertIn("All 26 packages pass standard schema validation", normalized)
+        self.assertIn("All 28 packages pass standard schema validation", normalized)
         self.assertIn(
             "materialized or installed package does not by itself prove", normalized
         )
