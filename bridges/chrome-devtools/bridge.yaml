@@ -18,7 +18,7 @@ overlay: overlay
 overlay_replacements: []
 output: plugins/chrome-devtools
 executable_paths: []
-expected_version: 1.8.0-uap.1
+expected_version: 1.8.0-uap.2
 components:
   mcp_servers:
   - chrome-devtools

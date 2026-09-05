@@ -1030,8 +1030,12 @@ class OpenAIAppBindingTests(unittest.TestCase):
             item for item in source["distributions"]
             if item["id"] == "777genius/cloudflare-docs-bridge"
         )
-        bridge["release_policies"][0]["targets"] = [
-            target for target in bridge["release_policies"][0]["targets"]
+        active_policy = next(
+            policy for policy in bridge["release_policies"]
+            if policy["status"] == "active"
+        )
+        active_policy["targets"] = [
+            target for target in active_policy["targets"]
             if target["client"] != "chatgpt"
         ]
         codex = registry.resolve_directory(source, "cloudflare-docs", ["codex"])

@@ -1055,8 +1055,12 @@ class DirectoryDomainTests(unittest.TestCase):
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
-                expected_sequences = [1, 2, 3]
+                expected_sequences = [1, 2, 3, 4]
             elif distribution["id"] == "777genius/context7":
+                expected_sequences = [1, 2, 3]
+            elif distribution["id"] in {
+                "777genius/cloudflare-docs-bridge", "777genius/github-bridge",
+            }:
                 expected_sequences = [1, 2]
             elif distribution["id"] == "777genius/chrome-devtools-bridge":
                 expected_sequences = list(range(1, len(distribution["releases"]) + 1))
@@ -1102,7 +1106,13 @@ class DirectoryDomainTests(unittest.TestCase):
                     distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}
                     and policy["release_sequence"] >= 2
                 ):
-                    expected_minimum = registry.LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION
+                    expected_minimum = (
+                        "0.1.26"
+                        if policy["release_sequence"] >= 3
+                        else registry.LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION
+                    )
+                if distribution["id"] == "777genius/context7" and policy["release_sequence"] >= 2:
+                    expected_minimum = "0.1.26"
                 if distribution["id"] == "upstash/context7":
                     expected_minimum = "0.1.13"
                 if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] >= 2:
@@ -1116,7 +1126,8 @@ class DirectoryDomainTests(unittest.TestCase):
                     expected_minimum = "0.1.26"
                 if distribution["id"] in {
                     "777genius/cloudflare-bridge", "777genius/cloudflare-bindings-bridge",
-                    "777genius/cloudflare-observability-bridge",
+                    "777genius/cloudflare-docs-bridge", "777genius/cloudflare-observability-bridge",
+                    "777genius/github-bridge",
                 }:
                     expected_minimum = "0.1.26"
                 self.assertEqual(policy["minimum_installer_version"], expected_minimum)
@@ -1157,7 +1168,7 @@ class DirectoryDomainTests(unittest.TestCase):
             active_sequence,
         )
         context7_resolution = registry.resolve_directory(source, "context7", ["codex"])
-        self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("777genius/context7", 2))
+        self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("777genius/context7", 3))
         for target in ("codex", "cursor", "kiro"):
             with self.subTest(target=target):
                 upstream = registry.resolve_directory(source, "upstash/context7", [target])
@@ -1172,7 +1183,7 @@ class DirectoryDomainTests(unittest.TestCase):
             product for product in registry.directory_preview(source)["products"]
             if product["id"] == "context7"
         )
-        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 2)
+        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 3)
         self.assertEqual(
             [item["client"] for item in local["eligible_targets"]],
             ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"],
@@ -1300,7 +1311,7 @@ class DirectoryDomainTests(unittest.TestCase):
         ):
             registry.validate_active_local_runtime_closures(source)
 
-    def test_firebase_locked_runtime_is_active_at_sequence_three(self) -> None:
+    def test_firebase_locked_runtime_is_active_at_sequence_four(self) -> None:
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "firebase")
         source = self.source()
         distribution = next(
@@ -1310,15 +1321,15 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(distribution["status"], "active")
         self.assertEqual(
             [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
-            [(1, "revoked"), (2, "revoked"), (3, "active")],
+            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "active")],
         )
         resolution = registry.resolve_directory(source, "firebase", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/firebase", 3),
+            ("777genius/firebase", 4),
         )
 
-    def test_hubspot_preview_locked_runtime_is_active_at_sequence_three(self) -> None:
+    def test_hubspot_preview_locked_runtime_is_active_at_sequence_four(self) -> None:
         package = registry.ROOT / "plugins" / "hubspot-developer"
         registry.validate_locked_npm_runtime(package)
         runtime = json.loads((package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json").read_text())
@@ -1333,12 +1344,17 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(
             [(policy["release_sequence"], policy["status"], policy["minimum_installer_version"])
              for policy in distribution["release_policies"]],
-            [(1, "revoked", "0.1.8"), (2, "revoked", "0.1.13"), (3, "active", "0.1.26")],
+            [
+                (1, "revoked", "0.1.8"),
+                (2, "revoked", "0.1.13"),
+                (3, "superseded", "0.1.26"),
+                (4, "active", "0.1.26"),
+            ],
         )
         resolution = registry.resolve_directory(source, "hubspot-developer", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/hubspot-developer", 3),
+            ("777genius/hubspot-developer", 4),
         )
 
     def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:
@@ -1630,12 +1646,12 @@ class DirectoryDomainTests(unittest.TestCase):
         source = self.source()
         reports = self.bridge_reports()
         distribution = next(item for item in source["distributions"] if item["id"] == "777genius/cloudflare-docs-bridge")
-        historical = copy.deepcopy(distribution["releases"][0])
+        historical = copy.deepcopy(distribution["releases"][-2])
         historical["package_source"]["revision"] = "1" * 40
         historical["manifest_digest"] = "sha256:" + "1" * 64
         historical["tree_digest"] = "sha256:" + "2" * 64
         historical["build_provenance"]["upstream_revision"] = "3" * 40
-        current = copy.deepcopy(distribution["releases"][0])
+        current = copy.deepcopy(distribution["releases"][-1])
         current["sequence"] = historical["sequence"] + 1
         distribution["releases"] = [historical, current]
 

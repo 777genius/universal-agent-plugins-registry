@@ -1,6 +1,6 @@
 {
   "name": "github",
-  "version": "1.10.1",
+  "version": "1.10.1-uap.1",
   "description": "Community package for GitHub MCP Server. Work with repositories, issues, pull requests, reviews, and code search through GitHub's hosted MCP endpoint.",
   "author": {
     "name": "777genius",

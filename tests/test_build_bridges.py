@@ -336,7 +336,8 @@ class RealBridgeCohortTests(unittest.TestCase):
         ])
         runtime = json.loads((ROOT / "plugins/chrome-devtools/io.github.777genius.agentplugins/runtime/runtime.json").read_text())
         recipe = yaml.safe_load((ROOT / "bridges/chrome-devtools/bridge.yaml").read_text())
-        self.assertEqual((runtime["package"], f"{runtime['version']}-uap.1"), ("chrome-devtools-mcp", recipe["expected_version"]))
+        self.assertEqual((runtime["package"], runtime["version"]), ("chrome-devtools-mcp", "1.8.0"))
+        self.assertEqual(recipe["expected_version"], "1.8.0-uap.2")
         directory = json.loads((ROOT / "registry/directory.json").read_text())
         chrome = {
             item["id"]: item for item in directory["distributions"]

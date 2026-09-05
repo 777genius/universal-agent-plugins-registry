@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "github",
-  "version": "1.10.1",
+  "version": "1.10.1-uap.1",
   "description": "Community package for GitHub MCP Server. Work with repositories, issues, pull requests, reviews, and code search through GitHub's hosted MCP endpoint.",
   "author": {"name": "777genius", "url": "https://github.com/777genius"},
   "homepage": "https://github.com/github/github-mcp-server",
