@@ -1,0 +1,43 @@
+{
+  "clients": [
+    "codex",
+    "cursor",
+    "kiro"
+  ],
+  "installer_version": "0.1.26",
+  "materialized_source": {
+    "kind": "local_bridge",
+    "path": "/home/runner/work/universal-agent-plugins-registry/universal-agent-plugins-registry/plugins/chrome-devtools"
+  },
+  "observed_at": "2026-09-05T15:43:50Z",
+  "operations": {
+    "add": "passed",
+    "cleanup": "passed",
+    "doctor": "passed",
+    "dry_run": "passed",
+    "info": "passed",
+    "remove": "passed"
+  },
+  "outcome": "passed",
+  "package": {
+    "manifest_digest": "sha256:9944e9506213597655e3fd18cfa843ecc167bbb8f8c60ee1daf441cbb792d5e2",
+    "package_version": "1.8.0-uap.1",
+    "tree_digest": "sha256:96cbf3be3f037e802a46c11c8221b76cef7a1aa9ebc95746938bd89fb410feb5"
+  },
+  "path": ".",
+  "product_id": "chrome-devtools",
+  "repository": "ChromeDevTools/chrome-devtools-mcp",
+  "revision": "05d9e55581b48e12412c0b531d87c739143782b6",
+  "run": {
+    "attempt": "1",
+    "id": "33975663599",
+    "repository": "777genius/universal-agent-plugins-registry",
+    "source_sha": "acf7c5334d8f3885e02227fbccd0f12f8bc3a167"
+  },
+  "sandbox": {
+    "kind": "disposable",
+    "real_user_project_used": false,
+    "removed": true
+  },
+  "schema_version": 1
+}

@@ -10,11 +10,11 @@ npx universal-agent-plugins add chrome-devtools --target codex
 ```
 <!-- agentplugins-install:end -->
 
-This package is independently assembled by 777genius from configuration anchored to ChromeDevTools/chrome-devtools-mcp at commit `774d78f5eef5e610407a0c92fa6ec5ed74b027e8`. It is not authored, published, or endorsed by ChromeDevTools or Google.
+This package is independently assembled by 777genius from configuration anchored to ChromeDevTools/chrome-devtools-mcp at commit `05d9e55581b48e12412c0b531d87c739143782b6`. It is not authored, published, or endorsed by ChromeDevTools or Google.
 
 - Component: MCP server
 - Transport: `stdio`
-- Runtime: integrity-locked `chrome-devtools-mcp@1.7.0`; install scripts are disabled
+- Runtime: integrity-locked `chrome-devtools-mcp@1.8.0`; install scripts are disabled
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Privacy: upstream usage statistics are disabled by default with `--no-usage-statistics`
 - Upstream source: https://github.com/ChromeDevTools/chrome-devtools-mcp
