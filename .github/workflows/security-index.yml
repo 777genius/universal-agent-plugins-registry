@@ -26,8 +26,8 @@ concurrency:
 env:
   LEDGER_BRANCH: directory-publication-ledger
   FEED_PATH: security
-  LINTAI_VERSION: 0.1.2
-  LINTAI_LINUX_AMD64_SHA256: c06fcb33a13f1483f20f4cb30d2c701cd01c6b8ba43e3b7322ebab3c1ae11e72
+  LINTAI_VERSION: 0.1.3
+  LINTAI_LINUX_AMD64_SHA256: 2b3d176db752433b904a4b42375543ff398f4841d22e48f7d4f23ded925b72da
 
 jobs:
   publisher-preflight:

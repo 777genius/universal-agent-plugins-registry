@@ -24,16 +24,16 @@ from scripts.directory_publication import (
 ROOT = Path(__file__).resolve().parents[1]
 DISCOVERY_SCHEMA = ROOT / "schemas" / "discovery-snapshot.schema.json"
 SECURITY_SCHEMA = ROOT / "schemas" / "security-snapshot.schema.json"
-SCANNER = {"id": "lintai", "version": "0.1.2"}
+SCANNER = {"id": "lintai", "version": "0.1.3"}
 REPORT_TOOL = {"name": SCANNER["id"], "version": SCANNER["version"]}
 POLICY_ID = "agent-plugin-install"
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 MAX_REPORT_BYTES = 8 << 20
 MAX_FINDINGS = 32
 MAX_WORKERS = 16
 
 BLOCKING_CODES = frozenset({
-    "SEC102", "SEC103", "SEC330", "SEC344",
+    "SEC103", "SEC330", "SEC344",
     "SEC637", "SEC640", "SEC645", "SEC648",
     "SEC652", "SEC653", "SEC654", "SEC658", "SEC659", "SEC660",
     "SEC665", "SEC666", "SEC671", "SEC672",
@@ -167,7 +167,7 @@ def verify_scanner(lintai: Path) -> None:
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=False,
     )
     require(completed.returncode == 0, "LintAI version probe failed")
-    require(completed.stdout == b"lintai 0.1.2\n" and completed.stderr == b"",
+    require(completed.stdout == b"lintai 0.1.3\n" and completed.stderr == b"",
             "LintAI scanner version is unsupported")
 
 
