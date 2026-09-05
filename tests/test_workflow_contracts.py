@@ -2134,7 +2134,12 @@ sys.modules['catalog_process_isolation']=module
             for field, wrong in (("package_version", "1.7.0"), ("tree_digest", "sha256:" + "b" * 64),
                                  ("manifest_digest", "sha256:" + "c" * 64)):
                 forged = copy.deepcopy(snapshot)
-                forged["distributions"][0]["releases"][1][field] = wrong
+                forged_release = next(
+                    item
+                    for item in forged["distributions"][0]["releases"]
+                    if item["sequence"] == release["sequence"]
+                )
+                forged_release[field] = wrong
                 with self.subTest(field=field), self.assertRaises(AssertionError):
                     check(forged)
 
