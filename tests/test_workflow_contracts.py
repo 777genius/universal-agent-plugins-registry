@@ -610,6 +610,26 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('test "$PACKAGE_PATH" = . && test "$DECISION" = promote_bridge', body)
         self.assertIn('diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- plugin.json mcp.json', body)
         self.assertIn('diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- "$PACKAGE_PATH"', body)
+        predecessor = next(
+            step for step in job["steps"]
+            if step.get("name") == "Resolve immutable bridge predecessor from signed Directory"
+        )
+        self.assertEqual(predecessor["if"], "steps.selection.outputs.decision == 'promote_bridge'")
+        self.assertIn("refs/heads/directory-publication-ledger", predecessor["run"])
+        self.assertIn("production-snapshot.json", predecessor["run"])
+        self.assertIn('search "$PRODUCT_ID" --format json', predecessor["run"])
+        self.assertIn("scripts/resolve_bridge_predecessor.py", predecessor["run"])
+        self.assertIn('--production-snapshot "$RUNNER_TEMP/production-snapshot.json"', predecessor["run"])
+        self.assertIn('--fallback-revision "$GITHUB_SHA"', predecessor["run"])
+        finalize = next(
+            step for step in job["steps"]
+            if step.get("name") == "Finalize and validate the review-required bridge promotion"
+        )
+        self.assertIn(
+            '--previous-revision "${{ steps.predecessor.outputs.revision }}"',
+            finalize["run"],
+        )
+        self.assertNotIn('--previous-revision "$GITHUB_SHA"', finalize["run"])
 
     def test_adapter_egress_and_native_projection_are_canonical_generic_contracts(self) -> None:
         schema = json.loads((ROOT / "deploy/uap-observer-adapter-config.schema.json").read_text())
