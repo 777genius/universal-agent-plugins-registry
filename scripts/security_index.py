@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DISCOVERY_SCHEMA = ROOT / "schemas" / "discovery-snapshot.schema.json"
 SECURITY_SCHEMA = ROOT / "schemas" / "security-snapshot.schema.json"
 SCANNER = {"id": "lintai", "version": "0.1.2"}
+REPORT_TOOL = {"name": SCANNER["id"], "version": SCANNER["version"]}
 POLICY_ID = "agent-plugin-install"
 POLICY_VERSION = 1
 MAX_REPORT_BYTES = 8 << 20
@@ -102,7 +103,7 @@ def assessment_from_report(record: dict[str, Any], body: bytes) -> dict[str, Any
     report = parse_json_bytes(body, "LintAI report", max_bytes=MAX_REPORT_BYTES)
     require(isinstance(report, dict), "LintAI report must be an object")
     require(report.get("schema_version") == 1, "LintAI report schema is unsupported")
-    require(report.get("tool") == SCANNER, "LintAI scanner identity is unsupported")
+    require(report.get("tool") == REPORT_TOOL, "LintAI scanner identity is unsupported")
     report_policy = report.get("policy")
     require(isinstance(report_policy, dict) and report_policy.get("id") == POLICY_ID and report_policy.get("version") == POLICY_VERSION,
             "LintAI policy identity is unsupported")
