@@ -1,0 +1,26 @@
+schema_version: 1
+product_id: firecrawl
+distribution_id: 777genius/firecrawl-bridge
+upstream:
+  repository: firecrawl/firecrawl-mcp-server
+  revision: 518e9299817aca118f0b3f5dded4c5fe7889d24e
+  license:
+    spdx: MIT
+    attribution_paths:
+      - path: LICENSE
+        sha256: sha256:9c12811442b47e27f690be7cf0252f6bf93ddee18476f13e0fc6b4badb09c22c
+  provenance:
+    paths:
+      - path: README.md
+        sha256: sha256:29446469f7d25038a4d80b7c714a7cac6e1f5389c3742f434055af07caf3664e
+      - path: package.json
+        sha256: sha256:e19e164c665bc2be971f2b0c08b34ae502f101855dd278f8a7d422189e46ee5f
+copy: []
+overlay: overlay
+overlay_replacements: []
+output: plugins/firecrawl
+executable_paths: []
+expected_version: 3.24.1
+components:
+  mcp_servers: [firecrawl]
+  skills: []

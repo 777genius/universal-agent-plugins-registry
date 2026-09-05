@@ -21,9 +21,10 @@ const endpoints = {
   cloudflare: 'https://mcp.cloudflare.com/mcp',
   'cloudflare-bindings': 'https://bindings.mcp.cloudflare.com/mcp',
   'cloudflare-observability': 'https://observability.mcp.cloudflare.com/mcp',
+  firecrawl: 'https://mcp.firecrawl.dev/v2/mcp',
 };
 const name = process.argv[2];
-assert(Object.hasOwn(endpoints, name), 'Select one of the three Cloudflare packages');
+assert(Object.hasOwn(endpoints, name), 'Select a supported remote MCP package');
 assert.equal(process.platform, 'linux', 'Run only on the isolated Linux CI runner');
 assert(process.env.RUNNER_TEMP, 'RUNNER_TEMP is required');
 const repo = path.resolve(__dirname, '../..');

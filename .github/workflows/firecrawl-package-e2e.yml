@@ -1,0 +1,56 @@
+name: Firecrawl package E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'bridges/firecrawl/**'
+      - 'plugins/firecrawl/**'
+      - 'registry/directory.json'
+      - 'tests/e2e/cloudflare-package-lifecycle.cjs'
+      - 'tests/e2e/firecrawl-live-readonly.cjs'
+      - '.github/workflows/firecrawl-package-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    name: CLI ${{ matrix.cli }} / eight synthetic profiles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: ['0.1.26', '0.1.45']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+      - name: Public CLI add, info, update and remove
+        run: node tests/e2e/cloudflare-package-lifecycle.cjs firecrawl '${{ matrix.cli }}'
+      - name: Upload sanitized lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firecrawl-lifecycle-cli-${{ matrix.cli }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-package-evidence/firecrawl/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  live-readonly:
+    name: Hosted MCP initialize and tools/list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+      - name: Verify the public keyless MCP interface without invoking tools
+        run: node tests/e2e/firecrawl-live-readonly.cjs
