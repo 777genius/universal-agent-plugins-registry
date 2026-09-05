@@ -100,6 +100,7 @@ SHORT_DESCRIPTIONS = {
     "linear": "Linear planning MCP",
     "neon": "Neon database MCP",
     "notion": "Notion workspace MCP",
+    "playwright": "Browser automation MCP",
     "sentry": "Sentry debugging MCP",
     "statsig": "Statsig experiments MCP",
     "stripe": "Stripe billing MCP",

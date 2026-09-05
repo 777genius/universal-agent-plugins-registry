@@ -90,6 +90,10 @@
       "text": "notion community package for the official notion hosted mcp plugin for user-authorized workspace access. search pages, read docs, edit content, and work with notion knowledge directly from ai agents. notion agent-plugins ai-agents collaboration knowledge mcp notion planning plugins"
     },
     {
+      "product_id": "playwright",
+      "text": "playwright community package for playwright mcp. automate browsers and inspect web pages through playwright. playwright agent-plugins ai-agents automation browser mcp testing"
+    },
+    {
       "product_id": "sentry",
       "text": "sentry community package for the official sentry hosted mcp plugin for human-in-the-loop debugging, issue triage, and incident workflows through sentry's remote mcp service. sentry agent-plugins ai-agents debugging incidents mcp plugins sentry"
     },

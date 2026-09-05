@@ -297,6 +297,7 @@ class RealBridgeCohortTests(unittest.TestCase):
             "chrome-devtools": ("777genius/chrome-devtools-bridge", "ChromeDevTools/chrome-devtools-mcp", "774d78f5eef5e610407a0c92fa6ec5ed74b027e8", "Apache-2.0"),
             "cloudflare-docs": ("777genius/cloudflare-docs-bridge", "cloudflare/mcp-server-cloudflare", "0c51a6fbcf9a2fae80120287e8238fb947cdc2df", "Apache-2.0"),
             "firecrawl": ("777genius/firecrawl-bridge", "firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e", "MIT"),
+            "playwright": ("777genius/playwright-bridge", "microsoft/playwright-mcp", "8a13ef8e9f7385a0f89477922127f31cbfde9761", "Apache-2.0"),
             "github": ("777genius/github-bridge", "github/github-mcp-server", "fcdd664099f957c4a7dc183d9381cef191e8c8a9", "MIT"),
         }
         for bridge_id, values in expected.items():
@@ -312,7 +313,7 @@ class RealBridgeCohortTests(unittest.TestCase):
                 self.assertTrue(recipe["upstream"]["provenance"]["paths"])
                 output = ROOT / "plugins" / bridge_id
                 expected_files = ["NOTICE", "README.md", "mcp.json", "plugin.json"]
-                if bridge_id == "chrome-devtools":
+                if bridge_id in {"chrome-devtools", "playwright"}:
                     expected_files.append("io.github.777genius.agentplugins")
                 self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(expected_files))
                 manifest = json.loads((output / "plugin.json").read_text())
@@ -322,6 +323,7 @@ class RealBridgeCohortTests(unittest.TestCase):
         chrome = json.loads((ROOT / "plugins/chrome-devtools/mcp.json").read_text())["mcpServers"]["chrome-devtools"]
         cloudflare = json.loads((ROOT / "plugins/cloudflare-docs/mcp.json").read_text())["mcpServers"]["cloudflare-docs"]
         firecrawl = json.loads((ROOT / "plugins/firecrawl/mcp.json").read_text())["mcpServers"]["firecrawl"]
+        playwright = json.loads((ROOT / "plugins/playwright/mcp.json").read_text())["mcpServers"]["playwright"]
         github = json.loads((ROOT / "plugins/github/mcp.json").read_text())["mcpServers"]["github"]
         self.assertEqual(chrome["command"], "node")
         self.assertEqual(chrome["args"], [
@@ -342,6 +344,12 @@ class RealBridgeCohortTests(unittest.TestCase):
         self.assertEqual([(policy["release_sequence"], policy["status"]) for policy in bridge["release_policies"]], [(1, "revoked"), (2, "active")])
         self.assertEqual(cloudflare["url"], "https://docs.mcp.cloudflare.com/mcp")
         self.assertEqual(firecrawl["url"], "https://mcp.firecrawl.dev/v2/mcp")
+        self.assertEqual(playwright["command"], "node")
+        self.assertEqual(playwright["args"], [
+            "${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs",
+        ])
+        playwright_runtime = json.loads((ROOT / "plugins/playwright/io.github.777genius.agentplugins/runtime/runtime.json").read_text())
+        self.assertEqual((playwright_runtime["package"], playwright_runtime["version"]), ("@playwright/mcp", "0.0.80"))
         self.assertEqual(github["url"], "https://api.githubcopilot.com/mcp/")
 
     def test_claimed_targets_materialize_complete_packages_in_disposable_roots(self) -> None:
@@ -351,6 +359,7 @@ class RealBridgeCohortTests(unittest.TestCase):
             "777genius/chrome-devtools-bridge",
             "777genius/cloudflare-docs-bridge",
             "777genius/firecrawl-bridge",
+            "777genius/playwright-bridge",
             "777genius/github-bridge",
         ]
         with tempfile.TemporaryDirectory(prefix="bridge-materialization-") as temporary:

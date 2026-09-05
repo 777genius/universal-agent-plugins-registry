@@ -741,6 +741,35 @@
     },
     {
       "schema_version": 1,
+      "id": "playwright",
+      "display_name": "Playwright",
+      "description": "Community package for Playwright MCP. Automate browsers and inspect web pages through Playwright.",
+      "manifest_name": "playwright",
+      "aliases": [
+        "playwright"
+      ],
+      "reserved_aliases": [
+        "playwright"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "automation",
+        "browser",
+        "mcp",
+        "testing"
+      ],
+      "minimum_capabilities": {
+        "skills": "optional",
+        "mcp": "required"
+      },
+      "default_distribution": "777genius/playwright-bridge",
+      "distributions": [
+        "777genius/playwright-bridge"
+      ]
+    },
+    {
+      "schema_version": 1,
       "id": "sentry",
       "display_name": "Sentry",
       "description": "Community package for the official Sentry hosted MCP plugin for human-in-the-loop debugging, issue triage, and incident workflows through Sentry's remote MCP service.",
@@ -4512,6 +4541,107 @@
               "scopes": [
                 "user"
               ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "777genius/playwright-bridge",
+      "product_id": "playwright",
+      "kind": "community_bridge",
+      "status": "active",
+      "packager": "777genius",
+      "releases": [
+        {
+          "sequence": 1,
+          "package_version": "0.0.80",
+          "manifest_name": "playwright",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/playwright"
+          },
+          "build_provenance": {
+            "upstream_repository": "microsoft/playwright-mcp",
+            "upstream_revision": "8a13ef8e9f7385a0f89477922127f31cbfde9761"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:8f0c8ac610974293c4f91f1ecb782fbe9d740f79f84cafe40fdfed1db234d103",
+          "manifest_digest": "sha256:8419b5c9e67894c2312048c4fe30e3ea920d00101d02641230183dd7ab4d3b31",
+          "components": [
+            "mcp"
+          ]
+        }
+      ],
+      "release_policies": [
+        {
+          "release_sequence": 1,
+          "status": "active",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": ["user"],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": ["user"],
               "delivery": "prepared"
             }
           ],

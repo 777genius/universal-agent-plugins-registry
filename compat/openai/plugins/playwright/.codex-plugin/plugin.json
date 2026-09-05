@@ -1,0 +1,40 @@
+{
+  "name": "playwright",
+  "version": "0.0.80",
+  "description": "Community package for Playwright MCP. Automate browsers and inspect web pages through Playwright.",
+  "author": {
+    "name": "777genius",
+    "url": "https://github.com/777genius"
+  },
+  "homepage": "https://github.com/microsoft/playwright-mcp",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
+  "license": "Apache-2.0",
+  "keywords": [
+    "automation",
+    "browser",
+    "mcp",
+    "playwright",
+    "testing"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Playwright",
+    "shortDescription": "Browser automation MCP",
+    "longDescription": "Community package for Playwright MCP. Automate browsers and inspect web pages through Playwright.",
+    "developerName": "777genius",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/microsoft/playwright-mcp",
+    "defaultPrompt": [
+      "Use Playwright for this task."
+    ],
+    "brandColor": "#111827",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png",
+    "logoDark": "./assets/logo.png",
+    "screenshots": []
+  }
+}

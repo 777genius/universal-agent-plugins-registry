@@ -1,0 +1,15 @@
+Playwright MCP community bridge
+
+This Agent Plugins package was independently assembled by 777genius. It is not
+authored, published, sponsored, or endorsed by Microsoft.
+
+Upstream project: microsoft/playwright-mcp
+Pinned revision: 8a13ef8e9f7385a0f89477922127f31cbfde9761
+Upstream version: 0.0.80
+Upstream license: Apache-2.0
+License evidence: LICENSE (SHA-256 9a7110fc2d2f964038e5dc49128f908f29f47a574c961cba16085914e879cbda)
+Configuration evidence: README.md (SHA-256 b0b2f8812e78c48810bd6431b3dd77d4c80eaceca3eaa929553814a9646f0002)
+Version evidence: package.json (SHA-256 4419e25dd95397dc7fb79771716f327bd9c186b0dc8013903ef197fb89d4c55d)
+
+No upstream source or executable bytes are copied into this package. The
+upstream files above are provenance evidence only.

@@ -1,6 +1,6 @@
 # Verification record
 
-Updated: 2026-08-22.
+Updated: 2026-09-05.
 
 Every committed evidence link below resolves through the exact commit that
 contains the cited bytes and is accompanied by their SHA-256. These are
@@ -15,15 +15,15 @@ checked there rather than duplicated in this historical record.
 
 ## Package conformance
 
-- 26 root `plugin.json` documents pass the Agent Plugins 1.0.0 JSON Schema.
-- 25 root `mcp.json` documents pass the Agent Plugins 1.0.0 MCP Schema.
+- 28 root `plugin.json` documents pass the Agent Plugins 1.0.0 JSON Schema.
+- 27 root `mcp.json` documents pass the Agent Plugins 1.0.0 MCP Schema.
 - 4 skills pass `skills-ref` 0.1.1.
-- The repository semantic validator reports 26 plugins, 25 MCP servers, and 4
+- The repository semantic validator reports 28 plugins, 27 MCP servers, and 4
   skills.
 - Released legacy compatibility outputs remain byte-for-byte unchanged. The
   later compatibility output adds the optional ChatGPT binding and pins its evidence path to an immutable
   full Git revision whose exact blob is verified before generation.
-- All 26 generated OpenAI compatibility packages pass the repository validator
+- All 28 generated OpenAI compatibility packages pass the repository validator
   and OpenAI's `plugin-creator` validator in CI. The latter is fetched from a
   pinned `openai/codex` commit and verified by SHA-256 before execution.
 - Cloudflare Docs is the only package with a generated `.app.json`; its host-only
@@ -36,10 +36,11 @@ checked there rather than duplicated in this historical record.
 
 ## Dependency verification
 
-The npm registry releases were checked on 2026-08-25 before pinning. HubSpot is
+The npm registry releases were checked on 2026-09-05 before pinning. HubSpot is
 the explicit preview exception and is not represented as stable:
 
 - `chrome-devtools-mcp@1.7.0`
+- `@playwright/mcp@0.0.80`
 - `@upstash/context7-mcp@4.0.3`
 - `firebase-tools@15.28.1`
 - `@hubspot/cli@8.14.0-beta.1` (preview prerelease; not a stable-upstream dependency claim)

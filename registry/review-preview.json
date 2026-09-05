@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "product_count": 27,
+  "product_count": 28,
   "products": [
     {
       "id": "agent-code-navigator",
@@ -5635,6 +5635,237 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:860fa6dd1830d0da2b8fed38195fa6ad6307082ac12d708118e5eb1c5d10f9b7",
           "manifest_digest": "sha256:bbab30a4f062218d7a5fce2f6c818680d3c7adfaebdbaa3e523e15942a2f57e5"
+        }
+      ]
+    },
+    {
+      "id": "playwright",
+      "display_name": "Playwright",
+      "description": "Community package for Playwright MCP. Automate browsers and inspect web pages through Playwright.",
+      "aliases": [
+        "playwright"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "automation",
+        "browser",
+        "mcp",
+        "testing"
+      ],
+      "default_distribution": "777genius/playwright-bridge",
+      "fallback_order": [
+        "777genius/playwright-bridge"
+      ],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        }
+      ],
+      "distributions": [
+        {
+          "id": "777genius/playwright-bridge",
+          "kind": "community_bridge",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "0.0.80",
+          "components": [
+            "mcp"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/playwright"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:8f0c8ac610974293c4f91f1ecb782fbe9d740f79f84cafe40fdfed1db234d103",
+          "manifest_digest": "sha256:8419b5c9e67894c2312048c4fe30e3ea920d00101d02641230183dd7ab4d3b31"
         }
       ]
     },

@@ -29,6 +29,7 @@ update; changing source is an explicit `switch`.
 | `docker-hub` | stdio | Public data only in portable config; authenticated writes need client-specific secrets |
 | `figma` | Streamable HTTP | Client-managed Figma OAuth |
 | `firebase` | stdio | Uses the local Firebase CLI login and selected project |
+| `firecrawl` | Streamable HTTP | Public keyless endpoint; service limits may apply |
 | `github` | Streamable HTTP | Client-managed auth; no PAT stored |
 | `gitlab` | Streamable HTTP | Client-managed GitLab OAuth |
 | `greptile` | Streamable HTTP | Client-managed auth; no API key stored |
@@ -38,6 +39,7 @@ update; changing source is an explicit `switch`.
 | `linear` | Streamable HTTP | Client-managed Linear OAuth |
 | `neon` | Streamable HTTP | Client-managed Neon OAuth |
 | `notion` | Streamable HTTP | Client-managed Notion OAuth |
+| `playwright` | stdio | Local browser session; integrity-locked npm package |
 | `sentry` | Streamable HTTP | Client-managed Sentry OAuth |
 | `statsig` | Streamable HTTP | Client-managed Statsig authorization |
 | `stripe` | Streamable HTTP | Client-managed Stripe OAuth; may expose write tools |
@@ -48,8 +50,8 @@ update; changing source is an explicit `switch`.
 
 | Package group | Count | Codex | ChatGPT |
 | --- | ---: | --- | --- |
-| stdio MCP | 5 | Generated `.mcp.json` package | Not supported; Codex-only |
-| Streamable HTTP MCP | 20 | Generated `.mcp.json` package | Requires a registered `.app.json` binding |
+| stdio MCP | 6 | Generated `.mcp.json` package | Not supported; Codex-only |
+| Streamable HTTP MCP | 21 | Generated `.mcp.json` package | Requires a registered `.app.json` binding |
 | Skills-only | 1 | Generated skills package | Separate skills package; package UI E2E not claimed |
 
 Cloudflare Docs is the only remote package with a registered ChatGPT
@@ -65,12 +67,13 @@ binding is required.
 
 ## Dependency pins
 
-Verified against registry releases on 2026-08-25. The HubSpot pin is an
+Verified against registry releases on 2026-09-05. The HubSpot pin is an
 explicit preview prerelease; the other rows are stable releases:
 
 | Runtime dependency | Pin |
 | --- | --- |
 | `chrome-devtools-mcp` | `1.7.0` |
+| `@playwright/mcp` | `0.0.80` |
 | `@upstash/context7-mcp` | `4.0.3` |
 | `firebase-tools` | `15.28.1` |
 | `@hubspot/cli` | `8.14.0-beta.1` preview prerelease |

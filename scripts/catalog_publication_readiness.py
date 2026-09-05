@@ -30,7 +30,7 @@ from repository_identity import active_registry_repository
 ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloudflare-bindings "
                 "cloudflare-docs cloudflare-observability cloudflare-radar context7 docker-hub "
                 "figma firebase firecrawl github gitlab greptile heroku hubspot-crm hubspot-developer "
-                "linear neon notion sentry statsig stripe supabase vercel".split())
+                "linear neon notion playwright sentry statsig stripe supabase vercel".split())
 CORE = ("codex", "cursor", "kiro")
 CATALOG_CLIENTS = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf")
 CHROME = CATALOG_CLIENTS
@@ -231,7 +231,7 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
               if selection["product_id"] in ("context7", "cloudflare-docs") for method in ("tools/list", "tools/call")]
-    require(len(rows) == len(ALIASES) * len(CATALOG_CLIENTS) == 270 and len(probes) == 4,
+    require(len(rows) == len(ALIASES) * len(CATALOG_CLIENTS) == 280 and len(probes) == 4,
             "fixed matrix cardinality mismatch")
     return {"schema_version": 1, "kind": "catalog-publication-readiness-v1", "outcome": "passed",
             "context": ctx, "cli": CLI, "baseline": identity, "rows": rows,

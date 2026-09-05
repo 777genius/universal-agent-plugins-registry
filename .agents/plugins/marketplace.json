@@ -269,6 +269,18 @@
       "category": "Productivity"
     },
     {
+      "name": "playwright",
+      "source": {
+        "source": "local",
+        "path": "./compat/openai/plugins/playwright"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "sentry",
       "source": {
         "source": "local",

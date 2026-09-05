@@ -17,14 +17,15 @@ const skills = [
   'sandbox-next', 'sandbox-stable', 'turnstile-spin', 'web-perf',
   'workers-best-practices', 'wrangler',
 ].sort();
-const endpoints = {
-  cloudflare: 'https://mcp.cloudflare.com/mcp',
-  'cloudflare-bindings': 'https://bindings.mcp.cloudflare.com/mcp',
-  'cloudflare-observability': 'https://observability.mcp.cloudflare.com/mcp',
-  firecrawl: 'https://mcp.firecrawl.dev/v2/mcp',
+const packages = {
+  cloudflare: { type: 'remote', url: 'https://mcp.cloudflare.com/mcp' },
+  'cloudflare-bindings': { type: 'remote', url: 'https://bindings.mcp.cloudflare.com/mcp' },
+  'cloudflare-observability': { type: 'remote', url: 'https://observability.mcp.cloudflare.com/mcp' },
+  firecrawl: { type: 'remote', url: 'https://mcp.firecrawl.dev/v2/mcp' },
+  playwright: { type: 'locked-local' },
 };
 const name = process.argv[2];
-assert(Object.hasOwn(endpoints, name), 'Select a supported remote MCP package');
+assert(Object.hasOwn(packages, name), 'Select a supported MCP package');
 assert.equal(process.platform, 'linux', 'Run only on the isolated Linux CI runner');
 assert(process.env.RUNNER_TEMP, 'RUNNER_TEMP is required');
 const repo = path.resolve(__dirname, '../..');
@@ -100,7 +101,27 @@ function installedSkills() {
 }
 function inspectInstalled() {
   const config = readJSON(configPath);
-  check(config.mcp[name]?.url === endpoints[name], 'OpenCode MCP endpoint mismatch');
+  const installed = config.mcp[name];
+  const expected = packages[name];
+  if (expected.type === 'remote') {
+    check(installed?.url === expected.url, 'OpenCode MCP endpoint mismatch');
+  } else {
+    check(installed?.type === 'local', 'OpenCode local MCP type mismatch');
+    check(Array.isArray(installed.command) && installed.command.length === 2,
+      'OpenCode local MCP command shape mismatch');
+    check(installed.command[0] === 'node', 'OpenCode local MCP executable mismatch');
+    const pluginRoot = path.resolve(installed.cwd);
+    check(pluginRoot.startsWith(path.join(base, 'state/uap/managed/clients/opencode') + path.sep),
+      'OpenCode plugin root escaped the isolated root');
+    equal(installed.command[1], path.join(pluginRoot,
+      'io.github.777genius.agentplugins/runtime/launcher.mjs'),
+      'OpenCode locked launcher path mismatch');
+    const dataRoot = path.resolve(installed.environment?.PLUGIN_DATA || '');
+    check(dataRoot.startsWith(path.join(base, 'state/uap/plugin-data') + path.sep),
+      'OpenCode plugin data escaped the isolated root');
+    equal(installed.environment, { PLUGIN_DATA: dataRoot, PLUGIN_ROOT: pluginRoot },
+      'OpenCode local MCP environment mismatch');
+  }
   equal(config.mcp['uap-sentinel'], sentinel, 'Unrelated disabled MCP was changed');
   equal(installedSkills(), expectedSkills, 'OpenCode installed skill set mismatch');
 }
