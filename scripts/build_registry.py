@@ -520,7 +520,10 @@ def validate_schema(document: object, document_path: Path, schema_name: str) -> 
         raise RegistryError(f"{document_path}: Agent Plugins 1.0 schema error at {location}: {error.message}")
 
 
-def validated_package_facts(root: Path, *, require_directory_name: bool = True) -> dict[str, object]:
+def validated_package_facts(
+    root: Path, *, require_directory_name: bool = True,
+    require_readme: bool = True,
+) -> dict[str, object]:
     """Validate package data without executing it and return manifest-derived facts."""
     # json.load silently accepts duplicate object keys. Parse every submitted
     # JSON file with the registry's fail-closed reader before schema validation.
@@ -534,7 +537,10 @@ def validated_package_facts(root: Path, *, require_directory_name: bool = True) 
         validate_schema(read_object(mcp_path), mcp_path, "mcp")
     try:
         if "version" in manifest:
-            mcp_count, skill_count = validate_plugin(root, require_directory_name=require_directory_name)
+            mcp_count, skill_count = validate_plugin(
+                root, require_directory_name=require_directory_name,
+                require_readme=require_readme,
+            )
         else:
             # Agent Plugins 1.0 permits an absent version. Reuse the catalog's
             # component validators while retaining its portable package boundary.
@@ -552,7 +558,8 @@ def validated_package_facts(root: Path, *, require_directory_name: bool = True) 
                 isinstance(keywords, list) and all(isinstance(item, str) for item in keywords),
                 f"{manifest_path}: keywords must be strings",
             )
-            require((root / "README.md").is_file(), f"{root}: package README required")
+            if require_readme:
+                require((root / "README.md").is_file(), f"{root}: package README required")
             require(not any(path.exists() for path in (root / ".mcp.json", root / ".codex-plugin")), f"{root}: client-specific files are forbidden in portable core")
             mcp_count, skill_count = validate_mcp(root), validate_skills(root)
             require(mcp_count + skill_count > 0, f"{root}: catalog packages must contain a component")
@@ -1134,6 +1141,7 @@ def validate_changed_external_releases(
                 package_root, release, label=label,
                 require_closed_runtime=policy["status"] != "revoked",
                 runtime_policy=policy if policy["status"] != "revoked" else None,
+                require_readme=distribution["kind"] != "upstream",
             )
         except RegistryError:
             raise
@@ -1354,6 +1362,7 @@ def validate_release_package(
     package_root: Path, release: dict[str, object], *, label: str | None = None,
     allow_unresolved_revision: bool = False, require_closed_runtime: bool = True,
     runtime_policy: dict[str, object] | None = None,
+    require_readme: bool = True,
 ) -> None:
     """Validate the complete immutable package boundary used for eligibility.
 
@@ -1390,7 +1399,10 @@ def validate_release_package(
     # The immutable manifest and release metadata bind package identity. The
     # Agent Plugins specification does not require a repository subdirectory
     # (for example `agent-plugin/`) to equal plugin.json.name.
-    facts = validated_package_facts(package_root, require_directory_name=False)
+    facts = validated_package_facts(
+        package_root, require_directory_name=False,
+        require_readme=require_readme,
+    )
     manifest = read_object(manifest_path)
     require(
         canonical_manifest_repository(manifest.get("repository")) == source_repository,

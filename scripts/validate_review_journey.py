@@ -236,10 +236,16 @@ def materialize(repository: Path, revision: str, source: str, destination: Path)
         target.chmod(0o755 if mode == "100755" else 0o644)
 
 
-def package_facts(package: Path, *, require_directory_name: bool = True) -> dict[str, Any]:
+def package_facts(
+    package: Path, *, require_directory_name: bool = True,
+    require_readme: bool = True,
+) -> dict[str, Any]:
     manifest_body = (package / "plugin.json").read_bytes()
     manifest = json.loads(manifest_body)
-    validated = validated_package_facts(package, require_directory_name=require_directory_name)
+    validated = validated_package_facts(
+        package, require_directory_name=require_directory_name,
+        require_readme=require_readme,
+    )
     return {
         "manifest_name": manifest["name"], "package_version": manifest.get("version", ""),
         "agent_plugins_schema": manifest["$schema"],
@@ -356,14 +362,18 @@ def promotion(args: argparse.Namespace) -> dict[str, Any]:
         # Agent Plugins binds identity through plugin.json, not through the
         # enclosing repository directory name. Official packages commonly use
         # a generic package root such as `agent-plugin/`.
-        reviewed = package_facts(reviewed_root, require_directory_name=False)
+        reviewed = package_facts(
+            reviewed_root, require_directory_name=False, require_readme=False,
+        )
         require(reviewed["tree_digest"] == record["reviewed_tree_digest"], "reviewed package tree digest differs from the review record")
         require(reviewed["manifest_digest"] == record["reviewed_manifest_digest"], "reviewed manifest digest differs from the review record")
         require(reviewed["manifest_name"] == record["manifest_name"], "reviewed manifest name differs from the Directory product manifest name")
         require(reviewed["manifest_repository"] is not None and reviewed["manifest_repository"].casefold() == repository_id.casefold(), "reviewed manifest repository differs from the official repository")
         gates.append(gate("reviewed_identity", {"revision": reviewed_revision, **reviewed}))
         materialize(args.repository, candidate_revision, args.path, candidate_root)
-        candidate = package_facts(candidate_root, require_directory_name=False)
+        candidate = package_facts(
+            candidate_root, require_directory_name=False, require_readme=False,
+        )
         require(candidate["manifest_name"] == record["manifest_name"], "candidate manifest name differs from the Directory product manifest name")
         require(candidate["manifest_repository"] is not None and candidate["manifest_repository"].casefold() == repository_id.casefold(), "candidate manifest repository differs from the official repository")
         require(set(enforced_components).issubset(candidate["components"]), "candidate is missing product minimum capabilities")
@@ -379,10 +389,12 @@ def promotion(args: argparse.Namespace) -> dict[str, Any]:
             candidate_root, proposed_release,
             label=f"{record['distribution_id']}@{record['release_sequence']}",
             require_closed_runtime=True, runtime_policy=policy,
+            require_readme=False,
         )
         gates.append(gate("package", {
             "validator": "build_registry.validate_release_package",
             "require_closed_runtime": True, "runtime_policy_enforced": True,
+            "require_package_readme": False,
             "minimum_installer_version": policy["minimum_installer_version"],
             "enforced_capabilities": enforced_components, "components": candidate["components"],
         }))

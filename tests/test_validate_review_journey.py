@@ -61,7 +61,9 @@ class PromotionReadinessTests(unittest.TestCase):
         (package / "plugin.json").write_text(json.dumps(manifest, indent=2) + "\n")
         self.git(repository, "init", "-q", "-b", "main")
         reviewed = self.commit(repository, "reviewed PR head", "2026-01-01T00:00:00Z")
-        facts = journey.package_facts(package, require_directory_name=False)
+        facts = journey.package_facts(
+            package, require_directory_name=False, require_readme=False,
+        )
         (repository / "MERGE-NOTE.md").write_text("squash metadata outside package\n")
         candidate = self.commit(repository, "official merged candidate", "2026-01-02T00:00:00Z")
         self.git(repository, "remote", "add", "origin", "https://github.com/Example/Official.git")
@@ -108,7 +110,9 @@ class PromotionReadinessTests(unittest.TestCase):
         package = repository / args.path
         mutate(package)
         reviewed = self.commit(repository, "updated reviewed PR head", "2026-01-03T00:00:00Z")
-        facts = journey.package_facts(package, require_directory_name=False)
+        facts = journey.package_facts(
+            package, require_directory_name=False, require_readme=False,
+        )
         (repository / "MERGE-NOTE-2.md").write_text("merge metadata outside package\n")
         candidate = self.commit(repository, "updated official merge", "2026-01-04T00:00:00Z")
         metadata = json.loads(args.pr_metadata.read_text())
@@ -139,8 +143,23 @@ class PromotionReadinessTests(unittest.TestCase):
         self.assertEqual(package_gate["artifact"]["validator"], "build_registry.validate_release_package")
         self.assertTrue(package_gate["artifact"]["require_closed_runtime"])
         self.assertTrue(package_gate["artifact"]["runtime_policy_enforced"])
+        self.assertFalse(package_gate["artifact"]["require_package_readme"])
         self.assertEqual(package_gate["artifact"]["minimum_installer_version"], "0.1.18")
         self.assertEqual(package_gate["artifact"]["enforced_capabilities"], ["mcp"])
+
+    def test_official_package_without_package_local_readme_is_accepted(self) -> None:
+        temporary, repository, args, record = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        self.replace_reviewed_package(
+            repository, args, record,
+            lambda package: (package / "README.md").unlink(),
+        )
+
+        result = journey.promotion(args)
+
+        self.assertEqual(result["candidate"]["source"]["byte_classification"], "exact")
+        package_gate = next(item for item in result["gates"] if item["name"] == "package")
+        self.assertFalse(package_gate["artifact"]["require_package_readme"])
 
     def test_new_client_promotion_targets_share_directory_contract_and_reject_unknown(self) -> None:
         temporary, _repository, args, record = self.fixture()

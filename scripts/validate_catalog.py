@@ -231,7 +231,10 @@ def validate_skills(plugin_root: Path) -> int:
     return count
 
 
-def validate_plugin(plugin_root: Path, *, require_directory_name: bool = True) -> tuple[int, int]:
+def validate_plugin(
+    plugin_root: Path, *, require_directory_name: bool = True,
+    require_readme: bool = True,
+) -> tuple[int, int]:
     require(not plugin_root.is_symlink(), f"{plugin_root}: plugin root cannot be a symlink")
     try:
         validate_tree(plugin_root)
@@ -240,7 +243,8 @@ def validate_plugin(plugin_root: Path, *, require_directory_name: bool = True) -
     for path in plugin_root.rglob("*"):
         require(not path.is_symlink(), f"{path}: symlinks are forbidden in portable packages")
     validate_plugin_manifest(plugin_root, require_directory_name=require_directory_name)
-    require((plugin_root / "README.md").is_file(), f"{plugin_root}: package README required")
+    if require_readme:
+        require((plugin_root / "README.md").is_file(), f"{plugin_root}: package README required")
     forbidden = [plugin_root / ".mcp.json", plugin_root / ".codex-plugin"]
     require(not any(path.exists() for path in forbidden), f"{plugin_root}: client-specific files are forbidden in portable core")
     mcp_count = validate_mcp(plugin_root)
