@@ -384,7 +384,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             head_sha = run_git(candidate, "rev-parse", "HEAD")
             verdict = bridge_promotion.verify_pr(
                 repository=candidate, base_sha=base_sha, head_sha=head_sha,
-                branch=f"automation/upstream-promotion-chrome-devtools-{merge_sha[:12]}",
+                branch=f"automation/upstream-promotion-chrome-devtools-{merge_sha[:12]}-{base_sha[:12]}",
                 product_id="chrome-devtools", short_sha=merge_sha[:12],
                 commits=[bridge_commit, head_sha], audit_path=audit_path,
             )
@@ -438,7 +438,7 @@ class UpstreamPromotionTests(unittest.TestCase):
 
             result = promotion.verify_pr(argparse.Namespace(
                 repository=repository, base_sha=base, head_sha=head,
-                branch="automation/upstream-promotion-github-bbbbbbbbbbbb",
+                branch=f"automation/upstream-promotion-github-bbbbbbbbbbbb-{base[:12]}",
             ))
             self.assertEqual(result["outcome"], "verified")
             self.assertEqual(result["observer_run_id"], "1")
