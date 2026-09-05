@@ -30,6 +30,8 @@ class UpstreamPromotionWorkflowTests(unittest.TestCase):
         self.assertNotIn("DIRECTORY_PUBLISHER", body)
         self.assertNotIn("publisher-identity", body)
         self.assertIn("scripts/run_upstream_promotion_materialization.py", body)
+        self.assertIn("scripts/upstream_promotion.py evidence-artifacts", body)
+        self.assertIn("--publication-config registry/publication/config.json", body)
         self.assertIn("scripts/upstream_bridge_promotion.py prepare", body)
         self.assertIn("scripts/upstream_bridge_promotion.py finalize", body)
         self.assertIn("scripts/build_openai_compat.py", body)
@@ -64,7 +66,7 @@ class UpstreamPromotionWorkflowTests(unittest.TestCase):
         self.assertEqual(value["permissions"], {"actions": "read", "contents": "write", "pull-requests": "write"})
         body = AUTO_MERGE.read_text()
         self.assertIn("upstream-promotion-verdict-", body)
-        self.assertIn('gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch', body)
+        self.assertIn('gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch', body)
         self.assertIn("steps.current.outputs.auto_merge == 'true'", body)
         self.assertNotIn("--admin", body)
         self.assertIn(

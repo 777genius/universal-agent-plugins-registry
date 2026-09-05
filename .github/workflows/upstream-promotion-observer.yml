@@ -205,6 +205,11 @@ jobs:
             --sandbox "$RUNNER_TEMP/materialization" --output "$evidence_path" \
             --run-repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" --source-sha "$GITHUB_SHA"
+          if test "$DECISION" = promote; then
+            python3 scripts/upstream_promotion.py evidence-artifacts \
+              --selection "$RUNNER_TEMP/selection.json" --materialization "$evidence_path" \
+              --output-directory "$(dirname "$evidence_path")/clients"
+          fi
           echo "path=$evidence_path" >> "$GITHUB_OUTPUT"
 
       - name: Commit immutable materialization evidence locally
@@ -224,7 +229,7 @@ jobs:
             git add -- "bridges/$PRODUCT_ID" "plugins/$PRODUCT_ID" \
               docs/COMPATIBILITY.md docs/VERIFICATION.md "$EVIDENCE_PATH"
           else
-            git add -- "$EVIDENCE_PATH"
+            git add -- "$(dirname "$EVIDENCE_PATH")"
           fi
           git commit -m "test(directory): record upstream promotion evidence"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -261,18 +266,21 @@ jobs:
           PY
           python3 scripts/upstream_promotion.py review-record \
             --selection "$RUNNER_TEMP/selection.json" --materialization "$EVIDENCE_PATH" \
-            --artifact-revision "$EVIDENCE_COMMIT" --artifact-path "$EVIDENCE_PATH" \
-            --workflow-revision "$GITHUB_SHA" --output "$audit/review-record.json"
+            --artifact-revision "$EVIDENCE_COMMIT" \
+            --artifact-directory "$(dirname "$EVIDENCE_PATH")/clients" \
+            --output "$audit/review-record.json"
           python3 scripts/validate_review_journey.py promotion \
             --repository "$RUNNER_TEMP/official" --pr-metadata "$RUNNER_TEMP/pr-metadata.json" \
             --path "$PACKAGE_PATH" --review-record "$audit/review-record.json" \
             --candidate-output "$audit/promotion-candidate.json"
           python3 scripts/upstream_promotion.py apply \
             --candidate "$audit/promotion-candidate.json" \
-            --review-record "$audit/review-record.json" --directory registry/directory.json
+            --review-record "$audit/review-record.json" --directory registry/directory.json \
+            --publication-config registry/publication/config.json
           python3 scripts/build_registry.py
           python3 scripts/build_registry.py --check
           python3 scripts/validate_catalog.py
+          python3 scripts/build_openai_compat.py --check
 
       - name: Finalize and validate the review-required bridge promotion
         if: steps.selection.outputs.decision == 'promote_bridge'

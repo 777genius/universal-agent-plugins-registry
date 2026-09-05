@@ -44,43 +44,6 @@ def run_git(repository: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def evidence(artifact_revision: str, artifact_path: str, artifact_digest: str) -> dict:
-    return {
-        "schema_version": 1,
-        "id": "promotion/github/bbbbbbbbbbbb/codex",
-        "product_id": "github", "distribution_id": "github/github", "release_sequence": 1,
-        "package_tree_digest": FAKE_DIGEST, "manifest_digest": MANIFEST_DIGEST,
-        "source_repository": "github/github-mcp-server", "source_revision": MERGE_SHA,
-        "source_path": "agent-plugin", "level": "materialization", "outcome": "passed",
-        "client": "codex", "client_version": "isolated-configuration-fixture",
-        "installer_version": "0.1.26", "adapter_version": "agentplugins-0.1.26",
-        "os": "linux", "architecture": "amd64", "dependency_identity": "agentplugins@0.1.26",
-        "observed_at": "2026-09-01T00:00:00Z",
-        "artifact": {
-            "repository": "777genius/universal-agent-plugins", "revision": artifact_revision,
-            "path": artifact_path, "digest": artifact_digest,
-        },
-        "trust": {
-            "kind": "github_actions", "workflow": promotion.WORKFLOW,
-            "source_ref": "refs/heads/main", "source_digest": "c" * 40,
-        },
-    }
-
-
-def review_record(item: dict) -> dict:
-    return {
-        "schema_version": 3, "repository": "github/github-mcp-server", "path": "agent-plugin",
-        "reviewed_revision": REVIEWED_SHA, "reviewed_tree_digest": FAKE_DIGEST,
-        "reviewed_manifest_digest": MANIFEST_DIGEST, "product_id": "github", "manifest_name": "github",
-        "distribution_id": "github/github", "release_sequence": 1,
-        "policy": {
-            "status": "active", "minimum_installer_version": "0.1.26",
-            "targets": [{"client": "codex", "scopes": ["user"], "delivery": "managed", "authentication": "required"}],
-        },
-        "evidence": [item],
-    }
-
-
 def candidate(record: dict) -> dict:
     item = record["evidence"][0]
     return {
@@ -445,6 +408,11 @@ class UpstreamPromotionTests(unittest.TestCase):
             (repository / "registry").mkdir()
             for name in ("directory.json", "review-preview.json", "review-search.json"):
                 shutil.copy2(ROOT / "registry" / name, repository / "registry" / name)
+            (repository / "registry/publication").mkdir()
+            shutil.copy2(
+                ROOT / "registry/publication/config.json",
+                repository / "registry/publication/config.json",
+            )
             run_git(repository, "add", ".")
             run_git(repository, "commit", "-qm", "base")
             base = run_git(repository, "rev-parse", "HEAD")
@@ -462,19 +430,50 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "sandbox": {"kind": "disposable", "real_user_project_used": False, "removed": True},
             }
             raw_file.write_bytes(promotion.pretty(raw))
-            run_git(repository, "add", raw_path)
+            selection = {
+                "schema_version": 1,
+                "decision": "promote",
+                "entry": {
+                    "product_id": "github", "repository": "github/github-mcp-server",
+                    "distribution_id": "github/github", "release_sequence": 1,
+                    "reviewed_head_sha": REVIEWED_SHA, "package_path": "agent-plugin",
+                    "minimum_installer_version": "0.1.26",
+                    "targets": [{
+                        "client": "codex", "scopes": ["user"],
+                        "delivery": "managed", "authentication": "required",
+                    }],
+                },
+                "pr_metadata": {"merge_commit_oid": MERGE_SHA},
+            }
+            selection_path = Path(temporary) / "selection.json"
+            selection_path.write_bytes(promotion.pretty(selection))
+            leaf_directory = raw_file.parent / "clients"
+            promotion.write_evidence_artifacts(argparse.Namespace(
+                selection=selection_path, materialization=raw_file,
+                os="linux", architecture="amd64", output_directory=leaf_directory,
+            ))
+            run_git(repository, "add", str(raw_file.parent.relative_to(repository)))
             run_git(repository, "commit", "-qm", "evidence")
             evidence_commit = run_git(repository, "rev-parse", "HEAD")
 
-            item = evidence(evidence_commit, raw_path, promotion.sha256(raw_file.read_bytes()))
-            review = review_record(item)
-            proposed = candidate(review)
             audit = repository / f"registry/upstream-promotion-audit/github/{MERGE_SHA}"
             audit.mkdir(parents=True)
             review_path, candidate_path = audit / "review-record.json", audit / "promotion-candidate.json"
-            review_path.write_bytes(promotion.pretty(review))
+            promotion.review_record(argparse.Namespace(
+                selection=selection_path, materialization=raw_file,
+                artifact_revision=evidence_commit,
+                artifact_directory=str(leaf_directory.relative_to(repository)),
+                repository=repository, os="linux", architecture="amd64",
+                output=review_path,
+            ))
+            review = promotion.read_object(review_path)
+            proposed = candidate(review)
             candidate_path.write_bytes(promotion.pretty(proposed))
-            promotion.apply_candidate(argparse.Namespace(candidate=candidate_path, review_record=review_path, directory=repository / "registry/directory.json"))
+            promotion.apply_candidate(argparse.Namespace(
+                candidate=candidate_path, review_record=review_path,
+                directory=repository / "registry/directory.json",
+                publication_config=repository / "registry/publication/config.json",
+            ))
             source = promotion.read_object(repository / "registry/directory.json")
             (repository / "registry/review-preview.json").write_bytes(promotion.encoded(promotion.directory_preview(source)))
             (repository / "registry/review-search.json").write_bytes(promotion.encoded(promotion.directory_search(source)))
@@ -490,10 +489,30 @@ class UpstreamPromotionTests(unittest.TestCase):
             self.assertEqual(result["observer_run_id"], "1")
             self.assertTrue(result["auto_merge"])
 
+            trusted_review = review_path.read_bytes()
+            invalid_trust = copy.deepcopy(review)
+            invalid_trust["evidence"][0]["trust"] = {
+                "kind": "github_actions",
+                "workflow": "example/repository/.github/workflows/evidence.yml",
+                "source_ref": "refs/heads/main",
+                "source_digest": evidence_commit,
+            }
+            review_path.write_bytes(promotion.pretty(invalid_trust))
+            with self.assertRaisesRegex(promotion.PromotionError, "trust is invalid"):
+                promotion.verify_pr(argparse.Namespace(
+                    repository=repository, base_sha=base, head_sha=head,
+                    branch=f"automation/upstream-promotion-github-bbbbbbbbbbbb-{base[:12]}",
+                ))
+            review_path.write_bytes(trusted_review)
+
             review["evidence"][0]["installer_version"] = "0.1.25"
             review_path.write_bytes(promotion.pretty(review))
             with self.assertRaisesRegex(promotion.PromotionError, "candidate evidence projection"):
-                promotion.apply_candidate(argparse.Namespace(candidate=candidate_path, review_record=review_path, directory=repository / "registry/directory.json"))
+                promotion.apply_candidate(argparse.Namespace(
+                    candidate=candidate_path, review_record=review_path,
+                    directory=repository / "registry/directory.json",
+                    publication_config=repository / "registry/publication/config.json",
+                ))
 
 
 if __name__ == "__main__":
