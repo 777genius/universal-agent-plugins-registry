@@ -12,8 +12,10 @@ from unittest import mock
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from scripts.build_discovery_index import DiscoveryError
 from scripts.build_registry import directory_tree_digest, digest_bytes
 from scripts.directory_publication import PublicationError, canonical_json
+import scripts.security_index as security_index
 from scripts.security_index import (
     REPORT_TOOL,
     SCANNER,
@@ -195,6 +197,66 @@ class SecurityIndexTests(unittest.TestCase):
             "error_code": "scan_failed",
             "findings": [],
         }])
+
+    def test_discovery_error_does_not_stop_the_next_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            discovery, mirrors = make_discovery(root)
+            record = discovery["records"][0]
+            real_files = security_index.bounded_package_files
+            calls = 0
+
+            def files(repository, package_path):  # noqa: ANN001
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise DiscoveryError("invalid package tree")
+                return real_files(repository, package_path)
+
+            with mock.patch.object(security_index, "bounded_package_files", side_effect=files):
+                results = scan_repository(
+                    make_lintai(root), record["repository"], record["revision"],
+                    [record, record], mirrors, None,
+                )
+        self.assertEqual([result["outcome"] for result in results], [
+            "check_unavailable", "no_blocking_findings",
+        ])
+
+    def test_builder_counts_mixed_checked_and_unavailable_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            discovery, _mirrors = make_discovery(root)
+            first = discovery["records"][0]
+            second = dict(first)
+            second.update({
+                "slug": "discovery:owner/repo//packages/other",
+                "name": "other",
+                "package_path": "packages/other",
+                "tree_digest": "sha256:" + "8" * 64,
+                "manifest_digest": "sha256:" + "6" * 64,
+            })
+            discovery["records"].append(second)
+            checked = {
+                "subject": {
+                    "tree_digest": second["tree_digest"],
+                    "manifest_digest": second["manifest_digest"],
+                },
+                "outcome": "no_blocking_findings",
+                "counts": {"blocking": 0, "warnings": 0, "total": 0},
+                "scanned_files": 2,
+                "report_digest": "sha256:" + "9" * 64,
+                "findings": [],
+            }
+            with mock.patch.object(security_index, "scan_repository", return_value=[
+                security_index.unavailable(first, "scan_failed"), checked,
+            ]):
+                candidate = build_security_candidate(
+                    discovery, make_lintai(root), {}, discovery["generated_at"], workers=1,
+                )
+        self.assertEqual(candidate["coverage"], {"subjects": 2, "checked": 1, "unavailable": 1})
+        self.assertEqual({record["outcome"] for record in candidate["records"]}, {
+            "check_unavailable", "no_blocking_findings",
+        })
 
     def test_exact_previous_subject_skips_scan_but_scanner_mismatch_invalidates_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
