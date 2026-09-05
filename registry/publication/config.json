@@ -1,7 +1,7 @@
 {
   "repository": "777genius/universal-agent-plugins-registry",
   "schema_version": 1,
-  "local_evidence_main_anchor": "358ba031677f0969a2a3fc844686813dadae065b",
+  "local_evidence_main_anchor": "e972b22e65af85f30840931e2ea880753d08196b",
   "snapshot_lifetime_days": 30,
   "trusted_external_evidence": [
     {
@@ -21,6 +21,24 @@
       "revision": "358ba031677f0969a2a3fc844686813dadae065b",
       "path": "registry/evidence/context7-upstream/cli-0.1.13/kiro.json",
       "digest": "sha256:980a6b184fa1e70e409529b29d323f68dd6e296d703fcca45888c49c7bbe08f6"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "e972b22e65af85f30840931e2ea880753d08196b",
+      "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/clients/codex.json",
+      "digest": "sha256:d550d4e47d341505cb480660e5ebf5ab9bc2e974b2d8e1b8a2a2948a99111cf2"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "e972b22e65af85f30840931e2ea880753d08196b",
+      "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/clients/cursor.json",
+      "digest": "sha256:db7840fd933009b21c8dc07f60e99f3159737787b290e5f08e71ee8a0c87d784"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "e972b22e65af85f30840931e2ea880753d08196b",
+      "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/clients/kiro.json",
+      "digest": "sha256:ff2eaa69b8164f01dbbcdec5d7e3bc840051632af5d3c750f991d757abaac4af"
     }
   ],
   "trusted_evidence_workflows": [

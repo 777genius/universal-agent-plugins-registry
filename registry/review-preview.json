@@ -3470,8 +3470,9 @@
         "mcp",
         "plugins"
       ],
-      "default_distribution": "777genius/github-bridge",
+      "default_distribution": "github/github",
       "fallback_order": [
+        "github/github",
         "777genius/github-bridge",
         "777genius/github"
       ],
@@ -3484,7 +3485,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support claude"
         },
         {
           "targets": [
@@ -3494,7 +3496,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support cline"
         },
         {
           "targets": [
@@ -3503,8 +3506,8 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "distribution_id": "github/github",
+          "release_sequence": 1
         },
         {
           "targets": [
@@ -3514,7 +3517,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support copilot"
         },
         {
           "targets": [
@@ -3523,8 +3527,8 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "distribution_id": "github/github",
+          "release_sequence": 1
         },
         {
           "targets": [
@@ -3534,7 +3538,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support gemini"
         },
         {
           "targets": [
@@ -3543,8 +3548,8 @@
               "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "distribution_id": "github/github",
+          "release_sequence": 1
         },
         {
           "targets": [
@@ -3554,7 +3559,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support opencode"
         },
         {
           "targets": [
@@ -3564,7 +3570,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support vscode"
         },
         {
           "targets": [
@@ -3574,7 +3581,26 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support windsurf"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "github/github",
+          "release_sequence": 1
         },
         {
           "targets": [
@@ -3600,7 +3626,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support copilot,vscode"
         },
         {
           "targets": [
@@ -3646,7 +3673,8 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 2
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support claude,cline,copilot,gemini,opencode,vscode,windsurf"
         }
       ],
       "distributions": [
@@ -3751,6 +3779,43 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:2ce143ac1068f56e8674b1160c6c82515d0387529d5dbf13f03b2e080a3953d0",
           "manifest_digest": "sha256:ea444f4814659dde61a78073d55377abd04d34fe9c09af7c9bbb41c93097523e"
+        },
+        {
+          "id": "github/github",
+          "kind": "upstream",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "",
+          "components": [
+            "mcp"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "current_evidence": [
+            "promotion/github/59847fb6204b/codex",
+            "promotion/github/59847fb6204b/cursor",
+            "promotion/github/59847fb6204b/kiro"
+          ],
+          "source": {
+            "repository": "github/github-mcp-server",
+            "revision": "59847fb6204b276dcdbe10eaf14ebe3a73176948",
+            "path": "agent-plugin"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0",
+          "manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1"
         }
       ]
     },
