@@ -137,7 +137,7 @@ jobs:
           args=(--discovery-snapshot "${DISCOVERY_SNAPSHOT}" --lintai "${LINTAI}" --output ../security-candidate.json --workers 16)
           if test -n "${PREVIOUS_SECURITY_SNAPSHOT}"; then args+=(--previous-security-snapshot "${PREVIOUS_SECURITY_SNAPSHOT}"); fi
           set +e
-          python3 scripts/security_index.py "${args[@]}"
+          python3 -m scripts.security_index "${args[@]}"
           status=$?
           set -e
           test -f ../security-candidate.json
