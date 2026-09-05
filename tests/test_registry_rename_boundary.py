@@ -163,6 +163,67 @@ class RegistryRenameBoundaryTests(unittest.TestCase):
                 with self.subTest(distribution=selected["id"], field=field), self.assertRaises(registry.RegistryError):
                     registry.validate_bridge_bindings(changed, repository=CURRENT)
 
+    def test_current_relocations_append_without_rewriting_signed_releases(self):
+        source = registry.load_directory_source()
+        distributions = {item["id"]: item for item in source["distributions"]}
+        signed = {
+            "777genius/chrome-devtools-bridge": (
+                2, "dcd94db0bfafe5ff5c4b1f1154ee1f7c656c19e4",
+                "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed",
+                "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265",
+            ),
+            "777genius/cloudflare-docs-bridge": (
+                1, "224e4c065c69ff0b4e326e7796283524df9bfd2f",
+                "sha256:2b1d984194324b50b756a893a576f3d795262bd7edfec6d7167863ca8be93a2c",
+                "sha256:7d1ada5818ced00257f39edd0bea371630ad5167dbfa572fbf01d7504012119c",
+            ),
+            "777genius/context7": (
+                2, "dcd94db0bfafe5ff5c4b1f1154ee1f7c656c19e4",
+                "sha256:663f92049d29218aa8a5506a4f40fcc3002583a63730d4584ec12c84d481503d",
+                "sha256:6f1cca4322bc7bcca4ef0d7fbf33d3b7b0bf3b132b10b80fe5dd27e58c0ff327",
+            ),
+            "777genius/firebase": (
+                3, "40469d89024e0cdb42f092faa9bd0d03ac41b6aa",
+                "sha256:f29d3dffebdc119f57a32b29461863ecde25aaed11aa8e5473d3cc857d3e5eb0",
+                "sha256:ae8b10620d67a17a08e8aeb80910a66436b86f26716854b520ad3b414b2af3b2",
+            ),
+            "777genius/github-bridge": (
+                1, "224e4c065c69ff0b4e326e7796283524df9bfd2f",
+                "sha256:8b4fa6985607be1f503fc98294b1c0af4d4f2c3c55cf089604a3137deaaa53e8",
+                "sha256:90f940c0f656bdf83fa8cccd5515bf4df9211c5a1d9cb095b84c30ee0f4f6efe",
+            ),
+            "777genius/hubspot-developer": (
+                3, "40469d89024e0cdb42f092faa9bd0d03ac41b6aa",
+                "sha256:3b3e4ae662d980e425fbf54dc7423c211e6a81fb1593ace561734392f14fb377",
+                "sha256:359e99c1974c94248663ad639688755409dafc0751fe31a650602b3984a03d92",
+            ),
+        }
+        for distribution_id, (sequence, revision, tree_digest, manifest_digest) in signed.items():
+            with self.subTest(distribution=distribution_id):
+                distribution = distributions[distribution_id]
+                releases = {item["sequence"]: item for item in distribution["releases"]}
+                policies = {item["release_sequence"]: item for item in distribution["release_policies"]}
+                historical = releases[sequence]
+                self.assertEqual(
+                    (
+                        historical["package_source"]["repository"],
+                        historical["package_source"]["revision"],
+                        historical["tree_digest"], historical["manifest_digest"],
+                    ),
+                    (LEGACY, revision, tree_digest, manifest_digest),
+                )
+                self.assertEqual(policies[sequence]["status"], "superseded")
+                current = releases[sequence + 1]
+                self.assertEqual(
+                    current["package_source"],
+                    {"repository": CURRENT, "revision": None, "path": f"plugins/{distribution['product_id']}"},
+                )
+                self.assertEqual(policies[sequence + 1]["status"], "active")
+                package = registry.ROOT / current["package_source"]["path"]
+                self.assertEqual(current["package_version"], registry.read_object(package / "plugin.json")["version"])
+                self.assertEqual(current["tree_digest"], registry.directory_tree_digest(package))
+                self.assertEqual(current["manifest_digest"], registry.digest_bytes((package / "plugin.json").read_bytes()))
+
 
 if __name__ == "__main__":
     unittest.main()

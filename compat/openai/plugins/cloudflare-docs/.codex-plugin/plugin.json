@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-docs",
-  "version": "0.4.13",
+  "version": "0.4.13-uap.1",
   "description": "Community package for Cloudflare Docs MCP. Search current Cloudflare documentation through Cloudflare's hosted documentation server.",
   "author": {
     "name": "777genius",

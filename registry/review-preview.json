@@ -701,7 +701,7 @@
           "kind": "community_bridge",
           "status": "active",
           "release_sequence": 3,
-          "package_version": "1.8.0-uap.1",
+          "package_version": "1.8.0-uap.2",
           "components": [
             "mcp"
           ],
@@ -754,8 +754,8 @@
             "path": "plugins/chrome-devtools"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:647d5896e1d28f3c6fc3a7e896f5010fd688cbb8b82bacb08571e1c7f94094ee",
-          "manifest_digest": "sha256:bd616f2231a414d3dae3fac32b53765801fe672e7d9e11badede40f22208378d"
+          "tree_digest": "sha256:b1ff05c14b80f38f2c71961f60540f6e55072cd09c2c828cdeb2df445b5a1bcc",
+          "manifest_digest": "sha256:d14e6529884e7f57d1a2ac6280baef1f3bd052aa3080f9c62ea8458c89b70a90"
         }
       ]
     },
@@ -1381,7 +1381,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1391,7 +1391,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1401,7 +1401,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1411,7 +1411,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1421,7 +1421,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1431,7 +1431,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1441,7 +1441,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1451,7 +1451,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1461,7 +1461,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1471,7 +1471,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1481,7 +1481,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1511,7 +1511,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -1561,7 +1561,7 @@
             }
           ],
           "distribution_id": "777genius/cloudflare-docs-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         }
       ],
       "distributions": [
@@ -1614,8 +1614,8 @@
           "id": "777genius/cloudflare-docs-bridge",
           "kind": "community_bridge",
           "status": "active",
-          "release_sequence": 1,
-          "package_version": "0.4.13",
+          "release_sequence": 2,
+          "package_version": "0.4.13-uap.1",
           "components": [
             "mcp"
           ],
@@ -1672,8 +1672,8 @@
             "path": "plugins/cloudflare-docs"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:c617b90627a2858d951d07e23f7230846a3134a255032ad752d457830cf854d0",
-          "manifest_digest": "sha256:68056da30a9d7872ba04b6fb099b551064d02ef0cbbd06e3bb72b0178c584723"
+          "tree_digest": "sha256:3c56c4490ca928a8d46e40e8dbb8693698d01490621c7c21297577a09b49b747",
+          "manifest_digest": "sha256:25128465979e1837271abe8ccfc91a15a7322dbaaf7962a10aefab5c06ad12d5"
         }
       ]
     },
@@ -2236,7 +2236,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2246,7 +2246,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2256,7 +2256,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2266,7 +2266,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2276,7 +2276,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2286,7 +2286,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2296,7 +2296,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2306,7 +2306,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2316,7 +2316,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2326,7 +2326,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2352,7 +2352,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         },
         {
           "targets": [
@@ -2398,7 +2398,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 2
+          "release_sequence": 3
         }
       ],
       "distributions": [
@@ -2406,8 +2406,8 @@
           "id": "777genius/context7",
           "kind": "community",
           "status": "active",
-          "release_sequence": 2,
-          "package_version": "0.2.0",
+          "release_sequence": 3,
+          "package_version": "0.2.1",
           "components": [
             "mcp"
           ],
@@ -2460,8 +2460,8 @@
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:67a27f6249dd0ae4528667498791fe4b42a3e486fdc60a8e683509a6956dd245",
-          "manifest_digest": "sha256:e4d7574bbd15e12e18feace52a62ae68549aa67be3252ed0d1d14fc10e0ee201"
+          "tree_digest": "sha256:9220051c7d8423acc8a9b41c016ba60552ef2637a483bb7db60064942b00116a",
+          "manifest_digest": "sha256:8d3921be2db9daa757b6083bbadee26038751134554af9cfccb74c97967ea355"
         },
         {
           "id": "upstash/context7",
@@ -2995,7 +2995,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3005,7 +3005,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3015,7 +3015,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3025,7 +3025,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3035,7 +3035,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3045,7 +3045,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3055,7 +3055,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3065,7 +3065,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3075,7 +3075,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3085,7 +3085,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3111,7 +3111,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -3157,7 +3157,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 3
+          "release_sequence": 4
         }
       ],
       "distributions": [
@@ -3165,8 +3165,8 @@
           "id": "777genius/firebase",
           "kind": "community",
           "status": "active",
-          "release_sequence": 3,
-          "package_version": "0.2.1",
+          "release_sequence": 4,
+          "package_version": "0.2.2",
           "components": [
             "mcp"
           ],
@@ -3219,8 +3219,8 @@
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:4fd37e672dac0c0951be44e9e21418230e5a99bd23eec809c4770fbf14638c07",
-          "manifest_digest": "sha256:c0f9b2c843c08a6d96c8629b1a713482b1864ddefdfb8996dfaadb6973dc9de6"
+          "tree_digest": "sha256:330c919a37accbfa408c8a19459bbd19ac5ac51c93a51acf03abd26a96f7cded",
+          "manifest_digest": "sha256:8bb74f3d10e4ba2ed4e1f02218ed4e2f468ba6a77e80dc26add7efd775bd5b7b"
         }
       ]
     },
@@ -3484,7 +3484,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3494,7 +3494,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3504,7 +3504,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3514,7 +3514,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3524,7 +3524,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3534,7 +3534,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3544,7 +3544,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3554,7 +3554,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3564,7 +3564,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3574,7 +3574,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3600,7 +3600,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -3646,7 +3646,7 @@
             }
           ],
           "distribution_id": "777genius/github-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         }
       ],
       "distributions": [
@@ -3695,8 +3695,8 @@
           "id": "777genius/github-bridge",
           "kind": "community_bridge",
           "status": "active",
-          "release_sequence": 1,
-          "package_version": "1.10.1",
+          "release_sequence": 2,
+          "package_version": "1.10.1-uap.1",
           "components": [
             "mcp"
           ],
@@ -3749,8 +3749,8 @@
             "path": "plugins/github"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:c159a48c2daef80251b355388ba47ddb7d64b4bd5a2eb06ae021e36c4d251524",
-          "manifest_digest": "sha256:475c2c31c3a6573c50a8b3ef98d6574f8d357b393af1bc1b112bcbbb48be62e2"
+          "tree_digest": "sha256:2ce143ac1068f56e8674b1160c6c82515d0387529d5dbf13f03b2e080a3953d0",
+          "manifest_digest": "sha256:ea444f4814659dde61a78073d55377abd04d34fe9c09af7c9bbb41c93097523e"
         }
       ]
     },
@@ -4712,7 +4712,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4722,7 +4722,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4732,7 +4732,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4742,7 +4742,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4752,7 +4752,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4762,7 +4762,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4772,7 +4772,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4782,7 +4782,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4792,7 +4792,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4802,7 +4802,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4828,7 +4828,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -4874,7 +4874,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 3
+          "release_sequence": 4
         }
       ],
       "distributions": [
@@ -4882,8 +4882,8 @@
           "id": "777genius/hubspot-developer",
           "kind": "community",
           "status": "active",
-          "release_sequence": 3,
-          "package_version": "0.2.1",
+          "release_sequence": 4,
+          "package_version": "0.2.2",
           "components": [
             "mcp"
           ],
@@ -4936,8 +4936,8 @@
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:5867d970e93ecf367c27e750a63e614ccf696abd17b80f36dc39234fa18fcda1",
-          "manifest_digest": "sha256:956caea431aba169b17afb2462c560712a6843f9ee295dc12c76eb2f3a24a16c"
+          "tree_digest": "sha256:467da672168c6d69e4df178ada4f0f606c9f7ec7bfa11744eece7e6c9ef275ba",
+          "manifest_digest": "sha256:84663d734bd6c3cb232a485f71ce9f9673d2a5dce58c097397debebcecbfaac5"
         }
       ]
     },
