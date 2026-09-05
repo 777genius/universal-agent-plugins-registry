@@ -1012,6 +1012,31 @@ class OpenAIAppBindingTests(unittest.TestCase):
         self.assertEqual(selection["distribution_id"], "github/github")
         self.assertIn("github", self.generated_names(source))
 
+    def test_broken_selected_local_package_does_not_fall_back_silently(self) -> None:
+        source = copy.deepcopy(registry.load_directory_source())
+        product = next(item for item in source["products"] if item["id"] == "github")
+        selected = next(
+            item for item in source["distributions"]
+            if item["id"] == product["default_distribution"]
+        )
+        active_sequence = next(
+            policy["release_sequence"] for policy in selected["release_policies"]
+            if policy["status"] == "active"
+        )
+        release = next(
+            item for item in selected["releases"]
+            if item["sequence"] == active_sequence
+        )
+        release["package_source"] = {
+            **release["package_source"], "revision": "a" * 40,
+        }
+
+        self.assertEqual(
+            registry.resolve_directory(source, "github", ["codex"])["distribution_id"],
+            selected["id"],
+        )
+        self.assertNotIn("github", self.generated_names(source))
+
     def test_non_openai_only_eligibility_cannot_create_marketplace_entry(self) -> None:
         source = copy.deepcopy(registry.load_directory_source())
         distribution = next(

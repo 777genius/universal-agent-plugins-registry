@@ -523,6 +523,11 @@ def exact_offline_package(
     portable_root = exact_selected_package(directory, selection, extracted_root)
     if portable_root is not None or not allow_fallback:
         return portable_root
+    _, selected = selected_release(directory, selection)
+    if is_checkout_owned_repository(
+        selected["package_source"]["repository"], LOCAL_REPOSITORY,
+    ):
+        return None
     distributions = {
         item["id"]: item for item in directory["distributions"]
     }
