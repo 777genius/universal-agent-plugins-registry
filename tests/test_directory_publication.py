@@ -83,6 +83,29 @@ def install_fixture_feed(root: Path, envelope: str = "envelope-current.json") ->
 
 
 class CanonicalAndSignatureTests(unittest.TestCase):
+    def test_unresolved_releases_use_current_publishing_repository_identity(self) -> None:
+        config = prepare.load_config(ROOT / "registry" / "publication" / "config.json")
+        source = json.loads((ROOT / "registry" / "directory.json").read_bytes())
+        expected_repository = config["repository"]
+        unresolved = []
+
+        for distribution in source["distributions"]:
+            for release in distribution["releases"]:
+                package_source = release["package_source"]
+                if package_source["revision"] is not None:
+                    continue
+                unresolved.append(f"{distribution['id']}@{release['sequence']}")
+                self.assertEqual(package_source["repository"], expected_repository)
+                manifest = json.loads(
+                    (ROOT / package_source["path"] / "plugin.json").read_bytes()
+                )
+                self.assertEqual(
+                    manifest["repository"],
+                    f"https://github.com/{expected_repository}",
+                )
+
+        self.assertTrue(unresolved)
+
     def test_all_directory_client_enums_match_publication_and_reject_unknown_ids(self) -> None:
         import jsonschema
         import build_registry

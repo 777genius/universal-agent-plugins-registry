@@ -14,6 +14,7 @@ from scripts import upstream_bridge_promotion as bridge_promotion
 from scripts import run_upstream_promotion_materialization as lifecycle
 from scripts import build_openai_compat as openai_compat
 from scripts.build_registry import RegistryError, validated_package_facts
+from scripts.repository_identity import CURRENT_REGISTRY_REPOSITORY
 from scripts.validate_review_journey import materialize
 
 
@@ -241,7 +242,15 @@ class UpstreamPromotionTests(unittest.TestCase):
             self.assertEqual(result["decision"], "promote_bridge")
             self.assertFalse(result["entry"].get("auto_merge", False))
 
-    def test_apply_locked_bridge_release_preserves_targets_and_requires_manual_merge(self) -> None:
+    @mock.patch.object(
+        bridge_promotion,
+        "active_registry_repository",
+        return_value=CURRENT_REGISTRY_REPOSITORY,
+    )
+    def test_apply_locked_bridge_release_preserves_targets_and_requires_manual_merge(
+        self,
+        _active_repository: mock.Mock,
+    ) -> None:
         directory = promotion.read_object(ROOT / "registry/directory.json")
         before = next(item for item in directory["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
         current_policy = next(item for item in before["release_policies"] if item["status"] == "active")
@@ -265,7 +274,15 @@ class UpstreamPromotionTests(unittest.TestCase):
         self.assertEqual(after["release_policies"][-1]["targets"], current_targets)
         self.assertEqual(after["release_policies"][-1]["current_evidence"], [])
 
-    def test_prepare_locked_bridge_pins_exact_official_npm_runtime(self) -> None:
+    @mock.patch.object(
+        bridge_promotion,
+        "active_registry_repository",
+        return_value=CURRENT_REGISTRY_REPOSITORY,
+    )
+    def test_prepare_locked_bridge_pins_exact_official_npm_runtime(
+        self,
+        _active_repository: mock.Mock,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repository = root / "official"

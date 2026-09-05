@@ -13,6 +13,9 @@ concurrency:
   group: upstream-promotion-policy-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
+
 jobs:
   policy:
     name: upstream-promotion-policy

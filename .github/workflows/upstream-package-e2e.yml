@@ -395,7 +395,8 @@ jobs:
               assert release["tree_digest"] == data["tree_digest"]
               assert release["manifest_digest"] == data["manifest_digest"]
               source = release["package_source"]
-              expected_repository = os.environ.get("UAP_ACTIVE_REPOSITORY", "777genius/universal-agent-plugins")
+              expected_repository = os.environ["EXPECTED_REPOSITORY"]
+              assert expected_repository == os.environ["UAP_ACTIVE_REPOSITORY"]
               assert source["repository"] == expected_repository and source["path"] == "plugins/chrome-devtools"
               assert len(source["revision"]) == 40 and int(source["revision"], 16) >= 0
               assert data["revision"] == installation["source"]["resolved_revision"] == source["revision"]

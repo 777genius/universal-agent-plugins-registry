@@ -749,13 +749,13 @@
           ],
           "current_evidence": [],
           "source": {
-            "repository": "777genius/universal-agent-plugins",
+            "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/chrome-devtools"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:96cbf3be3f037e802a46c11c8221b76cef7a1aa9ebc95746938bd89fb410feb5",
-          "manifest_digest": "sha256:9944e9506213597655e3fd18cfa843ecc167bbb8f8c60ee1daf441cbb792d5e2"
+          "tree_digest": "sha256:647d5896e1d28f3c6fc3a7e896f5010fd688cbb8b82bacb08571e1c7f94094ee",
+          "manifest_digest": "sha256:bd616f2231a414d3dae3fac32b53765801fe672e7d9e11badede40f22208378d"
         }
       ]
     },
@@ -1667,13 +1667,13 @@
           ],
           "current_evidence": [],
           "source": {
-            "repository": "777genius/universal-agent-plugins",
+            "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/cloudflare-docs"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:2b1d984194324b50b756a893a576f3d795262bd7edfec6d7167863ca8be93a2c",
-          "manifest_digest": "sha256:7d1ada5818ced00257f39edd0bea371630ad5167dbfa572fbf01d7504012119c"
+          "tree_digest": "sha256:c617b90627a2858d951d07e23f7230846a3134a255032ad752d457830cf854d0",
+          "manifest_digest": "sha256:68056da30a9d7872ba04b6fb099b551064d02ef0cbbd06e3bb72b0178c584723"
         }
       ]
     },
@@ -2455,13 +2455,13 @@
           ],
           "current_evidence": [],
           "source": {
-            "repository": "777genius/universal-agent-plugins",
+            "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:663f92049d29218aa8a5506a4f40fcc3002583a63730d4584ec12c84d481503d",
-          "manifest_digest": "sha256:6f1cca4322bc7bcca4ef0d7fbf33d3b7b0bf3b132b10b80fe5dd27e58c0ff327"
+          "tree_digest": "sha256:67a27f6249dd0ae4528667498791fe4b42a3e486fdc60a8e683509a6956dd245",
+          "manifest_digest": "sha256:e4d7574bbd15e12e18feace52a62ae68549aa67be3252ed0d1d14fc10e0ee201"
         },
         {
           "id": "upstash/context7",
@@ -3214,13 +3214,13 @@
           ],
           "current_evidence": [],
           "source": {
-            "repository": "777genius/universal-agent-plugins",
+            "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:f29d3dffebdc119f57a32b29461863ecde25aaed11aa8e5473d3cc857d3e5eb0",
-          "manifest_digest": "sha256:ae8b10620d67a17a08e8aeb80910a66436b86f26716854b520ad3b414b2af3b2"
+          "tree_digest": "sha256:4fd37e672dac0c0951be44e9e21418230e5a99bd23eec809c4770fbf14638c07",
+          "manifest_digest": "sha256:c0f9b2c843c08a6d96c8629b1a713482b1864ddefdfb8996dfaadb6973dc9de6"
         }
       ]
     },
@@ -3744,13 +3744,13 @@
           ],
           "current_evidence": [],
           "source": {
-            "repository": "777genius/universal-agent-plugins",
+            "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/github"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:8b4fa6985607be1f503fc98294b1c0af4d4f2c3c55cf089604a3137deaaa53e8",
-          "manifest_digest": "sha256:90f940c0f656bdf83fa8cccd5515bf4df9211c5a1d9cb095b84c30ee0f4f6efe"
+          "tree_digest": "sha256:c159a48c2daef80251b355388ba47ddb7d64b4bd5a2eb06ae021e36c4d251524",
+          "manifest_digest": "sha256:475c2c31c3a6573c50a8b3ef98d6574f8d357b393af1bc1b112bcbbb48be62e2"
         }
       ]
     },
@@ -4931,13 +4931,13 @@
           ],
           "current_evidence": [],
           "source": {
-            "repository": "777genius/universal-agent-plugins",
+            "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:3b3e4ae662d980e425fbf54dc7423c211e6a81fb1593ace561734392f14fb377",
-          "manifest_digest": "sha256:359e99c1974c94248663ad639688755409dafc0751fe31a650602b3984a03d92"
+          "tree_digest": "sha256:5867d970e93ecf367c27e750a63e614ccf696abd17b80f36dc39234fa18fcda1",
+          "manifest_digest": "sha256:956caea431aba169b17afb2462c560712a6843f9ee295dc12c76eb2f3a24a16c"
         }
       ]
     },

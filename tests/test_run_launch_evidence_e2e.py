@@ -24,6 +24,8 @@ import jsonschema
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from scripts.repository_identity import CURRENT_REGISTRY_REPOSITORY
+
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENTPLUGINS_0_1_14_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "agentplugins-0.1.14"
@@ -5162,7 +5164,11 @@ else: raise SystemExit(2)
         for distribution in harness.snapshot["distributions"]:
             for release in distribution["releases"]:
                 source = release.get("package_source", {})
-                if source.get("repository") == e2e.TRUSTED_CATALOG_REPOSITORY and source.get("revision") is None:
+                if (
+                    source.get("repository")
+                    in {e2e.TRUSTED_CATALOG_REPOSITORY, CURRENT_REGISTRY_REPOSITORY}
+                    and source.get("revision") is None
+                ):
                     source["revision"] = publication_revision
         upstream = harness.configured_source_release("upstream_owned_short_name", ["cursor"])
         bridge = harness.configured_source_release("community_bridge_short_name", ["cursor"])

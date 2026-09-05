@@ -5,7 +5,7 @@
   "description": "Community package for Cloudflare Docs MCP. Search current Cloudflare documentation through Cloudflare's hosted documentation server.",
   "author": {"name": "777genius", "url": "https://github.com/777genius"},
   "homepage": "https://github.com/cloudflare/mcp-server-cloudflare/tree/main/apps/docs-ai-search",
-  "repository": "https://github.com/777genius/universal-agent-plugins",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
   "license": "Apache-2.0",
   "keywords": ["cloud", "cloudflare", "documentation", "mcp", "research"]
 }
