@@ -32,7 +32,12 @@ again. Existing or partially created automation branches are never reused.
 The reviewed cohort lives in `registry/upstream-promotions.json`. It currently
 watches Chrome DevTools, Cloudflare Docs, and GitHub MCP Server. The root package
 path `.` is supported explicitly for repositories such as Chrome DevTools; it
-does not weaken traversal or ambiguous-path rejection.
+does not weaken traversal or ambiguous-path rejection. For a review-required
+root bridge, the observer requires the reviewed `plugin.json` and `mcp.json` to
+remain byte-identical in the official merge. The generated lock, exact merged
+`package.json`, license digest, and runtime risk report are then bound in the
+manual promotion PR. Automatic root-package promotion still requires the whole
+package tree to remain unchanged.
 
 Chrome DevTools uses `locked_bridge_manual`: its official manifest launches live
 `npx`, which does not meet the Directory's content-addressed runtime policy.
