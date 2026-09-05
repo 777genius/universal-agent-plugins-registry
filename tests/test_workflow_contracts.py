@@ -50,6 +50,19 @@ def pinned_requirements(body: str) -> set[str]:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_registry_landing_redirect_is_finalized_before_artifact_hashing(self) -> None:
+        build = load(DIRECTORY_PUBLICATION)["jobs"]["build_site"]
+        steps = build["steps"]
+        generate = next(step for step in steps if step.get("name") == "Generate from the exact signed snapshot")
+        command = "node scripts/finalize-registry-landing.mjs"
+        self.assertGreater(generate["run"].index(command), generate["run"].index("pnpm check:generated"))
+        artifact = next(step for step in steps if step.get("id") == "artifact")
+        self.assertLess(steps.index(generate), steps.index(artifact))
+        pr_steps = load(PAGES)["jobs"]["build"]["steps"]
+        finalizer = next(step for step in pr_steps if step.get("run") == command)
+        browser = next(step for step in pr_steps if step.get("run") == "pnpm test:browser")
+        self.assertGreater(pr_steps.index(finalizer), pr_steps.index(browser))
+
     def test_catalog_gate_is_fresh_per_publication_and_has_no_skip_bypass(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
         gate = workflow["jobs"]["required_catalog_readiness"]
