@@ -1017,8 +1017,9 @@ class OpenAIAppBindingTests(unittest.TestCase):
         product = next(item for item in source["products"] if item["id"] == "github")
         selected = next(
             item for item in source["distributions"]
-            if item["id"] == product["default_distribution"]
+            if item["id"] == "777genius/github-bridge"
         )
+        product["default_distribution"] = selected["id"]
         active_sequence = next(
             policy["release_sequence"] for policy in selected["release_policies"]
             if policy["status"] == "active"
