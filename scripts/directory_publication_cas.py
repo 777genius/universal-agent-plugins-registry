@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -19,8 +19,8 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 PUBLICATION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 MARKER_NAME = "uap-directory-publisher[bot]"
 MARKER_EMAIL = "uap-directory-publisher[bot]@users.noreply.github.com"
-MARKER_EPOCH = 946684800  # 2000-01-01; the bounded hash offset is part of v1.
-MARKER_SPAN = 100 * 366 * 24 * 60 * 60
+MARKER_VERSION = 2
+MAX_SOURCE_FUTURE_SKEW_SECONDS = 300
 
 
 class CasError(RuntimeError):
@@ -40,11 +40,16 @@ def _require_sha(value: str, label: str) -> None:
         raise CasError(f"{label} must be a full lowercase object ID")
 
 
-def marker_timestamp(publication_id: str) -> int:
-    if PUBLICATION_ID_RE.fullmatch(publication_id) is None:
-        raise CasError("publication ID is invalid")
-    digest = hashlib.sha256(("uap-directory-publication-marker-v1\0" + publication_id).encode("ascii")).digest()
-    return MARKER_EPOCH + int.from_bytes(digest[:8], "big") % MARKER_SPAN
+def marker_timestamp(repo: Path, source: str) -> int:
+    """Place a v2 marker immediately after its source in Git chronology."""
+    _require_sha(source, "source commit")
+    raw = _git(repo, ["show", "-s", "--format=%ct", source]).stdout.strip()
+    if re.fullmatch(r"[0-9]+", raw) is None:
+        raise CasError("source commit timestamp is invalid")
+    timestamp = int(raw) + 1
+    if timestamp > int(time.time()) + MAX_SOURCE_FUTURE_SKEW_SECONDS:
+        raise CasError("source commit timestamp is unreasonably far in the future")
+    return timestamp
 
 
 def marker_message(source: str, publication_id: str) -> str:
@@ -53,7 +58,7 @@ def marker_message(source: str, publication_id: str) -> str:
         raise CasError("publication ID is invalid")
     return (
         "chore(directory): record publication marker\n\n"
-        "Directory-Publication-Marker: 1\n"
+        f"Directory-Publication-Marker: {MARKER_VERSION}\n"
         f"Publication-ID: {publication_id}\n"
         f"Source-Commit: {source}\n"
     )
@@ -66,7 +71,7 @@ def create_marker(repo: Path, source: str, publication_id: str) -> str:
     if source_type != "commit":
         raise CasError("source object is not a commit")
     tree = _git(repo, ["show", "-s", "--format=%T", source]).stdout.strip()
-    timestamp = marker_timestamp(publication_id)
+    timestamp = marker_timestamp(repo, source)
     identity_env = dict(os.environ)
     identity_env.update({
         "GIT_AUTHOR_NAME": MARKER_NAME,
@@ -101,7 +106,7 @@ def validate_marker(repo: Path, marker: str, source: str, publication_id: str) -
     raw_message = _git(repo, ["show", "-s", "--format=%B", marker]).stdout
     if raw_message != marker_message(source, publication_id) + "\n":
         raise CasError("marker commit message differs from deterministic contract")
-    timestamp = str(marker_timestamp(publication_id))
+    timestamp = str(marker_timestamp(repo, source))
     expected_body = (
         f"tree {source_tree}\n"
         f"parent {source}\n"
