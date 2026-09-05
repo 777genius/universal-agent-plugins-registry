@@ -84,7 +84,7 @@ jobs:
               value.get("state") == "OPEN" and value.get("isDraft") is False
               and value.get("headRefOid") == os.environ["EXPECTED_HEAD"]
               and repository == os.environ["GITHUB_REPOSITORY"]
-              and re.fullmatch(r"automation/upstream-promotion-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{12}", value.get("headRefName", ""))
+              and re.fullmatch(r"automation/upstream-promotion-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{12}-[0-9a-f]{12}", value.get("headRefName", ""))
           ):
               raise SystemExit("promotion PR changed after the trusted verdict")
           PY

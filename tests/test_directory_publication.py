@@ -524,10 +524,24 @@ class PublicationLifecycleTests(unittest.TestCase):
                 self.assertEqual(committed, (ROOT / artifact["path"]).read_bytes())
                 self.assertEqual(publication.sha256_digest(committed), artifact["digest"])
 
-    def test_initial_inactive_bridge_is_reproduced_before_its_first_signed_binding(self) -> None:
+    def test_current_bridge_is_reproduced_before_its_first_signed_binding(self) -> None:
         import build_bridges
 
         source = json.loads((ROOT / "registry" / "directory.json").read_bytes())
+        # A first signed binding has no historical recipe archive. Model only
+        # each bridge's current release; real superseded releases are validated
+        # against the previous signed snapshot instead of the current recipe.
+        for distribution in source["distributions"]:
+            if distribution["kind"] != "community_bridge":
+                continue
+            current = max(item["sequence"] for item in distribution["releases"])
+            distribution["releases"] = [
+                item for item in distribution["releases"] if item["sequence"] == current
+            ]
+            distribution["release_policies"] = [
+                item for item in distribution["release_policies"]
+                if item["release_sequence"] == current
+            ]
         reproduced: list[str] = []
 
         def assemble(repository_root, bridge_id, destination, _cache):  # type: ignore[no-untyped-def]

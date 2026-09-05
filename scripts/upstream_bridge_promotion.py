@@ -386,10 +386,15 @@ def verify_pr(
     allowed_promotion_paths = {
         "registry/directory.json", "registry/review-preview.json", "registry/review-search.json", audit_path,
     }
+    openai_root = f"compat/openai/plugins/{product_id}"
     require(
-        set(promotion_paths) <= allowed_promotion_paths
+        all(item in allowed_promotion_paths or item.startswith(f"{openai_root}/") for item in promotion_paths)
         and {"registry/directory.json", audit_path} <= set(promotion_paths),
         f"locked bridge promotion changed unexpected review paths: {promotion_paths!r}",
+    )
+    require(
+        any(item.startswith(f"{openai_root}/") for item in promotion_paths),
+        "locked bridge promotion omitted its OpenAI compatibility projection",
     )
     raw, review = read_object(repository / raw_path), read_object(repository / audit_path)
     require(review.get("promotion_kind") == "locked_bridge", "locked bridge review kind is invalid")
@@ -447,6 +452,8 @@ def verify_pr(
         and raw.get("clients") == [target["client"] for target in entry["targets"]],
         "locked bridge materialization did not bind the prepared package",
     )
+    candidate_directory = read_object(repository / "registry/directory.json")
+    validate_directory(candidate_directory, repository_root=repository)
     package_root = repository / review["package"]["path"]
     require(review["package"]["path"] == f"plugins/{product_id}", "locked bridge package path is invalid")
     validate_locked_npm_runtime(package_root)
@@ -470,6 +477,35 @@ def verify_pr(
         and review["runtime"]["npm_package"] == entry["bridge"]["npm_package"],
         "locked bridge runtime differs from the trusted bridge policy",
     )
+    from build_openai_compat import project_portable_package, tree_file_modes, tree_files
+    from openai_app_bindings import load_app_bindings
+    with tempfile.TemporaryDirectory(prefix="verify-locked-bridge-openai-") as temporary:
+        product = next(
+            item for item in candidate_directory["products"] if item["id"] == product_id
+        )
+        bindings = load_app_bindings(repository / "compat/openai/app-bindings.json")
+        expected_openai = Path(temporary) / product_id
+        actual_openai = repository / openai_root
+        project_portable_package(
+            package_root,
+            expected_openai,
+            product,
+            bindings.get(product_id),
+            brand_assets=repository / "assets",
+        )
+        require(
+            actual_openai.is_dir() and not actual_openai.is_symlink()
+            and all(not item.is_symlink() for item in actual_openai.rglob("*")),
+            "locked bridge OpenAI compatibility projection contains a symlink",
+        )
+        require(
+            tree_files(expected_openai) == tree_files(actual_openai),
+            "locked bridge OpenAI compatibility projection is stale or non-deterministic",
+        )
+        require(
+            tree_file_modes(expected_openai) == tree_file_modes(actual_openai),
+            "locked bridge OpenAI compatibility projection file modes differ",
+        )
     mcp = read_object(package_root / "mcp.json")
     server = mcp.get("mcpServers", {}).get(entry["bridge"]["server"])
     require(
@@ -480,8 +516,6 @@ def verify_pr(
         ],
         "locked bridge MCP command differs from the trusted bridge policy",
     )
-    candidate_directory = read_object(repository / "registry/directory.json")
-    validate_directory(candidate_directory, repository_root=repository)
     with tempfile.TemporaryDirectory(prefix="verify-locked-bridge-promotion-") as temporary:
         reconstructed_path = Path(temporary) / "directory.json"
         base_directory = subprocess.run(

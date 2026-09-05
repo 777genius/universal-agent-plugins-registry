@@ -509,6 +509,60 @@ def exact_selected_package(
     return package_root
 
 
+def project_portable_package(
+    portable_root: Path,
+    output: Path,
+    product: dict[str, object],
+    binding: dict[str, object] | None,
+    *,
+    brand_assets: Path = BRAND_ASSETS,
+) -> dict[str, object]:
+    """Project one exact portable package into the OpenAI host format."""
+    name = str(product["id"])
+    portable = load(portable_root / "plugin.json")
+    if portable.get("name") != product["manifest_name"] or portable["name"] != name:
+        raise ValueError(f"{portable_root}: plugin name does not match directory")
+    output.mkdir(parents=True, exist_ok=True)
+    has_skills = (portable_root / "skills").is_dir()
+    has_mcp = (portable_root / "mcp.json").is_file()
+    portable_mcp = load(portable_root / "mcp.json") if has_mcp else None
+    if binding is not None:
+        if portable_mcp is None:
+            raise ValueError(f"{name}: app binding requires portable mcp.json")
+        validate_binding_target(name, binding, portable_mcp)
+    dump(
+        output / ".codex-plugin" / "plugin.json",
+        openai_manifest(portable, has_skills, has_mcp, binding is not None),
+    )
+    if has_mcp:
+        assert portable_mcp is not None
+        dump(output / ".mcp.json", openai_mcp(portable_mcp, name))
+    if binding is not None:
+        dump(output / ".app.json", app_document(binding))
+    if has_skills:
+        shutil.copytree(portable_root / "skills", output / "skills", dirs_exist_ok=True)
+    if portable_mcp is not None:
+        copy_mcp_resources(portable_root, output, portable_mcp)
+    assets = output / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(brand_assets / "icon.png", assets / "icon.png")
+    shutil.copy2(brand_assets / "logo.png", assets / "logo.png")
+    copy_portable_legal_files(portable_root, output)
+    shutil.copy2(portable_root / "README.md", output / "README.md")
+    return {
+        "name": name,
+        "source": {
+            "source": "local",
+            "path": f"./compat/openai/plugins/{name}",
+        },
+        "policy": {
+            "installation": "AVAILABLE",
+            "authentication": "ON_INSTALL",
+        },
+        "category": CATEGORIES.get(name, "Developer Tools"),
+    }
+
+
 def build(output_root: Path, marketplace_path: Path) -> None:
     """Generate all OpenAI packages and their marketplace catalog."""
     # Lazy to avoid the legacy catalog builder's import of OPENAI_MCP_AUTH
@@ -527,9 +581,7 @@ def build(output_root: Path, marketplace_path: Path) -> None:
         for product in products:
             name = str(product["id"])
             try:
-                selection = resolve_directory(
-                    directory, name, [OPENAI_PACKAGE_TARGET]
-                )
+                selection = resolve_directory(directory, name, [OPENAI_PACKAGE_TARGET])
             except RegistryError:
                 continue
             binding = bindings.get(name)
@@ -553,67 +605,23 @@ def build(output_root: Path, marketplace_path: Path) -> None:
                     key: binding[key] for key in ("app_key", "id", "mcp_server")
                 }
                 if app_target is None or app_target.get("app_binding") != expected_binding:
-                    actual_binding = (
-                        None if app_target is None else app_target.get("app_binding")
-                    )
+                    actual_binding = None if app_target is None else app_target.get("app_binding")
                     raise stale_app_binding(
                         name,
                         "signed ChatGPT target app_binding "
                         f"{actual_binding!r} does not equal sidecar binding "
                         f"{expected_binding!r}",
                     )
-            portable_root = exact_selected_package(
-                directory, selection, extracted_root
-            )
+            portable_root = exact_selected_package(directory, selection, extracted_root)
             if portable_root is None:
                 continue
-            portable = load(portable_root / "plugin.json")
-            if portable.get("name") != product["manifest_name"] or portable["name"] != name:
-                raise ValueError(f"{portable_root}: plugin name does not match directory")
-            output = output_root / name
-            output.mkdir(parents=True, exist_ok=True)
-            has_skills = (portable_root / "skills").is_dir()
-            has_mcp = (portable_root / "mcp.json").is_file()
-            portable_mcp = load(portable_root / "mcp.json") if has_mcp else None
-            if binding is not None:
-                if portable_mcp is None:
-                    raise ValueError(f"{name}: app binding requires portable mcp.json")
-                validate_binding_target(name, binding, portable_mcp)
-            dump(
-                output / ".codex-plugin" / "plugin.json",
-                openai_manifest(portable, has_skills, has_mcp, binding is not None),
-            )
-            if has_mcp:
-                assert portable_mcp is not None
-                dump(output / ".mcp.json", openai_mcp(portable_mcp, name))
-            if binding is not None:
-                dump(output / ".app.json", app_document(binding))
-            if has_skills:
-                shutil.copytree(
-                    portable_root / "skills", output / "skills",
-                    dirs_exist_ok=True,
-                )
-            if portable_mcp is not None:
-                copy_mcp_resources(portable_root, output, portable_mcp)
-            assets = output / "assets"
-            assets.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(BRAND_ASSETS / "icon.png", assets / "icon.png")
-            shutil.copy2(BRAND_ASSETS / "logo.png", assets / "logo.png")
-            copy_portable_legal_files(portable_root, output)
-            shutil.copy2(portable_root / "README.md", output / "README.md")
             entries.append(
-                {
-                    "name": name,
-                    "source": {
-                        "source": "local",
-                        "path": f"./compat/openai/plugins/{name}",
-                    },
-                    "policy": {
-                        "installation": "AVAILABLE",
-                        "authentication": "ON_INSTALL",
-                    },
-                    "category": CATEGORIES.get(name, "Developer Tools"),
-                }
+                project_portable_package(
+                    portable_root,
+                    output_root / name,
+                    product,
+                    binding,
+                )
             )
     dump(
         marketplace_path,
@@ -633,6 +641,15 @@ def tree_files(root: Path) -> dict[str, bytes]:
         str(path.relative_to(root)): path.read_bytes()
         for path in root.rglob("*")
         if path.is_file()
+    }
+
+
+def tree_file_modes(root: Path) -> dict[str, int]:
+    """Return tracked permission bits for every regular generated file."""
+    return {
+        str(path.relative_to(root)): path.stat().st_mode & 0o777
+        for path in root.rglob("*")
+        if path.is_file() and not path.is_symlink()
     }
 
 
