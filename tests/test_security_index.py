@@ -41,7 +41,7 @@ def make_lintai(root: Path, findings: list[dict[str, object]] | None = None, *, 
     report = {
         "schema_version": 1,
         "tool": REPORT_TOOL,
-        "policy": {"id": "agent-plugin-install", "version": 1, "preset": "recommended"},
+        "policy": {"id": "agent-plugin-install", "version": 2, "preset": "recommended"},
         "stats": {"scanned_files": 2},
         "findings": findings or [],
         "diagnostics": [],
@@ -50,7 +50,7 @@ def make_lintai(root: Path, findings: list[dict[str, object]] | None = None, *, 
     source = f"""#!{sys.executable}
 import json, sys
 if sys.argv[1:] == ['version']:
-    print('lintai 0.1.2')
+    print('lintai 0.1.3')
     raise SystemExit(0)
 if sys.argv[1] == 'scan-agent-plugin':
     if {fail_scan!r}:
@@ -134,14 +134,14 @@ class SecurityIndexTests(unittest.TestCase):
     def test_policy_digest_is_the_cross_language_contract(self) -> None:
         self.assertEqual(
             policy()["digest"],
-            "sha256:41d3640d31eac89e7b30777bbbe937b307908e4a8d7c29a3a0edca49cfe1d755",
+            "sha256:9cf869e299d847d7078aeca01f5a182fcdb0144bbf513c83290459991c79e037",
         )
 
     def test_report_preserves_counts_and_applies_narrow_blocking_policy(self) -> None:
         record = {"tree_digest": "sha256:" + "1" * 64, "manifest_digest": "sha256:" + "2" * 64}
         body = json.dumps({
             "schema_version": 1, "tool": REPORT_TOOL,
-            "policy": {"id": "agent-plugin-install", "version": 1},
+            "policy": {"id": "agent-plugin-install", "version": 2},
             "stats": {"scanned_files": 3},
             "findings": [finding("SEC330"), finding("SEC301"), finding("SEC330", confidence="medium")],
             "runtime_errors": [],
@@ -151,11 +151,26 @@ class SecurityIndexTests(unittest.TestCase):
         self.assertEqual(result["counts"], {"blocking": 1, "warnings": 2, "total": 3})
         self.assertEqual(result["report_digest"], digest_bytes(body))
 
+    def test_contextual_remote_execution_is_warning_but_direct_execution_blocks(self) -> None:
+        record = {"tree_digest": "sha256:" + "1" * 64, "manifest_digest": "sha256:" + "2" * 64}
+        body = json.dumps({
+            "schema_version": 1, "tool": REPORT_TOOL,
+            "policy": {"id": "agent-plugin-install", "version": 2},
+            "stats": {"scanned_files": 2},
+            "findings": [finding("SEC102"), finding("SEC330")],
+            "runtime_errors": [],
+        }, separators=(",", ":")).encode()
+        result = assessment_from_report(record, body)
+        self.assertEqual(
+            [(item["code"], item["disposition"]) for item in result["findings"]],
+            [("SEC330", "blocking"), ("SEC102", "warning")],
+        )
+
     def test_report_rejects_feed_identity_in_place_of_public_tool_identity(self) -> None:
         record = {"tree_digest": "sha256:" + "1" * 64, "manifest_digest": "sha256:" + "2" * 64}
         body = json.dumps({
             "schema_version": 1, "tool": SCANNER,
-            "policy": {"id": "agent-plugin-install", "version": 1},
+            "policy": {"id": "agent-plugin-install", "version": 2},
             "stats": {"scanned_files": 1}, "findings": [], "runtime_errors": [],
         }, separators=(",", ":")).encode()
         with self.assertRaisesRegex(PublicationError, "scanner identity"):
