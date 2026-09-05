@@ -44,6 +44,8 @@ not by itself prove that its service, OAuth flow, or runtime tool call works.
 | --- | --- | --- |
 | <img src="assets/client-icons/openai.svg" width="20" height="20" alt=""> Codex | <img src="assets/client-icons/openai.svg" width="20" height="20" alt=""> ChatGPT | <img src="assets/client-icons/cursor.svg" width="20" height="20" alt=""> Cursor |
 | <img src="assets/client-icons/github-copilot.svg" width="20" height="20" alt=""> GitHub Copilot CLI | <img src="assets/client-icons/vscode.svg" width="20" height="20" alt=""> VS Code | <img src="assets/client-icons/kiro.svg" width="20" height="20" alt=""> Kiro |
+| <img src="assets/client-icons/claude.svg" width="20" height="20" alt=""> Claude Code | <img src="assets/client-icons/gemini.svg" width="20" height="20" alt=""> Gemini CLI | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/client-icons/opencode-dark.svg"><img src="assets/client-icons/opencode.svg" width="20" height="20" alt=""></picture> OpenCode |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/client-icons/cline-dark.svg"><img src="assets/client-icons/cline.svg" width="20" height="20" alt=""></picture> Cline | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/client-icons/windsurf-dark.svg"><img src="assets/client-icons/windsurf.svg" width="20" height="20" alt=""></picture> Windsurf |  |
 
 These are CLI targets, not a promise that every package works in every client.
 Compatibility is package-specific and any remaining activation or OAuth step is
@@ -58,11 +60,11 @@ shown by the CLI.
 - **Community bridges** package a pinned upstream commit while an upstream
   contribution is being reviewed. The source label is always shown.
 
-The catalog currently contains 26 reviewed packages and 2,500+ discovered
+The catalog currently contains 28 reviewed packages and 3,000+ discovered
 package paths. Counts can change as signed snapshots are published. A schema
 pass does not prove activation, OAuth, or a successful tool call in every agent.
 
-All 26 packages pass standard schema validation. Historical evidence includes
+All 28 packages pass standard schema validation. Historical evidence includes
 15/15 runtime checks for five starter packages across Codex, Cursor, and Kiro.
 Installation coverage is broader than runtime coverage; see the test matrix and
 verification report for exact boundaries.
