@@ -1468,7 +1468,7 @@ class PublicationLifecycleTests(unittest.TestCase):
         source_commit = subprocess.check_output(["/usr/bin/git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         with tempfile.TemporaryDirectory() as tmp:
             external = Path(tmp) / "external"
-            package = external / "plugins" / "demo"
+            package = external / "agent-plugin"
             write_valid_package(package)
             subprocess.run(["/usr/bin/git", "init", "-q", str(external)], check=True)
             subprocess.run(["/usr/bin/git", "-C", str(external), "add", "."], check=True)
@@ -1477,7 +1477,7 @@ class PublicationLifecycleTests(unittest.TestCase):
             source = {
                 "schema_version": 1,
                 "products": [{"schema_version": 1, "id": "demo", "display_name": "Demo", "description": "External demo package.", "manifest_name": "demo", "aliases": ["demo"], "reserved_aliases": ["demo"], "categories": ["demo"], "minimum_capabilities": {"skills": "optional", "mcp": "required"}, "default_distribution": "example/demo", "distributions": ["example/demo"]}],
-                "distributions": [{"schema_version": 1, "id": "example/demo", "product_id": "demo", "kind": "community", "status": "active", "packager": "example", "releases": [{"sequence": 1, "package_version": "1.0.0", "manifest_name": "demo", "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "package_source": {"repository": "example/external", "revision": revision, "path": "plugins/demo"}, "tree_digest_algorithm": "agentplugins-tree-sha256-v1", "tree_digest": prepare.package_tree_digest(package), "manifest_digest": prepare.manifest_digest(package), "components": ["mcp"]}], "release_policies": [{"release_sequence": 1, "status": "active", "minimum_installer_version": "0.1.6", "targets": [{"client": "codex", "scopes": ["user"], "delivery": "managed", "authentication": "unknown"}], "current_evidence": []}]}],
+                "distributions": [{"schema_version": 1, "id": "example/demo", "product_id": "demo", "kind": "community", "status": "active", "packager": "example", "releases": [{"sequence": 1, "package_version": "1.0.0", "manifest_name": "demo", "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "package_source": {"repository": "example/external", "revision": revision, "path": "agent-plugin"}, "tree_digest_algorithm": "agentplugins-tree-sha256-v1", "tree_digest": prepare.package_tree_digest(package), "manifest_digest": prepare.manifest_digest(package), "components": ["mcp"]}], "release_policies": [{"release_sequence": 1, "status": "active", "minimum_installer_version": "0.1.6", "targets": [{"client": "codex", "scopes": ["user"], "delivery": "managed", "authentication": "unknown"}], "current_evidence": []}]}],
                 "evidence": [],
             }
             candidate = prepare.build_candidate(source, config, source_commit, "valid-external", None, external_overrides={"example/external": external})

@@ -51,7 +51,7 @@ class PromotionReadinessTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
         repository = root / "official"
-        package = repository / "packages" / "chrome-devtools"
+        package = repository / "agent-plugin"
         package.parent.mkdir(parents=True)
         shutil.copytree(ROOT / "plugins/cloudflare-docs", package)
         manifest = json.loads((package / "plugin.json").read_text())
@@ -61,7 +61,7 @@ class PromotionReadinessTests(unittest.TestCase):
         (package / "plugin.json").write_text(json.dumps(manifest, indent=2) + "\n")
         self.git(repository, "init", "-q", "-b", "main")
         reviewed = self.commit(repository, "reviewed PR head", "2026-01-01T00:00:00Z")
-        facts = journey.package_facts(package)
+        facts = journey.package_facts(package, require_directory_name=False)
         (repository / "MERGE-NOTE.md").write_text("squash metadata outside package\n")
         candidate = self.commit(repository, "official merged candidate", "2026-01-02T00:00:00Z")
         self.git(repository, "remote", "add", "origin", "https://github.com/Example/Official.git")
@@ -72,13 +72,13 @@ class PromotionReadinessTests(unittest.TestCase):
             "schema_version": 1, "id": "official-materialization-codex", "product_id": "chrome-devtools",
             "distribution_id": "example/chrome-devtools", "release_sequence": 1,
             "package_tree_digest": facts["tree_digest"], "manifest_digest": facts["manifest_digest"],
-            "source_repository": "Example/Official", "source_revision": candidate, "source_path": "packages/chrome-devtools",
+            "source_repository": "Example/Official", "source_revision": candidate, "source_path": "agent-plugin",
             "level": "materialization", "outcome": "passed", "client": "codex", "client_version": "1.0",
             "installer_version": "0.1.18", "os": "linux", "architecture": "amd64", "observed_at": "2026-01-02T00:00:00Z",
             "artifact": artifact,
         }
         record = {
-            "schema_version": 3, "repository": "Example/Official", "path": "packages/chrome-devtools",
+            "schema_version": 3, "repository": "Example/Official", "path": "agent-plugin",
             "reviewed_revision": reviewed, "reviewed_tree_digest": facts["tree_digest"], "reviewed_manifest_digest": facts["manifest_digest"],
             "product_id": "chrome-devtools", "manifest_name": "chrome-devtools", "distribution_id": "example/chrome-devtools",
             "release_sequence": 1,
@@ -97,7 +97,7 @@ class PromotionReadinessTests(unittest.TestCase):
         }))
         args = argparse.Namespace(
             repository=repository, pr_metadata=metadata_path,
-            path="packages/chrome-devtools", review_record=review_path, candidate_output=root / "candidate.json",
+            path="agent-plugin", review_record=review_path, candidate_output=root / "candidate.json",
         )
         return temporary, repository, args, record
 
@@ -108,7 +108,7 @@ class PromotionReadinessTests(unittest.TestCase):
         package = repository / args.path
         mutate(package)
         reviewed = self.commit(repository, "updated reviewed PR head", "2026-01-03T00:00:00Z")
-        facts = journey.package_facts(package)
+        facts = journey.package_facts(package, require_directory_name=False)
         (repository / "MERGE-NOTE-2.md").write_text("merge metadata outside package\n")
         candidate = self.commit(repository, "updated official merge", "2026-01-04T00:00:00Z")
         metadata = json.loads(args.pr_metadata.read_text())
@@ -180,7 +180,9 @@ class PromotionReadinessTests(unittest.TestCase):
                         manifest[field] = value
                     manifest_path.write_text(json.dumps(manifest) + "\n")
                     with self.assertRaisesRegex(journey.RegistryError, message):
-                        journey.validated_package_facts(repository / args.path)
+                        journey.validated_package_facts(
+                            repository / args.path, require_directory_name=False,
+                        )
 
     def test_materialization_preflights_blob_size_before_writing(self) -> None:
         temporary, repository, args, _record = self.fixture()
@@ -273,7 +275,7 @@ class PromotionReadinessTests(unittest.TestCase):
                         manifest["description"] = "different merged bytes"
                         (package / "plugin.json").write_text(json.dumps(manifest) + "\n")
                     elif classification == "moved":
-                        self.git(repository, "mv", args.path, "packages/moved-fixture")
+                        self.git(repository, "mv", args.path, "moved-fixture")
                     else:
                         self.git(repository, "rm", "-qr", args.path)
                     candidate = self.commit(repository, classification, "2026-01-03T00:00:00Z")

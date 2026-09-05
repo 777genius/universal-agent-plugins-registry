@@ -319,7 +319,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: catalog-readiness-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence
+          path: attestation-input
       - name: Strictly validate both canonical subjects without executing clients or MCP
         run: |
           test "$WORKFLOW_SHA" = "$GITHUB_SHA"
@@ -332,13 +332,13 @@ jobs:
             --snapshot-digest "$SNAPSHOT_DIGEST" --source-sha "$SOURCE_SHA" --workflow-sha "$WORKFLOW_SHA" \
             --signed-ledger-sha "$SIGNED_LEDGER_SHA" --materialized-ledger-sha "$MATERIALIZED_LEDGER_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --repository "$GITHUB_REPOSITORY" \
-            --artifact evidence/catalog-readiness.json
+            --artifact attestation-input/catalog-readiness.json
           python3 - <<'PY'
           import json, os, sys
           from pathlib import Path
           sys.path.insert(0, "scripts")
           from two_lane_evidence import canonical_json, sha256_file, validate_source_policy_evidence
-          path = Path("evidence/source-policy-conformance.json")
+          path = Path("attestation-input/source-policy-conformance.json")
           assert path.is_file() and not path.is_symlink() and path.stat().st_size <= 1048576
           body = path.read_bytes()
           value = json.loads(body)
@@ -347,15 +347,15 @@ jobs:
               scenario_digest=sha256_file(Path("tests/e2e/launch-scenarios.json")),
               harness_digest=sha256_file(Path("tests/e2e/source-policy-tests.json")),
               overlay_digest=sha256_file(Path("tests/e2e/source-policy-overlay.json")))
-          assert {p.name for p in Path("evidence").iterdir()} == {"catalog-readiness.json", "source-policy-conformance.json"}
+          assert {p.name for p in Path("attestation-input").iterdir()} == {"catalog-readiness.json", "source-policy-conformance.json"}
           PY
       - name: Attest only the validated catalog and policy subjects
         id: attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            evidence/catalog-readiness.json
-            evidence/source-policy-conformance.json
+            attestation-input/catalog-readiness.json
+            attestation-input/source-policy-conformance.json
       - name: Preserve exact offline attestation transport
         env:
           BUNDLE_PATH: ${{ steps.attestation.outputs.bundle-path }}
