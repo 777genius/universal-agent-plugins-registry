@@ -1,0 +1,146 @@
+{
+  "schema_version": 3,
+  "repository": "github/github-mcp-server",
+  "path": "agent-plugin",
+  "reviewed_revision": "14092de9940741511d224e0d7071ac02910bda11",
+  "reviewed_tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0",
+  "reviewed_manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1",
+  "product_id": "github",
+  "manifest_name": "github",
+  "distribution_id": "github/github",
+  "release_sequence": 1,
+  "policy": {
+    "status": "active",
+    "minimum_installer_version": "0.1.26",
+    "targets": [
+      {
+        "authentication": "required",
+        "client": "codex",
+        "delivery": "managed",
+        "scopes": [
+          "user"
+        ]
+      },
+      {
+        "authentication": "required",
+        "client": "cursor",
+        "delivery": "managed",
+        "scopes": [
+          "user"
+        ]
+      },
+      {
+        "authentication": "required",
+        "client": "kiro",
+        "delivery": "managed",
+        "scopes": [
+          "user"
+        ]
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "schema_version": 1,
+      "id": "promotion/github/59847fb6204b/codex",
+      "product_id": "github",
+      "distribution_id": "github/github",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0",
+      "manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1",
+      "source_repository": "github/github-mcp-server",
+      "source_revision": "59847fb6204b276dcdbe10eaf14ebe3a73176948",
+      "source_path": "agent-plugin",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "codex",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.26",
+      "adapter_version": "agentplugins-0.1.26",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.26",
+      "observed_at": "2026-09-05T22:02:12Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "1b16a2731613cde3bcd0a0be6e8a03de21611477",
+        "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/materialization.json",
+        "digest": "sha256:1c01ad357d3022fcc891ce64605417eec824d519cf1ba28c3867cc5af3924ad4"
+      },
+      "trust": {
+        "kind": "github_actions",
+        "workflow": "777genius/universal-agent-plugins-registry/.github/workflows/upstream-promotion-observer.yml",
+        "source_ref": "refs/heads/main",
+        "source_digest": "ef126891ff43555c883b59c56d7ca212f0c70272"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/github/59847fb6204b/cursor",
+      "product_id": "github",
+      "distribution_id": "github/github",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0",
+      "manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1",
+      "source_repository": "github/github-mcp-server",
+      "source_revision": "59847fb6204b276dcdbe10eaf14ebe3a73176948",
+      "source_path": "agent-plugin",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "cursor",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.26",
+      "adapter_version": "agentplugins-0.1.26",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.26",
+      "observed_at": "2026-09-05T22:02:12Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "1b16a2731613cde3bcd0a0be6e8a03de21611477",
+        "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/materialization.json",
+        "digest": "sha256:1c01ad357d3022fcc891ce64605417eec824d519cf1ba28c3867cc5af3924ad4"
+      },
+      "trust": {
+        "kind": "github_actions",
+        "workflow": "777genius/universal-agent-plugins-registry/.github/workflows/upstream-promotion-observer.yml",
+        "source_ref": "refs/heads/main",
+        "source_digest": "ef126891ff43555c883b59c56d7ca212f0c70272"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/github/59847fb6204b/kiro",
+      "product_id": "github",
+      "distribution_id": "github/github",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0",
+      "manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1",
+      "source_repository": "github/github-mcp-server",
+      "source_revision": "59847fb6204b276dcdbe10eaf14ebe3a73176948",
+      "source_path": "agent-plugin",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "kiro",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.26",
+      "adapter_version": "agentplugins-0.1.26",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.26",
+      "observed_at": "2026-09-05T22:02:12Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "1b16a2731613cde3bcd0a0be6e8a03de21611477",
+        "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/materialization.json",
+        "digest": "sha256:1c01ad357d3022fcc891ce64605417eec824d519cf1ba28c3867cc5af3924ad4"
+      },
+      "trust": {
+        "kind": "github_actions",
+        "workflow": "777genius/universal-agent-plugins-registry/.github/workflows/upstream-promotion-observer.yml",
+        "source_ref": "refs/heads/main",
+        "source_digest": "ef126891ff43555c883b59c56d7ca212f0c70272"
+      }
+    }
+  ]
+}
