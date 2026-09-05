@@ -25,6 +25,7 @@ from openai_app_bindings import (  # noqa: E402
 import build_openai_compat as builder  # noqa: E402
 import build_registry as registry  # noqa: E402
 from build_openai_compat import openai_manifest  # noqa: E402
+from repository_identity import CURRENT_REGISTRY_REPOSITORY  # noqa: E402
 from validate_openai_compat import ValidationError, validate_plugin  # noqa: E402
 
 
@@ -975,7 +976,10 @@ class OpenAIAppBindingTests(unittest.TestCase):
         selection = registry.resolve_directory(source, "cloudflare-docs", ["codex"])
         _, release = builder.selected_release(source, selection)
 
-        self.assertEqual(release["package_source"]["repository"], builder.LOCAL_REPOSITORY)
+        self.assertEqual(
+            release["package_source"]["repository"],
+            CURRENT_REGISTRY_REPOSITORY,
+        )
         self.assertIsNone(release["package_source"]["revision"])
         self.assertIn("cloudflare-docs", self.generated_names(source))
 

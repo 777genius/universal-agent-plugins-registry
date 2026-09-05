@@ -5,7 +5,7 @@
   "description": "Community package for GitHub MCP Server. Work with repositories, issues, pull requests, reviews, and code search through GitHub's hosted MCP endpoint.",
   "author": {"name": "777genius", "url": "https://github.com/777genius"},
   "homepage": "https://github.com/github/github-mcp-server",
-  "repository": "https://github.com/777genius/universal-agent-plugins",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
   "license": "MIT",
   "keywords": ["code-search", "github", "issues", "mcp", "pull-requests"]
 }

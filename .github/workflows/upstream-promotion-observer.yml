@@ -15,6 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
   AGENTPLUGINS_VERSION: "0.1.26"
   AGENTPLUGINS_NPM_INTEGRITY: sha512-7aPo4aoulltyx9zTbhJLxjCpQSvjKN0/YW/ATF6AUl2tnpWMwZf440SZbXfTGeuPRo0Ol2K5epNJFOguaPj7WQ==
 

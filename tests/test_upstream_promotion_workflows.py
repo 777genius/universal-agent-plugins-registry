@@ -45,6 +45,7 @@ class UpstreamPromotionWorkflowTests(unittest.TestCase):
         value = workflow(POLICY)
         self.assertEqual(set(value["on"]), {"pull_request"})
         self.assertEqual(value["permissions"], {"actions": "read", "contents": "read", "pull-requests": "read"})
+        self.assertEqual(value["env"]["UAP_ACTIVE_REPOSITORY"], "${{ github.repository }}")
         job = value["jobs"]["policy"]
         self.assertEqual(job["name"], "upstream-promotion-policy")
         body = POLICY.read_text()

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -591,6 +592,10 @@ sys.modules['catalog_process_isolation']=module
 
     def test_upstream_promotion_observer_targets_its_current_repository(self) -> None:
         workflow = load(ROOT / ".github" / "workflows" / "upstream-promotion-observer.yml")
+        self.assertEqual(
+            workflow["env"]["UAP_ACTIVE_REPOSITORY"],
+            "${{ github.repository }}",
+        )
         job = workflow["jobs"]["observe"]
         token_step = next(
             step for step in job["steps"]
@@ -2113,6 +2118,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('native_digest == "sha256:" + hashlib.sha256(release_binary.read_bytes()).hexdigest()', body)
         self.assertIn('mutable_selector = discovered or directory', body)
         self.assertIn('success=mutable_selector', body)
+        self.assertIn('expected_repository = os.environ["EXPECTED_REPOSITORY"]', body)
+        self.assertIn('expected_repository == os.environ["UAP_ACTIVE_REPOSITORY"]', body)
         token_steps = [step.get("name") for step in job["steps"] if "GH_TOKEN" in json.dumps(step)]
         self.assertEqual(token_steps, ["Download and authenticate the exact released CLI"])
 
@@ -2145,7 +2152,11 @@ sys.modules['catalog_process_isolation']=module
                 cache = {"sequence": sequence, "snapshot": encode(candidate),
                          "envelope": encode({"sequence": sequence, "snapshot_digest": "wrong" if bad_digest else digest, "key_id": "test-key"})}
                 (sandbox / "state/directory-v1-cache.json").write_text(json.dumps(cache))
-                return validate(sandbox, data, installed)
+                with mock.patch.dict(os.environ, {
+                    "EXPECTED_REPOSITORY": "777genius/universal-agent-plugins-registry",
+                    "UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry",
+                }):
+                    return validate(sandbox, data, installed)
             self.assertEqual(check(snapshot)["snapshot_sequence"], 20)
             self.assertEqual(check(snapshot, sequence=21)["snapshot_sequence"], 21)
             for changed in ({"sequence": 13}, {"source_path": "wrong"}, {"bad_digest": True}):
