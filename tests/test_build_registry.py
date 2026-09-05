@@ -708,6 +708,30 @@ class DirectoryDomainTests(unittest.TestCase):
             )
             self.assertEqual(changed, [("zz-community/zz-community-product", 1)])
 
+    def test_only_upstream_external_release_may_omit_package_readme(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source, repository, package, _revision = self.local_external_release(Path(tmp))
+            distribution = source["distributions"][-1]
+            release = distribution["releases"][0]
+            (package / "README.md").unlink()
+            release["package_source"]["revision"] = self.commit_fixture_change(
+                repository, "remove optional upstream package README",
+            )
+            release["tree_digest"] = registry.directory_tree_digest(package)
+
+            with self.assertRaisesRegex(registry.RegistryError, "package README required"):
+                registry.validate_changed_external_releases(
+                    source, self.source(),
+                    repository_overrides={"example/external": repository},
+                )
+
+            distribution["kind"] = "upstream"
+            changed = registry.validate_changed_external_releases(
+                source, self.source(),
+                repository_overrides={"example/external": repository},
+            )
+            self.assertEqual(changed, [("zz-community/zz-community-product", 1)])
+
     def test_initial_migration_skips_revoked_release_without_acquisition(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source, repository, _package, _revision = self.local_external_release(Path(tmp))

@@ -70,7 +70,9 @@ def official_path(repository: Path, package_path: str, relative: str) -> Path:
 def exact_runtime_identity(entry: dict[str, Any], repository: Path) -> dict[str, str]:
     package_path = entry["package_path"]
     package_root = repository if package_path == "." else repository.joinpath(*package_path.split("/"))
-    facts = validated_package_facts(package_root, require_directory_name=False)
+    facts = validated_package_facts(
+        package_root, require_directory_name=False, require_readme=False,
+    )
     require(facts["manifest_name"] == entry["product_id"], "official bridge manifest name differs from product")
     manifest = read_object(package_root / "plugin.json")
     require(
