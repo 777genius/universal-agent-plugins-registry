@@ -1,0 +1,430 @@
+name: Signed Security Index
+
+on:
+  workflow_run:
+    workflows: [Signed Discovery Index]
+    types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - "schemas/security-*.schema.json"
+      - "scripts/security_index.py"
+      - "scripts/security_publication.py"
+      - "scripts/sign_security_index.py"
+      - "scripts/verify_security_index.py"
+      - "scripts/observe_security_index.py"
+      - ".github/workflows/security-index.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: directory-publication-schema-1
+  cancel-in-progress: false
+
+env:
+  LEDGER_BRANCH: directory-publication-ledger
+  FEED_PATH: security
+  LINTAI_VERSION: 0.1.2
+  LINTAI_LINUX_AMD64_SHA256: c06fcb33a13f1483f20f4cb30d2c701cd01c6b8ba43e3b7322ebab3c1ae11e72
+
+jobs:
+  publisher-preflight:
+    name: Verify publisher can write before scanning
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: discovery-publication
+    permissions:
+      contents: read
+    steps:
+      - name: Request exact publisher capability
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.DISCOVERY_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+  scan:
+    name: Scan exact inert Discovery packages
+    needs: publisher-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: discovery-read
+    permissions:
+      contents: read
+    outputs:
+      candidate_digest: ${{ steps.scan.outputs.candidate_digest }}
+      complete: ${{ steps.scan.outputs.complete }}
+      ledger_head: ${{ steps.ledger.outputs.head }}
+      source_commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - name: Select exact source commit
+        id: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          DISCOVERY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if test "${EVENT_NAME}" = workflow_run; then commit="${DISCOVERY_SHA}"; else commit="${EVENT_SHA}"; fi
+          [[ "${commit}" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.commit }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.LEDGER_BRANCH }}
+          path: ledger
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned validation dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Install exact public LintAI release
+        working-directory: source
+        run: |
+          archive="$RUNNER_TEMP/lintai.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --retry-all-errors \
+            --output "${archive}" \
+            "https://github.com/777genius/lintai/releases/download/v${LINTAI_VERSION}/lintai-v${LINTAI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          printf '%s  %s\n' "${LINTAI_LINUX_AMD64_SHA256}" "${archive}" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/lintai"
+          tar -xzf "${archive}" -C "$RUNNER_TEMP/lintai"
+          test "$(find "$RUNNER_TEMP/lintai" -type f -name lintai | wc -l)" -eq 1
+          lintai="$(find "$RUNNER_TEMP/lintai" -type f -name lintai)"
+          test ! -L "${lintai}"
+          chmod 0755 "${lintai}"
+          test "$("${lintai}" version)" = "lintai ${LINTAI_VERSION}"
+          echo "LINTAI=${lintai}" >> "$GITHUB_ENV"
+      - name: Authenticate exact Discovery and previous Security snapshots
+        id: ledger
+        working-directory: source
+        run: |
+          echo "head=$(git -C ../ledger rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 scripts/verify_discovery_index.py \
+            --feed ../ledger/discovery \
+            --trusted-keys registry/discovery/trusted-keys.json
+          discovery_path="$(python3 -c 'import json; print(json.load(open("../ledger/discovery/latest.json"))["snapshot_path"])')"
+          echo "discovery_path=../ledger/discovery/${discovery_path}" >> "$GITHUB_OUTPUT"
+          if test -f "../ledger/${FEED_PATH}/latest.json"; then
+            python3 scripts/verify_security_index.py \
+              --feed "../ledger/${FEED_PATH}" \
+              --trusted-keys registry/discovery/trusted-keys.json
+            security_path="$(python3 -c 'import json; print(json.load(open("../ledger/security/latest.json"))["snapshot_path"])')"
+            echo "previous_path=../ledger/${FEED_PATH}/${security_path}" >> "$GITHUB_OUTPUT"
+          else
+            echo "previous_path=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build assessment candidate without executing package content
+        id: scan
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DISCOVERY_SNAPSHOT: ${{ steps.ledger.outputs.discovery_path }}
+          PREVIOUS_SECURITY_SNAPSHOT: ${{ steps.ledger.outputs.previous_path }}
+        run: |
+          args=(--discovery-snapshot "${DISCOVERY_SNAPSHOT}" --lintai "${LINTAI}" --output ../security-candidate.json --workers 16)
+          if test -n "${PREVIOUS_SECURITY_SNAPSHOT}"; then args+=(--previous-security-snapshot "${PREVIOUS_SECURITY_SNAPSHOT}"); fi
+          set +e
+          python3 scripts/security_index.py "${args[@]}"
+          status=$?
+          set -e
+          test -f ../security-candidate.json
+          test "$(wc -c < ../security-candidate.json)" -le 8388608
+          if test "${status}" -eq 0; then
+            complete=true
+          elif test "${status}" -eq 3; then
+            complete=false
+            echo "::warning::Security coverage is incomplete. The signed last-known-good feed remains active."
+          else
+            exit "${status}"
+          fi
+          echo "complete=${complete}" >> "$GITHUB_OUTPUT"
+          echo "candidate_digest=sha256:$(sha256sum ../security-candidate.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-candidate-${{ github.run_id }}
+          path: security-candidate.json
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-and-publish:
+    name: Sign and append complete assessment snapshot
+    if: needs.scan.outputs.complete == 'true'
+    needs: scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: discovery-publication
+    permissions:
+      contents: read
+    outputs:
+      ledger_commit: ${{ steps.commit.outputs.ledger_commit }}
+      sequence: ${{ steps.sign.outputs.sequence }}
+      source_commit: ${{ needs.scan.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.scan.outputs.source_commit }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.LEDGER_BRANCH }}
+          path: ledger
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: security-candidate-${{ github.run_id }}
+          path: candidate
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned signer dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+      - name: Recheck exact candidate and ledger identities
+        id: preflight
+        env:
+          EXPECTED_CANDIDATE_DIGEST: ${{ needs.scan.outputs.candidate_digest }}
+          EXPECTED_LEDGER_HEAD: ${{ needs.scan.outputs.ledger_head }}
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "${{ needs.scan.outputs.source_commit }}"
+          test "sha256:$(sha256sum candidate/security-candidate.json | cut -d' ' -f1)" = "${EXPECTED_CANDIDATE_DIGEST}"
+          test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_HEAD}"
+          if test -f "ledger/${FEED_PATH}/latest.json"; then
+            python3 source/scripts/verify_security_index.py \
+              --feed "ledger/${FEED_PATH}" \
+              --trusted-keys source/registry/discovery/trusted-keys.json
+            current="$(python3 -c 'import json; print(json.load(open("ledger/security/latest.json"))["sequence"])')"
+          else
+            current=
+          fi
+          successor_args=()
+          if test -n "${current}"; then successor_args=(--current "${current}"); fi
+          next="$(python3 source/scripts/sequence_boundaries.py successor "${successor_args[@]}")"
+          test -z "$(git -C ledger tag --list "security-index-sequence-$(printf '%020d' "${next}")")"
+          echo "next_sequence=${next}" >> "$GITHUB_OUTPUT"
+      - name: Sign in the separate Security signature domain
+        id: sign
+        working-directory: source
+        env:
+          DISCOVERY_ED25519_PRIVATE_KEY: ${{ secrets.DISCOVERY_ED25519_PRIVATE_KEY }}
+          DISCOVERY_SIGNING_KEY_ID: ${{ vars.DISCOVERY_SIGNING_KEY_ID }}
+          EXPECTED_SEQUENCE: ${{ steps.preflight.outputs.next_sequence }}
+        run: |
+          python3 scripts/sign_security_index.py \
+            --candidate ../candidate/security-candidate.json \
+            --feed "../ledger/${FEED_PATH}" \
+            --trusted-keys registry/discovery/trusted-keys.json \
+            --publication-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --source-commit "${{ needs.scan.outputs.source_commit }}" \
+            --key-id "${DISCOVERY_SIGNING_KEY_ID}" \
+            --result ../publication.json
+          python3 scripts/verify_security_index.py \
+            --feed "../ledger/${FEED_PATH}" \
+            --trusted-keys registry/discovery/trusted-keys.json
+          sequence="$(python3 -c 'import json; print(json.load(open("../publication.json"))["sequence"])')"
+          test "${sequence}" = "${EXPECTED_SEQUENCE}"
+          echo "sequence=${sequence}" >> "$GITHUB_OUTPUT"
+      - name: Commit only the immutable Security append
+        id: commit
+        working-directory: ledger
+        env:
+          SEQUENCE: ${{ steps.sign.outputs.sequence }}
+        run: |
+          git config user.name universal-agent-plugins-publisher[bot]
+          git config user.email 247038142+universal-agent-plugins-publisher[bot]@users.noreply.github.com
+          git add -- security
+          stem="$(printf '%020d' "${SEQUENCE}")"
+          expected=("security/latest.json" "security/snapshots/${stem}.envelope.json" "security/snapshots/${stem}.json")
+          mapfile -t changed < <(git diff --cached --name-status)
+          test "${#changed[@]}" -eq "${#expected[@]}"
+          mapfile -t actual < <(printf '%s\n' "${changed[@]}" | awk '{ print $2 }' | LC_ALL=C sort)
+          mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          test "${actual[*]}" = "${expected[*]}"
+          for change in "${changed[@]}"; do
+            status="${change%%$'\t'*}"
+            path="${change#*$'\t'}"
+            if test "${path}" = security/latest.json; then case "${status}" in A|M) ;; *) exit 1 ;; esac
+            else test "${status}" = A; fi
+          done
+          git commit -m "chore(security): publish sequence ${SEQUENCE}"
+          echo "ledger_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Acquire dedicated publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.DISCOVERY_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Atomically append branch and immutable sequence tag
+        working-directory: ledger
+        env:
+          PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
+          SEQUENCE: ${{ steps.sign.outputs.sequence }}
+        run: |
+          tag="security-index-sequence-$(printf '%020d' "${SEQUENCE}")"
+          git tag "${tag}"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
+          local_commit="$(git rev-parse HEAD)"
+          base_commit="$(git rev-parse HEAD^)"
+          push_log="$(mktemp)"
+          remote_log="$(mktemp)"
+          for attempt in 1 2 3; do
+            set +e
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="${auth_header}" \
+              git push --atomic origin "HEAD:refs/heads/${LEDGER_BRANCH}" "refs/tags/${tag}:refs/tags/${tag}" >"${push_log}" 2>&1
+            status=$?
+            set -e
+            cat "${push_log}"
+            if test "${status}" -eq 0; then exit 0; fi
+            if ! grep -Eqi 'HTTP (429|5[0-9]{2})|Could not resolve host|Connection (reset|timed out)|remote end hung up unexpectedly' "${push_log}"; then
+              exit "${status}"
+            fi
+            set +e
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="${auth_header}" \
+              git ls-remote --refs origin "refs/heads/${LEDGER_BRANCH}" "refs/tags/${tag}" >"${remote_log}" 2>&1
+            remote_status=$?
+            set -e
+            if test "${remote_status}" -ne 0; then exit "${status}"; fi
+            branch_commit="$(awk -v ref="refs/heads/${LEDGER_BRANCH}" '$2 == ref { print $1 }' "${remote_log}")"
+            tag_commit="$(awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }' "${remote_log}")"
+            if test "${branch_commit}" = "${local_commit}" && test "${tag_commit}" = "${local_commit}"; then exit 0; fi
+            if ! { test "${branch_commit}" = "${base_commit}" && test -z "${tag_commit}"; }; then exit 1; fi
+            if test "${attempt}" -eq 3; then exit "${status}"; fi
+            sleep "$((attempt * 2))"
+          done
+
+  incomplete-scan:
+    name: Report incomplete assessment without replacing LKG
+    if: always() && needs.scan.result == 'success' && needs.scan.outputs.complete != 'true'
+    needs: scan
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Security assessment coverage was incomplete. Publication was skipped." >&2
+          exit 1
+
+  deploy:
+    name: Deploy Security over the exact production Directory tree
+    if: needs.sign-and-publish.result == 'success'
+    needs: sign-and-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sign-and-publish.outputs.ledger_commit }}
+          path: exact-security-tree
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sign-and-publish.outputs.source_commit }}
+          path: trusted-source
+          persist-credentials: false
+      - name: Resolve the exact promoted Directory tree
+        env:
+          SECURITY_LEDGER_COMMIT: ${{ needs.sign-and-publish.outputs.ledger_commit }}
+        run: |
+          test "$(git -C exact-security-tree rev-parse HEAD)" = "${SECURITY_LEDGER_COMMIT}"
+          contract=trusted-source/registry/publication/production-marker.json
+          marker_ref="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["marker_ref"])' "${contract}")"
+          tag_prefix="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sequence_tag_prefix"])' "${contract}")"
+          production_commit="$(git -C exact-security-tree ls-remote --refs origin "${marker_ref}" | awk '{ print $1 }')"
+          if test -z "${production_commit}"; then
+            production_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bootstrap_materialized_commit"])' "${contract}")"
+          fi
+          [[ "${production_commit}" =~ ^[0-9a-f]{40}$ ]]
+          git -C exact-security-tree fetch --no-tags origin "${production_commit}"
+          git -C exact-security-tree merge-base --is-ancestor "${production_commit}" "${SECURITY_LEDGER_COMMIT}"
+          production_sequence="$(git -C exact-security-tree show "${production_commit}:registry/schemas/1/latest.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sequence"])')"
+          production_ref="${tag_prefix}$(printf '%020d' "${production_sequence}")"
+          production_signed="$(git -C exact-security-tree rev-parse "${production_ref}^{commit}")"
+          materialized_commit="$(python3 trusted-source/scripts/directory_publication_cas.py staged-lineage-verify \
+            --repo exact-security-tree --signed "${production_signed}" --current "${production_commit}")"
+          test "${materialized_commit}" = "${production_commit}"
+          git -C exact-security-tree worktree add --detach ../production-pages-tree "${production_commit}"
+          echo "production_commit=${production_commit}" >> "$GITHUB_ENV"
+      - name: Overlay exact signed Discovery and Security feeds
+        env:
+          SECURITY_LEDGER_COMMIT: ${{ needs.sign-and-publish.outputs.ledger_commit }}
+        run: |
+          test "$(git -C exact-security-tree rev-parse HEAD)" = "${SECURITY_LEDGER_COMMIT}"
+          test -f exact-security-tree/discovery/latest.json
+          test -f exact-security-tree/security/latest.json
+          mkdir -p production-pages-tree/discovery production-pages-tree/security
+          rsync -a --delete exact-security-tree/discovery/ production-pages-tree/discovery/
+          rsync -a --delete exact-security-tree/security/ production-pages-tree/security/
+          diff -qr exact-security-tree/discovery production-pages-tree/discovery
+          diff -qr exact-security-tree/security production-pages-tree/security
+          test -z "$(git -C production-pages-tree diff --name-only -- . ':!discovery' ':!security')"
+          test -z "$(git -C production-pages-tree ls-files --others --exclude-standard | awk '$0 !~ /^(discovery|security)\//')"
+          test -n "$(git -C production-pages-tree status --porcelain -- security)"
+      - name: Archive deterministic production composition
+        run: tar --directory production-pages-tree -cvf "$RUNNER_TEMP/artifact.tar" --exclude=.git --exclude=.github .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
+          retention-days: 1
+      - name: Deploy exact ledger tree
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+  observe:
+    name: Verify exact production Security sequence
+    needs: [sign-and-publish, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sign-and-publish.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned verification dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+      - name: Reacquire bounded production artifacts and verify signature
+        env:
+          EXPECTED_SEQUENCE: ${{ needs.sign-and-publish.outputs.sequence }}
+        run: |
+          python3 scripts/observe_security_index.py \
+            --origin https://777genius.github.io/universal-agent-plugins-registry/security \
+            --trusted-keys registry/discovery/trusted-keys.json \
+            --minimum-sequence "${EXPECTED_SEQUENCE}" \
+            --output "$RUNNER_TEMP/security-observation.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-observation.json
+          if-no-files-found: error
+          retention-days: 30

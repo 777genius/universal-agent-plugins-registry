@@ -23,6 +23,7 @@ VALIDATE = ROOT / ".github/workflows/validate.yml"
 DIRECTORY_PUBLICATION = ROOT / ".github/workflows/directory-publication.yml"
 CATALOG_READINESS = ROOT / ".github/workflows/catalog-publication-readiness.yml"
 DISCOVERY_INDEX = ROOT / ".github/workflows/discovery-index.yml"
+SECURITY_INDEX = ROOT / ".github/workflows/security-index.yml"
 UPSTREAM_PROMOTION = ROOT / ".github/workflows/upstream-promotion-readiness.yml"
 OBSERVER_RUNBOOK = ROOT / "docs/OBSERVER_OPERATIONS.md"
 PUBLICATION_INPUTS = {
@@ -1432,7 +1433,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('--signed "${production_signed}" --current "${production_commit}"', deploy_body)
         self.assertIn("rsync -a --delete exact-discovery-tree/discovery/ production-pages-tree/discovery/", deploy_body)
         self.assertIn("diff -qr exact-discovery-tree/discovery production-pages-tree/discovery", deploy_body)
-        self.assertIn("diff --name-only -- . ':!discovery'", deploy_body)
+        self.assertIn("diff --name-only -- . ':!discovery' ':!security'", deploy_body)
+        self.assertIn("exact-discovery-tree/security/ production-pages-tree/security/", deploy_body)
         self.assertIn("tar --directory production-pages-tree", deploy_body)
         self.assertNotIn("tar --directory exact-discovery-tree", deploy_body)
         marker = json.loads((ROOT / "registry/publication/production-marker.json").read_text())
@@ -1445,21 +1447,23 @@ sys.modules['catalog_process_isolation']=module
                 self.assertIn("cryptography==46.0.3", pinned_requirements(body))
                 self.assertIn("jsonschema==4.26.0", pinned_requirements(body))
 
-    def test_directory_materialization_preserves_the_discovery_feed(self) -> None:
+    def test_directory_materialization_preserves_the_signed_auxiliary_feeds(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
         materialize = workflow["jobs"]["materialize_site"]
         body = commands(materialize)
-        self.assertIn("rsync -a --delete --exclude=.git --exclude=registry --exclude=/discovery", body)
+        self.assertIn("--exclude=/discovery --exclude=/security", body)
         self.assertIn("diff --exit-code -- discovery", body)
+        self.assertIn("diff --exit-code -- security", body)
         self.assertIn("diff --cached --exit-code -- discovery", body)
-        self.assertIn('[[ "${path}" == discovery/* ]]', body)
+        self.assertIn("diff --cached --exit-code -- security", body)
+        self.assertIn('[[ "${path}" == discovery/* || "${path}" == security/* ]]', body)
         self.assertIn('"${EXISTING_MATERIALIZED_COMMIT}..${EXPECTED_LEDGER_HEAD}"', body)
         self.assertLess(
             body.index('if test -n "${EXISTING_MATERIALIZED_COMMIT}"'),
             body.index("rsync -a --delete"),
         )
         self.assertIn("commit --allow-empty", body)
-        self.assertEqual(body.count("':!discovery'"), 1)
+        self.assertEqual(body.count("':!security'"), 1)
 
     def test_directory_materialization_delete_semantics_keep_signed_feeds(self) -> None:
         rsync = shutil.which("rsync")
@@ -1472,19 +1476,54 @@ sys.modules['catalog_process_isolation']=module
             generated.mkdir()
             (ledger / "registry").mkdir(parents=True)
             (ledger / "discovery").mkdir()
+            (ledger / "security").mkdir()
             (generated / "index.html").write_text("new generated site\n")
             (ledger / "index.html").write_text("old site\n")
             (ledger / "stale.html").write_text("remove me\n")
             (ledger / "registry" / "latest.json").write_text("directory\n")
             (ledger / "discovery" / "latest.json").write_text("discovery\n")
+            (ledger / "security" / "latest.json").write_text("security\n")
             subprocess.run([
                 rsync, "-a", "--delete", "--exclude=.git", "--exclude=registry",
-                "--exclude=/discovery", str(generated) + "/", str(ledger) + "/",
+                "--exclude=/discovery", "--exclude=/security", str(generated) + "/", str(ledger) + "/",
             ], check=True)
             self.assertEqual((ledger / "index.html").read_text(), "new generated site\n")
             self.assertFalse((ledger / "stale.html").exists())
             self.assertEqual((ledger / "registry" / "latest.json").read_text(), "directory\n")
             self.assertEqual((ledger / "discovery" / "latest.json").read_text(), "discovery\n")
+            self.assertEqual((ledger / "security" / "latest.json").read_text(), "security\n")
+
+    def test_security_index_binds_exact_discovery_subjects_and_preserves_directory(self) -> None:
+        workflow = load(SECURITY_INDEX)
+        self.assertEqual(workflow["concurrency"], {
+            "group": "directory-publication-schema-1",
+            "cancel-in-progress": "false",
+        })
+        self.assertIn("Signed Discovery Index", workflow["on"]["workflow_run"]["workflows"])
+        scan = workflow["jobs"]["scan"]
+        signer = workflow["jobs"]["sign-and-publish"]
+        self.assertEqual(scan["environment"], "discovery-read")
+        self.assertEqual(signer["environment"], "discovery-publication")
+        scan_body = yaml.safe_dump(scan)
+        self.assertIn("verify_discovery_index.py", scan_body)
+        self.assertIn("verify_security_index.py", scan_body)
+        self.assertIn("security_index.py", scan_body)
+        self.assertIn("scan-agent-plugin", (ROOT / "scripts/security_index.py").read_text())
+        self.assertIn("LINTAI_LINUX_AMD64_SHA256", yaml.safe_dump(workflow))
+        self.assertIn("sha256sum --check --strict", commands(scan))
+        self.assertIn("GITHUB_TOKEN: ${{ github.token }}", scan_body)
+        self.assertNotIn("DISCOVERY_ED25519_PRIVATE_KEY", scan_body)
+        signer_body = yaml.safe_dump(signer)
+        self.assertIn("DISCOVERY_ED25519_PRIVATE_KEY", signer_body)
+        self.assertIn("security-index-sequence-", commands(signer))
+        self.assertIn("git push --atomic", commands(signer))
+        self.assertIn("permission-contents: write", signer_body)
+        deploy_body = commands(workflow["jobs"]["deploy"])
+        self.assertIn("directory_publication_cas.py staged-lineage-verify", deploy_body)
+        self.assertIn("exact-security-tree/discovery/ production-pages-tree/discovery/", deploy_body)
+        self.assertIn("exact-security-tree/security/ production-pages-tree/security/", deploy_body)
+        self.assertIn("diff --name-only -- . ':!discovery' ':!security'", deploy_body)
+        self.assertIn("observe_security_index.py", commands(workflow["jobs"]["observe"]))
 
     def test_pages_concurrency_isolates_prs_from_production(self) -> None:
         workflow = load(PAGES)

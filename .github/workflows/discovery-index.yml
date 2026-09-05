@@ -460,7 +460,7 @@ jobs:
           fi
           git -C exact-discovery-tree worktree add --detach ../production-pages-tree "${production_commit}"
           echo "production_commit=${production_commit}" >> "$GITHUB_ENV"
-      - name: Overlay only the exact signed Discovery feed
+      - name: Overlay exact signed Discovery and existing Security feeds
         env:
           DISCOVERY_LEDGER_COMMIT: ${{ needs.sign-and-publish.outputs.ledger_commit }}
         run: |
@@ -470,8 +470,13 @@ jobs:
           mkdir -p production-pages-tree/discovery
           rsync -a --delete exact-discovery-tree/discovery/ production-pages-tree/discovery/
           diff -qr exact-discovery-tree/discovery production-pages-tree/discovery
-          test -z "$(git -C production-pages-tree diff --name-only -- . ':!discovery')"
-          test -z "$(git -C production-pages-tree ls-files --others --exclude-standard | awk '$0 !~ /^discovery\//')"
+          if test -f exact-discovery-tree/security/latest.json; then
+            mkdir -p production-pages-tree/security
+            rsync -a --delete exact-discovery-tree/security/ production-pages-tree/security/
+            diff -qr exact-discovery-tree/security production-pages-tree/security
+          fi
+          test -z "$(git -C production-pages-tree diff --name-only -- . ':!discovery' ':!security')"
+          test -z "$(git -C production-pages-tree ls-files --others --exclude-standard | awk '$0 !~ /^(discovery|security)\//')"
           test -n "$(git -C production-pages-tree status --porcelain -- discovery)"
       - name: Archive the deterministic production composition
         run: |
