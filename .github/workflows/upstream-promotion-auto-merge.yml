@@ -88,4 +88,4 @@ jobs:
           ):
               raise SystemExit("promotion PR changed after the trusted verdict")
           PY
-          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch

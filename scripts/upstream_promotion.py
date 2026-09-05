@@ -22,6 +22,7 @@ from build_registry import (
     validate_directory, validate_registry_path,
 )
 from repository_identity import active_registry_repository
+from publication_trust_policy import load_publication_trust_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +30,6 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 BRANCH_RE = re.compile(
     r"^automation/upstream-promotion-([a-z0-9]+(?:-[a-z0-9]+)*)-([0-9a-f]{12})-([0-9a-f]{12})$"
 )
-WORKFLOW = f"{active_registry_repository()}/.github/workflows/upstream-promotion-observer.yml"
 MAX_JSON_BYTES = 262_144
 
 
@@ -218,11 +218,12 @@ def select(args: argparse.Namespace) -> dict[str, Any]:
     return {"schema_version": 1, "decision": "none", "diagnostics": diagnostics}
 
 
-def review_record(args: argparse.Namespace) -> dict[str, Any]:
-    selection = read_object(args.selection)
+def materialization_evidence_payloads(
+    selection: dict[str, Any], raw: dict[str, Any], os_name: str, architecture: str,
+) -> list[dict[str, Any]]:
+    """Project one aggregate observer result into signer-readable client records."""
     require(selection.get("decision") == "promote", "selection is not a promotion")
     entry, metadata = selection["entry"], selection["pr_metadata"]
-    raw = read_object(args.materialization)
     require(raw.get("schema_version") == 1 and raw.get("outcome") == "passed", "materialization did not pass")
     identity = raw.get("package")
     require(isinstance(identity, dict), "materialization package identity is absent")
@@ -235,17 +236,16 @@ def review_record(args: argparse.Namespace) -> dict[str, Any]:
     )
     clients = [target["client"] for target in entry["targets"]]
     require(raw.get("clients") == clients, "materialization clients differ from policy")
-    artifact_body = args.materialization.read_bytes()
-    require(SHA_RE.fullmatch(args.artifact_revision) is not None, "artifact revision must be a full SHA")
+    require(
+        raw.get("installer_version") == entry["minimum_installer_version"],
+        "materialization installer differs from policy",
+    )
     observed_at = raw.get("observed_at")
     require(isinstance(observed_at, str), "materialization observed_at is absent")
-    artifact = {
-        "repository": active_registry_repository(), "revision": args.artifact_revision,
-        "path": args.artifact_path, "digest": sha256(artifact_body),
-    }
-    evidence = []
+    evidence_schema = schema("directory-evidence-artifact.schema.json")
+    evidence: list[dict[str, Any]] = []
     for client in clients:
-        evidence.append({
+        payload = {
             "schema_version": 1,
             "id": f"promotion/{entry['product_id']}/{metadata['merge_commit_oid'][:12]}/{client}",
             "product_id": entry["product_id"], "distribution_id": entry["distribution_id"],
@@ -256,13 +256,71 @@ def review_record(args: argparse.Namespace) -> dict[str, Any]:
             "client": client, "client_version": "isolated-configuration-fixture",
             "installer_version": entry["minimum_installer_version"],
             "adapter_version": f"agentplugins-{entry['minimum_installer_version']}",
-            "os": args.os, "architecture": args.architecture,
+            "os": os_name, "architecture": architecture,
             "dependency_identity": f"agentplugins@{entry['minimum_installer_version']}",
-            "observed_at": observed_at, "artifact": artifact,
-            "trust": {
-                "kind": "github_actions", "workflow": WORKFLOW,
-                "source_ref": "refs/heads/main", "source_digest": args.workflow_revision,
+            "observed_at": observed_at,
+        }
+        jsonschema.Draft202012Validator(evidence_schema).validate(payload)
+        evidence.append(payload)
+    return evidence
+
+
+def write_evidence_artifacts(args: argparse.Namespace) -> dict[str, Any]:
+    selection = read_object(args.selection)
+    raw = read_object(args.materialization)
+    payloads = materialization_evidence_payloads(
+        selection, raw, args.os, args.architecture,
+    )
+    args.output_directory.mkdir(parents=True, exist_ok=True)
+    expected_names = {f"{item['client']}.json" for item in payloads}
+    existing_names = {path.name for path in args.output_directory.iterdir()}
+    require(
+        existing_names.issubset(expected_names),
+        "evidence output directory contains unexpected entries",
+    )
+    for payload in payloads:
+        path = args.output_directory / f"{payload['client']}.json"
+        require(not path.is_symlink(), f"{path}: evidence artifact cannot be a symlink")
+        path.write_bytes(pretty(payload))
+    return {
+        "schema_version": 1, "outcome": "written",
+        "evidence_count": len(payloads),
+    }
+
+
+def review_record(args: argparse.Namespace) -> dict[str, Any]:
+    selection = read_object(args.selection)
+    raw = read_object(args.materialization)
+    payloads = materialization_evidence_payloads(
+        selection, raw, args.os, args.architecture,
+    )
+    entry, metadata = selection["entry"], selection["pr_metadata"]
+    identity = raw["package"]
+    require(SHA_RE.fullmatch(args.artifact_revision) is not None, "artifact revision must be a full SHA")
+    artifact_directory = validate_registry_path(args.artifact_directory)
+    artifact_root = args.repository / artifact_directory
+    expected_names = {f"{item['client']}.json" for item in payloads}
+    require(
+        artifact_root.is_dir()
+        and {path.name for path in artifact_root.iterdir()} == expected_names,
+        "materialization evidence artifacts differ from selected clients",
+    )
+    evidence = []
+    for payload in payloads:
+        artifact_path = f"{artifact_directory}/{payload['client']}.json"
+        artifact_file = args.repository / artifact_path
+        body = artifact_file.read_bytes()
+        require(body == pretty(payload), f"{artifact_path}: evidence artifact is not canonical")
+        require(read_object(artifact_file) == payload, f"{artifact_path}: evidence artifact differs from materialization")
+        evidence.append({
+            **payload,
+            "artifact": {
+                "repository": active_registry_repository(),
+                "revision": args.artifact_revision,
+                "path": artifact_path,
+                "digest": sha256(body),
             },
+            "trust": {"kind": "reviewed_external"},
         })
     record = {
         "schema_version": 3, "repository": entry["repository"], "path": entry["package_path"],
@@ -288,6 +346,7 @@ def apply_candidate(args: argparse.Namespace) -> dict[str, Any]:
     jsonschema.Draft202012Validator(schema("promotion-candidate.schema.json")).validate(candidate)
     review = read_object(args.review_record)
     directory = read_object(args.directory)
+    publication_config = load_publication_trust_config(args.publication_config)
     require(candidate["decision"] == "reviewable_promotion_candidate", "candidate is not reviewable")
     product_id = candidate["product"]["id"]
     distribution_id = candidate["distribution"]["id"]
@@ -355,7 +414,28 @@ def apply_candidate(args: argparse.Namespace) -> dict[str, Any]:
     directory["distributions"].sort(key=lambda item: item["id"])
     directory["evidence"].sort(key=lambda item: item["id"])
     validate_directory(directory, verify_packages=False)
+    artifact_revisions = {item["artifact"]["revision"] for item in review["evidence"]}
+    require(len(artifact_revisions) == 1, "promotion evidence must share one immutable commit")
+    trusted = publication_config["trusted_external_evidence"]
+    for item in review["evidence"]:
+        require(item.get("trust") == {"kind": "reviewed_external"}, "promotion evidence trust must be reviewed_external")
+        artifact = item["artifact"]
+        require(
+            artifact["repository"] == active_registry_repository(),
+            "promotion evidence artifact repository differs from the registry",
+        )
+        require(artifact not in trusted, "promotion evidence artifact is already trusted")
+        trusted.append(artifact)
+    trusted.sort(key=lambda item: (
+        item["repository"], item["revision"], item["path"], item["digest"],
+    ))
+    publication_config["local_evidence_main_anchor"] = next(iter(artifact_revisions))
+    with tempfile.TemporaryDirectory(prefix="validate-promotion-config-") as temporary:
+        candidate_config = Path(temporary) / "config.json"
+        candidate_config.write_bytes(pretty(publication_config))
+        load_publication_trust_config(candidate_config)
     args.directory.write_bytes(pretty(directory))
+    args.publication_config.write_bytes(pretty(publication_config))
     return {
         "schema_version": 1, "outcome": "applied", "product_id": product_id,
         "distribution_id": distribution_id, "release_sequence": release["sequence"],
@@ -401,15 +481,31 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
     require(promotion_commit == args.head_sha, "promotion commit is not the PR head")
     require(git(args.repository, "rev-parse", f"{evidence_commit}^") == args.base_sha, "evidence commit is not based on the PR base")
     require(git(args.repository, "rev-parse", f"{promotion_commit}^") == evidence_commit, "promotion commit is not based on evidence")
-    raw_paths = git(args.repository, "diff", "--name-only", args.base_sha, evidence_commit).splitlines()
-    require(len(raw_paths) == 1 and raw_paths[0].startswith(f"evidence/upstream-promotions/{product_id}/"), "evidence commit changed unexpected paths")
-    raw_path = raw_paths[0]
+    evidence_paths = git(args.repository, "diff", "--name-only", args.base_sha, evidence_commit).splitlines()
+    raw_candidates = [path for path in evidence_paths if path.endswith("/materialization.json")]
+    require(len(raw_candidates) == 1, "evidence commit must contain one aggregate materialization record")
+    raw_path = raw_candidates[0]
+    require(raw_path.startswith(f"evidence/upstream-promotions/{product_id}/"), "evidence commit changed an unexpected materialization path")
     require(raw_path.endswith("/materialization.json") and f"/{short_sha}" in raw_path, "evidence path does not match the branch identity")
     raw = read_object(args.repository / raw_path)
     require(raw.get("product_id") == product_id and str(raw.get("revision", "")).startswith(short_sha), "raw evidence identity differs from branch")
+    clients = raw.get("clients")
+    require(
+        isinstance(clients, list) and clients
+        and clients == [client for client in CLIENT_IDS if client in clients]
+        and len(clients) == len(set(clients)),
+        "raw evidence clients are invalid",
+    )
+    evidence_root = raw_path.removesuffix("/materialization.json")
+    leaf_paths = [f"{evidence_root}/clients/{client}.json" for client in clients]
+    require(
+        sorted(evidence_paths) == sorted([raw_path, *leaf_paths]),
+        "evidence commit changed unexpected paths",
+    )
     audit_root = f"registry/upstream-promotion-audit/{product_id}/{raw['revision']}"
     expected_paths = sorted([
-        raw_path, "registry/directory.json", "registry/review-preview.json",
+        raw_path, *leaf_paths, "registry/directory.json", "registry/review-preview.json",
+        "registry/publication/config.json",
         f"{audit_root}/promotion-candidate.json", f"{audit_root}/review-record.json",
     ])
     actual_paths = sorted(git(args.repository, "diff", "--name-only", args.base_sha, args.head_sha).splitlines())
@@ -417,11 +513,49 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
     review_path = args.repository / audit_root / "review-record.json"
     candidate_path = args.repository / audit_root / "promotion-candidate.json"
     review, candidate = read_object(review_path), read_object(candidate_path)
-    artifact_revisions = {item["artifact"]["revision"] for item in review["evidence"]}
-    artifact_paths = {item["artifact"]["path"] for item in review["evidence"]}
-    artifact_digests = {item["artifact"]["digest"] for item in review["evidence"]}
-    require(artifact_revisions == {evidence_commit} and artifact_paths == {raw_path}, "review evidence does not bind the evidence commit")
-    require(artifact_digests == {sha256((args.repository / raw_path).read_bytes())}, "review evidence digest differs from raw evidence")
+    trusted_selection = {
+        "decision": "promote",
+        "entry": {
+            "product_id": candidate["product"]["id"],
+            "repository": candidate["source"]["repository"],
+            "package_path": candidate["source"]["path"],
+            "distribution_id": candidate["distribution"]["id"],
+            "release_sequence": candidate["release"]["sequence"],
+            "minimum_installer_version": candidate["policy"]["minimum_installer_version"],
+            "targets": candidate["policy"]["targets"],
+        },
+        "pr_metadata": {
+            "merge_commit_oid": candidate["source"]["official_candidate_sha"],
+        },
+    }
+    expected_payloads = materialization_evidence_payloads(
+        trusted_selection, raw, "linux", "amd64",
+    )
+    require(
+        [item.get("client") for item in review["evidence"]] == clients,
+        "review evidence clients differ from raw evidence",
+    )
+    for item, artifact_path, expected_payload in zip(
+        review["evidence"], leaf_paths, expected_payloads, strict=True,
+    ):
+        artifact = item["artifact"]
+        require(
+            artifact["repository"] == active_registry_repository()
+            and artifact["revision"] == evidence_commit
+            and artifact["path"] == artifact_path,
+            "review evidence does not bind its client artifact",
+        )
+        body = (args.repository / artifact_path).read_bytes()
+        require(artifact["digest"] == sha256(body), "review evidence digest differs from its client artifact")
+        payload = read_object(args.repository / artifact_path)
+        jsonschema.Draft202012Validator(schema("directory-evidence-artifact.schema.json")).validate(payload)
+        require(body == pretty(payload), f"{artifact_path}: evidence artifact is not canonical")
+        require(payload == expected_payload, "client evidence artifact differs from aggregate materialization")
+        require(
+            {key: value for key, value in item.items() if key not in {"artifact", "trust"}} == payload,
+            "review evidence differs from its client artifact",
+        )
+        require(item.get("trust") == {"kind": "reviewed_external"}, "review evidence trust is invalid")
     require(candidate["source"]["official_candidate_sha"] == raw["revision"], "candidate source differs from raw evidence")
     require(candidate["product"]["id"] == product_id, "candidate product differs from branch")
     require(
@@ -432,16 +566,40 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
     )
     with tempfile.TemporaryDirectory(prefix="verify-upstream-promotion-") as temporary:
         reconstructed = Path(temporary) / "directory.json"
+        reconstructed_config = Path(temporary) / "config.json"
         base_directory = subprocess.run(
             ["git", "show", f"{args.base_sha}:registry/directory.json"], cwd=args.repository,
             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
             env={"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "LANG": "C", "LC_ALL": "C"},
         ).stdout
         reconstructed.write_bytes(base_directory)
-        apply_args = argparse.Namespace(candidate=candidate_path, review_record=review_path, directory=reconstructed)
+        base_config = subprocess.run(
+            ["git", "show", f"{args.base_sha}:registry/publication/config.json"], cwd=args.repository,
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+            env={"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "LANG": "C", "LC_ALL": "C"},
+        ).stdout
+        reconstructed_config.write_bytes(base_config)
+        apply_args = argparse.Namespace(
+            candidate=candidate_path, review_record=review_path,
+            directory=reconstructed, publication_config=reconstructed_config,
+        )
         apply_candidate(apply_args)
         expected_directory = read_object(reconstructed)
         require(reconstructed.read_bytes() == (args.repository / "registry/directory.json").read_bytes(), "Directory change is not the deterministic promotion result")
+        require(
+            reconstructed_config.read_bytes()
+            == (args.repository / "registry/publication/config.json").read_bytes(),
+            "publication trust change is not the deterministic promotion result",
+        )
+        reconstructed_trust = load_publication_trust_config(reconstructed_config)
+        require(
+            reconstructed_trust.get("local_evidence_main_anchor") == evidence_commit,
+            "publication trust anchor does not preserve the evidence commit",
+        )
+        require(
+            git(args.repository, "merge-base", "--is-ancestor", evidence_commit, args.head_sha) == "",
+            "evidence commit is not durable from the promotion head",
+        )
         require(
             encoded(directory_preview(expected_directory)) == (args.repository / "registry/review-preview.json").read_bytes(),
             "review preview is not the deterministic promotion projection",
@@ -470,12 +628,18 @@ def parser() -> argparse.ArgumentParser:
     observe.add_argument("--watch", type=Path, required=True)
     observe.add_argument("--directory", type=Path, required=True)
     observe.add_argument("--gh", type=Path, required=True)
+    artifacts = commands.add_parser("evidence-artifacts")
+    artifacts.add_argument("--selection", type=Path, required=True)
+    artifacts.add_argument("--materialization", type=Path, required=True)
+    artifacts.add_argument("--os", default="linux")
+    artifacts.add_argument("--architecture", default="amd64")
+    artifacts.add_argument("--output-directory", type=Path, required=True)
     record = commands.add_parser("review-record")
     record.add_argument("--selection", type=Path, required=True)
     record.add_argument("--materialization", type=Path, required=True)
     record.add_argument("--artifact-revision", required=True)
-    record.add_argument("--artifact-path", required=True)
-    record.add_argument("--workflow-revision", required=True)
+    record.add_argument("--artifact-directory", required=True)
+    record.add_argument("--repository", type=Path, default=ROOT)
     record.add_argument("--os", default="linux")
     record.add_argument("--architecture", default="amd64")
     record.add_argument("--output", type=Path, required=True)
@@ -483,6 +647,7 @@ def parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--candidate", type=Path, required=True)
     apply_parser.add_argument("--review-record", type=Path, required=True)
     apply_parser.add_argument("--directory", type=Path, required=True)
+    apply_parser.add_argument("--publication-config", type=Path, required=True)
     verify = commands.add_parser("verify-pr")
     verify.add_argument("--repository", type=Path, required=True)
     verify.add_argument("--base-sha", required=True)
@@ -496,6 +661,8 @@ def main() -> int:
     try:
         if args.command == "select":
             result = select(args)
+        elif args.command == "evidence-artifacts":
+            result = write_evidence_artifacts(args)
         elif args.command == "review-record":
             result = review_record(args)
         elif args.command == "apply":

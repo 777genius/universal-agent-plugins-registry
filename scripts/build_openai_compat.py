@@ -509,6 +509,47 @@ def exact_selected_package(
     return package_root
 
 
+def exact_offline_package(
+    directory: dict[str, object],
+    product: dict[str, object],
+    selection: dict[str, object],
+    extracted_root: Path,
+    *,
+    allow_fallback: bool,
+) -> Path | None:
+    """Return exact checkout-owned bytes without changing authoritative resolution."""
+    from build_registry import KIND_PRIORITY, RegistryError, resolve_directory
+
+    portable_root = exact_selected_package(directory, selection, extracted_root)
+    if portable_root is not None or not allow_fallback:
+        return portable_root
+    _, selected = selected_release(directory, selection)
+    if is_checkout_owned_repository(
+        selected["package_source"]["repository"], LOCAL_REPOSITORY,
+    ):
+        return None
+    distributions = {
+        item["id"]: item for item in directory["distributions"]
+    }
+    candidates = [
+        distributions[distribution_id]
+        for distribution_id in product["distributions"]
+        if distribution_id != selection["distribution_id"]
+    ]
+    candidates.sort(key=lambda item: (KIND_PRIORITY[item["kind"]], item["id"]))
+    for distribution in candidates:
+        try:
+            fallback = resolve_directory(
+                directory, str(distribution["id"]), [OPENAI_PACKAGE_TARGET],
+            )
+        except RegistryError:
+            continue
+        portable_root = exact_selected_package(directory, fallback, extracted_root)
+        if portable_root is not None:
+            return portable_root
+    return None
+
+
 def project_portable_package(
     portable_root: Path,
     output: Path,
@@ -612,7 +653,10 @@ def build(output_root: Path, marketplace_path: Path) -> None:
                         f"{actual_binding!r} does not equal sidecar binding "
                         f"{expected_binding!r}",
                     )
-            portable_root = exact_selected_package(directory, selection, extracted_root)
+            portable_root = exact_offline_package(
+                directory, product, selection, extracted_root,
+                allow_fallback=binding is None,
+            )
             if portable_root is None:
                 continue
             entries.append(

@@ -956,6 +956,88 @@ class OpenAIAppBindingTests(unittest.TestCase):
         self.assertEqual(selection["distribution_id"], upstream["id"])
         self.assertNotIn("atlassian", self.generated_names(source))
 
+    def test_active_external_upstream_keeps_eligible_local_offline_projection(self) -> None:
+        source = copy.deepcopy(registry.load_directory_source())
+        product = next(item for item in source["products"] if item["id"] == "github")
+        bridge = next(
+            item for item in source["distributions"]
+            if item["id"] == "777genius/github-bridge"
+        )
+        upstream = copy.deepcopy(bridge)
+        upstream.update({
+            "id": "github/github", "kind": "upstream",
+            "status": "active", "packager": "github",
+        })
+        upstream["releases"] = [copy.deepcopy(bridge["releases"][-1])]
+        release = upstream["releases"][0]
+        release["sequence"] = 1
+        release["package_source"] = {
+            "repository": "github/github-mcp-server",
+            "revision": "a" * 40,
+            "path": "agent-plugin",
+        }
+        upstream["release_policies"] = [copy.deepcopy(bridge["release_policies"][-1])]
+        policy = upstream["release_policies"][0]
+        policy["release_sequence"] = 1
+        policy["targets"] = [
+            target for target in policy["targets"] if target["client"] == "codex"
+        ]
+        evidence_id = "promotion/github/aaaaaaaaaaaa/codex"
+        policy["current_evidence"] = [evidence_id]
+        source["evidence"].append({
+            "schema_version": 1, "id": evidence_id, "product_id": "github",
+            "distribution_id": upstream["id"], "release_sequence": 1,
+            "package_tree_digest": release["tree_digest"],
+            "manifest_digest": release["manifest_digest"],
+            "source_repository": release["package_source"]["repository"],
+            "source_revision": release["package_source"]["revision"],
+            "source_path": release["package_source"]["path"],
+            "level": "materialization", "outcome": "passed", "client": "codex",
+            "client_version": "1.0.0", "installer_version": policy["minimum_installer_version"],
+            "os": "linux", "architecture": "amd64",
+            "observed_at": "2026-09-05T00:00:00Z",
+            "artifact": {
+                "repository": CURRENT_REGISTRY_REPOSITORY,
+                "revision": "b" * 40,
+                "path": "evidence/github/codex.json",
+                "digest": "sha256:" + "c" * 64,
+            },
+        })
+        product["default_distribution"] = upstream["id"]
+        product["distributions"] = sorted([*product["distributions"], upstream["id"]])
+        source["distributions"].append(upstream)
+        source["distributions"].sort(key=lambda item: item["id"])
+
+        selection = registry.resolve_directory(source, "github", ["codex"])
+        self.assertEqual(selection["distribution_id"], "github/github")
+        self.assertIn("github", self.generated_names(source))
+
+    def test_broken_selected_local_package_does_not_fall_back_silently(self) -> None:
+        source = copy.deepcopy(registry.load_directory_source())
+        product = next(item for item in source["products"] if item["id"] == "github")
+        selected = next(
+            item for item in source["distributions"]
+            if item["id"] == "777genius/github-bridge"
+        )
+        product["default_distribution"] = selected["id"]
+        active_sequence = next(
+            policy["release_sequence"] for policy in selected["release_policies"]
+            if policy["status"] == "active"
+        )
+        release = next(
+            item for item in selected["releases"]
+            if item["sequence"] == active_sequence
+        )
+        release["package_source"] = {
+            **release["package_source"], "revision": "a" * 40,
+        }
+
+        self.assertEqual(
+            registry.resolve_directory(source, "github", ["codex"])["distribution_id"],
+            selected["id"],
+        )
+        self.assertNotIn("github", self.generated_names(source))
+
     def test_non_openai_only_eligibility_cannot_create_marketplace_entry(self) -> None:
         source = copy.deepcopy(registry.load_directory_source())
         distribution = next(

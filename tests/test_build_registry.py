@@ -1056,6 +1056,10 @@ class DirectoryDomainTests(unittest.TestCase):
             "playwright": ["777genius/playwright-bridge"],
             "github": ["777genius/github", "777genius/github-bridge"],
         }
+        distribution_ids = {item["id"] for item in source["distributions"]}
+        if "github/github" in distribution_ids:
+            alternatives["github"].append("github/github")
+            alternatives["github"].sort()
         products = {item["id"]: item for item in source["products"]}
         expected_distribution_ids = set()
         for product_id in CANONICAL_PRODUCT_IDS:
@@ -1167,12 +1171,21 @@ class DirectoryDomainTests(unittest.TestCase):
         source = self.source()
         expected_defaults = {
             "cloudflare-docs": "777genius/cloudflare-docs-bridge",
-            "github": "777genius/github-bridge",
+            "github": (
+                "github/github"
+                if any(item["id"] == "github/github" for item in source["distributions"])
+                else "777genius/github-bridge"
+            ),
         }
         for product, bridge in expected_defaults.items():
             self.assertEqual(registry.resolve_directory(source, product, ["codex"])["distribution_id"], bridge)
             legacy = f"777genius/{product}"
             self.assertEqual(registry.resolve_directory(source, legacy, ["codex"])["distribution_id"], legacy)
+        if expected_defaults["github"] == "github/github":
+            self.assertEqual(
+                registry.resolve_directory(source, "github", ["claude"])["distribution_id"],
+                "777genius/github-bridge",
+            )
         self.assertEqual(
             registry.resolve_directory(source, "firecrawl", ["codex"])["distribution_id"],
             "777genius/firecrawl-bridge",
