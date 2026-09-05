@@ -591,8 +591,9 @@ sys.modules['catalog_process_isolation']=module
 
     def test_upstream_promotion_observer_targets_its_current_repository(self) -> None:
         workflow = load(ROOT / ".github" / "workflows" / "upstream-promotion-observer.yml")
+        job = workflow["jobs"]["observe"]
         token_step = next(
-            step for step in workflow["jobs"]["observe"]["steps"]
+            step for step in job["steps"]
             if step.get("uses", "").startswith("actions/create-github-app-token@")
         )
         self.assertEqual(token_step["with"]["owner"], "${{ github.repository_owner }}")
@@ -600,6 +601,15 @@ sys.modules['catalog_process_isolation']=module
             token_step["with"]["repositories"],
             "${{ github.event.repository.name }}",
         )
+        acquire = next(
+            step for step in job["steps"]
+            if step.get("name") == "Acquire official PR and default-branch history"
+        )
+        self.assertEqual(acquire["env"]["DECISION"], "${{ steps.selection.outputs.decision }}")
+        body = acquire["run"]
+        self.assertIn('test "$PACKAGE_PATH" = . && test "$DECISION" = promote_bridge', body)
+        self.assertIn('diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- plugin.json mcp.json', body)
+        self.assertIn('diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- "$PACKAGE_PATH"', body)
 
     def test_adapter_egress_and_native_projection_are_canonical_generic_contracts(self) -> None:
         schema = json.loads((ROOT / "deploy/uap-observer-adapter-config.schema.json").read_text())

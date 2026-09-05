@@ -110,6 +110,7 @@ jobs:
           HEAD_SHA: ${{ steps.selection.outputs.head_sha }}
           DEFAULT_BRANCH: ${{ steps.selection.outputs.default_branch }}
           MERGE_SHA: ${{ steps.selection.outputs.merge_sha }}
+          DECISION: ${{ steps.selection.outputs.decision }}
         run: |
           env -u GH_TOKEN GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone \
             --filter=blob:none --no-checkout --single-branch --branch "$DEFAULT_BRANCH" \
@@ -119,7 +120,11 @@ jobs:
             "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pull/${PR_NUMBER}/head"
           test "$(git -C "$RUNNER_TEMP/official" rev-parse "refs/remotes/origin/pull/${PR_NUMBER}/head^{commit}")" = "$HEAD_SHA"
           git -C "$RUNNER_TEMP/official" merge-base --is-ancestor "$MERGE_SHA" "refs/remotes/origin/${DEFAULT_BRANCH}"
-          git -C "$RUNNER_TEMP/official" diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- "$PACKAGE_PATH"
+          if test "$PACKAGE_PATH" = . && test "$DECISION" = promote_bridge; then
+            git -C "$RUNNER_TEMP/official" diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- plugin.json mcp.json
+          else
+            git -C "$RUNNER_TEMP/official" diff --quiet "$HEAD_SHA" "$MERGE_SHA" -- "$PACKAGE_PATH"
+          fi
           if test "$PACKAGE_PATH" != .; then
             git -C "$RUNNER_TEMP/official" sparse-checkout init --no-cone
             git -C "$RUNNER_TEMP/official" sparse-checkout set --no-cone "/${PACKAGE_PATH}/"
