@@ -32,6 +32,17 @@ def next_chrome_bridge_sequence() -> int:
     return max(item["sequence"] for item in bridge["releases"]) + 1
 
 
+def next_github_upstream_sequence() -> int:
+    directory = promotion.read_object(ROOT / "registry/directory.json")
+    upstream = next(
+        (item for item in directory["distributions"] if item["id"] == "github/github"),
+        None,
+    )
+    if upstream is None:
+        return 1
+    return max((item["sequence"] for item in upstream["releases"]), default=0) + 1
+
+
 def run_git(repository: Path, *args: str) -> str:
     environment = {
         **os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -44,14 +55,14 @@ def run_git(repository: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def candidate(record: dict) -> dict:
+def candidate(record: dict, release_sequence: int) -> dict:
     item = record["evidence"][0]
     return {
         "schema_version": 1, "decision": "reviewable_promotion_candidate",
         "product": {"id": "github", "manifest_name": "github"},
         "distribution": {"id": "github/github", "kind": "upstream"},
         "release": {
-            "sequence": 1, "package_version": "", "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "sequence": release_sequence, "package_version": "", "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
             "components": ["mcp"], "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
             "tree_digest": FAKE_DIGEST, "manifest_digest": MANIFEST_DIGEST,
         },
@@ -402,6 +413,7 @@ class UpstreamPromotionTests(unittest.TestCase):
 
     def test_apply_and_verify_exact_two_commit_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
+            release_sequence = next_github_upstream_sequence()
             repository = Path(temporary) / "repository"
             repository.mkdir()
             run_git(repository, "init", "-q")
@@ -435,7 +447,7 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "decision": "promote",
                 "entry": {
                     "product_id": "github", "repository": "github/github-mcp-server",
-                    "distribution_id": "github/github", "release_sequence": 1,
+                    "distribution_id": "github/github", "release_sequence": release_sequence,
                     "reviewed_head_sha": REVIEWED_SHA, "package_path": "agent-plugin",
                     "minimum_installer_version": "0.1.26",
                     "targets": [{
@@ -467,7 +479,7 @@ class UpstreamPromotionTests(unittest.TestCase):
                 output=review_path,
             ))
             review = promotion.read_object(review_path)
-            proposed = candidate(review)
+            proposed = candidate(review, release_sequence)
             candidate_path.write_bytes(promotion.pretty(proposed))
             promotion.apply_candidate(argparse.Namespace(
                 candidate=candidate_path, review_record=review_path,
@@ -519,7 +531,7 @@ class UpstreamPromotionTests(unittest.TestCase):
                 leaf_path.read_bytes()
             )
             review_path.write_bytes(promotion.pretty(forged_review))
-            candidate_path.write_bytes(promotion.pretty(candidate(forged_review)))
+            candidate_path.write_bytes(promotion.pretty(candidate(forged_review, release_sequence)))
             with self.assertRaisesRegex(
                 promotion.PromotionError,
                 "client evidence artifact differs from aggregate materialization",
