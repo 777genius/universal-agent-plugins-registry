@@ -66,7 +66,9 @@ class CatalogContractTests(unittest.TestCase):
             {(alias, client) for alias in gate.ALIASES for client in gate.CATALOG_CLIENTS},
         )
         self.assertEqual({row["distribution_id"] for row in chrome}, {"777genius/chrome-devtools-bridge"})
-        self.assertEqual({row["release_sequence"] for row in chrome}, {2})
+        bridge = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
+        active_sequence = next(item["release_sequence"] for item in bridge["release_policies"] if item["status"] == "active")
+        self.assertEqual({row["release_sequence"] for row in chrome}, {active_sequence})
         self.assertTrue(all(row["fallback_reason"] for row in chrome))
         self.assertIs(artifact["runtime_claims"], False)
         self.assertTrue(all(row["oauth"] == "not_tested" for row in artifact["mcp_probes"]))

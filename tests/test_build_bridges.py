@@ -293,8 +293,12 @@ class BridgeBuilderTests(unittest.TestCase):
 
 class RealBridgeCohortTests(unittest.TestCase):
     def test_recipes_are_zero_copy_exactly_pinned_and_outputs_are_complete(self) -> None:
+        directory = json.loads((ROOT / "registry/directory.json").read_text())
+        chrome = next(item for item in directory["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
+        chrome_active = next(item for item in chrome["release_policies"] if item["status"] == "active")
+        chrome_release = next(item for item in chrome["releases"] if item["sequence"] == chrome_active["release_sequence"])
         expected = {
-            "chrome-devtools": ("777genius/chrome-devtools-bridge", "ChromeDevTools/chrome-devtools-mcp", "774d78f5eef5e610407a0c92fa6ec5ed74b027e8", "Apache-2.0"),
+            "chrome-devtools": ("777genius/chrome-devtools-bridge", "ChromeDevTools/chrome-devtools-mcp", chrome_release["build_provenance"]["upstream_revision"], "Apache-2.0"),
             "cloudflare-docs": ("777genius/cloudflare-docs-bridge", "cloudflare/mcp-server-cloudflare", "0c51a6fbcf9a2fae80120287e8238fb947cdc2df", "Apache-2.0"),
             "firecrawl": ("777genius/firecrawl-bridge", "firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e", "MIT"),
             "playwright": ("777genius/playwright-bridge", "microsoft/playwright-mcp", "8a13ef8e9f7385a0f89477922127f31cbfde9761", "Apache-2.0"),
@@ -331,7 +335,8 @@ class RealBridgeCohortTests(unittest.TestCase):
             "--no-usage-statistics",
         ])
         runtime = json.loads((ROOT / "plugins/chrome-devtools/io.github.777genius.agentplugins/runtime/runtime.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("chrome-devtools-mcp", "1.7.0"))
+        recipe = yaml.safe_load((ROOT / "bridges/chrome-devtools/bridge.yaml").read_text())
+        self.assertEqual((runtime["package"], f"{runtime['version']}-uap.1"), ("chrome-devtools-mcp", recipe["expected_version"]))
         directory = json.loads((ROOT / "registry/directory.json").read_text())
         chrome = {
             item["id"]: item for item in directory["distributions"]
@@ -341,7 +346,10 @@ class RealBridgeCohortTests(unittest.TestCase):
         self.assertEqual(chrome["777genius/chrome-devtools"]["status"], "suspended")
         bridge = chrome["777genius/chrome-devtools-bridge"]
         self.assertEqual(bridge["status"], "active")
-        self.assertEqual([(policy["release_sequence"], policy["status"]) for policy in bridge["release_policies"]], [(1, "revoked"), (2, "active")])
+        active = [policy for policy in bridge["release_policies"] if policy["status"] == "active"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["release_sequence"], bridge["releases"][-1]["sequence"])
+        self.assertTrue(all(policy["status"] in {"revoked", "superseded"} for policy in bridge["release_policies"][:-1]))
         self.assertEqual(cloudflare["url"], "https://docs.mcp.cloudflare.com/mcp")
         self.assertEqual(firecrawl["url"], "https://mcp.firecrawl.dev/v2/mcp")
         self.assertEqual(playwright["command"], "node")

@@ -21,6 +21,13 @@ FAKE_DIGEST = "sha256:" + "1" * 64
 MANIFEST_DIGEST = "sha256:" + "2" * 64
 REVIEWED_SHA = "a" * 40
 MERGE_SHA = "b" * 40
+TEST_RUNTIME_VERSION = "9.9.9"
+
+
+def next_chrome_bridge_sequence() -> int:
+    directory = promotion.read_object(ROOT / "registry/directory.json")
+    bridge = next(item for item in directory["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
+    return max(item["sequence"] for item in bridge["releases"]) + 1
 
 
 def run_git(repository: Path, *args: str) -> str:
@@ -185,6 +192,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             watch = promotion.validate_watch(ROOT / "registry/upstream-promotions.json")
             watch["entries"] = [watch["entries"][0]]
             watch["entries"][0]["reviewed_head_sha"] = REVIEWED_SHA
+            watch["entries"][0]["release_sequence"] = next_chrome_bridge_sequence()
             watch_path = root / "watch.json"
             watch_path.write_bytes(promotion.pretty(watch))
             gh = root / "gh"
@@ -212,6 +220,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             watch = promotion.validate_watch(ROOT / "registry/upstream-promotions.json")
             watch["entries"] = [watch["entries"][0]]
             watch["entries"][0]["reviewed_head_sha"] = REVIEWED_SHA
+            watch["entries"][0]["release_sequence"] = next_chrome_bridge_sequence()
             watch_path = root / "watch.json"
             watch_path.write_bytes(promotion.pretty(watch))
             gh = root / "gh"
@@ -234,10 +243,12 @@ class UpstreamPromotionTests(unittest.TestCase):
     def test_apply_locked_bridge_release_preserves_targets_and_requires_manual_merge(self) -> None:
         directory = promotion.read_object(ROOT / "registry/directory.json")
         before = next(item for item in directory["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
-        current_targets = copy.deepcopy(before["release_policies"][-1]["targets"])
+        current_policy = next(item for item in before["release_policies"] if item["status"] == "active")
+        current_targets = copy.deepcopy(current_policy["targets"])
+        next_sequence = max(item["sequence"] for item in before["releases"]) + 1
         plan = {
             "product_id": "chrome-devtools", "distribution_id": "777genius/chrome-devtools-bridge",
-            "release_sequence": 3, "minimum_installer_version": "0.1.26", "previous_revision": MERGE_SHA,
+            "release_sequence": next_sequence, "minimum_installer_version": "0.1.26", "previous_revision": MERGE_SHA,
             "upstream": {"repository": "ChromeDevTools/chrome-devtools-mcp", "merge_sha": MERGE_SHA},
             "package": {
                 "path": "plugins/chrome-devtools", "version": "1.8.0-uap.1",
@@ -246,9 +257,10 @@ class UpstreamPromotionTests(unittest.TestCase):
         }
         bridge_promotion.apply_bridge_release(directory, plan)
         after = next(item for item in directory["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
-        self.assertEqual(after["releases"][-1]["sequence"], 3)
+        self.assertEqual(after["releases"][-1]["sequence"], next_sequence)
         self.assertEqual(after["releases"][-2]["package_source"]["revision"], MERGE_SHA)
         self.assertEqual(after["releases"][-1]["build_provenance"]["upstream_revision"], MERGE_SHA)
+        self.assertEqual(after["release_policies"][-2]["status"], "superseded")
         self.assertEqual(after["release_policies"][-1]["targets"], current_targets)
         self.assertEqual(after["release_policies"][-1]["current_evidence"], [])
 
@@ -260,7 +272,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             run_git(repository, "init", "-q")
             (repository / "plugin.json").write_text(json.dumps({
                 "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-                "name": "chrome-devtools", "version": "1.8.0",
+                "name": "chrome-devtools", "version": TEST_RUNTIME_VERSION,
                 "description": "Official Chrome DevTools MCP package.",
                 "author": {"name": "ChromeDevTools"},
                 "repository": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
@@ -270,10 +282,10 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
                 "mcpServers": {"chrome-devtools": {
                     "type": "stdio", "command": "npx",
-                    "args": ["--prefix", "${PLUGIN_DATA}", "chrome-devtools-mcp@1.8.0"],
+                    "args": ["--prefix", "${PLUGIN_DATA}", f"chrome-devtools-mcp@{TEST_RUNTIME_VERSION}"],
                 }},
             }) + "\n")
-            (repository / "package.json").write_text(json.dumps({"name": "chrome-devtools-mcp", "version": "1.8.0"}) + "\n")
+            (repository / "package.json").write_text(json.dumps({"name": "chrome-devtools-mcp", "version": TEST_RUNTIME_VERSION}) + "\n")
             (repository / "README.md").write_text("# Chrome DevTools\n")
             (repository / "LICENSE").write_text("Apache License 2.0 fixture\n")
             run_git(repository, "add", ".")
@@ -288,13 +300,18 @@ class UpstreamPromotionTests(unittest.TestCase):
             )
             candidate = root / "candidate"
             candidate.mkdir()
-            for name in ("bridges", "plugins", "registry"):
+            for name in ("bridges", "plugins", "registry", "docs"):
                 shutil.copytree(ROOT / name, candidate / name)
+            next_sequence = next_chrome_bridge_sequence()
+            candidate_watch = promotion.read_object(candidate / "registry/upstream-promotions.json")
+            candidate_watch["entries"][0]["release_sequence"] = next_sequence
+            (candidate / "registry/upstream-promotions.json").write_bytes(promotion.pretty(candidate_watch))
             run_git(candidate, "init", "-q")
             run_git(candidate, "add", ".")
             run_git(candidate, "commit", "-qm", "test: trusted base")
             base_sha = run_git(candidate, "rev-parse", "HEAD")
             entry = copy.deepcopy(promotion.validate_watch(ROOT / "registry/upstream-promotions.json")["entries"][0])
+            entry["release_sequence"] = next_sequence
             selection = {
                 "schema_version": 1, "decision": "promote_bridge", "entry": entry,
                 "pr_metadata": {"merge_commit_oid": merge_sha, "merged_at": "2026-09-01T00:00:00Z"},
@@ -320,8 +337,10 @@ class UpstreamPromotionTests(unittest.TestCase):
             self.assertFalse(plan["auto_merge"])
             self.assertTrue(plan["manual_review_required"])
             self.assertEqual(plan["upstream"]["merge_sha"], merge_sha)
-            self.assertEqual(plan["runtime"]["version"], "1.8.0")
-            self.assertEqual(plan["package"]["version"], "1.8.0-uap.1")
+            self.assertEqual(plan["runtime"]["version"], TEST_RUNTIME_VERSION)
+            self.assertEqual(plan["package"]["version"], f"{TEST_RUNTIME_VERSION}-uap.1")
+            self.assertIn(f"| `chrome-devtools-mcp` | `{TEST_RUNTIME_VERSION}` |", (candidate / "docs/COMPATIBILITY.md").read_text())
+            self.assertIn(f"- `chrome-devtools-mcp@{TEST_RUNTIME_VERSION}`", (candidate / "docs/VERIFICATION.md").read_text())
             self.assertEqual(
                 json.loads((candidate / "plugins/chrome-devtools/io.github.777genius.agentplugins/runtime/runtime.json").read_text())["package_lock_sha256"],
                 plan["runtime"]["package_lock_sha256"],
@@ -341,7 +360,7 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "run": {"repository": "777genius/universal-agent-plugins", "id": "1", "attempt": "1", "source_sha": "c" * 40},
             }
             raw_path.write_bytes(promotion.pretty(raw))
-            run_git(candidate, "add", "bridges/chrome-devtools", "plugins/chrome-devtools", str(raw_path.relative_to(candidate)))
+            run_git(candidate, "add", "bridges/chrome-devtools", "plugins/chrome-devtools", "docs/COMPATIBILITY.md", "docs/VERIFICATION.md", str(raw_path.relative_to(candidate)))
             run_git(candidate, "commit", "-qm", "test(directory): record upstream promotion evidence")
             bridge_commit = run_git(candidate, "rev-parse", "HEAD")
 
