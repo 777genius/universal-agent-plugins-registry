@@ -94,7 +94,7 @@ jobs:
           PRODUCT_ID: ${{ steps.selection.outputs.product_id }}
           MERGE_SHA: ${{ steps.selection.outputs.merge_sha }}
         run: |
-          branch="automation/upstream-promotion-${PRODUCT_ID}-${MERGE_SHA:0:12}"
+          branch="automation/upstream-promotion-${PRODUCT_ID}-${MERGE_SHA:0:12}-${GITHUB_SHA:0:12}"
           test "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state all --json number --jq length)" = 0
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
             echo "refusing to reuse an existing automation branch" >&2
@@ -186,12 +186,13 @@ jobs:
           EVIDENCE_PATH: ${{ steps.evidence.outputs.path }}
           DECISION: ${{ steps.selection.outputs.decision }}
         run: |
-          branch="automation/upstream-promotion-${PRODUCT_ID}-${MERGE_SHA:0:12}"
+          branch="automation/upstream-promotion-${PRODUCT_ID}-${MERGE_SHA:0:12}-${GITHUB_SHA:0:12}"
           git switch -c "$branch"
           git config user.name "universal-agent-plugins[bot]"
           git config user.email "universal-agent-plugins[bot]@users.noreply.github.com"
           if test "$DECISION" = promote_bridge; then
-            git add -- "bridges/$PRODUCT_ID" "plugins/$PRODUCT_ID" "$EVIDENCE_PATH"
+            git add -- "bridges/$PRODUCT_ID" "plugins/$PRODUCT_ID" \
+              docs/COMPATIBILITY.md docs/VERIFICATION.md "$EVIDENCE_PATH"
           else
             git add -- "$EVIDENCE_PATH"
           fi

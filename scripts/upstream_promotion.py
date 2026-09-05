@@ -26,7 +26,9 @@ from repository_identity import active_registry_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-BRANCH_RE = re.compile(r"^automation/upstream-promotion-([a-z0-9]+(?:-[a-z0-9]+)*)-([0-9a-f]{12})$")
+BRANCH_RE = re.compile(
+    r"^automation/upstream-promotion-([a-z0-9]+(?:-[a-z0-9]+)*)-([0-9a-f]{12})-([0-9a-f]{12})$"
+)
 WORKFLOW = f"{active_registry_repository()}/.github/workflows/upstream-promotion-observer.yml"
 MAX_JSON_BYTES = 262_144
 
@@ -374,7 +376,8 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
     require(SHA_RE.fullmatch(args.base_sha) is not None and SHA_RE.fullmatch(args.head_sha) is not None, "base/head SHA is invalid")
     branch_match = BRANCH_RE.fullmatch(args.branch)
     require(branch_match is not None, "promotion branch name is invalid")
-    product_id, short_sha = branch_match.groups()
+    product_id, short_sha, base_short_sha = branch_match.groups()
+    require(args.base_sha.startswith(base_short_sha), "promotion branch does not bind the exact trusted base")
     require(git(args.repository, "rev-parse", "HEAD^{commit}") == args.head_sha, "checked-out head differs from PR head")
     commits = git(args.repository, "rev-list", "--reverse", f"{args.base_sha}..{args.head_sha}").splitlines()
     changed_paths = git(args.repository, "diff", "--name-only", args.base_sha, args.head_sha).splitlines()
