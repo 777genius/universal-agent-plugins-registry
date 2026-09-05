@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from scripts.build_registry import directory_tree_digest, digest_bytes
 from scripts.directory_publication import PublicationError, canonical_json
 from scripts.security_index import (
+    REPORT_TOOL,
     SCANNER,
     assessment_from_report,
     build_security_candidate,
@@ -36,7 +37,7 @@ def make_lintai(root: Path, findings: list[dict[str, object]] | None = None, *, 
     executable = root / "lintai"
     report = {
         "schema_version": 1,
-        "tool": SCANNER,
+        "tool": REPORT_TOOL,
         "policy": {"id": "agent-plugin-install", "version": 1, "preset": "recommended"},
         "stats": {"scanned_files": 2},
         "findings": findings or [],
@@ -136,7 +137,7 @@ class SecurityIndexTests(unittest.TestCase):
     def test_report_preserves_counts_and_applies_narrow_blocking_policy(self) -> None:
         record = {"tree_digest": "sha256:" + "1" * 64, "manifest_digest": "sha256:" + "2" * 64}
         body = json.dumps({
-            "schema_version": 1, "tool": SCANNER,
+            "schema_version": 1, "tool": REPORT_TOOL,
             "policy": {"id": "agent-plugin-install", "version": 1},
             "stats": {"scanned_files": 3},
             "findings": [finding("SEC330"), finding("SEC301"), finding("SEC330", confidence="medium")],
@@ -146,6 +147,16 @@ class SecurityIndexTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "blocking_findings")
         self.assertEqual(result["counts"], {"blocking": 1, "warnings": 2, "total": 3})
         self.assertEqual(result["report_digest"], digest_bytes(body))
+
+    def test_report_rejects_feed_identity_in_place_of_public_tool_identity(self) -> None:
+        record = {"tree_digest": "sha256:" + "1" * 64, "manifest_digest": "sha256:" + "2" * 64}
+        body = json.dumps({
+            "schema_version": 1, "tool": SCANNER,
+            "policy": {"id": "agent-plugin-install", "version": 1},
+            "stats": {"scanned_files": 1}, "findings": [], "runtime_errors": [],
+        }, separators=(",", ":")).encode()
+        with self.assertRaisesRegex(PublicationError, "scanner identity"):
+            assessment_from_report(record, body)
 
     def test_builder_scans_exact_materialized_subject(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
