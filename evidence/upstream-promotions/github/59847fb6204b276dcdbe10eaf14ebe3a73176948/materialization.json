@@ -1,0 +1,43 @@
+{
+  "clients": [
+    "codex",
+    "cursor",
+    "kiro"
+  ],
+  "installer_version": "0.1.26",
+  "materialized_source": {
+    "kind": "official_upstream",
+    "path": "agent-plugin"
+  },
+  "observed_at": "2026-09-05T23:40:05Z",
+  "operations": {
+    "add": "passed",
+    "cleanup": "passed",
+    "doctor": "passed",
+    "dry_run": "passed",
+    "info": "passed",
+    "remove": "passed"
+  },
+  "outcome": "passed",
+  "package": {
+    "manifest_digest": "sha256:4500bfe9a78f736c0300fde137595bc47d16582b12727aef062eb0f2b86735f1",
+    "package_version": "",
+    "tree_digest": "sha256:277d1d6ac82febff8dcb43808f158308f04f57eb03f9621163bd0d1941d8e7a0"
+  },
+  "path": "agent-plugin",
+  "product_id": "github",
+  "repository": "github/github-mcp-server",
+  "revision": "59847fb6204b276dcdbe10eaf14ebe3a73176948",
+  "run": {
+    "attempt": "1",
+    "id": "33999260842",
+    "repository": "777genius/universal-agent-plugins-registry",
+    "source_sha": "87a63b7b952f2ec4c1bae1d37c58bbcfa40e9bc9"
+  },
+  "sandbox": {
+    "kind": "disposable",
+    "real_user_project_used": false,
+    "removed": true
+  },
+  "schema_version": 1
+}
