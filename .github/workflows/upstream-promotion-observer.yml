@@ -77,7 +77,8 @@ jobs:
                   "package_path": entry["package_path"], "targets": ",".join(item["client"] for item in entry["targets"]),
                   "head_sha": entry["reviewed_head_sha"], "merge_sha": metadata["merge_commit_oid"],
                   "default_branch": metadata["default_branch"], "pr_number": str(entry["upstream_pr_number"]),
-                  "promotion_mode": entry["promotion_mode"],
+                  "promotion_mode": entry["promotion_mode"], "distribution_id": entry["distribution_id"],
+                  "release_sequence": str(entry["release_sequence"]),
               })
               for key, text in rows.items():
                   if "\n" in text or "\r" in text:
@@ -149,6 +150,34 @@ jobs:
           env HOME="$tools/home" TMPDIR="$tools/tmp" NPM_CONFIG_CACHE="$tools/cache" \
             npm install --prefix "$tools" --no-audit --no-fund "universal-agent-plugins@${AGENTPLUGINS_VERSION}"
           test "$("$tools/node_modules/.bin/agentplugins" version)" = "agentplugins ${AGENTPLUGINS_VERSION}"
+
+      - name: Resolve immutable bridge predecessor from signed Directory
+        if: steps.selection.outputs.decision == 'promote_bridge'
+        id: predecessor
+        env:
+          PRODUCT_ID: ${{ steps.selection.outputs.product_id }}
+          DISTRIBUTION_ID: ${{ steps.selection.outputs.distribution_id }}
+          RELEASE_SEQUENCE: ${{ steps.selection.outputs.release_sequence }}
+        run: |
+          production_ref=refs/remotes/origin/directory-publication-ledger
+          git fetch --no-tags --force origin \
+            refs/heads/directory-publication-ledger:"$production_ref"
+          git show "$production_ref:registry/schemas/1/latest.json" \
+            > "$RUNNER_TEMP/production-latest.json"
+          snapshot_path="$(jq -r .snapshot_path "$RUNNER_TEMP/production-latest.json")"
+          [[ "$snapshot_path" =~ ^snapshots/[0-9]{20}\.json$ ]]
+          git show "$production_ref:registry/schemas/1/$snapshot_path" \
+            > "$RUNNER_TEMP/production-snapshot.json"
+          cli="$RUNNER_TEMP/tools/node_modules/.bin/agentplugins"
+          "$cli" search "$PRODUCT_ID" --format json > "$RUNNER_TEMP/public-search.json"
+          python3 scripts/resolve_bridge_predecessor.py \
+            --directory registry/directory.json --search "$RUNNER_TEMP/public-search.json" \
+            --production-snapshot "$RUNNER_TEMP/production-snapshot.json" \
+            --distribution-id "$DISTRIBUTION_ID" --next-sequence "$RELEASE_SEQUENCE" \
+            --fallback-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/predecessor.json"
+          revision="$(jq -r .revision "$RUNNER_TEMP/predecessor.json")"
+          test "${#revision}" = 40
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
       - name: Prove isolated add, inspect, doctor, remove, and cleanup
         if: steps.selection.outputs.decision != 'none'
@@ -257,7 +286,7 @@ jobs:
           python3 scripts/upstream_bridge_promotion.py finalize \
             --selection "$RUNNER_TEMP/selection.json" --plan "$RUNNER_TEMP/bridge-plan.json" \
             --materialization "$EVIDENCE_PATH" --artifact-revision "$EVIDENCE_COMMIT" \
-            --previous-revision "$GITHUB_SHA" \
+            --previous-revision "${{ steps.predecessor.outputs.revision }}" \
             --artifact-path "$EVIDENCE_PATH" --directory registry/directory.json \
             --output "$audit/manual-review.json"
           python3 scripts/build_registry.py

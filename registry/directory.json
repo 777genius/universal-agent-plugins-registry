@@ -1290,7 +1290,7 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins",
-            "revision": "0042ea558500a75a29e82c40a6d9780e482e8031",
+            "revision": "dcd94db0bfafe5ff5c4b1f1154ee1f7c656c19e4",
             "path": "plugins/chrome-devtools"
           },
           "build_provenance": {
