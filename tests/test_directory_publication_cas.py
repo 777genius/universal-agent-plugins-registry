@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -92,6 +94,32 @@ class BarePublicationCasTests(unittest.TestCase):
             git(self.publisher, "show", "-s", "--format=%T", self.source),
         )
         self.assertEqual(git(self.publisher, "diff", "--name-only", self.source, first), "")
+        self.assertEqual(
+            int(git(self.publisher, "show", "-s", "--format=%ct", first)),
+            int(git(self.publisher, "show", "-s", "--format=%ct", self.source)) + 1,
+        )
+        self.assertLessEqual(
+            int(git(self.publisher, "show", "-s", "--format=%ct", first)),
+            int(time.time()) + cas.MAX_SOURCE_FUTURE_SKEW_SECONDS,
+        )
+        self.assertIn(
+            "Directory-Publication-Marker: 2",
+            git(self.publisher, "show", "-s", "--format=%B", first),
+        )
+
+    def test_marker_rejects_a_source_with_an_unreasonable_future_timestamp(self) -> None:
+        future = str(int(time.time()) + cas.MAX_SOURCE_FUTURE_SKEW_SECONDS + 60)
+        environment = {
+            "GIT_AUTHOR_DATE": f"@{future} +0000",
+            "GIT_COMMITTER_DATE": f"@{future} +0000",
+        }
+        subprocess.run(
+            [GIT, "-C", str(self.publisher), "commit", "--allow-empty", "-qm", "future"],
+            check=True, env={**os.environ, **environment},
+        )
+        source = git(self.publisher, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(cas.CasError, "unreasonably far in the future"):
+            cas.create_marker(self.publisher, source, "run-future")
 
     def test_successful_sequence_one_atomic_transition(self) -> None:
         marker, ledger = self.objects()

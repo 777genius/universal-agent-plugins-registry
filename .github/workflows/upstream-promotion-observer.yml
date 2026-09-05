@@ -31,7 +31,7 @@ jobs:
           app-id: ${{ secrets.UPSTREAM_PROMOTION_APP_ID }}
           private-key: ${{ secrets.UPSTREAM_PROMOTION_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: universal-agent-plugins
+          repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
 

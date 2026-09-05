@@ -589,6 +589,18 @@ sys.modules['catalog_process_isolation']=module
         upload = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
         self.assertEqual(set(upload["with"]["path"].splitlines()), {"pr-metadata.json", "promotion-candidate.json", "readiness-diagnostics.json"})
 
+    def test_upstream_promotion_observer_targets_its_current_repository(self) -> None:
+        workflow = load(ROOT / ".github" / "workflows" / "upstream-promotion-observer.yml")
+        token_step = next(
+            step for step in workflow["jobs"]["observe"]["steps"]
+            if step.get("uses", "").startswith("actions/create-github-app-token@")
+        )
+        self.assertEqual(token_step["with"]["owner"], "${{ github.repository_owner }}")
+        self.assertEqual(
+            token_step["with"]["repositories"],
+            "${{ github.event.repository.name }}",
+        )
+
     def test_adapter_egress_and_native_projection_are_canonical_generic_contracts(self) -> None:
         schema = json.loads((ROOT / "deploy/uap-observer-adapter-config.schema.json").read_text())
         self.assertIn("egress_hosts", schema["required"])
