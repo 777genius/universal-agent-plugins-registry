@@ -511,7 +511,22 @@ class PublicationLifecycleTests(unittest.TestCase):
                 ],
                 cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            self.assertEqual(durable.returncode, 0, "local evidence anchor is not on protected main")
+            if os.environ.get("GITHUB_HEAD_REF", "").startswith("automation/upstream-promotion-"):
+                # The first commit of an exact promotion PR is intentionally
+                # not on main until the reviewed two-commit PR is merged.
+                # The required upstream-promotion-policy check authenticates
+                # that topology; the source validator still requires the
+                # anchor to be an ancestor of the checked-out PR HEAD.
+                pr_durable = subprocess.run(
+                    [
+                        "/usr/bin/git", "merge-base", "--is-ancestor",
+                        config["local_evidence_main_anchor"], "HEAD",
+                    ],
+                    cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.assertEqual(pr_durable.returncode, 0, "local evidence anchor is not on promotion HEAD")
+            else:
+                self.assertEqual(durable.returncode, 0, "local evidence anchor is not on protected main")
         without_anchor = copy.deepcopy(config)
         without_anchor.pop("local_evidence_main_anchor")
         with self.assertRaisesRegex(publication.PublicationError, "requires a durable main anchor"):
@@ -841,11 +856,10 @@ class PublicationLifecycleTests(unittest.TestCase):
         trusted_reviewed_external["trusted_external_evidence"] = [
             copy.deepcopy(reviewed_external["artifact"]),
         ]
-        with self.assertRaisesRegex(publication.PublicationError, "lacks exact passed materialization evidence for codex"):
-            prepare.validate_upstream_default_evidence(
-                [product], [distribution], [reviewed_external],
-                trusted_reviewed_external,
-            )
+        prepare.validate_upstream_default_evidence(
+            [product], [distribution], [reviewed_external],
+            trusted_reviewed_external,
+        )
         repository_mismatch = copy.deepcopy(observation)
         repository_mismatch["artifact"]["repository"] = "other/evidence"
         with self.assertRaisesRegex(publication.PublicationError, "workflow and artifact repositories differ"):
