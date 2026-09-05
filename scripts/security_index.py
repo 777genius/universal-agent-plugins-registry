@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.build_bridges import BridgeError, PinnedRepository
-from scripts.build_discovery_index import bounded_package_files, materialize_package
+from scripts.build_discovery_index import DiscoveryError, bounded_package_files, materialize_package
 from scripts.build_registry import directory_tree_digest, digest_bytes
 from scripts.directory_publication import (
     PublicationError, canonical_json, parse_json_bytes, read_json, require, sha256_digest, validate_with_schema,
@@ -186,7 +186,15 @@ def scan_repository(lintai: Path, repository: str, revision: str, records: list[
                     root = Path(temporary)
                     materialize_package(files, root)
                     results.append(scan_materialized(lintai, record, root))
-            except (BridgeError, OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
+            except (
+                BridgeError,
+                DiscoveryError,
+                OSError,
+                PublicationError,
+                ValueError,
+                subprocess.SubprocessError,
+                json.JSONDecodeError,
+            ):
                 results.append(unavailable(record, "scan_failed"))
     finally:
         pinned.close()

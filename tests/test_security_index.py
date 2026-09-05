@@ -21,6 +21,7 @@ from scripts.security_index import (
     build_security_candidate,
     policy,
     previous_records,
+    scan_repository,
 )
 import scripts.security_publication as security_publication
 
@@ -173,6 +174,27 @@ class SecurityIndexTests(unittest.TestCase):
             "manifest_digest": discovery["records"][0]["manifest_digest"],
         })
         self.assertEqual(candidate["records"][0]["outcome"], "warnings")
+
+    def test_per_package_validation_failure_becomes_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            discovery, mirrors = make_discovery(root)
+            record = discovery["records"][0]
+            results = scan_repository(
+                make_lintai(root, fail_scan=True), record["repository"], record["revision"],
+                [record], mirrors, None,
+            )
+        self.assertEqual(results, [{
+            "subject": {
+                "tree_digest": record["tree_digest"],
+                "manifest_digest": record["manifest_digest"],
+            },
+            "outcome": "check_unavailable",
+            "counts": {"blocking": 0, "warnings": 0, "total": 0},
+            "scanned_files": 0,
+            "error_code": "scan_failed",
+            "findings": [],
+        }])
 
     def test_exact_previous_subject_skips_scan_but_scanner_mismatch_invalidates_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
