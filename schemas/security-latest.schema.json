@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://777genius.github.io/universal-agent-plugins-registry/schemas/security-latest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pointer_schema_version", "snapshot_schema_version", "sequence", "snapshot_path", "envelope_path", "fetch_contract"],
+  "properties": {
+    "pointer_schema_version": {"const": 1},
+    "snapshot_schema_version": {"const": 1},
+    "sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "snapshot_path": {"type": "string", "pattern": "^snapshots/[0-9]{20}\\.json$"},
+    "envelope_path": {"type": "string", "pattern": "^snapshots/[0-9]{20}\\.envelope\\.json$"},
+    "fetch_contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_redirects", "latest_max_bytes", "snapshot_max_bytes", "envelope_max_bytes", "retry_attempts"],
+      "properties": {
+        "max_redirects": {"const": 0},
+        "latest_max_bytes": {"const": 16384},
+        "snapshot_max_bytes": {"const": 8388608},
+        "envelope_max_bytes": {"const": 16384},
+        "retry_attempts": {"const": 3}
+      }
+    }
+  }
+}

@@ -906,7 +906,7 @@ jobs:
               mapfile -t changed < <(git -C ledger diff-tree --no-commit-id --name-only -r "${previous}" "${descendant}")
               test "${#changed[@]}" -gt 0
               for path in "${changed[@]}"; do
-                [[ "${path}" == discovery/* ]]
+                [[ "${path}" == discovery/* || "${path}" == security/* ]]
               done
               previous="${descendant}"
             done
@@ -914,16 +914,18 @@ jobs:
             git -C ledger diff --cached --exit-code
           else
             test "${EXPECTED_LEDGER_HEAD}" = "${EXPECTED_LEDGER_COMMIT}"
-            rsync -a --delete --exclude=.git --exclude=registry --exclude=/discovery "${RUNNER_TEMP}/validated-site/" ledger/
+            rsync -a --delete --exclude=.git --exclude=registry --exclude=/discovery --exclude=/security "${RUNNER_TEMP}/validated-site/" ledger/
             git -C ledger diff --exit-code -- registry/schemas/1/snapshots
             git -C ledger diff --exit-code -- registry
             git -C ledger diff --exit-code -- discovery
+            git -C ledger diff --exit-code -- security
             git -C ledger config user.name "uap-directory-publisher[bot]"
             git -C ledger config user.email "uap-directory-publisher[bot]@users.noreply.github.com"
-            git -C ledger add -A -- . ':!registry' ':!discovery'
+            git -C ledger add -A -- . ':!registry' ':!discovery' ':!security'
             git -C ledger diff --cached --exit-code -- registry/schemas/1/snapshots
             git -C ledger diff --cached --exit-code -- registry
             git -C ledger diff --cached --exit-code -- discovery
+            git -C ledger diff --cached --exit-code -- security
             git -C ledger -c core.hooksPath=/dev/null commit --allow-empty \
               -m "chore(directory): materialize signed production site"
             test "$(git -C ledger rev-parse HEAD^)" = "${EXPECTED_LEDGER_COMMIT}"
