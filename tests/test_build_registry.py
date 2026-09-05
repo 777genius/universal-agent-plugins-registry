@@ -1056,8 +1056,10 @@ class DirectoryDomainTests(unittest.TestCase):
             self.assertEqual(distribution["status"], expected_status)
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
                 expected_sequences = [1, 2, 3]
-            elif distribution["id"] in {"777genius/chrome-devtools-bridge", "777genius/context7"}:
+            elif distribution["id"] == "777genius/context7":
                 expected_sequences = [1, 2]
+            elif distribution["id"] == "777genius/chrome-devtools-bridge":
+                expected_sequences = list(range(1, len(distribution["releases"]) + 1))
             else:
                 expected_sequences = [1]
             self.assertEqual([item["sequence"] for item in distribution["releases"]], expected_sequences)
@@ -1103,8 +1105,8 @@ class DirectoryDomainTests(unittest.TestCase):
                     expected_minimum = registry.LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION
                 if distribution["id"] == "upstash/context7":
                     expected_minimum = "0.1.13"
-                if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] == 2:
-                    expected_minimum = "0.1.24"
+                if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] >= 2:
+                    expected_minimum = "0.1.26"
                 if (
                     distribution["status"] == "active"
                     and policy["status"] == "active"
@@ -1145,12 +1147,14 @@ class DirectoryDomainTests(unittest.TestCase):
             "777genius/playwright-bridge",
         )
         chrome = registry.resolve_directory(source, "chrome-devtools", ["codex"])
-        self.assertEqual((chrome["distribution_id"], chrome["release_sequence"]), ("777genius/chrome-devtools-bridge", 2))
+        chrome_bridge = next(item for item in source["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
+        active_sequence = next(item["release_sequence"] for item in chrome_bridge["release_policies"] if item["status"] == "active")
+        self.assertEqual((chrome["distribution_id"], chrome["release_sequence"]), (chrome_bridge["id"], active_sequence))
         with self.assertRaisesRegex(registry.RegistryError, r"777genius/chrome-devtools: distribution is suspended"):
             registry.resolve_directory(source, "777genius/chrome-devtools", ["codex"])
         self.assertEqual(
             registry.resolve_directory(source, "777genius/chrome-devtools-bridge", ["codex"])["release_sequence"],
-            2,
+            active_sequence,
         )
         context7_resolution = registry.resolve_directory(source, "context7", ["codex"])
         self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("777genius/context7", 2))
@@ -1186,7 +1190,11 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual({policy["status"] for policy in chrome["777genius/chrome-devtools"]["release_policies"]}, {"revoked"})
         bridge = chrome["777genius/chrome-devtools-bridge"]
         self.assertEqual(bridge["status"], "active")
-        self.assertEqual([(policy["release_sequence"], policy["status"]) for policy in bridge["release_policies"]], [(1, "revoked"), (2, "active")])
+        active = [policy for policy in bridge["release_policies"] if policy["status"] == "active"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["release_sequence"], bridge["releases"][-1]["sequence"])
+        self.assertEqual(bridge["release_policies"][0]["status"], "revoked")
+        self.assertTrue(all(policy["status"] in {"revoked", "superseded"} for policy in bridge["release_policies"][:-1]))
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "chrome-devtools")
 
     def test_context7_locked_npm_runtime_is_complete(self) -> None:
@@ -1198,7 +1206,8 @@ class DirectoryDomainTests(unittest.TestCase):
         source = self.source()
         clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
         bridge = next(item for item in source["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
-        previous, active = bridge["release_policies"]
+        previous = bridge["release_policies"][0]
+        active = next(item for item in bridge["release_policies"] if item["status"] == "active")
         self.assertEqual([target["client"] for target in previous["targets"]], clients[:5])
         self.assertEqual(previous["minimum_installer_version"], "0.1.8")
         self.assertEqual([target["client"] for target in active["targets"]], clients)
@@ -1214,7 +1223,7 @@ class DirectoryDomainTests(unittest.TestCase):
         for targets in [[client] for client in clients] + [clients, clients[5:], ["codex", "gemini"]]:
             with self.subTest(targets=targets):
                 result = registry.resolve_directory(source, "chrome-devtools", targets)
-                self.assertEqual((result["distribution_id"], result["release_sequence"]), (bridge["id"], 2))
+                self.assertEqual((result["distribution_id"], result["release_sequence"]), (bridge["id"], active["release_sequence"]))
                 self.assertIn("declared default 777genius/chrome-devtools", result["fallback_reason"])
         for targets in [["unknown"], ["codex", "unknown"], ["claude", "claude"]]:
             with self.subTest(targets=targets), self.assertRaisesRegex(registry.RegistryError, "unique supported client IDs"):
@@ -1262,7 +1271,9 @@ class DirectoryDomainTests(unittest.TestCase):
         policy_count = sum(len(item["release_policies"]) for item in source["distributions"])
         self.assertLessEqual(len(product["target_resolutions"]), len(registry.CLIENT_IDS) + policy_count)
         full = next(item for item in product["target_resolutions"] if [target["client"] for target in item["targets"]] == clients)
-        self.assertEqual((full["distribution_id"], full["release_sequence"]), ("777genius/chrome-devtools-bridge", 2))
+        bridge = next(item for item in source["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
+        active_sequence = next(item["release_sequence"] for item in bridge["release_policies"] if item["status"] == "active")
+        self.assertEqual((full["distribution_id"], full["release_sequence"]), (bridge["id"], active_sequence))
         self.assertTrue(all(item["current_evidence"] == [] for item in product["distributions"]))
 
     def test_active_locked_npm_runtime_rejects_incompatible_installer_policy(self) -> None:
@@ -1519,8 +1530,9 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_real_bridge_and_upstream_context7_provenance_is_exact(self) -> None:
         source = self.source()
         distributions = {item["id"]: item for item in source["distributions"]}
+        chrome_recipe = yaml.safe_load((registry.ROOT / "bridges/chrome-devtools/bridge.yaml").read_text())
         expected = {
-            "777genius/chrome-devtools-bridge": ("ChromeDevTools/chrome-devtools-mcp", "774d78f5eef5e610407a0c92fa6ec5ed74b027e8"),
+            "777genius/chrome-devtools-bridge": ("ChromeDevTools/chrome-devtools-mcp", chrome_recipe["upstream"]["revision"]),
             "777genius/cloudflare-docs-bridge": ("cloudflare/mcp-server-cloudflare", "0c51a6fbcf9a2fae80120287e8238fb947cdc2df"),
             "777genius/firecrawl-bridge": ("firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e"),
             "777genius/playwright-bridge": ("microsoft/playwright-mcp", "8a13ef8e9f7385a0f89477922127f31cbfde9761"),

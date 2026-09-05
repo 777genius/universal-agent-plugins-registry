@@ -37,6 +37,26 @@ VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
+def update_public_runtime_pins(root: Path, npm_package: str, version: str) -> None:
+    replacements = (
+        (
+            root / "docs/COMPATIBILITY.md",
+            re.compile(rf"^\| `{re.escape(npm_package)}` \| `[^`]+` \|$", re.MULTILINE),
+            f"| `{npm_package}` | `{version}` |",
+        ),
+        (
+            root / "docs/VERIFICATION.md",
+            re.compile(rf"^- `{re.escape(npm_package)}@[^`]+`$", re.MULTILINE),
+            f"- `{npm_package}@{version}`",
+        ),
+    )
+    for path, pattern, replacement in replacements:
+        body = path.read_text(encoding="utf-8")
+        updated, count = pattern.subn(replacement, body)
+        require(count == 1, f"{path}: expected one public runtime pin for {npm_package}, found {count}")
+        path.write_text(updated, encoding="utf-8")
+
+
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pretty(value))
@@ -201,6 +221,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "Review the server's tools, scopes, and write capabilities before enabling it. Agent Plugins 1.0 standardizes packaging, not permissions or sandboxing.\n",
         encoding="utf-8",
     )
+    update_public_runtime_pins(args.root, identity["npm_package"], identity["version"])
 
     report = build_one(args.root, bridge_id, args.upstream_mirror)
     output = args.root / report["package_path"]
@@ -252,10 +273,14 @@ def apply_bridge_release(directory: dict[str, Any], plan: dict[str, Any]) -> Non
         "previous locked bridge release is not the exact unresolved predecessor",
     )
     unresolved[0]["package_source"]["revision"] = previous_revision
-    current_policy = max(
-        (item for item in distribution["release_policies"] if item["status"] == "active"),
-        key=lambda item: item["release_sequence"],
+    active_policies = [item for item in distribution["release_policies"] if item["status"] == "active"]
+    require(len(active_policies) == 1, "locked bridge distribution must have exactly one active release")
+    current_policy = active_policies[0]
+    require(
+        current_policy["release_sequence"] == sequence - 1,
+        "locked bridge active release is not the exact predecessor",
     )
+    current_policy["status"] = "superseded"
     package = plan["package"]
     distribution["releases"].append({
         "sequence": sequence, "package_version": package["version"], "manifest_name": plan["product_id"],
@@ -329,7 +354,9 @@ def verify_pr(
     require(raw_path.endswith("/materialization.json") and f"/{short_sha}" in raw_path, "locked bridge evidence path differs from branch")
     require(
         all(
-            item == raw_path or item.startswith(f"bridges/{product_id}/") or item.startswith(f"plugins/{product_id}/")
+            item == raw_path or item.startswith(f"bridges/{product_id}/")
+            or item.startswith(f"plugins/{product_id}/")
+            or item in {"docs/COMPATIBILITY.md", "docs/VERIFICATION.md"}
             for item in bridge_paths
         ),
         "locked bridge commit changed paths outside its recipe, package, and evidence",
@@ -352,6 +379,7 @@ def verify_pr(
     required_changes = required_bridge_paths - {
         f"bridges/{product_id}/overlay/mcp.json", f"plugins/{product_id}/mcp.json",
     }
+    required_changes.update({"docs/COMPATIBILITY.md", "docs/VERIFICATION.md"})
     require(required_changes <= set(bridge_paths), "locked bridge update omitted required runtime identity changes")
 
     promotion_paths = sorted(git(repository, "diff", "--name-only", bridge_commit, head_sha).splitlines())
