@@ -138,6 +138,9 @@ jobs:
       - name: Exercise finalized Pages output in Chromium
         working-directory: site
         run: pnpm test:browser
+      - name: Finalize the registry-only human landing redirects
+        working-directory: site
+        run: node scripts/finalize-registry-landing.mjs
       - name: Remove only this job's ephemeral AppArmor allowance
         if: ${{ always() && steps.isolation_profile.outputs.profile_owned == 'true' }}
         run: |
