@@ -743,7 +743,11 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm generate
           pnpm check:generated
-          node scripts/finalize-registry-landing.mjs
+          if test -L scripts/finalize-registry-landing.mjs || test -e scripts/finalize-registry-landing.mjs; then
+            test -f scripts/finalize-registry-landing.mjs
+            test ! -L scripts/finalize-registry-landing.mjs
+            node scripts/finalize-registry-landing.mjs
+          fi
       - name: Create bounded static artifact and manifest
         id: artifact
         working-directory: trusted-source/site

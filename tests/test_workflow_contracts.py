@@ -55,6 +55,13 @@ class WorkflowContractTests(unittest.TestCase):
         steps = build["steps"]
         generate = next(step for step in steps if step.get("name") == "Generate from the exact signed snapshot")
         command = "node scripts/finalize-registry-landing.mjs"
+        self.assertIn(
+            "if test -L scripts/finalize-registry-landing.mjs || "
+            "test -e scripts/finalize-registry-landing.mjs; then",
+            generate["run"],
+        )
+        self.assertIn("test -f scripts/finalize-registry-landing.mjs", generate["run"])
+        self.assertIn("test ! -L scripts/finalize-registry-landing.mjs", generate["run"])
         self.assertGreater(generate["run"].index(command), generate["run"].index("pnpm check:generated"))
         artifact = next(step for step in steps if step.get("id") == "artifact")
         self.assertLess(steps.index(generate), steps.index(artifact))
