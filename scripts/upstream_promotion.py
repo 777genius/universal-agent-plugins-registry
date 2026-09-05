@@ -513,11 +513,31 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
     review_path = args.repository / audit_root / "review-record.json"
     candidate_path = args.repository / audit_root / "promotion-candidate.json"
     review, candidate = read_object(review_path), read_object(candidate_path)
+    trusted_selection = {
+        "decision": "promote",
+        "entry": {
+            "product_id": candidate["product"]["id"],
+            "repository": candidate["source"]["repository"],
+            "package_path": candidate["source"]["path"],
+            "distribution_id": candidate["distribution"]["id"],
+            "release_sequence": candidate["release"]["sequence"],
+            "minimum_installer_version": candidate["policy"]["minimum_installer_version"],
+            "targets": candidate["policy"]["targets"],
+        },
+        "pr_metadata": {
+            "merge_commit_oid": candidate["source"]["official_candidate_sha"],
+        },
+    }
+    expected_payloads = materialization_evidence_payloads(
+        trusted_selection, raw, "linux", "amd64",
+    )
     require(
         [item.get("client") for item in review["evidence"]] == clients,
         "review evidence clients differ from raw evidence",
     )
-    for item, artifact_path in zip(review["evidence"], leaf_paths, strict=True):
+    for item, artifact_path, expected_payload in zip(
+        review["evidence"], leaf_paths, expected_payloads, strict=True,
+    ):
         artifact = item["artifact"]
         require(
             artifact["repository"] == active_registry_repository()
@@ -530,6 +550,7 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
         payload = read_object(args.repository / artifact_path)
         jsonschema.Draft202012Validator(schema("directory-evidence-artifact.schema.json")).validate(payload)
         require(body == pretty(payload), f"{artifact_path}: evidence artifact is not canonical")
+        require(payload == expected_payload, "client evidence artifact differs from aggregate materialization")
         require(
             {key: value for key, value in item.items() if key not in {"artifact", "trust"}} == payload,
             "review evidence differs from its client artifact",

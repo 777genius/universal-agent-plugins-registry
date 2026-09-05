@@ -505,6 +505,33 @@ class UpstreamPromotionTests(unittest.TestCase):
                 ))
             review_path.write_bytes(trusted_review)
 
+            trusted_candidate = candidate_path.read_bytes()
+            leaf_path = leaf_directory / "codex.json"
+            trusted_leaf = leaf_path.read_bytes()
+            forged_review = copy.deepcopy(review)
+            forged_review["evidence"][0]["client_version"] = "forged-client"
+            forged_payload = {
+                key: value for key, value in forged_review["evidence"][0].items()
+                if key not in {"artifact", "trust"}
+            }
+            leaf_path.write_bytes(promotion.pretty(forged_payload))
+            forged_review["evidence"][0]["artifact"]["digest"] = promotion.sha256(
+                leaf_path.read_bytes()
+            )
+            review_path.write_bytes(promotion.pretty(forged_review))
+            candidate_path.write_bytes(promotion.pretty(candidate(forged_review)))
+            with self.assertRaisesRegex(
+                promotion.PromotionError,
+                "client evidence artifact differs from aggregate materialization",
+            ):
+                promotion.verify_pr(argparse.Namespace(
+                    repository=repository, base_sha=base, head_sha=head,
+                    branch=f"automation/upstream-promotion-github-bbbbbbbbbbbb-{base[:12]}",
+                ))
+            leaf_path.write_bytes(trusted_leaf)
+            review_path.write_bytes(trusted_review)
+            candidate_path.write_bytes(trusted_candidate)
+
             review["evidence"][0]["installer_version"] = "0.1.25"
             review_path.write_bytes(promotion.pretty(review))
             with self.assertRaisesRegex(promotion.PromotionError, "candidate evidence projection"):
