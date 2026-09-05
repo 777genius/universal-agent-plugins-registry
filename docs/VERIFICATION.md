@@ -39,7 +39,7 @@ checked there rather than duplicated in this historical record.
 The npm registry releases were checked on 2026-09-05 before pinning. HubSpot is
 the explicit preview exception and is not represented as stable:
 
-- `chrome-devtools-mcp@1.7.0`
+- `chrome-devtools-mcp@1.8.0`
 - `@playwright/mcp@0.0.80`
 - `@upstash/context7-mcp@4.0.3`
 - `firebase-tools@15.28.1`
