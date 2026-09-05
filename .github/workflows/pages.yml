@@ -7,7 +7,16 @@ on:
       - "registry/**"
       - "schemas/registry-*.schema.json"
       - "scripts/build_registry.py"
+      - "scripts/build_openai_compat.py"
+      - "scripts/upstream_bridge_promotion.py"
+      - "scripts/upstream_promotion.py"
       - "tests/test_build_registry.py"
+      - "tests/test_directory_publication.py"
+      - "tests/test_upstream_promotion.py"
+      - "tests/test_upstream_promotion_workflows.py"
+      - "tests/test_workflow_contracts.py"
+      - ".github/workflows/upstream-package-e2e.yml"
+      - ".github/workflows/upstream-promotion-*.yml"
       - ".github/workflows/pages.yml"
 permissions:
   contents: read

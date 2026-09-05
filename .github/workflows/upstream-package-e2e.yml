@@ -205,7 +205,7 @@ jobs:
             repository: 777genius/universal-agent-plugins-registry
             revision: signed-directory-release
             plugin: chrome-devtools
-            version: 1.7.0-uap.1
+            version: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -388,12 +388,12 @@ jobs:
               assert distribution["kind"] == "community_bridge"
               declared, = [item for item in snapshot["distributions"] if item["id"] == product["default_distribution"]]
               assert declared["status"] == "suspended" and declared["id"] != distribution["id"]
-              release, = [item for item in distribution["releases"] if item["sequence"] == 2]
-              policy, = [item for item in distribution["release_policies"] if item["release_sequence"] == 2]
-              assert policy["status"] == "active"
-              assert release["package_version"] == data["version"] == "1.7.0-uap.1"
-              assert release["tree_digest"] == data["tree_digest"] == "sha256:9ecf4bcd3eff01f3cb23a46838f65e5c9e213a29367514b320dc92aee98689ed"
-              assert release["manifest_digest"] == data["manifest_digest"] == "sha256:38c1ccf9c0857300832c140caf1049aaaacaa09594011d45e68b85a416734265"
+              active, = [item for item in distribution["release_policies"] if item["status"] == "active"]
+              release_sequence = active["release_sequence"]
+              release, = [item for item in distribution["releases"] if item["sequence"] == release_sequence]
+              assert release["package_version"] == data["version"]
+              assert release["tree_digest"] == data["tree_digest"]
+              assert release["manifest_digest"] == data["manifest_digest"]
               source = release["package_source"]
               expected_repository = os.environ.get("UAP_ACTIVE_REPOSITORY", "777genius/universal-agent-plugins")
               assert source["repository"] == expected_repository and source["path"] == "plugins/chrome-devtools"
@@ -402,7 +402,7 @@ jobs:
               assert installation["source"]["package_subpath"] == source["path"]
               assert installation["origin_mode"] == "directory"
               expected = {"product_id": product["id"], "distribution_id": distribution["id"],
-                          "distribution_kind": distribution["kind"], "desired_release_sequence": 2,
+                          "distribution_kind": distribution["kind"], "desired_release_sequence": release_sequence,
                           "snapshot_schema": snapshot["snapshot_schema_version"],
                           "snapshot_sequence": sequence, "snapshot_digest": digest}
               assert data["directory"] == installation["directory"] == expected

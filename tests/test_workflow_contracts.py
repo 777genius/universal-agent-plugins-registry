@@ -2078,7 +2078,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(job["strategy"]["matrix"]["package"][-1], {
             "id": "reviewed-chrome-short-alias", "source": "chrome-devtools",
             "repository": "777genius/universal-agent-plugins-registry", "revision": "signed-directory-release",
-            "plugin": "chrome-devtools", "version": "1.7.0-uap.1"})
+            "plugin": "chrome-devtools", "version": ""})
         install = next(step for step in job["steps"] if step.get("name") == "Install exact public npm wrapper without credentials")
         self.assertNotIn("env", install)
         for required in ('env -i PATH="$PATH"', 'NPM_CONFIG_CACHE="$tools_root/cache"',
@@ -2102,7 +2102,8 @@ sys.modules['catalog_process_isolation']=module
         product = next(item for item in registry["products"] if item["id"] == "chrome-devtools")
         distribution = copy.deepcopy(next(item for item in registry["distributions"] if item["id"] == "777genius/chrome-devtools-bridge"))
         declared = next(item for item in registry["distributions"] if item["id"] == product["default_distribution"])
-        release = next(item for item in distribution["releases"] if item["sequence"] == 2)
+        policy = next(item for item in distribution["release_policies"] if item["status"] == "active")
+        release = next(item for item in distribution["releases"] if item["sequence"] == policy["release_sequence"])
         release["package_source"]["revision"] = "a" * 40
         snapshot = {"snapshot_schema_version": 1, "sequence": 20, "products": [product],
                     "distributions": [distribution, declared]}
@@ -2115,7 +2116,7 @@ sys.modules['catalog_process_isolation']=module
                 candidate["sequence"] = sequence
                 digest = "sha256:" + hashlib.sha256(json.dumps(candidate).encode()).hexdigest()
                 origin = {"product_id": "chrome-devtools", "distribution_id": distribution["id"],
-                          "distribution_kind": "community_bridge", "desired_release_sequence": 2,
+                          "distribution_kind": "community_bridge", "desired_release_sequence": release["sequence"],
                           "snapshot_schema": 1, "snapshot_sequence": sequence, "snapshot_digest": digest}
                 data = {"version": release["package_version"], "tree_digest": release["tree_digest"],
                         "manifest_digest": release["manifest_digest"], "revision": "a" * 40, "directory": origin}

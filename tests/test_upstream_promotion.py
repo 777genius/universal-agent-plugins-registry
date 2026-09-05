@@ -12,6 +12,7 @@ from unittest import mock
 from scripts import upstream_promotion as promotion
 from scripts import upstream_bridge_promotion as bridge_promotion
 from scripts import run_upstream_promotion_materialization as lifecycle
+from scripts import build_openai_compat as openai_compat
 from scripts.build_registry import RegistryError, validated_package_facts
 from scripts.validate_review_journey import materialize
 
@@ -300,7 +301,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             )
             candidate = root / "candidate"
             candidate.mkdir()
-            for name in ("bridges", "plugins", "registry", "docs"):
+            for name in ("assets", "bridges", "compat", "plugins", "registry", "docs"):
                 shutil.copytree(ROOT / name, candidate / name)
             next_sequence = next_chrome_bridge_sequence()
             candidate_watch = promotion.read_object(candidate / "registry/upstream-promotions.json")
@@ -379,7 +380,17 @@ class UpstreamPromotionTests(unittest.TestCase):
             (candidate / "registry/review-search.json").write_bytes(
                 bridge_promotion.encoded(bridge_promotion.directory_search(directory))
             )
-            run_git(candidate, "add", "registry")
+            product = next(item for item in directory["products"] if item["id"] == "chrome-devtools")
+            projected = candidate / "compat/openai/plugins/chrome-devtools"
+            shutil.rmtree(projected)
+            openai_compat.project_portable_package(
+                candidate / "plugins/chrome-devtools",
+                projected,
+                product,
+                None,
+                brand_assets=candidate / "assets",
+            )
+            run_git(candidate, "add", "registry", "compat/openai/plugins/chrome-devtools")
             run_git(candidate, "commit", "-qm", "feat(directory): review locked chrome-devtools bridge")
             head_sha = run_git(candidate, "rev-parse", "HEAD")
             verdict = bridge_promotion.verify_pr(
@@ -390,6 +401,24 @@ class UpstreamPromotionTests(unittest.TestCase):
             )
             self.assertEqual(verdict["outcome"], "verified")
             self.assertFalse(verdict["auto_merge"])
+
+            manifest_path = projected / ".codex-plugin/plugin.json"
+            manifest = promotion.read_object(manifest_path)
+            manifest["description"] = "tampered projection"
+            manifest_path.write_bytes(promotion.pretty(manifest))
+            run_git(candidate, "add", str(manifest_path.relative_to(candidate)))
+            run_git(candidate, "commit", "--amend", "-qm", "feat(directory): review locked chrome-devtools bridge")
+            tampered_head = run_git(candidate, "rev-parse", "HEAD")
+            with self.assertRaisesRegex(
+                bridge_promotion.PromotionError,
+                "OpenAI compatibility projection is stale or non-deterministic",
+            ):
+                bridge_promotion.verify_pr(
+                    repository=candidate, base_sha=base_sha, head_sha=tampered_head,
+                    branch=f"automation/upstream-promotion-chrome-devtools-{merge_sha[:12]}-{base_sha[:12]}",
+                    product_id="chrome-devtools", short_sha=merge_sha[:12],
+                    commits=[bridge_commit, tampered_head], audit_path=audit_path,
+                )
 
     def test_apply_and_verify_exact_two_commit_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

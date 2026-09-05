@@ -264,6 +264,15 @@ jobs:
           python3 scripts/build_registry.py --check
           python3 scripts/build_bridges.py check
           python3 scripts/validate_catalog.py
+          python3 scripts/build_openai_compat.py
+          python3 scripts/build_openai_compat.py --check
+          python3 scripts/validate_openai_compat.py
+          git diff --name-only -- .agents/plugins/marketplace.json compat/openai/plugins \
+            > "$RUNNER_TEMP/openai-changed-paths.txt"
+          if grep -v "^compat/openai/plugins/${PRODUCT_ID}/" "$RUNNER_TEMP/openai-changed-paths.txt"; then
+            echo "OpenAI generation changed a package outside ${PRODUCT_ID}" >&2
+            exit 1
+          fi
 
       - name: Commit, push, and open the protected promotion PR
         if: steps.selection.outputs.decision != 'none'
@@ -276,7 +285,7 @@ jobs:
           BRANCH: ${{ steps.evidence-commit.outputs.branch }}
           DECISION: ${{ steps.selection.outputs.decision }}
         run: |
-          git add -- registry catalog \
+          git add -- registry catalog "compat/openai/plugins/${PRODUCT_ID}" \
             "registry/upstream-promotion-audit/${PRODUCT_ID}/${MERGE_SHA}"
           if test "$DECISION" = promote_bridge; then
             subject="feat(directory): review locked ${PRODUCT_ID} bridge"

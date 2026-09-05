@@ -29,7 +29,7 @@ jobs:
           import os, re, sys
           branch = os.environ["HEAD_BRANCH"]
           internal = os.environ["HEAD_REPOSITORY"] == os.environ["GITHUB_REPOSITORY"]
-          named = re.fullmatch(r"automation/upstream-promotion-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{12}", branch) is not None
+          named = re.fullmatch(r"automation/upstream-promotion-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{12}-[0-9a-f]{12}", branch) is not None
           promotion = internal and named
           if named and not promotion:
               raise SystemExit("automated promotion must use an internal reserved branch")
