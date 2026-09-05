@@ -83,10 +83,13 @@ describe('registry parsing', () => {
     assert.equal(plugin.default_distribution, '777genius/chrome-devtools-bridge')
     assert.deepEqual(new Set(plugin.client_support.clients), new Set(clients))
     assert.equal(validationLabel(plugin), 'Package reviewed')
+    const bridge = raw.distributions.find((item: { id: string }) => item.id === '777genius/chrome-devtools-bridge')
+    const activePolicy = bridge.release_policies.find((item: { status: string }) => item.status === 'active')
+    assert.ok(activePolicy)
     for (const targets of [...clients.map(client => [client]), clients, clients.slice(5)]) {
       const selected = expectedDistribution(plugin, targets)!
       assert.equal(selected.id, '777genius/chrome-devtools-bridge')
-      assert.equal(selected.release_sequence, 2)
+      assert.equal(selected.release_sequence, activePolicy.release_sequence)
       assert.equal(pluginCommands(plugin, targets).add, `npx universal-agent-plugins add chrome-devtools --target ${targets.join(',')}`)
     }
     assert.equal(expectedDistribution(plugin, [...clients, 'chatgpt']), undefined)
@@ -95,8 +98,7 @@ describe('registry parsing', () => {
       assert.equal(plugin.client_support.delivery[client], mode)
       assert.deepEqual(plugin.client_support.scopes[client], ['user'])
     }
-    const bridge = raw.distributions.find((item: { id: string }) => item.id === '777genius/chrome-devtools-bridge')
-    bridge.release_policies[1].targets[0].client = 'unknown'
+    activePolicy.targets[0].client = 'unknown'
     assert.throws(() => parseDirectoryData(raw, 'review_preview'), /invalid or duplicate client/)
   })
 
