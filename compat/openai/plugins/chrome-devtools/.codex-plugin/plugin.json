@@ -1,6 +1,6 @@
 {
   "name": "chrome-devtools",
-  "version": "1.7.0-uap.1",
+  "version": "1.8.0-uap.1",
   "description": "Community package for Chrome DevTools MCP. Inspect pages, automate flows, analyze performance, and debug browser state.",
   "author": {
     "name": "777genius",
