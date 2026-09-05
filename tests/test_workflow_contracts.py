@@ -55,6 +55,17 @@ class WorkflowContractTests(unittest.TestCase):
         steps = build["steps"]
         generate = next(step for step in steps if step.get("name") == "Generate from the exact signed snapshot")
         command = "node scripts/finalize-registry-landing.mjs"
+        guard_start = (
+            "if test -L scripts/finalize-registry-landing.mjs || "
+            "test -e scripts/finalize-registry-landing.mjs; then"
+        )
+        lines = generate["run"].splitlines()
+        start = lines.index(guard_start)
+        end = next(index for index in range(start + 1, len(lines)) if lines[index] == "fi")
+        guard = "\n".join(lines[start:end + 1])
+        self.assertIn("test -f scripts/finalize-registry-landing.mjs", guard)
+        self.assertIn("test ! -L scripts/finalize-registry-landing.mjs", guard)
+        self.assertIn(command, guard)
         self.assertGreater(generate["run"].index(command), generate["run"].index("pnpm check:generated"))
         artifact = next(step for step in steps if step.get("id") == "artifact")
         self.assertLess(steps.index(generate), steps.index(artifact))
@@ -62,6 +73,50 @@ class WorkflowContractTests(unittest.TestCase):
         finalizer = next(step for step in pr_steps if step.get("run") == command)
         browser = next(step for step in pr_steps if step.get("run") == "pnpm test:browser")
         self.assertGreater(pr_steps.index(finalizer), pr_steps.index(browser))
+
+    def test_registry_landing_finalizer_guard_is_backward_compatible_and_fail_closed(self) -> None:
+        build = load(DIRECTORY_PUBLICATION)["jobs"]["build_site"]
+        generate = next(
+            step for step in build["steps"]
+            if step.get("name") == "Generate from the exact signed snapshot"
+        )
+        lines = generate["run"].splitlines()
+        start = next(index for index, line in enumerate(lines) if line.startswith("if test -L scripts/"))
+        end = next(index for index in range(start + 1, len(lines)) if lines[index] == "fi")
+        guard = "\n".join(lines[start:end + 1])
+
+        def execute(setup) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                scripts = root / "scripts"
+                scripts.mkdir()
+                setup(scripts / "finalize-registry-landing.mjs")
+                return subprocess.run(
+                    ["bash", "-e", "-c", guard],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+        def create_symlink(path: Path) -> None:
+            target = path.parent / "target.mjs"
+            target.write_text("process.exit(0)\n")
+            path.symlink_to(target)
+
+        cases = {
+            "missing": (lambda _path: None, True),
+            "regular": (lambda path: path.write_text("process.exit(0)\n"), True),
+            "directory": (lambda path: path.mkdir(), False),
+            "symlink": (create_symlink, False),
+            "dangling-symlink": (lambda path: path.symlink_to(path.parent / "missing.mjs"), False),
+            "fifo": (lambda path: os.mkfifo(path), False),
+            "node-failure": (lambda path: path.write_text("process.exit(7)\n"), False),
+        }
+        for name, (setup, succeeds) in cases.items():
+            with self.subTest(name=name):
+                result = execute(setup)
+                self.assertEqual(result.returncode == 0, succeeds, result.stderr)
 
     def test_catalog_gate_is_fresh_per_publication_and_has_no_skip_bypass(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
