@@ -2,12 +2,19 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto'
 
 const discoveryFixture = makeDiscoveryFixture()
+const securityFixture = makeSecurityFixture()
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/discovery/**', async (route) => {
     const body = discoveryFixture.get(new URL(route.request().url()).pathname.split('/discovery/')[1] ?? '')
     await route.fulfill(body
       ? { body: Buffer.from(body), contentType: 'application/json', headers: { etag: '"browser-discovery-7"' } }
+      : { status: 404, body: 'missing' })
+  })
+  await page.route('**/security/**', async (route) => {
+    const body = securityFixture.get(new URL(route.request().url()).pathname.split('/security/')[1] ?? '')
+    await route.fulfill(body
+      ? { body: Buffer.from(body), contentType: 'application/json' }
       : { status: 404, body: 'missing' })
   })
 })
@@ -298,6 +305,8 @@ test('loads, filters, and installs one signed unreviewed package without a site 
   const card = page.locator('.plugin-card').filter({ hasText: 'portable-demo' })
   await expect(card.getByText('Found on GitHub').first()).toBeVisible()
   await expect(card).toContainText('★ 412 stars on repo')
+  await expect(card.getByText('Automated checks: warnings found')).toBeVisible()
+  await expect(card.getByText(/not a guarantee of safety/i)).toHaveCount(0)
   await expect(card).not.toContainText('Immutable commit')
   await expect(card).not.toContainText('Manifest sha256:')
   await openCardInstaller(card)
@@ -370,5 +379,58 @@ function makeDiscoveryFixture() {
     ['snapshots/00000000000000000007.json', snapshotBytes],
     ['snapshots/00000000000000000007.envelope.json', canonical(envelope)],
     ['search/00000000000000000007.json', searchBytes],
+  ])
+}
+
+function makeSecurityFixture() {
+  const encoder = new TextEncoder()
+  const canonical = (value: unknown) => {
+    const sort = (item: unknown): unknown => Array.isArray(item)
+      ? item.map(sort)
+      : item && typeof item === 'object'
+        ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, child]) => [key, sort(child)]))
+        : item
+    return encoder.encode(`${JSON.stringify(sort(value))}\n`)
+  }
+  const digest = (bytes: Uint8Array) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+  const generated = new Date(Date.now() - 60_000)
+  generated.setMilliseconds(0)
+  const generatedAt = generated.toISOString().replace('.000Z', 'Z')
+  const expiresAt = new Date(generated.getTime() + 30 * 86_400_000).toISOString().replace('.000Z', 'Z')
+  const record = {
+    subject: { tree_digest: `sha256:${'1'.repeat(64)}`, manifest_digest: `sha256:${'2'.repeat(64)}` },
+    outcome: 'warnings', counts: { blocking: 0, warnings: 1, total: 1 }, scanned_files: 2,
+    report_digest: `sha256:${'6'.repeat(64)}`,
+    findings: [{ code: 'SEC301', disposition: 'warning', severity: 'warn', confidence: 'high', category: 'security', path: 'mcp.json', line: 2, message: 'Review this endpoint' }],
+  }
+  const snapshot = {
+    security_schema_version: 1, sequence: 1, publication_id: 'browser-security-1', source_commit: 'd'.repeat(40),
+    generated_at: generatedAt, expires_at: expiresAt, complete: true,
+    discovery: { sequence: 7, snapshot_digest: `sha256:${'7'.repeat(64)}` },
+    scanner: { id: 'lintai', version: '0.1.2' },
+    policy: { id: 'agent-plugin-install', version: 1, digest: 'sha256:41d3640d31eac89e7b30777bbbe937b307908e4a8d7c29a3a0edca49cfe1d755' },
+    coverage: { subjects: 1, checked: 1, unavailable: 0 }, records: [record],
+  }
+  const snapshotBytes = canonical(snapshot)
+  const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 1))
+  const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]), format: 'der', type: 'pkcs8' })
+  const prefix = encoder.encode('UAP-SECURITY-INDEX-ED25519-V1\0')
+  const signed = new Uint8Array(prefix.length + 8 + snapshotBytes.length)
+  signed.set(prefix)
+  new DataView(signed.buffer).setBigUint64(prefix.length, BigInt(snapshotBytes.length))
+  signed.set(snapshotBytes, prefix.length + 8)
+  const envelope = {
+    envelope_schema_version: 1, snapshot_schema_version: 1, sequence: 1, key_id: 'test-discovery', algorithm: 'Ed25519',
+    signature_domain: 'UAP-SECURITY-INDEX-ED25519-V1', snapshot_digest: digest(snapshotBytes), signature: sign(null, signed, privateKey).toString('base64'),
+  }
+  const pointer = {
+    pointer_schema_version: 1, snapshot_schema_version: 1, sequence: 1,
+    snapshot_path: 'snapshots/00000000000000000001.json', envelope_path: 'snapshots/00000000000000000001.envelope.json',
+    fetch_contract: { max_redirects: 0, latest_max_bytes: 16 << 10, snapshot_max_bytes: 8 << 20, envelope_max_bytes: 16 << 10, retry_attempts: 3 },
+  }
+  return new Map([
+    ['latest.json', canonical(pointer)],
+    ['snapshots/00000000000000000001.json', snapshotBytes],
+    ['snapshots/00000000000000000001.envelope.json', canonical(envelope)],
   ])
 }

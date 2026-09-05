@@ -265,6 +265,10 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .plugin-card__identity-copy { min-width: 0; }
 .plugin-card h3 { margin: 0; overflow: hidden; font-size: 1rem; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
 .plugin-card__source-label { margin: 6px 0 0; color: var(--subtle); font-size: .66rem; font-weight: 700; }
+.plugin-card__security { width: fit-content; margin: 8px 0 0; display: inline-flex; align-items: center; gap: 6px; color: var(--cyan); font-size: .62rem; font-weight: 750; }
+.plugin-card__security span { width: 16px; height: 16px; display: inline-grid; place-items: center; border: 1px solid currentcolor; border-radius: 50%; font-size: .55rem; }
+.plugin-card__security--warnings { color: #f5c451; }
+.plugin-card__security--blocking_findings { color: var(--coral); }
 .plugin-card__ribbon { position: absolute; top: 14px; right: 0; min-width: 104px; padding: 6px 9px 6px 11px; border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--line)); border-right: 0; border-radius: 8px 0 0 8px; color: var(--primary-bright); background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 16%, var(--surface-solid)), var(--surface-solid)); box-shadow: -8px 8px 24px rgba(0,0,0,.16); font: 750 .52rem SFMono-Regular, monospace; letter-spacing: .045em; text-align: center; text-transform: uppercase; }
 .plugin-card__ribbon::after { content: ""; position: absolute; right: 0; bottom: -6px; border-width: 3px; border-style: solid; border-color: color-mix(in srgb, var(--primary) 35%, transparent) transparent transparent color-mix(in srgb, var(--primary) 35%, transparent); }
 .plugin-card__ribbon--muted { color: var(--subtle); border-color: var(--line); background: var(--surface-solid); }

@@ -1,3 +1,5 @@
+import type { SecurityFinding } from './security'
+
 export interface PluginAuthor {
   name: string
   email?: string
@@ -158,6 +160,15 @@ export interface RegistryPlugin {
     mcp_transports: string[]
     availability: 'available' | 'unavailable'
     reviewed_distribution_id?: string
+  }
+  security?: {
+    generated_at: string
+    scanner: { id: string, version: string }
+    policy: { id: string, version: number, digest: string }
+    outcome: 'no_blocking_findings' | 'warnings' | 'blocking_findings'
+    counts: { blocking: number, warnings: number, total: number }
+    scanned_files: number
+    findings: SecurityFinding[]
   }
 }
 
