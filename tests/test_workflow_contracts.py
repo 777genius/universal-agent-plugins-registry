@@ -314,10 +314,15 @@ sys.modules['catalog_process_isolation']=module
         self.assertNotIn("*", failure["with"]["path"])
         attest_step = next(step for step in attester["steps"] if step.get("id") == "attestation")
         self.assertEqual(set(attest_step["with"]["subject-path"].splitlines()), {
-            "evidence/catalog-readiness.json", "evidence/source-policy-conformance.json",
+            "attestation-input/catalog-readiness.json", "attestation-input/source-policy-conformance.json",
         })
         attest_index = attester["steps"].index(attest_step)
-        self.assertIn("catalog_publication_readiness.py verify", attester["steps"][attest_index - 1]["run"])
+        validation = attester["steps"][attest_index - 1]["run"]
+        self.assertIn("catalog_publication_readiness.py verify", validation)
+        self.assertIn("--artifact attestation-input/catalog-readiness.json", validation)
+        self.assertIn('Path("attestation-input").iterdir()', validation)
+        downloads = [step for step in attester["steps"] if str(step.get("uses", "")).startswith("actions/download-artifact@")]
+        self.assertEqual(downloads[-1]["with"]["path"], "attestation-input")
         for job in (attester, verifier):
             body = commands(job)
             self.assertIn("validate_source_policy_evidence", body)

@@ -1387,7 +1387,10 @@ def validate_release_package(
         and digest_bytes(manifest_path.read_bytes()) == release["manifest_digest"],
         f"{identity}: reacquired manifest digest differs from submitted metadata",
     )
-    facts = validated_package_facts(package_root, require_directory_name=package_path != ".")
+    # The immutable manifest and release metadata bind package identity. The
+    # Agent Plugins specification does not require a repository subdirectory
+    # (for example `agent-plugin/`) to equal plugin.json.name.
+    facts = validated_package_facts(package_root, require_directory_name=False)
     manifest = read_object(manifest_path)
     require(
         canonical_manifest_repository(manifest.get("repository")) == source_repository,

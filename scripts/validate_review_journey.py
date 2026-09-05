@@ -353,14 +353,17 @@ def promotion(args: argparse.Namespace) -> dict[str, Any]:
         reviewed_root.mkdir()
         candidate_root.mkdir()
         materialize(args.repository, reviewed_revision, args.path, reviewed_root)
-        reviewed = package_facts(reviewed_root, require_directory_name=args.path != ".")
+        # Agent Plugins binds identity through plugin.json, not through the
+        # enclosing repository directory name. Official packages commonly use
+        # a generic package root such as `agent-plugin/`.
+        reviewed = package_facts(reviewed_root, require_directory_name=False)
         require(reviewed["tree_digest"] == record["reviewed_tree_digest"], "reviewed package tree digest differs from the review record")
         require(reviewed["manifest_digest"] == record["reviewed_manifest_digest"], "reviewed manifest digest differs from the review record")
         require(reviewed["manifest_name"] == record["manifest_name"], "reviewed manifest name differs from the Directory product manifest name")
         require(reviewed["manifest_repository"] is not None and reviewed["manifest_repository"].casefold() == repository_id.casefold(), "reviewed manifest repository differs from the official repository")
         gates.append(gate("reviewed_identity", {"revision": reviewed_revision, **reviewed}))
         materialize(args.repository, candidate_revision, args.path, candidate_root)
-        candidate = package_facts(candidate_root, require_directory_name=args.path != ".")
+        candidate = package_facts(candidate_root, require_directory_name=False)
         require(candidate["manifest_name"] == record["manifest_name"], "candidate manifest name differs from the Directory product manifest name")
         require(candidate["manifest_repository"] is not None and candidate["manifest_repository"].casefold() == repository_id.casefold(), "candidate manifest repository differs from the official repository")
         require(set(enforced_components).issubset(candidate["components"]), "candidate is missing product minimum capabilities")
