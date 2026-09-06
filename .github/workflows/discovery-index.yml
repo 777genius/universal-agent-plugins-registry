@@ -49,7 +49,6 @@ jobs:
       contents: read
     steps:
       - name: Request exact publisher capability
-        id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
@@ -57,19 +56,6 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-      - name: Record non-secret publisher integration identity
-        env:
-          GH_TOKEN: ${{ steps.publisher.outputs.token }}
-        run: |
-          mkdir publisher-identity
-          gh api /installation --jq '{app_id}' > publisher-identity/installation.json
-          python3 -c 'import json; value=json.load(open("publisher-identity/installation.json")); assert type(value.get("app_id")) is int and value["app_id"] > 0'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: discovery-publisher-identity-${{ github.run_id }}
-          path: publisher-identity/installation.json
-          if-no-files-found: error
-          retention-days: 1
 
   scan:
     name: Scan inert public packages
