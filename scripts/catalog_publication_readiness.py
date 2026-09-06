@@ -69,7 +69,10 @@ def require(condition: bool, message: str) -> None:
 
 
 def lifecycle_step(args: argparse.Namespace, selector: str, step: str) -> None:
-    require(selector in ALIASES and step in LIFECYCLE_STEPS, "unknown lifecycle diagnostic step")
+    valid_selector = selector in ALIASES or (
+        selector.startswith("default-") and selector.removeprefix("default-") in ALIASES
+    )
+    require(valid_selector and step in LIFECYCLE_STEPS, "unknown lifecycle diagnostic step")
     args.failure_phase = f"lifecycle:{selector}:{step}"
 
 
@@ -147,13 +150,45 @@ def selected(snapshot: dict, alias: str, clients: tuple[str, ...]) -> dict:
 
 
 def row_identity(selection: dict, client: str) -> dict:
-    return {**{key: value for key, value in selection.items() if key != "policy"}, "client": client,
+    return {**{key: value for key, value in selection.items() if key != "policy" and not key.startswith("_")}, "client": client,
             "target_policy": next(item for item in selection["policy"]["targets"] if item["client"] == client)}
 
 
 def plan(snapshot: dict) -> list[tuple[dict, tuple[str, ...]]]:
     # A new publication cannot silently shrink this accepted catalog matrix.
-    return [(selected(snapshot, alias, CATALOG_CLIENTS), CATALOG_CLIENTS) for alias in ALIASES]
+    selections = [(selected(snapshot, alias, CATALOG_CLIENTS), CATALOG_CLIENTS) for alias in ALIASES]
+    products = {product["id"]: product for product in snapshot["products"]}
+    distributions = {distribution["id"]: distribution for distribution in snapshot["distributions"]}
+    covered = {(selection["distribution_id"], selection["release_sequence"])
+               for selection, _ in selections}
+    fixed_alias = {selection["product_id"]: selection["selector"] for selection, _ in selections}
+    seen = set()
+    for product_id in sorted(fixed_alias):
+        product = products[product_id]
+        default_id = product["default_distribution"]
+        default = distributions[default_id]
+        if default["status"] != "active":
+            continue
+        releases = {release["sequence"]: release for release in default["releases"]}
+        active = sorted(
+            (policy for policy in default["release_policies"]
+             if policy["status"] == "active" and policy["release_sequence"] in releases),
+            key=lambda policy: policy["release_sequence"], reverse=True,
+        )
+        for policy in active:
+            clients = tuple(client for client in CATALOG_CLIENTS
+                            if client in {target["client"] for target in policy["targets"]})
+            if not clients:
+                continue
+            selection = selected(snapshot, default_id, clients)
+            identity = (selection["distribution_id"], selection["release_sequence"])
+            if identity in covered or (*identity, clients) in seen:
+                break
+            selection["_case_id"] = "default-" + fixed_alias[product_id]
+            selections.append((selection, clients))
+            seen.add((*identity, clients))
+            break
+    return selections
 
 
 def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
@@ -231,7 +266,10 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
               if selection["product_id"] in ("context7", "cloudflare-docs") for method in ("tools/list", "tools/call")]
-    require(len(rows) == len(ALIASES) * len(CATALOG_CLIENTS) == 280 and len(probes) == 4,
+    expected_rows = len(ALIASES) * len(CATALOG_CLIENTS) + sum(
+        len(clients) for selection, clients in selections if "_case_id" in selection
+    )
+    require(len(rows) == expected_rows and len(probes) >= 4,
             "fixed matrix cardinality mismatch")
     return {"schema_version": 1, "kind": "catalog-publication-readiness-v1", "outcome": "passed",
             "context": ctx, "cli": CLI, "baseline": identity, "rows": rows,
@@ -459,7 +497,7 @@ def remove_targets(run, plugin: str, clients: tuple, verify_native_absent) -> di
 
 
 def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients: tuple, ctx: dict) -> None:
-    step = lambda name: lifecycle_step(args, selection["selector"], name)
+    step = lambda name: lifecycle_step(args, selection.get("_case_id", selection["selector"]), name)
     step("prepare")
     root.mkdir(mode=0o700)
     roots, env = isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot))
@@ -601,13 +639,14 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     root.mkdir(mode=0o700)
     try:
         for selection, clients in plan(snapshot):
-            args.failure_phase = "lifecycle:" + selection["selector"]
+            case_id = selection.get("_case_id", selection["selector"])
+            args.failure_phase = "lifecycle:" + case_id
             print(f"catalog readiness: {selection['selector']} ({len(clients)} targets)", flush=True)
-            run_lifecycle(args, root / selection["selector"], selection, clients, expected["context"])
+            run_lifecycle(args, root / case_id, selection, clients, expected["context"])
             if selection["product_id"] not in ("context7", "cloudflare-docs"):
                 continue
-            package = acquired_package(root / (selection["selector"] + "-probe"), selection)
-            probe_parent = root / (selection["selector"] + "-sessions")
+            package = acquired_package(root / (case_id + "-probe"), selection)
+            probe_parent = root / (case_id + "-sessions")
             probe_parent.mkdir(mode=0o700)
             def probe_runner(argv, *, cwd, env, timeout, **_):
                 return child(argv, root=Path(cwd), readonly=(*tool_paths(args), package), cwd=Path(cwd), env=env, timeout=timeout)

@@ -1862,6 +1862,45 @@ class DirectoryDomainTests(unittest.TestCase):
         registry.validate_directory(fixture, verify_packages=False)
         self.assertEqual(registry.resolve_directory(fixture, "demo", ["codex", "cursor"])["distribution_id"], "upstream/demo")
 
+    def test_signed_wire_evidence_resolves_upstream_without_internal_identity_fields(self) -> None:
+        fixture = self.fixture()
+        upstream = self.promote_upstream(fixture, ("codex", "cursor"))
+        for evidence_id in upstream["release_policies"][0]["current_evidence"]:
+            observation = next(item for item in fixture["evidence"] if item["id"] == evidence_id)
+            for field in ("product_id", "manifest_digest", "source_repository", "source_revision",
+                          "source_path", "adapter_version"):
+                observation.pop(field, None)
+            observation["trust"] = {"kind": "reviewed_external"}
+        self.assertEqual(
+            registry.resolve_directory(fixture, "demo", ["codex", "cursor"])["distribution_id"],
+            "upstream/demo",
+        )
+
+    def test_wire_evidence_cannot_bypass_release_or_trust_binding(self) -> None:
+        for field, value in (
+            ("trust", None),
+            ("trust", {"kind": "unknown"}),
+            ("manifest_digest", "sha256:" + "0" * 64),
+            ("package_tree_digest", "sha256:" + "0" * 64),
+            ("installer_version", "0.1.5"),
+        ):
+            fixture = self.fixture()
+            upstream = self.promote_upstream(fixture, ("cursor",), set_default=False)
+            evidence_id = upstream["release_policies"][0]["current_evidence"][0]
+            observation = next(item for item in fixture["evidence"] if item["id"] == evidence_id)
+            for internal in ("product_id", "manifest_digest", "source_repository", "source_revision",
+                             "source_path", "adapter_version"):
+                observation.pop(internal, None)
+            observation["trust"] = {"kind": "reviewed_external"}
+            if value is None:
+                observation.pop(field, None)
+            else:
+                observation[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                registry.RegistryError, r"evidence .* for cursor$",
+            ):
+                registry.resolve_directory(fixture, "upstream/demo", ["cursor"])
+
     def test_unqualified_fallback_skips_upstream_without_selected_target_evidence(self) -> None:
         fixture = self.fixture()
         fixture["products"][0]["default_distribution"] = "community/demo"

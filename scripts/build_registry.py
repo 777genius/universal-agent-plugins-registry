@@ -1579,6 +1579,37 @@ def _positive_materialization_clients(
     distribution: dict[str, object], release: dict[str, object], policy: dict[str, object],
     evidence: dict[str, dict[str, object]],
 ) -> set[object]:
+    internal_identity = {
+        "manifest_digest": release["manifest_digest"],
+        "source_repository": release["package_source"]["repository"],
+        "source_revision": release["package_source"]["revision"],
+        "source_path": release["package_source"]["path"],
+    }
+
+    def release_binding_matches(observation: dict[str, object]) -> bool:
+        present = internal_identity.keys() & observation.keys()
+        if present:
+            # Source-registry evidence is the stronger internal form. Never
+            # accept a partial tuple or silently downgrade it to wire evidence.
+            return present == internal_identity.keys() and all(
+                observation.get(field) == value for field, value in internal_identity.items()
+            )
+        # Signed public snapshots intentionally omit the internal source tuple.
+        # Their wire evidence remains release-bound by the signed distribution,
+        # sequence and package tree digest, matching the released CLI contract.
+        trust = observation.get("trust")
+        if not isinstance(trust, dict):
+            return False
+        if trust == {"kind": "reviewed_external"}:
+            return True
+        artifact = observation.get("artifact")
+        return (
+            trust.keys() == {"kind", "workflow", "source_ref", "source_digest"}
+            and trust.get("kind") == "github_actions"
+            and isinstance(artifact, dict)
+            and trust.get("source_digest") == artifact.get("revision")
+        )
+
     return {
         observation.get("client")
         for evidence_id in policy["current_evidence"]
@@ -1586,10 +1617,7 @@ def _positive_materialization_clients(
         if observation.get("distribution_id") == distribution["id"]
         and observation.get("release_sequence") == release["sequence"]
         and observation.get("package_tree_digest") == release["tree_digest"]
-        and observation.get("manifest_digest") == release["manifest_digest"]
-        and observation.get("source_repository") == release["package_source"]["repository"]
-        and observation.get("source_revision") == release["package_source"]["revision"]
-        and observation.get("source_path") == release["package_source"]["path"]
+        and release_binding_matches(observation)
         and observation.get("installer_version") == policy["minimum_installer_version"]
         and observation.get("level") == "materialization"
         and observation.get("outcome") == "passed"
