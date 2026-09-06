@@ -60,7 +60,10 @@ try {
         await expect(page.locator('.catalog')).toHaveAttribute('data-discovery-state', /current|cached/, { timeout: 60_000 })
         await fit()
       }
-      const registry = await page.evaluate(() => window.__NUXT__.config.public.registryIndex)
+      // Nuxt serializes useState values into the hydrated payload and may omit the
+      // large source object from runtimeConfig. Read the same state consumed by
+      // useRegistry() instead of depending on a build-time config implementation detail.
+      const registry = await page.evaluate(() => window.__NUXT__.state['registry-index'])
       assert.equal(registry.data_source, 'published_snapshot')
       assert(Number.isSafeInteger(registry.snapshot_sequence) && registry.snapshot_sequence >= 20)
       const get = async path => {

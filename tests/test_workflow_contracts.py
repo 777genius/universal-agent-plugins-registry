@@ -2304,6 +2304,7 @@ sys.modules['catalog_process_isolation']=module
                          'assert.equal(actual.origin, expected.origin)',
                          'normalizePath(actual.pathname)',
                          "new URL('discovery/.browser-lkg.json', siteBase)",
+                         "window.__NUXT__.state['registry-index']",
                          'discovery:vectorize-io/hindsight//hindsight-integrations/agent-plugin'):
             self.assertIn(required, source)
         for forbidden in ('.route(', 'route.fulfill', 'addInitScript', 'executablePath', 'child_process'):
