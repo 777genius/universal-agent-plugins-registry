@@ -2304,11 +2304,12 @@ sys.modules['catalog_process_isolation']=module
                          'assert.equal(actual.origin, expected.origin)',
                          'normalizePath(actual.pathname)',
                          "new URL('discovery/.browser-lkg.json', siteBase)",
-                         "window.__NUXT__.state['registry-index']",
+                         "window.__NUXT__.state['$sregistry-index']",
                          'discovery:vectorize-io/hindsight//hindsight-integrations/agent-plugin'):
             self.assertIn(required, source)
         for forbidden in ('.route(', 'route.fulfill', 'addInitScript', 'executablePath', 'child_process'):
             self.assertNotIn(forbidden, source)
+        self.assertNotIn("window.__NUXT__.state['registry-index']", source)
         self.assertNotIn('unreviewed packages from', source)
 
     def test_upstream_public_site_artifacts_are_json_and_newline_terminated_sha(self) -> None:
