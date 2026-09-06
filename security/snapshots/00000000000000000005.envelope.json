@@ -1,0 +1,1 @@
+{"algorithm":"Ed25519","envelope_schema_version":1,"key_id":"uap-discovery-2026-01","sequence":5,"signature":"xluvRHFFNIu2HLoqpGvuNH4g7T5Ksr2VihizIfjPOpAIY2Bk1nCHwOAjdGB0jY3vIeMmsrScZySgu1de9Y5ZBA==","signature_domain":"UAP-SECURITY-INDEX-ED25519-V1","snapshot_digest":"sha256:9f27ad24d7fa5bec57bca83302797d765907cb478bfb3c611bd41addf83b880e","snapshot_schema_version":1}
