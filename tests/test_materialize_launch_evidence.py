@@ -669,8 +669,22 @@ class PermanentCommitTests(unittest.TestCase):
         materialized = git(self.repo, "rev-parse", "HEAD")
         discovery_commits = []
         for sequence in (1, 2):
+            stem = f"{sequence:020d}"
             (self.repo / "discovery" / "latest.json").write_text(f'{{"sequence":{sequence}}}\n')
-            git(self.repo, "add", "discovery/latest.json")
+            for relative in (
+                f"snapshots/{stem}.json",
+                f"snapshots/{stem}.envelope.json",
+                f"search/{stem}.json",
+            ):
+                target = self.repo / "discovery" / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("{}\n")
+            git(
+                self.repo, "add", "discovery/latest.json",
+                f"discovery/snapshots/{stem}.json",
+                f"discovery/snapshots/{stem}.envelope.json",
+                f"discovery/search/{stem}.json",
+            )
             git(self.repo, "commit", "-qm", f"chore(discovery): publish sequence {sequence}")
             discovery_commits.append(git(self.repo, "rev-parse", "HEAD"))
         evidence_parent = discovery_commits[-1]
