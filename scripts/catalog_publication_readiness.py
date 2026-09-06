@@ -271,12 +271,19 @@ def probe_contract(selection: dict, method: str) -> dict:
             "status": "passed", "scope": "package_mcp_component", "account_runtime": "not_tested", "oauth": "not_tested"}
 
 
+def credential_free_probe(selection: dict) -> bool:
+    """Return whether every supported target declares credential-free MCP use."""
+    targets = selection["policy"]["targets"]
+    return bool(targets) and all(target.get("authentication") == "not_required" for target in targets)
+
+
 def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
     selections = plan(snapshot)
     policy_scope(baseline, snapshot, selections)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
-              if selection["product_id"] in ("context7", "cloudflare-docs") for method in ("tools/list", "tools/call")]
+              if selection["product_id"] in ("context7", "cloudflare-docs")
+              and credential_free_probe(selection) for method in ("tools/list", "tools/call")]
     expected_rows = len(ALIASES) * len(CATALOG_CLIENTS) + sum(
         len(clients) for selection, clients in selections if "_case_id" in selection
     )
@@ -658,7 +665,8 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
             args.failure_phase = "lifecycle:" + case_id
             print(f"catalog readiness: {selection['selector']} ({len(clients)} targets)", flush=True)
             run_lifecycle(args, root / case_id, selection, clients, expected["context"])
-            if selection["product_id"] not in ("context7", "cloudflare-docs"):
+            if (selection["product_id"] not in ("context7", "cloudflare-docs")
+                    or not credential_free_probe(selection)):
                 continue
             package = acquired_package(root / (case_id + "-probe"), selection)
             probe_parent = root / (case_id + "-sessions")

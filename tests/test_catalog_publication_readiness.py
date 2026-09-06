@@ -58,7 +58,7 @@ class CatalogContractTests(unittest.TestCase):
         artifact = self.expected()
         self.assertEqual(len(artifact["rows"]), 293)
         self.assertEqual(len(artifact["static_metadata"]), 2)
-        self.assertEqual(len(artifact["mcp_probes"]), 6)
+        self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
         self.assertEqual({row["client"] for row in chrome}, set(gate.CATALOG_CLIENTS))
         self.assertTrue(
@@ -73,6 +73,14 @@ class CatalogContractTests(unittest.TestCase):
         context7_fallback = [row for row in artifact["rows"] if row["selector"] == "777genius/context7"]
         self.assertEqual({row["client"] for row in context7_fallback}, set(gate.CATALOG_CLIENTS))
         self.assertEqual({row["distribution_id"] for row in context7_fallback}, {"777genius/context7"})
+        self.assertNotIn(
+            next(product for product in self.snapshot["products"] if product["id"] == "context7")["default_distribution"],
+            {probe["distribution_id"] for probe in artifact["mcp_probes"]},
+        )
+        self.assertTrue(all(
+            gate.credential_free_probe(gate.selected(self.snapshot, probe["distribution_id"], gate.CATALOG_CLIENTS))
+            for probe in artifact["mcp_probes"]
+        ))
         github = [row for row in artifact["rows"] if row["selector"] == "github/github"]
         self.assertEqual({row["client"] for row in github}, set(gate.CORE))
         self.assertEqual({row["distribution_id"] for row in github}, {"github/github"})
@@ -765,9 +773,9 @@ class CatalogContractTests(unittest.TestCase):
                                     if call.args[2]["selector"] == "github/github")
                 self.assertEqual(default_call.args[1].name, "default-github")
                 self.assertEqual(default_call.args[3], gate.CORE)
-                self.assertEqual(acquire.call_count, 5)
+                self.assertEqual(acquire.call_count, 4)
                 self.assertEqual(static.call_count, 2)
-                self.assertEqual(probe.call_count, 6)
+                self.assertEqual(probe.call_count, 4)
                 self.assertFalse(args.sandbox.exists())
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 
