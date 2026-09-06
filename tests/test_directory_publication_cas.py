@@ -345,6 +345,22 @@ class BarePublicationCasTests(unittest.TestCase):
         with self.assertRaisesRegex(cas.CasError, "exact immutable publication shape"):
             cas.validate_staged_lineage(self.publisher, mixed, signed)
 
+    def test_staged_lineage_rejects_symlinked_feed_artifact(self) -> None:
+        _marker, signed = self.objects()
+        materialized = self.commit_object(
+            signed, "chore(directory): materialize signed production site"
+        )
+        security = self.commit_feed(materialized, "security", 3)
+        git(self.publisher, "checkout", "-q", "--detach", security)
+        snapshot = self.publisher / "security/snapshots/00000000000000000003.json"
+        snapshot.unlink()
+        snapshot.symlink_to("../latest.json")
+        git(self.publisher, "add", str(snapshot.relative_to(self.publisher)))
+        git(self.publisher, "commit", "--amend", "-qm", "chore(security): publish sequence 3")
+        security = git(self.publisher, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(cas.CasError, "non-regular publication file"):
+            cas.validate_staged_lineage(self.publisher, security, signed)
+
     def test_evidence_transition_resolves_lost_response_by_exact_three_ref_readback(self) -> None:
         main_new = self.commit_object(self.source, "mechanical evidence pointers")
         ledger_new = self.commit_object(self.source, "permanent evidence")

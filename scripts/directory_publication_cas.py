@@ -199,6 +199,10 @@ def validate_feed_append(repo: Path, previous: str, descendant: str) -> None:
         actual[fields[1]] = fields[0]
     if set(actual) != set(expected) or any(actual[path] not in statuses for path, statuses in expected.items()):
         raise CasError("staged ledger feed append is not the exact immutable publication shape")
+    for path in expected:
+        entry = _git(repo, ["ls-tree", descendant, "--", path]).stdout.strip().split(None, 3)
+        if len(entry) != 4 or entry[0] != "100644" or entry[1] != "blob" or entry[3] != path:
+            raise CasError("staged ledger feed append contains a non-regular publication file")
 
 
 def validate_staged_lineage(repo: Path, current: str, signed: str) -> str:
