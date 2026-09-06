@@ -166,8 +166,43 @@ def validate_materialized_descendant(repo: Path, materialized: str, signed: str)
         raise CasError("materialized ledger commit message is invalid")
 
 
+def validate_feed_append(repo: Path, previous: str, descendant: str) -> None:
+    """Authenticate one immutable Discovery or Security publication append."""
+    message = _git(repo, ["show", "-s", "--format=%B", descendant]).stdout
+    match = re.fullmatch(
+        r"chore\((discovery|security)\): publish sequence ([1-9][0-9]*)\n\n",
+        message,
+    )
+    if match is None:
+        raise CasError("staged ledger has an unsupported post-materialization append")
+    feed, raw_sequence = match.groups()
+    sequence = int(raw_sequence)
+    if sequence > 9_007_199_254_740_991:
+        raise CasError("staged ledger feed sequence exceeds the JSON-safe range")
+    stem = f"{sequence:020d}"
+    expected = {
+        f"{feed}/latest.json": {"A", "M"},
+        f"{feed}/snapshots/{stem}.envelope.json": {"A"},
+        f"{feed}/snapshots/{stem}.json": {"A"},
+    }
+    if feed == "discovery":
+        expected[f"{feed}/search/{stem}.json"] = {"A"}
+    changes = _git(
+        repo,
+        ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", previous, descendant],
+    ).stdout.splitlines()
+    actual: dict[str, str] = {}
+    for change in changes:
+        fields = change.split("\t")
+        if len(fields) != 2 or fields[1] in actual:
+            raise CasError("staged ledger feed append has malformed path changes")
+        actual[fields[1]] = fields[0]
+    if set(actual) != set(expected) or any(actual[path] not in statuses for path, statuses in expected.items()):
+        raise CasError("staged ledger feed append is not the exact immutable publication shape")
+
+
 def validate_staged_lineage(repo: Path, current: str, signed: str) -> str:
-    """Return the exact site materialization below safe Discovery-only appends."""
+    """Return the exact site materialization below safe signed-feed appends."""
     _require_sha(current, "current ledger")
     _require_sha(signed, "signed ledger")
     if _git(repo, ["merge-base", "--is-ancestor", signed, current], check=False).returncode != 0:
@@ -184,11 +219,7 @@ def validate_staged_lineage(repo: Path, current: str, signed: str) -> str:
         parents = _git(repo, ["show", "-s", "--format=%P", descendant]).stdout.strip().split()
         if parents != [previous]:
             raise CasError("staged ledger has a non-linear post-materialization append")
-        changed = _git(
-            repo, ["diff-tree", "--no-commit-id", "--name-only", "-r", previous, descendant],
-        ).stdout.splitlines()
-        if not changed or any(not path.startswith("discovery/") for path in changed):
-            raise CasError("staged ledger has a non-Discovery post-materialization append")
+        validate_feed_append(repo, previous, descendant)
         previous = descendant
     if _git(repo, ["diff", "--quiet", signed, current, "--", "registry"], check=False).returncode != 0:
         raise CasError("staged ledger changed signed registry bytes")
