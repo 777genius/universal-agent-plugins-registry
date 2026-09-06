@@ -213,6 +213,19 @@ class UpstreamPromotionTests(unittest.TestCase):
             ):
                 lifecycle.run(argparse.Namespace(**vars(base), targets=targets))
 
+    def test_context7_workflow_uses_an_authenticated_real_claude_cli(self) -> None:
+        workflow = (ROOT / ".github/workflows/context7-upstream-materialization.yml").read_text()
+        self.assertIn('CLAUDE_CODE_VERSION: "2.1.263"', workflow)
+        self.assertIn(
+            "CLAUDE_CODE_NPM_INTEGRITY: "
+            "sha512-kvvBK6/69iTRYnq0TKVyxVZs1CxYCJGojshQSP+2qaDb66A2xtI4zbCuqkZUWLkFGmHSRqhFf/ATpzH2UNKcwg==",
+            workflow,
+        )
+        self.assertIn('npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity', workflow)
+        self.assertIn('"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"', workflow)
+        self.assertIn('node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"', workflow)
+        self.assertIn('echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"', workflow)
+
     def test_select_refuses_a_merged_pr_when_reviewed_head_changed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

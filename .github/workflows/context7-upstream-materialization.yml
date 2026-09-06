@@ -26,6 +26,8 @@ concurrency:
 env:
   AGENTPLUGINS_VERSION: "0.1.51"
   AGENTPLUGINS_NPM_INTEGRITY: sha512-R3KrYWcQAsJ3ogu0SA460rIJkUVisKrxtexFWg9lAX5PvuRtSb/UJCDCqCkhr+XezlNsB6olxZZJ80U6W2DWDQ==
+  CLAUDE_CODE_VERSION: "2.1.263"
+  CLAUDE_CODE_NPM_INTEGRITY: sha512-kvvBK6/69iTRYnq0TKVyxVZs1CxYCJGojshQSP+2qaDb66A2xtI4zbCuqkZUWLkFGmHSRqhFf/ATpzH2UNKcwg==
   CONTEXT7_REVISION: 769c6cd22c3d95462d1f55d789e9532cabefa5a9
   CONTEXT7_TREE_DIGEST: sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8
   CONTEXT7_MANIFEST_DIGEST: sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236
@@ -61,11 +63,18 @@ jobs:
           tools="$RUNNER_TEMP/tools"
           mkdir -p "$tools"/{home,cache,tmp}
           test "$(npm view "universal-agent-plugins@${AGENTPLUGINS_VERSION}" dist.integrity)" = "$AGENTPLUGINS_NPM_INTEGRITY"
+          test "$(npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity)" = "$CLAUDE_CODE_NPM_INTEGRITY"
           env HOME="$tools/home" TMPDIR="$tools/tmp" NPM_CONFIG_CACHE="$tools/cache" \
-            npm install --prefix "$tools" --no-audit --no-fund "universal-agent-plugins@${AGENTPLUGINS_VERSION}"
+            npm install --prefix "$tools" --no-audit --no-fund \
+              "universal-agent-plugins@${AGENTPLUGINS_VERSION}" \
+              "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           npm audit signatures --prefix "$tools"
           test "$(node -p "require('${tools}/node_modules/universal-agent-plugins/package.json').version")" = "$AGENTPLUGINS_VERSION"
+          test "$(node -p "require('${tools}/node_modules/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION"
           test "$("$tools/node_modules/.bin/agentplugins" version)" = "agentplugins ${AGENTPLUGINS_VERSION}"
+          node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"
+          test "$("$tools/node_modules/.bin/claude" --version | cut -d ' ' -f 1)" = "$CLAUDE_CODE_VERSION"
+          echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Validate the immutable official checkout
         run: |
