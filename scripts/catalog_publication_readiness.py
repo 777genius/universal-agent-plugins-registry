@@ -160,15 +160,19 @@ def row_identity(selection: dict, client: str) -> dict:
 def plan(snapshot: dict) -> list[tuple[dict, tuple[str, ...]]]:
     # A new publication cannot silently shrink this accepted catalog matrix.
     selections = [(selected(snapshot, alias, CATALOG_CLIENTS), CATALOG_CLIENTS) for alias in ALIASES]
-    for case_id, selector in QUALIFIED_FALLBACKS.items():
-        selection = selected(snapshot, selector, CATALOG_CLIENTS)
-        selection["_case_id"] = case_id
-        selections.append((selection, CATALOG_CLIENTS))
-    products = {product["id"]: product for product in snapshot["products"]}
-    distributions = {distribution["id"]: distribution for distribution in snapshot["distributions"]}
+    fixed_alias = {selection["product_id"]: selection["selector"] for selection, _ in selections}
     covered = {(selection["distribution_id"], selection["release_sequence"])
                for selection, _ in selections}
-    fixed_alias = {selection["product_id"]: selection["selector"] for selection, _ in selections}
+    for case_id, selector in QUALIFIED_FALLBACKS.items():
+        selection = selected(snapshot, selector, CATALOG_CLIENTS)
+        identity = (selection["distribution_id"], selection["release_sequence"])
+        if identity in covered:
+            continue
+        selection["_case_id"] = case_id
+        selections.append((selection, CATALOG_CLIENTS))
+        covered.add(identity)
+    products = {product["id"]: product for product in snapshot["products"]}
+    distributions = {distribution["id"]: distribution for distribution in snapshot["distributions"]}
     seen = set()
     for product_id in sorted(fixed_alias):
         product = products[product_id]

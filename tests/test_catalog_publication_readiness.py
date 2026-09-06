@@ -216,6 +216,26 @@ class CatalogContractTests(unittest.TestCase):
         with self.assertRaises(Exception):
             gate.plan(self.snapshot)
 
+    def test_qualified_fallback_does_not_replace_short_alias_or_duplicate_selection(self):
+        product = next(item for item in self.snapshot["products"] if item["id"] == "context7")
+        default_id = product["default_distribution"]
+        for snapshot in (self.snapshot, self.baseline):
+            default = next(item for item in snapshot["distributions"] if item["id"] == default_id)
+            policy = next(item for item in default["release_policies"] if item["status"] == "active")
+            policy["targets"] = [target for target in policy["targets"] if target["client"] in gate.CORE]
+
+        selections = gate.plan(self.snapshot)
+        context7 = [(selection, clients) for selection, clients in selections
+                    if selection["product_id"] == "context7"]
+        self.assertEqual(len(context7), 2)
+        self.assertEqual(
+            {(selection["distribution_id"], selection.get("_case_id"), clients) for selection, clients in context7},
+            {("777genius/context7", None, gate.CATALOG_CLIENTS),
+             (default_id, "default-context7", gate.CORE)},
+        )
+        for selection, _ in context7:
+            gate.lifecycle_step(argparse.Namespace(), selection.get("_case_id", selection["selector"]), "complete")
+
     def test_read_json_rejects_duplicates_and_noncanonical_bytes(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "artifact.json"
