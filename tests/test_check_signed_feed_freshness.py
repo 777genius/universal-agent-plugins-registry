@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from scripts.check_signed_feed_freshness import check_observations
 from scripts.directory_publication import PublicationError
 
 
 NOW = datetime(2026, 9, 6, 0, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def observations(hours: int = 72) -> list[dict[str, object]]:
@@ -20,6 +23,12 @@ def observations(hours: int = 72) -> list[dict[str, object]]:
 
 
 class SignedFeedFreshnessTests(unittest.TestCase):
+    def test_workflow_uses_the_same_directory_origin_as_production(self) -> None:
+        production = json.loads((ROOT / "tests/e2e/production-launch.json").read_text())
+        origin = production["production_origin"].rstrip("/")
+        workflow = (ROOT / ".github/workflows/signed-feed-freshness.yml").read_text()
+        self.assertEqual(workflow.count(f"--origin {origin} \\"), 1)
+
     def test_accepts_all_three_feeds_above_margin(self) -> None:
         self.assertEqual(len(check_observations(observations(), NOW, timedelta(hours=48))), 3)
 

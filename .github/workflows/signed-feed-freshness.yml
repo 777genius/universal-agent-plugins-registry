@@ -30,7 +30,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/uap-feed-observations"
           python3 scripts/observe_directory_publication.py \
-            --origin https://777genius.github.io/universal-agent-plugins/registry/schemas/1 \
+            --origin https://777genius.github.io/universal-agent-plugins-registry/registry/schemas/1 \
             --trusted-keys registry/publication/trusted-keys.json \
             --minimum-sequence 1 \
             --attempts 3 \
