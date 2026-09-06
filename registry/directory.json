@@ -2789,14 +2789,31 @@
           "package_version": "0.2.1",
           "manifest_name": "context7",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+      "package_source": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "384fef6c0bcbc99439cebb4e0646ae8b8d5b8345",
+        "path": "plugins/context7"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:9220051c7d8423acc8a9b41c016ba60552ef2637a483bb7db60064942b00116a",
+          "manifest_digest": "sha256:8d3921be2db9daa757b6083bbadee26038751134554af9cfccb74c97967ea355",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 4,
+          "package_version": "0.2.2",
+          "manifest_name": "context7",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:9220051c7d8423acc8a9b41c016ba60552ef2637a483bb7db60064942b00116a",
-          "manifest_digest": "sha256:8d3921be2db9daa757b6083bbadee26038751134554af9cfccb74c97967ea355",
+          "tree_digest": "sha256:f208567833612fed4e0f0784029a08692f53e00a1d5df4005c188439524c93be",
+          "manifest_digest": "sha256:64e86df5ae3c49bfb23519d2ee83be7f508dd06ac9fbcd7b21f6e38aa23f34d5",
           "components": [
             "mcp"
           ]
@@ -2941,6 +2958,94 @@
         },
         {
           "release_sequence": 3,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 4,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
@@ -3332,14 +3437,31 @@
           "package_version": "0.2.2",
           "manifest_name": "firebase",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+      "package_source": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "384fef6c0bcbc99439cebb4e0646ae8b8d5b8345",
+        "path": "plugins/firebase"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:330c919a37accbfa408c8a19459bbd19ac5ac51c93a51acf03abd26a96f7cded",
+          "manifest_digest": "sha256:8bb74f3d10e4ba2ed4e1f02218ed4e2f468ba6a77e80dc26add7efd775bd5b7b",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 5,
+          "package_version": "0.2.3",
+          "manifest_name": "firebase",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:330c919a37accbfa408c8a19459bbd19ac5ac51c93a51acf03abd26a96f7cded",
-          "manifest_digest": "sha256:8bb74f3d10e4ba2ed4e1f02218ed4e2f468ba6a77e80dc26add7efd775bd5b7b",
+        "tree_digest": "sha256:93bc0a22f594f72fb7b884abc27a0841251c6c7673e7ad5368daecd4aae05fe8",
+          "manifest_digest": "sha256:a82b126d4b7e50a343e217e444444ed755685f785e47f4abc0c913410a1b1d09",
           "components": [
             "mcp"
           ]
@@ -3532,6 +3654,94 @@
         },
         {
           "release_sequence": 4,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 5,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
@@ -4589,14 +4799,31 @@
           "package_version": "0.2.2",
           "manifest_name": "hubspot-developer",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+      "package_source": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "384fef6c0bcbc99439cebb4e0646ae8b8d5b8345",
+        "path": "plugins/hubspot-developer"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:467da672168c6d69e4df178ada4f0f606c9f7ec7bfa11744eece7e6c9ef275ba",
+          "manifest_digest": "sha256:84663d734bd6c3cb232a485f71ce9f9673d2a5dce58c097397debebcecbfaac5",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 5,
+          "package_version": "0.2.3",
+          "manifest_name": "hubspot-developer",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
             "revision": null,
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:467da672168c6d69e4df178ada4f0f606c9f7ec7bfa11744eece7e6c9ef275ba",
-          "manifest_digest": "sha256:84663d734bd6c3cb232a485f71ce9f9673d2a5dce58c097397debebcecbfaac5",
+        "tree_digest": "sha256:d6acbc5c5b50dfd4ae2cc699c80e7d660c44b3d0a2d455210954071136574d8b",
+          "manifest_digest": "sha256:f53098656008e93bfe91b5dfe6d07340b7d99b7dbfbff730749c3ec9273e6daf",
           "components": [
             "mcp"
           ]
@@ -4789,6 +5016,94 @@
         },
         {
           "release_sequence": 4,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 5,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
