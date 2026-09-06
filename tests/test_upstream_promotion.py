@@ -221,8 +221,15 @@ class UpstreamPromotionTests(unittest.TestCase):
             "sha512-kvvBK6/69iTRYnq0TKVyxVZs1CxYCJGojshQSP+2qaDb66A2xtI4zbCuqkZUWLkFGmHSRqhFf/ATpzH2UNKcwg==",
             workflow,
         )
+        self.assertIn('COPILOT_VERSION: "1.0.83"', workflow)
+        self.assertIn(
+            "COPILOT_NPM_INTEGRITY: "
+            "sha512-M8uZI0V0dahYV1KZij3nGDxaXEGG7I7YUZzQPI7NEZkL/83Nl/tNTbPdxKtdWZbOmWoXsPKXty/eEYoj6RHDhA==",
+            workflow,
+        )
         self.assertIn('npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity', workflow)
         self.assertIn('"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"', workflow)
+        self.assertIn('"@github/copilot@${COPILOT_VERSION}"', workflow)
         self.assertIn('node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"', workflow)
         self.assertIn('echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"', workflow)
 
