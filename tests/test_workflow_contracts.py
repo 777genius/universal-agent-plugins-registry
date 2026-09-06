@@ -2017,13 +2017,15 @@ sys.modules['catalog_process_isolation']=module
         body = (ROOT / ".github/workflows/upstream-package-e2e.yml").read_text()
         workflow = load(ROOT / ".github/workflows/upstream-package-e2e.yml")
         self.assertEqual(workflow["permissions"], {"attestations": "read", "contents": "read"})
-        self.assertIn('AGENTPLUGINS_VERSION: "0.1.34"', body)
-        self.assertIn("AGENTPLUGINS_COMMIT: 5ee12c478f7194686b30efbdac83b613a3f3d68a", body)
-        self.assertIn("AGENTPLUGINS_NPM_INTEGRITY: sha512-x4LoUwRJpPHzYaOUMSo1lbGxxEPozJSMShGLI/qa4aOrvasIP/hjEVfYSEtSDmuGfhRpCnOfa0RCufrOmSkndg==", body)
-        self.assertIn("0f1d5de082d79e8e109a5a822d863caafc48913916f43f211951af9c04988d4d", body)
+        self.assertIn('AGENTPLUGINS_VERSION: "0.1.51"', body)
+        self.assertIn("AGENTPLUGINS_COMMIT: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c", body)
+        self.assertIn("AGENTPLUGINS_NPM_INTEGRITY: sha512-R3KrYWcQAsJ3ogu0SA460rIJkUVisKrxtexFWg9lAX5PvuRtSb/UJCDCqCkhr+XezlNsB6olxZZJ80U6W2DWDQ==", body)
+        self.assertIn("bc2b5e546394eb176eebd97226972eec9c60f8f1518bc7981ead6ea752c57a53", body)
         self.assertIn("--pattern release-manifest.json", body)
         self.assertIn('manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]', body)
         self.assertEqual(body.count("gh attestation verify"), 1)
+        self.assertIn("--repo 777genius/universal-agent-plugins", body)
+        self.assertIn("--signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml", body)
         self.assertIn('--source-digest "$AGENTPLUGINS_COMMIT"', body)
         self.assertIn('mkdir -p "$run_root/home"/{.codex,.cursor,.kiro}', body)
         self.assertIn('{item["status"] for item in data["targets"]} == {"external_completed"}', body)
@@ -2205,7 +2207,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(job["strategy"]["matrix"]["package"][-1], {
             "id": "reviewed-chrome-short-alias", "source": "chrome-devtools",
             "repository": "777genius/universal-agent-plugins-registry", "revision": "signed-directory-release",
-            "plugin": "chrome-devtools", "version": ""})
+            "plugin": "chrome-devtools", "version": "1.8.0-uap.2"})
         install = next(step for step in job["steps"] if step.get("name") == "Install exact public npm wrapper without credentials")
         self.assertNotIn("env", install)
         for required in ('env -i PATH="$PATH"', 'NPM_CONFIG_CACHE="$tools_root/cache"',
@@ -2288,7 +2290,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('pnpm exec playwright install --with-deps chromium', body)
         for forbidden in ("GH_TOKEN", "UAP_SIGNED_SNAPSHOT_PATH", "pnpm generate"):
             self.assertNotIn(forbidden, body)
-        for required in ('https://777genius.github.io/universal-agent-plugins-registry/',
+        for required in ('https://777genius.github.io/universal-agent-plugins/',
                          'registry.snapshot_sequence >= 20', 'discovery.sequence >= 20',
                          'discovery.records.length >= 2000', 'navigator.clipboard.readText()',
                          'recently found community packages',
@@ -2299,6 +2301,8 @@ sys.modules['catalog_process_isolation']=module
                          "new URL('discovery/latest.json', base).pathname",
                          '![502, 503, 504].includes(status)',
                          'attempt <= 4',
+                         'assert.equal(actual.origin, expected.origin)',
+                         'normalizePath(actual.pathname)',
                          'discovery:upstash/context7//plugins/agent-plugins/context7'):
             self.assertIn(required, source)
         for forbidden in ('.route(', 'route.fulfill', 'addInitScript', 'executablePath', 'child_process'):

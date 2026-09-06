@@ -203,7 +203,7 @@ def observe_upstream_head(
     expected_head: str,
     env: dict[str, str],
 ) -> dict[str, str]:
-    """Observe an open PR head twice around its Git commit metadata lookup."""
+    """Observe an open or merged PR head twice around its commit lookup."""
 
     def pr() -> dict[str, Any]:
         return gh_json(
@@ -215,24 +215,36 @@ def observe_upstream_head(
                 "--repo",
                 repository,
                 "--json",
-                "headRefOid,state,url",
+                "headRefOid,state,url,mergedAt",
             ],
             env=env,
         )
 
+    def validate_pr(value: dict[str, Any], *, phase: str) -> None:
+        state = value.get("state")
+        if state not in {"OPEN", "MERGED"} or value.get("headRefOid") != expected_head:
+            raise EvidenceError(
+                f"upstream PR is not open or merged at the expected immutable head during {phase}"
+            )
+        merged_at = value.get("mergedAt")
+        if state == "OPEN" and merged_at is not None:
+            raise EvidenceError(f"open upstream PR unexpectedly has mergedAt during {phase}")
+        if state == "MERGED":
+            if not isinstance(merged_at, str):
+                raise EvidenceError(f"merged upstream PR is missing mergedAt during {phase}")
+            parse_rfc3339(merged_at)
+
     first = pr()
-    if first.get("state") != "OPEN" or first.get("headRefOid") != expected_head:
-        raise EvidenceError("upstream PR is not open at the expected immutable head")
+    validate_pr(first, phase="initial observation")
     commit = gh_json(
         gh,
         ["api", f"repos/{repository}/git/commits/{expected_head}"],
         env=env,
     )
     second = pr()
-    if second.get("state") != "OPEN" or second.get("headRefOid") != expected_head:
-        raise EvidenceError("upstream PR head changed during observation")
-    if first.get("url") != second.get("url"):
-        raise EvidenceError("upstream PR URL changed during observation")
+    validate_pr(second, phase="final observation")
+    if any(first.get(field) != second.get(field) for field in ("state", "url", "mergedAt")):
+        raise EvidenceError("upstream PR identity changed during observation")
     tree = commit.get("tree")
     committer = commit.get("committer")
     if not isinstance(tree, dict) or not isinstance(committer, dict):

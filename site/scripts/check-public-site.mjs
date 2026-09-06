@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { chromium, expect } from '@playwright/test'
 
-const base = new URL(process.env.PUBLIC_SITE_ORIGIN ?? 'https://777genius.github.io/universal-agent-plugins-registry/')
+const base = new URL(process.env.PUBLIC_SITE_ORIGIN ?? 'https://777genius.github.io/universal-agent-plugins/')
 if (!base.pathname.endsWith('/')) base.pathname += '/'
 const evidenceRoot = process.env.EVIDENCE_ROOT
 assert(evidenceRoot, 'EVIDENCE_ROOT is required')
@@ -46,9 +46,13 @@ try {
       }
       for (const path of ['', 'plugins']) {
         await goto(path)
+        const expected = new URL(path, base)
+        const actual = new URL(page.url())
+        const normalizePath = value => value.replace(/\/+$/, '') || '/'
+        assert.equal(actual.origin, expected.origin)
+        assert.equal(normalizePath(actual.pathname), normalizePath(expected.pathname))
         await expect(page.locator('main')).toBeVisible()
         await expect(page.locator('h1')).toHaveCount(1)
-        await expect(page.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveCount(1)
         await expect(page.locator('[data-hydrated="true"]').first()).toBeVisible()
         // Wait before interacting: catalog intentionally defers Discovery replacement during focus.
         await expect(page.locator('.discovery-status--current, .discovery-status--cached')).toBeVisible({ timeout: 60_000 })

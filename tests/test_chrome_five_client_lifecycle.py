@@ -152,11 +152,50 @@ class ChromeFiveClientLifecycleTests(unittest.TestCase):
 
     def test_head_observation_fails_when_pr_changes_during_metadata_lookup(self) -> None:
         values = [
-            {"state": "OPEN", "headRefOid": "a" * 40, "url": "https://github.com/o/r/pull/1"},
+            {"state": "OPEN", "headRefOid": "a" * 40, "url": "https://github.com/o/r/pull/1", "mergedAt": None},
             {"tree": {"sha": "b" * 40}, "committer": {"date": "2026-08-30T00:00:00Z"}},
-            {"state": "OPEN", "headRefOid": "c" * 40, "url": "https://github.com/o/r/pull/1"},
+            {"state": "OPEN", "headRefOid": "c" * 40, "url": "https://github.com/o/r/pull/1", "mergedAt": None},
         ]
         with mock.patch.object(runner, "gh_json", side_effect=values):
+            with self.assertRaises(runner.EvidenceError):
+                runner.observe_upstream_head(
+                    Path("/gh"),
+                    repository="o/r",
+                    pr_number=1,
+                    expected_head="a" * 40,
+                    env={},
+                )
+
+    def test_head_observation_accepts_merged_pr_at_exact_head(self) -> None:
+        pr = {
+            "state": "MERGED",
+            "headRefOid": "a" * 40,
+            "url": "https://github.com/o/r/pull/1",
+            "mergedAt": "2026-08-30T01:00:00Z",
+        }
+        values = [
+            pr,
+            {"tree": {"sha": "b" * 40}, "committer": {"date": "2026-08-30T00:00:00Z"}},
+            dict(pr),
+        ]
+        with mock.patch.object(runner, "gh_json", side_effect=values):
+            observed = runner.observe_upstream_head(
+                Path("/gh"),
+                repository="o/r",
+                pr_number=1,
+                expected_head="a" * 40,
+                env={},
+            )
+        self.assertEqual(observed["commit_sha"], "a" * 40)
+
+    def test_head_observation_rejects_closed_unmerged_pr(self) -> None:
+        value = {
+            "state": "CLOSED",
+            "headRefOid": "a" * 40,
+            "url": "https://github.com/o/r/pull/1",
+            "mergedAt": None,
+        }
+        with mock.patch.object(runner, "gh_json", return_value=value):
             with self.assertRaises(runner.EvidenceError):
                 runner.observe_upstream_head(
                     Path("/gh"),

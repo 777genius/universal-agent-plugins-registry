@@ -9,9 +9,9 @@ permissions:
 
 env:
   UAP_ACTIVE_REPOSITORY: ${{ github.repository }}
-  AGENTPLUGINS_VERSION: "0.1.34"
-  AGENTPLUGINS_COMMIT: 5ee12c478f7194686b30efbdac83b613a3f3d68a
-  AGENTPLUGINS_NPM_INTEGRITY: sha512-x4LoUwRJpPHzYaOUMSo1lbGxxEPozJSMShGLI/qa4aOrvasIP/hjEVfYSEtSDmuGfhRpCnOfa0RCufrOmSkndg==
+  AGENTPLUGINS_VERSION: "0.1.51"
+  AGENTPLUGINS_COMMIT: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c
+  AGENTPLUGINS_NPM_INTEGRITY: sha512-R3KrYWcQAsJ3ogu0SA460rIJkUVisKrxtexFWg9lAX5PvuRtSb/UJCDCqCkhr+XezlNsB6olxZZJ80U6W2DWDQ==
   CLAUDE_CODE_VERSION: "2.1.251"
   CLAUDE_CODE_NPM_INTEGRITY: sha512-eG+ZPPpW2Dbmnntf1Fz9/T9ewS8I8SKfc1tcU2PqSwmftfjRPP7BXPaCyLuZ8kvgTdiPnJi/2/JnTvTRieneEQ==
   CHROME_UPSTREAM_HEAD: 59380dd5c1af79973081d7b594262e86e24eb0b3
@@ -205,7 +205,7 @@ jobs:
             repository: 777genius/universal-agent-plugins-registry
             revision: signed-directory-release
             plugin: chrome-devtools
-            version: ""
+            version: 1.8.0-uap.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -226,16 +226,16 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/release"
           gh release download "agentplugins-v${AGENTPLUGINS_VERSION}" \
-            --repo 777genius/plugin-kit-ai \
+            --repo 777genius/universal-agent-plugins \
             --pattern "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
             --pattern checksums.txt \
             --pattern release-manifest.json \
             --dir "$RUNNER_TEMP/release"
           chmod +x "$RUNNER_TEMP/release/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
           cd "$RUNNER_TEMP/release"
-          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = 0f1d5de082d79e8e109a5a822d863caafc48913916f43f211951af9c04988d4d
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 5f0afce6498044369fa5076cdcefab2d82bffbbde309e6f98369c10d06209194
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 0547052ce2bf0e6788cf867c8182d8edff46aec076a51bf3019335f5de8d3aa3
+          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = bc2b5e546394eb176eebd97226972eec9c60f8f1518bc7981ead6ea752c57a53
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = ca47809c05bb5a409232d81e72284cd007c0a88bef6a6c2d416c9e1795d798f3
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = a602e493cc911af64b33a9f572c8925c719b6416e5672c744c0e6673159856b4
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib
@@ -256,8 +256,8 @@ jobs:
           PY
           for asset in "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
             gh attestation verify "$asset" \
-              --repo 777genius/plugin-kit-ai \
-              --signer-workflow 777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml \
+              --repo 777genius/universal-agent-plugins \
+              --signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml \
               --source-digest "$AGENTPLUGINS_COMMIT"
           done
           test "$(./agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 version)" = "agentplugins ${AGENTPLUGINS_VERSION}"
