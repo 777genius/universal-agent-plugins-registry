@@ -56,9 +56,9 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 283)
+        self.assertEqual(len(artifact["rows"]), 293)
         self.assertEqual(len(artifact["static_metadata"]), 2)
-        self.assertEqual(len(artifact["mcp_probes"]), 4)
+        self.assertEqual(len(artifact["mcp_probes"]), 6)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
         self.assertEqual({row["client"] for row in chrome}, set(gate.CATALOG_CLIENTS))
         self.assertTrue(
@@ -70,6 +70,9 @@ class CatalogContractTests(unittest.TestCase):
         active_sequence = next(item["release_sequence"] for item in bridge["release_policies"] if item["status"] == "active")
         self.assertEqual({row["release_sequence"] for row in chrome}, {active_sequence})
         self.assertTrue(all(row["fallback_reason"] for row in chrome))
+        context7_fallback = [row for row in artifact["rows"] if row["selector"] == "777genius/context7"]
+        self.assertEqual({row["client"] for row in context7_fallback}, set(gate.CATALOG_CLIENTS))
+        self.assertEqual({row["distribution_id"] for row in context7_fallback}, {"777genius/context7"})
         github = [row for row in artifact["rows"] if row["selector"] == "github/github"]
         self.assertEqual({row["client"] for row in github}, set(gate.CORE))
         self.assertEqual({row["distribution_id"] for row in github}, {"github/github"})
@@ -158,7 +161,7 @@ class CatalogContractTests(unittest.TestCase):
             gate.check_identity(data, selection, self.identity)
 
     def test_new_uncovered_target_policy_fails_closed(self):
-        distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/context7")
+        distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
         policy = next(item for item in distribution["release_policies"] if item["status"] == "active")
         policy["targets"][0]["delivery"] = "surprise"
         with self.assertRaisesRegex(ValueError, "uncovered target"):
@@ -168,8 +171,8 @@ class CatalogContractTests(unittest.TestCase):
         for change in ("reactivation", "new_release", "lower_floor"):
             with self.subTest(change=change):
                 self.snapshot, self.baseline = catalog(), catalog()
-                old = next(item for item in self.baseline["distributions"] if item["id"] == "777genius/context7")
-                new = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/context7")
+                old = next(item for item in self.baseline["distributions"] if item["id"] == "777genius/cloudflare")
+                new = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
                 if change == "reactivation":
                     old["status"] = "suspended"
                 elif change == "new_release":
@@ -192,7 +195,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_authentication_tightening_is_not_account_runtime_expansion(self):
         for snapshot, authentication in ((self.baseline, "not_required"), (self.snapshot, "required")):
-            distribution = next(item for item in snapshot["distributions"] if item["id"] == "777genius/context7")
+            distribution = next(item for item in snapshot["distributions"] if item["id"] == "777genius/cloudflare")
             for policy in distribution["release_policies"]:
                 for target in policy["targets"]:
                     target["authentication"] = authentication
@@ -737,14 +740,14 @@ class CatalogContractTests(unittest.TestCase):
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                self.assertEqual(lifecycle.call_count, 29)
+                self.assertEqual(lifecycle.call_count, 30)
                 default_call = next(call for call in lifecycle.call_args_list
                                     if call.args[2]["selector"] == "github/github")
                 self.assertEqual(default_call.args[1].name, "default-github")
                 self.assertEqual(default_call.args[3], gate.CORE)
-                self.assertEqual(acquire.call_count, 4)
+                self.assertEqual(acquire.call_count, 5)
                 self.assertEqual(static.call_count, 2)
-                self.assertEqual(probe.call_count, 4)
+                self.assertEqual(probe.call_count, 6)
                 self.assertFalse(args.sandbox.exists())
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 

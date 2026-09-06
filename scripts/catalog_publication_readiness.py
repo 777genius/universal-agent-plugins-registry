@@ -31,6 +31,9 @@ ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloud
                 "cloudflare-docs cloudflare-observability cloudflare-radar context7 docker-hub "
                 "figma firebase firecrawl github gitlab greptile heroku hubspot-crm hubspot-developer "
                 "linear neon notion playwright sentry statsig stripe supabase vercel".split())
+# Context7's upstream package is the short-name default. Keep its community
+# bridge in the fixed matrix as an explicit, independently installable fallback.
+QUALIFIED_FALLBACKS = {"fallback-context7": "777genius/context7"}
 CORE = ("codex", "cursor", "kiro")
 CATALOG_CLIENTS = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf")
 CHROME = CATALOG_CLIENTS
@@ -69,7 +72,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def lifecycle_step(args: argparse.Namespace, selector: str, step: str) -> None:
-    valid_selector = selector in ALIASES or (
+    valid_selector = selector in ALIASES or selector in QUALIFIED_FALLBACKS or (
         selector.startswith("default-") and selector.removeprefix("default-") in ALIASES
     )
     require(valid_selector and step in LIFECYCLE_STEPS, "unknown lifecycle diagnostic step")
@@ -157,6 +160,10 @@ def row_identity(selection: dict, client: str) -> dict:
 def plan(snapshot: dict) -> list[tuple[dict, tuple[str, ...]]]:
     # A new publication cannot silently shrink this accepted catalog matrix.
     selections = [(selected(snapshot, alias, CATALOG_CLIENTS), CATALOG_CLIENTS) for alias in ALIASES]
+    for case_id, selector in QUALIFIED_FALLBACKS.items():
+        selection = selected(snapshot, selector, CATALOG_CLIENTS)
+        selection["_case_id"] = case_id
+        selections.append((selection, CATALOG_CLIENTS))
     products = {product["id"]: product for product in snapshot["products"]}
     distributions = {distribution["id"]: distribution for distribution in snapshot["distributions"]}
     covered = {(selection["distribution_id"], selection["release_sequence"])
