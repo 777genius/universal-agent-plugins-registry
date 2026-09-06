@@ -57,7 +57,9 @@ def fetch(opener: urllib.request.OpenerDirector, url: str, maximum: int) -> byte
     return body
 
 
-def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict[str, object]:
+def observe_once(
+    origin: str, trusted_keys: Path, minimum_sequence: int, *, include_expiry: bool = False,
+) -> dict[str, object]:
     minimum_sequence = require_public_sequence(minimum_sequence, "minimum sequence")
     opener = urllib.request.build_opener(NoRedirect())
     origin = origin.rstrip("/")
@@ -95,7 +97,7 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
             "Discovery envelope",
             max_bytes=latest["fetch_contract"]["envelope_max_bytes"],
         )
-        return {
+        observation: dict[str, object] = {
             "observation_schema_version": 1,
             "origin": origin,
             "sequence": snapshot["sequence"],
@@ -106,6 +108,13 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
             "observed_at": format_timestamp(now),
             "latest_digest": sha256_digest(latest_body),
         }
+        if include_expiry:
+            observation.update({
+                "observation_schema_version": 2,
+                "feed": "discovery",
+                "expires_at": snapshot["expires_at"],
+            })
+        return observation
 
 
 def main() -> int:
@@ -115,6 +124,7 @@ def main() -> int:
     parser.add_argument("--minimum-sequence", required=True, type=parse_public_sequence)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--attempts", type=int, default=6)
+    parser.add_argument("--include-expiry", action="store_true", help="emit freshness observation schema 2")
     args = parser.parse_args()
     if not args.origin.startswith("https://") or not 1 <= args.attempts <= 6:
         print("Discovery observation failed: invalid observer arguments", file=sys.stderr)
@@ -122,7 +132,10 @@ def main() -> int:
     error: Exception | None = None
     for attempt in range(args.attempts):
         try:
-            observation = observe_once(args.origin, args.trusted_keys, args.minimum_sequence)
+            observation = observe_once(
+                args.origin, args.trusted_keys, args.minimum_sequence,
+                include_expiry=args.include_expiry,
+            )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(canonical_json(observation))
             print(f"observed Discovery sequence {observation['sequence']} with {observation['record_count']} records")
