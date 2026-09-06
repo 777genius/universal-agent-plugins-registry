@@ -132,7 +132,7 @@ public tuple is:
   reviewed public package in the future-publish lane; the 0.1.51 package itself
   remains immutable.
 - GitHub-hosted run `34018131609` validates the current public npm package,
-  reviewed and discovered packages across ten client targets, covering managed
+  reviewed and discovered packages across eight client targets, covering managed
   installation and prepared-package delivery, plus the live desktop/mobile site
   against the merged registry code. It includes the Chrome DevTools lifecycle for
   Claude Code, Gemini CLI, OpenCode, Cline, and Windsurf, plus reviewed-package
@@ -142,8 +142,8 @@ public tuple is:
   Discovery 40, and Security 8 to the product origin before the final consumer
   smoke; all mirrored feed files match the Registry origin byte for byte.
 - Catalog readiness run `34014230574` passed 30 lifecycle cases, 293 explicit
-  target rows, and four credential-free MCP probes before Directory 37 was
-  published.
+  target rows across the full ten-client matrix, and four credential-free MCP
+  probes before Directory 37 was published.
 - The public browser artifact covers 1440x1000 and 390x844 viewports with no UI
   errors or horizontal overflow. It verifies exact reviewed and Discovery
   commands plus clipboard output without executing either command in the page.
