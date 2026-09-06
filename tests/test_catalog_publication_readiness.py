@@ -158,7 +158,7 @@ class CatalogContractTests(unittest.TestCase):
             gate.check_identity(data, selection, self.identity)
 
     def test_new_uncovered_target_policy_fails_closed(self):
-        distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "upstash/context7")
+        distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/context7")
         policy = next(item for item in distribution["release_policies"] if item["status"] == "active")
         policy["targets"][0]["delivery"] = "surprise"
         with self.assertRaisesRegex(ValueError, "uncovered target"):
@@ -168,8 +168,8 @@ class CatalogContractTests(unittest.TestCase):
         for change in ("reactivation", "new_release", "lower_floor"):
             with self.subTest(change=change):
                 self.snapshot, self.baseline = catalog(), catalog()
-                old = next(item for item in self.baseline["distributions"] if item["id"] == "upstash/context7")
-                new = next(item for item in self.snapshot["distributions"] if item["id"] == "upstash/context7")
+                old = next(item for item in self.baseline["distributions"] if item["id"] == "777genius/context7")
+                new = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/context7")
                 if change == "reactivation":
                     old["status"] = "suspended"
                 elif change == "new_release":
@@ -177,7 +177,7 @@ class CatalogContractTests(unittest.TestCase):
                         policy["release_sequence"] += 100
                 else:
                     for policy in old["release_policies"]:
-                        policy["minimum_installer_version"] = "0.1.25"
+                        policy["minimum_installer_version"] = "0.1.27"
                 with self.assertRaisesRegex(ValueError, "uncovered"):
                     self.expected()
 
@@ -192,7 +192,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_authentication_tightening_is_not_account_runtime_expansion(self):
         for snapshot, authentication in ((self.baseline, "not_required"), (self.snapshot, "required")):
-            distribution = next(item for item in snapshot["distributions"] if item["id"] == "upstash/context7")
+            distribution = next(item for item in snapshot["distributions"] if item["id"] == "777genius/context7")
             for policy in distribution["release_policies"]:
                 for target in policy["targets"]:
                     target["authentication"] = authentication
