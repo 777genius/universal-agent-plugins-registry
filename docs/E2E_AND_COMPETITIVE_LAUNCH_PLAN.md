@@ -1,6 +1,6 @@
 # Universal Agent Plugins: final architecture and E2E launch plan
 
-Status: implemented and E2E-closed 2026-09-04.
+Status: implemented and E2E-closed 2026-09-06.
 
 This is the authoritative plan for the completed repository split and the
 production E2E closure. Historical evidence is kept in Git history; this file
@@ -42,8 +42,10 @@ breaking API migration and is not part of this launch.
   packages; they are not silently republished under the facade name.
 - A short name resolves only to a reviewed Directory default. Discovery results
   always retain publisher, repository, exact commit, package path, and digest.
-- Targets are explicit. `--target codex,cursor` means those two clients; the CLI
-  never silently installs into every detected client.
+- Scripts select targets explicitly. In an interactive terminal, omitting
+  `--target` detects compatible installed clients and presents them all selected
+  for confirmation; `--target codex,cursor` bypasses that prompt and means only
+  those two clients.
 - Directory/Discovery are optional discovery services. Explicit local paths and
   immutable Git selectors continue to work when either feed is unavailable.
 - Schema validity, preparation, installation, activation, OAuth, and runtime
@@ -93,36 +95,53 @@ static Pages mirror is a byte-for-byte verified cache, not a second registry.
 Discovery is an index of schema-conformant packages and popularity signals, not
 manual certification or runtime proof.
 
-## 4. Current production closure (verified 2026-09-04)
+## 4. Current production closure (verified 2026-09-06)
 
 The previous release and publisher notes remain in Git history. The current
 public tuple is:
 
-- CLI main: `b842323c2babfbd984328e637f723a5d8dc7a95d` (public lifecycle E2E
-  hardening and all renamed Action references merged after the 0.1.44 release).
-- Registry evidence checkpoint: `c53462a82183575d8fcf60a81be8cc3c2e719f7a`.
+- CLI main: `b0b4268e964fa5808debbcc998bd174670faeb6e`; the public release commit is
+  `aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c`.
+- Registry evidence checkpoint: `5db2c89c99d876ecb2be8a884705e50434489c10`.
   This documentation-only closure may advance registry `main` without changing
   the signed production tuple below.
-- Public GitHub release: [`agentplugins-v0.1.44`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.44), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
-- npm: `universal-agent-plugins@0.1.44` is public and is the `latest` tag. The
+- Public GitHub release: [`agentplugins-v0.1.51`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.51), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
+- npm: `universal-agent-plugins@0.1.51` is public and is the `latest` tag. The
   Trusted Publisher workflow is working; no token workaround is used.
-- Directory sequence 29: 26 products and 30 distributions. Public snapshot
-  digest: `sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1`.
-- Discovery sequence 30: 2,875 records, source commit
-  `1388c89521bca4b53454776b584ee0c4996b31c0`, publication `33791156432-1`.
+- Directory sequence 36: 28 products and 36 distributions. Public snapshot
+  digest: `sha256:2d3fa2b6c88a50cd3143a8d32b56a4560462b2b0328c3f29e40c37b07e227b16`.
+- Discovery sequence 39: 3,024 records, source commit
+  `3a994c89e94419ea389c6302b964b75d35b628e2`, publication `34003029529-1`.
   The signed envelope, snapshot, search projection, and latest pointer are
   public and return HTTP 200.
+- Security sequence 5: 2,751 subjects in the signed snapshot; 2,746 checks
+  completed and five upstream sources were temporarily unavailable. Publication
+  `34004900232-1`, digest
+  `sha256:9f27ad24d7fa5bec57bca83302797d765907cb478bfb3c611bd41addf83b880e`.
 - Public CLI search resolves reviewed short names before Discovery and works
   from a fresh home without executing an indexed package.
-- A fresh isolated exact-source lifecycle passed for `context7` on OpenCode:
+- A fresh isolated public Directory lifecycle passed for the upstream
+  `github/github` distribution on Codex and Cursor:
+  `add -> info -> update(no change) -> remove --purge-data -> list(empty)`.
+- A separate exact-source lifecycle passed for `context7` on OpenCode:
   `add -> info -> repair -> remove`. Repair restored a deliberately modified
-  client projection from the pinned source commit, and remove left no active
-  client binding while retaining ownership-verified data.
+  client projection from the pinned source commit.
 - The public npm workflow proves synthetic multi-target
   `add -> info -> update -> remove` for explicit `codex,cursor,kiro` targets.
   The merged E2E hardening workflow also proves immutable-source repair for a
-  reviewed public package in the future-publish lane; the 0.1.44 package itself
+  reviewed public package in the future-publish lane; the 0.1.51 package itself
   remains immutable.
+- GitHub-hosted run `34009449785` validates the current public npm package,
+  reviewed and discovered packages across eight client targets, covering managed
+  installation and prepared-package delivery, plus the live desktop/mobile site
+  against the merged registry code. The site displays eight automatic and two
+  final-step delivery modes; this is not proof that runtime or activation ran in
+  all ten clients.
+  Compatibility mirror run `34009298114` promoted Directory 36, Discovery 39,
+  and Security 5 to the product origin before the final consumer smoke.
+- The public browser artifact covers 1440x1000 and 390x844 viewports with no UI
+  errors or horizontal overflow. It verifies exact reviewed and Discovery
+  commands plus clipboard output without executing either command in the page.
 - No real user project, OAuth credential, vendor account, Docker container, new
   VM, LXC instance, or snapshot was used. Heavy checks ran on GitHub-hosted CI;
   local checks used disposable homes and synthetic or public reviewed packages.
@@ -225,7 +244,7 @@ gh api repos/777genius/universal-agent-plugins/commits/main --jq .sha
 gh api repos/777genius/universal-agent-plugins-registry/commits/main --jq .sha
 gh run list --repo 777genius/universal-agent-plugins --limit 20
 gh run list --repo 777genius/universal-agent-plugins-registry --limit 20
-gh release view agentplugins-v0.1.44 --repo 777genius/universal-agent-plugins
+gh release view agentplugins-v0.1.51 --repo 777genius/universal-agent-plugins
 npm view universal-agent-plugins version dist-tags repository.url homepage
 ```
 
@@ -252,24 +271,27 @@ as environment limitations, not fixed by changing production contracts.
       separate.
 - [x] Agent Plugins 1.0 `plugin.json` is authoritative; `plugin.yaml` is legacy
       authoring input only.
-- [x] Six native `agentplugins-v0.1.44` artifacts, checksums, and manifest are
+- [x] Six native `agentplugins-v0.1.51` artifacts, checksums, and manifest are
       public and verified.
-- [x] Directory 29 and Discovery 30 are signed, complete, public, and distinct;
-      Discovery has 2,875 records at the current checkpoint.
+- [x] Directory 36, Discovery 39, and Security 5 are signed, complete, public,
+      and distinct; Discovery has 3,024 records at the current checkpoint.
 - [x] CLI Pages product site and byte-for-byte compatibility mirror are green.
 - [x] Public CLI Discovery search works without package execution.
-- [x] Public npm `0.1.44` add/info/update/remove proof exists for explicit
+- [x] Public npm `0.1.51` add/info/update/remove proof exists for explicit
       Codex/Cursor/Kiro targets in a fresh home.
+- [x] Public npm `0.1.51` resolves the upstream `github/github` distribution and
+      completes add/info/no-change-update/remove for Codex and Cursor in a fresh
+      disposable home.
 - [x] Immutable public registry-source `context7` add/info/repair/remove proof
       passes for OpenCode in a fresh disposable home.
 - [x] Local/exact Git installs and fail-closed trust separation are covered by CI.
 - [x] Multi-target planning, rollback, ownership cleanup, and no-real-project
       safety contracts are covered by focused tests and CI.
 - [x] npm Trusted Publisher publish permission is active for the renamed CLI.
-- [x] npm `0.1.44` is published with provenance and verified from a clean project.
-- [x] Post-publish `0.1.44` lifecycle evidence is recorded here.
+- [x] npm `0.1.51` is published with provenance and verified from a clean project.
+- [x] Post-publish `0.1.51` lifecycle evidence is recorded here.
 - [x] Final GitHub, Pages, Registry, npm, and Actions smoke is green at the
-      Directory 29 / Discovery 30 production tuple.
+      Directory 36 / Discovery 39 / Security 5 production tuple.
 
 ## 11. Delivery order from the current state
 
@@ -315,18 +337,19 @@ Do not include tokens, cookies, private filesystem paths, account names, or raw
 OAuth material. A package being indexed or schema-valid must never be described
 as manually runtime-tested unless the corresponding E2E evidence is present.
 
-### Final production checkpoint (2026-09-04)
+### Final production checkpoint (2026-09-06)
 
 ```text
-CLI main SHA: b842323c2babfbd984328e637f723a5d8dc7a95d
-GitHub release/tag: agentplugins-v0.1.44 (six platform builds and native runtime E2E green)
-Registry evidence checkpoint: c53462a82183575d8fcf60a81be8cc3c2e719f7a
-Directory: sequence 29, publication 33768064981, snapshot sha256:dc41e827648231c22ac8cfb3cafb76f6dc0f5e406d28439f8ac297a7aa7428c1
-Directory source/ledger: 1388c89521bca4b53454776b584ee0c4996b31c0 / a08ffff17deafe1a01098fc46d847c827e025f5c
-Discovery: sequence 30, 2,875 records, HTTP 200 pointers/snapshot/envelope/search
-Catalog readiness: 260 explicit target rows, 4 MCP package probes, 11 source-policy cases, all passed in fresh credential-free roots
-Pages: HTTP 200, 68 same-origin assets checked, 0 asset failures, 0 legacy-base references
-CLI search: public Directory/Discovery sequence 30, deterministic results, reviewed context7 first
-npm: 0.1.44 public latest with Trusted Publisher provenance; synthetic 3-target lifecycle and merged future-publish immutable-source repair lane green
+CLI main SHA: b0b4268e964fa5808debbcc998bd174670faeb6e
+CLI release SHA/tag: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c / agentplugins-v0.1.51 (six platform builds and native runtime E2E green)
+Registry evidence checkpoint: 5db2c89c99d876ecb2be8a884705e50434489c10
+Directory: sequence 36, publication 33999541782, snapshot sha256:2d3fa2b6c88a50cd3143a8d32b56a4560462b2b0328c3f29e40c37b07e227b16
+Directory source/signed/materialized/shared ledger: b7e5c1057c425ba10665913cbc2f51c7542d98ef / 2cc8f63ef842b7f6d3e6bf7bb5a30905805d2350 / 4bc0b22633dcf8182f5023ff5113d184f10fe116 / 3796029af3d797436da6b3cac281f2750fa27a8a
+Discovery: sequence 39, 3,024 records, publication 34003029529-1, snapshot sha256:ad02eeb8f4b0493538f9d46dd14b7bacb22f0258eee445ce7b1d50a33bcac543, HTTP 200 pointers/snapshot/envelope/search
+Security: sequence 5, 2,751 subjects, publication 34004900232-1, snapshot sha256:9f27ad24d7fa5bec57bca83302797d765907cb478bfb3c611bd41addf83b880e
+Catalog readiness: 283 explicit target rows, 4 MCP package probes, 11 source-policy cases, all passed in fresh credential-free roots (run 34006985551)
+Pages: compatibility mirror 34009298114 and final desktop/mobile public consumer smoke 34009449785 green at Directory 36 / Discovery 39 / Security 5
+CLI search: public Directory 36 / Discovery 39, deterministic reviewed-first results
+npm: 0.1.51 public latest with Trusted Publisher provenance; synthetic 3-target lifecycle and upstream github/github Codex/Cursor lifecycle green
 OAuth/account runtime: not claimed by this checkpoint
 ```
