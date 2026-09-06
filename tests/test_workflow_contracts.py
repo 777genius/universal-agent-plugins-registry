@@ -1511,7 +1511,15 @@ sys.modules['catalog_process_isolation']=module
         preflight_body = yaml.safe_dump(publisher_preflight)
         self.assertIn("DISCOVERY_PUBLISHER_APP_PRIVATE_KEY", preflight_body)
         self.assertIn("permission-contents: write", preflight_body)
-        self.assertIn("gh api /installation --jq '{app_id}'", commands(publisher_preflight))
+        publisher_identity = next(
+            step for step in publisher_preflight["steps"]
+            if step.get("name") == "Record non-secret publisher integration identity"
+        )
+        self.assertEqual(
+            publisher_identity["env"]["PUBLISHER_APP_ID"],
+            "${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}",
+        )
+        self.assertIn('int(os.environ["PUBLISHER_APP_ID"])', publisher_identity["run"])
         identity_upload = next(step for step in publisher_preflight["steps"]
                                if step.get("with", {}).get("name") == "discovery-publisher-identity-${{ github.run_id }}")
         self.assertEqual(identity_upload["with"]["retention-days"], "1")
