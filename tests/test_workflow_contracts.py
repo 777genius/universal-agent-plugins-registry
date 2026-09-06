@@ -1670,6 +1670,13 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("permission-contents: write", signer_body)
         deploy_body = commands(workflow["jobs"]["deploy"])
         self.assertIn("directory_publication_cas.py staged-lineage-verify", deploy_body)
+        self.assertIn("bootstrap_sequence", deploy_body)
+        self.assertIn("sequence_boundaries.py validate", deploy_body)
+        self.assertIn('if test -n "${bootstrap_sequence:-}"', deploy_body)
+        self.assertLess(
+            deploy_body.index('if test -n "${bootstrap_sequence:-}"'),
+            deploy_body.index('test "${materialized_commit}" = "${production_commit}"'),
+        )
         self.assertIn("exact-security-tree/discovery/ production-pages-tree/discovery/", deploy_body)
         self.assertIn("exact-security-tree/security/ production-pages-tree/security/", deploy_body)
         self.assertIn("diff --name-only -- . ':!discovery' ':!security'", deploy_body)
