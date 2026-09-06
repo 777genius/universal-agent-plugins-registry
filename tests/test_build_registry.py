@@ -1348,6 +1348,36 @@ class DirectoryDomainTests(unittest.TestCase):
         ):
             registry.validate_active_local_runtime_closures(source)
 
+    def test_reviewed_runtime_upgrade_allowlists_are_exact(self) -> None:
+        self.assertEqual(
+            registry.LOCKED_NPM_SECURITY_OVERRIDES[("@upstash/context7-mcp", "4.0.5")],
+            {"qs": "6.16.0"},
+        )
+        self.assertEqual(
+            registry.LOCKED_NPM_SECURITY_OVERRIDES[("@hubspot/cli", "8.14.0")],
+            {"@sentry/node": "10.71.0", "qs": "6.16.0"},
+        )
+        self.assertEqual(
+            registry.LOCKED_NPM_SECURITY_OVERRIDES[("firebase-tools", "15.29.0")],
+            {"@google-cloud/pubsub": "6.0.1", "gaxios": "8.0.0", "qs": "6.16.0"},
+        )
+        self.assertNotIn(
+            "stream-json",
+            registry.LOCKED_NPM_SECURITY_OVERRIDES[("firebase-tools", "15.29.0")],
+        )
+        self.assertIn(
+            ("@hubspot/cli", "8.14.0"),
+            registry.LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST,
+        )
+        self.assertIn(
+            ("firebase-tools", "15.29.0"),
+            registry.LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST,
+        )
+        self.assertIn(
+            ("@hubspot/cli", "8.14.0"),
+            registry.LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST,
+        )
+
     def test_firebase_locked_runtime_is_active_at_sequence_four(self) -> None:
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "firebase")
         source = self.source()
