@@ -55,7 +55,10 @@ try {
         assert.equal(normalizePath(actual.pathname), normalizePath(expected.pathname))
         await expect(page.locator('main')).toBeVisible()
         await expect(page.locator('h1')).toHaveCount(1)
-        await expect(page.locator('[data-hydrated="true"]').first()).toBeVisible()
+        // Mobile keeps desktop filter controls hydrated but intentionally hidden.
+        // Presence of a true marker proves client hydration without coupling the
+        // smoke to which responsive control happens to be first in DOM order.
+        await expect.poll(() => page.locator('[data-hydrated="true"]').count()).toBeGreaterThan(0)
         // Wait before interacting: catalog intentionally defers Discovery replacement during focus.
         await expect(page.locator('.catalog')).toHaveAttribute('data-discovery-state', /current|cached/, { timeout: 60_000 })
         await fit()

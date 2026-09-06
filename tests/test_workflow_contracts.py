@@ -2303,6 +2303,7 @@ sys.modules['catalog_process_isolation']=module
                          'attempt <= 4',
                          'assert.equal(actual.origin, expected.origin)',
                          'normalizePath(actual.pathname)',
+                         "page.locator('[data-hydrated=\"true\"]').count()",
                          "new URL('discovery/.browser-lkg.json', siteBase)",
                          "window.__NUXT__.state['$sregistry-index']",
                          'discovery:vectorize-io/hindsight//hindsight-integrations/agent-plugin'):
