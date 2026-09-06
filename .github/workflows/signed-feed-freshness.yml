@@ -1,0 +1,58 @@
+name: Signed feed freshness
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-feed-freshness
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify production feeds have more than 48 hours remaining
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned verification dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+      - name: Authenticate current public feeds
+        run: |
+          mkdir -p "$RUNNER_TEMP/uap-feed-observations"
+          python3 scripts/observe_directory_publication.py \
+            --origin https://777genius.github.io/universal-agent-plugins-registry/registry/schemas/1 \
+            --trusted-keys registry/publication/trusted-keys.json \
+            --minimum-sequence 1 \
+            --attempts 3 \
+            --output "$RUNNER_TEMP/uap-feed-observations/directory.json"
+          python3 scripts/observe_discovery_index.py \
+            --origin https://777genius.github.io/universal-agent-plugins-registry/discovery \
+            --trusted-keys registry/discovery/trusted-keys.json \
+            --minimum-sequence 1 \
+            --attempts 3 \
+            --include-expiry \
+            --output "$RUNNER_TEMP/uap-feed-observations/discovery.json"
+          python3 scripts/observe_security_index.py \
+            --origin https://777genius.github.io/universal-agent-plugins-registry/security \
+            --trusted-keys registry/discovery/trusted-keys.json \
+            --minimum-sequence 1 \
+            --attempts 3 \
+            --include-expiry \
+            --output "$RUNNER_TEMP/uap-feed-observations/security.json"
+      - name: Require more than 48 hours of signed validity
+        run: |
+          python3 scripts/check_signed_feed_freshness.py \
+            --minimum-hours 48 \
+            --observation "$RUNNER_TEMP/uap-feed-observations/directory.json" \
+            --observation "$RUNNER_TEMP/uap-feed-observations/discovery.json" \
+            --observation "$RUNNER_TEMP/uap-feed-observations/security.json"

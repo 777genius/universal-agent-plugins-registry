@@ -24,6 +24,7 @@ from scripts.directory_publication import (
     sha256_digest,
     validate_with_schema,
 )
+from scripts.discovery_publication import cryptography_ed25519_verify
 from scripts.security_publication import LATEST_SCHEMA, MAX_LATEST_BYTES, load_latest
 from scripts.sequence_boundaries import parse_public_sequence, require_public_sequence
 
@@ -53,7 +54,9 @@ def fetch(opener: urllib.request.OpenerDirector, url: str, maximum: int) -> byte
     return body
 
 
-def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict[str, object]:
+def observe_once(
+    origin: str, trusted_keys: Path, minimum_sequence: int, *, include_expiry: bool = False,
+) -> dict[str, object]:
     minimum_sequence = require_public_sequence(minimum_sequence, "minimum sequence")
     opener = urllib.request.build_opener(NoRedirect())
     origin = origin.rstrip("/")
@@ -76,7 +79,7 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
             destination = feed / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(fetch(opener, origin + "/" + relative, latest["fetch_contract"][maximum_field]))
-        loaded = load_latest(feed, trusted_keys)
+        loaded = load_latest(feed, trusted_keys, signature_verifier=cryptography_ed25519_verify)
         if loaded is None:
             raise PublicationError("Security latest pointer disappeared")
         snapshot, _pointer = loaded
@@ -89,7 +92,7 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
             read_bytes_bounded(feed / latest["envelope_path"], latest["fetch_contract"]["envelope_max_bytes"]),
             "Security envelope", max_bytes=latest["fetch_contract"]["envelope_max_bytes"],
         )
-        return {
+        observation: dict[str, object] = {
             "observation_schema_version": 1,
             "origin": origin,
             "sequence": snapshot["sequence"],
@@ -102,6 +105,13 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
             "observed_at": format_timestamp(now),
             "latest_digest": sha256_digest(latest_body),
         }
+        if include_expiry:
+            observation.update({
+                "observation_schema_version": 2,
+                "feed": "security",
+                "expires_at": snapshot["expires_at"],
+            })
+        return observation
 
 
 def main() -> int:
@@ -111,6 +121,7 @@ def main() -> int:
     parser.add_argument("--minimum-sequence", required=True, type=parse_public_sequence)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--attempts", type=int, default=6)
+    parser.add_argument("--include-expiry", action="store_true", help="emit freshness observation schema 2")
     args = parser.parse_args()
     if not args.origin.startswith("https://") or not 1 <= args.attempts <= 6:
         print("Security observation failed: invalid observer arguments", file=sys.stderr)
@@ -118,7 +129,10 @@ def main() -> int:
     error: Exception | None = None
     for attempt in range(args.attempts):
         try:
-            observation = observe_once(args.origin, args.trusted_keys, args.minimum_sequence)
+            observation = observe_once(
+                args.origin, args.trusted_keys, args.minimum_sequence,
+                include_expiry=args.include_expiry,
+            )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(canonical_json(observation))
             print(f"observed Security sequence {observation['sequence']} with {observation['checked']} checked subjects")
