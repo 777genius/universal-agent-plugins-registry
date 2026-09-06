@@ -357,16 +357,22 @@ jobs:
           production_commit="$(git -C exact-security-tree ls-remote --refs origin "${marker_ref}" | awk '{ print $1 }')"
           if test -z "${production_commit}"; then
             production_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bootstrap_materialized_commit"])' "${contract}")"
+            bootstrap_sequence="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bootstrap_sequence"])' "${contract}")"
           fi
           [[ "${production_commit}" =~ ^[0-9a-f]{40}$ ]]
           git -C exact-security-tree fetch --no-tags origin "${production_commit}"
           git -C exact-security-tree merge-base --is-ancestor "${production_commit}" "${SECURITY_LEDGER_COMMIT}"
           production_sequence="$(git -C exact-security-tree show "${production_commit}:registry/schemas/1/latest.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sequence"])')"
+          test "$(python3 trusted-source/scripts/sequence_boundaries.py validate "${production_sequence}")" = "${production_sequence}"
           production_ref="${tag_prefix}$(printf '%020d' "${production_sequence}")"
           production_signed="$(git -C exact-security-tree rev-parse "${production_ref}^{commit}")"
           materialized_commit="$(python3 trusted-source/scripts/directory_publication_cas.py staged-lineage-verify \
             --repo exact-security-tree --signed "${production_signed}" --current "${production_commit}")"
-          test "${materialized_commit}" = "${production_commit}"
+          [[ "${materialized_commit}" =~ ^[0-9a-f]{40}$ ]]
+          if test -n "${bootstrap_sequence:-}"; then
+            test "${production_sequence}" = "${bootstrap_sequence}"
+            test "${materialized_commit}" = "${production_commit}"
+          fi
           git -C exact-security-tree worktree add --detach ../production-pages-tree "${production_commit}"
           echo "production_commit=${production_commit}" >> "$GITHUB_ENV"
       - name: Overlay exact signed Discovery and Security feeds
