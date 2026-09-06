@@ -59,11 +59,10 @@ jobs:
           permission-contents: write
       - name: Record non-secret publisher integration identity
         env:
-          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+          PUBLISHER_APP_ID: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
         run: |
           mkdir publisher-identity
-          gh api /installation --jq '{app_id}' > publisher-identity/installation.json
-          python3 -c 'import json; value=json.load(open("publisher-identity/installation.json")); assert type(value.get("app_id")) is int and value["app_id"] > 0'
+          python3 -c 'import json,os; app_id=int(os.environ["PUBLISHER_APP_ID"]); assert app_id > 0; json.dump({"app_id": app_id}, open("publisher-identity/installation.json", "w"))'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: discovery-publisher-identity-${{ github.run_id }}
