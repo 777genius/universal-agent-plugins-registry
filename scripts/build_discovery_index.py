@@ -65,11 +65,12 @@ MAX_PREVIOUS_SNAPSHOT_BYTES = 16 << 20
 # windows such as the 75-second delay observed in production.
 MAX_GITHUB_RETRY_DELAY_SECONDS = 120
 MAX_GITHUB_SERVER_RETRY_DELAY_SECONDS = 30
-# GitHub secondary search limits can remain active through the old six-attempt
-# window even while the returned retry hint is already shrinking. Two bounded
-# attempts let that window close without turning a transient throttle into a
-# whole-scan failure.
-MAX_GITHUB_REQUEST_ATTEMPTS = 8
+# GitHub secondary search limits can remain active through eight attempts while
+# the returned retry hint is still shrinking. Keep four bounded attempts beyond
+# that observed production window so a cooling limiter does not abort the whole
+# scan. Per-attempt sleeps remain capped above, so persistent failures still
+# terminate deterministically.
+MAX_GITHUB_REQUEST_ATTEMPTS = 12
 CODE_SEARCH_REQUEST_INTERVAL_SECONDS = 6.5
 REPOSITORY_GRAPHQL_BATCH = 50
 SEARCH_STABILITY_ATTEMPTS = 3
