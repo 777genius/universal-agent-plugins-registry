@@ -65,6 +65,11 @@ MAX_PREVIOUS_SNAPSHOT_BYTES = 16 << 20
 # windows such as the 75-second delay observed in production.
 MAX_GITHUB_RETRY_DELAY_SECONDS = 120
 MAX_GITHUB_SERVER_RETRY_DELAY_SECONDS = 30
+# GitHub secondary search limits can remain active through the old six-attempt
+# window even while the returned retry hint is already shrinking. Two bounded
+# attempts let that window close without turning a transient throttle into a
+# whole-scan failure.
+MAX_GITHUB_REQUEST_ATTEMPTS = 8
 CODE_SEARCH_REQUEST_INTERVAL_SECONDS = 6.5
 REPOSITORY_GRAPHQL_BATCH = 50
 SEARCH_STABILITY_ATTEMPTS = 3
@@ -156,7 +161,7 @@ class GitHubAPI:
         url = self.origin + "/" + path.lstrip("/") + query
         encoded = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         code_search = path.lstrip("/") == "search/code"
-        for attempt in range(6):
+        for attempt in range(MAX_GITHUB_REQUEST_ATTEMPTS):
             request = urllib.request.Request(url, headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": "Bearer " + self.token,
@@ -182,7 +187,10 @@ class GitHubAPI:
                     detail = error.read(4096).decode("utf-8", "replace")
                 except OSError as body_error:
                     detail = f"<unable to read response body: {type(body_error).__name__}>"
-                if error.code not in {403, 429, 500, 502, 503, 504} or attempt == 5:
+                if (
+                    error.code not in {403, 429, 500, 502, 503, 504}
+                    or attempt + 1 == MAX_GITHUB_REQUEST_ATTEMPTS
+                ):
                     raise GitHubHTTPError(error.code, path, detail) from error
                 secondary_limit = error.code in {403, 429}
                 delay_cap = (
@@ -211,7 +219,7 @@ class GitHubAPI:
                         delay = max(delay, message_delay)
                 time.sleep(max(1, min(delay, delay_cap)))
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
-                if attempt == 5:
+                if attempt + 1 == MAX_GITHUB_REQUEST_ATTEMPTS:
                     raise DiscoveryError(f"GitHub API {path} failed: {error}") from error
                 time.sleep(min(attempt + 1, 5))
         raise DiscoveryError(f"GitHub API {path} exhausted retries")
