@@ -41,9 +41,9 @@ the explicit preview exception and is not represented as stable:
 
 - `chrome-devtools-mcp@1.8.0`
 - `@playwright/mcp@0.0.80`
-- `@upstash/context7-mcp@4.0.3`
-- `firebase-tools@15.28.1`
-- `@hubspot/cli@8.14.0-beta.1` (preview prerelease; not a stable-upstream dependency claim)
+- `@upstash/context7-mcp@4.0.5`
+- `firebase-tools@15.29.0`
+- `@hubspot/cli@8.14.0`
 
 The Docker Hub package is pinned to the multi-architecture OCI digest recorded
 in `plugins/docker-hub/mcp.json`.

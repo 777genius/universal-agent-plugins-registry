@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@hubspot/cli": "8.14.0-beta.1"
+    "@hubspot/cli": "8.14.0"
   },
   "overrides": {
-    "@sentry/node": "10.71.0"
+    "@sentry/node": "10.71.0",
+    "qs": "6.16.0"
   }
 }

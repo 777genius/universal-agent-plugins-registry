@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "package": "@upstash/context7-mcp",
-  "version": "4.0.3",
+  "version": "4.0.5",
   "entrypoint": "node_modules/@upstash/context7-mcp/dist/index.js",
-  "package_lock_sha256": "sha256:178b7cf8c56199752dfb9810f101cf082a47aabe9566c88a319521087d43f056",
+  "package_lock_sha256": "sha256:f6a069886d0f02c570bba10bda91bab2a1cce95b6b5e96c2fa1f164b4aa573d4",
   "omit_optional": false
 }

@@ -67,16 +67,16 @@ binding is required.
 
 ## Dependency pins
 
-Verified against registry releases on 2026-09-05. The HubSpot pin is an
-explicit preview prerelease; the other rows are stable releases:
+Verified against registry releases on 2026-09-06. All listed npm pins are
+stable releases:
 
 | Runtime dependency | Pin |
 | --- | --- |
 | `chrome-devtools-mcp` | `1.8.0` |
 | `@playwright/mcp` | `0.0.80` |
-| `@upstash/context7-mcp` | `4.0.3` |
-| `firebase-tools` | `15.28.1` |
-| `@hubspot/cli` | `8.14.0-beta.1` preview prerelease |
+| `@upstash/context7-mcp` | `4.0.5` |
+| `firebase-tools` | `15.29.0` |
+| `@hubspot/cli` | `8.14.0` |
 | `mcp/dockerhub` | OCI digest `sha256:76454af…d4248` |
 
 The code-intelligence skills document current optional versions of Semble

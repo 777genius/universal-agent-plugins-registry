@@ -213,12 +213,18 @@ class RegistryRenameBoundaryTests(unittest.TestCase):
                     (LEGACY, revision, tree_digest, manifest_digest),
                 )
                 self.assertEqual(policies[sequence]["status"], "superseded")
-                current = releases[sequence + 1]
+                relocation = releases[sequence + 1]
+                self.assertEqual(
+                    relocation["package_source"]["repository"],
+                    CURRENT,
+                )
+                self.assertEqual(relocation["package_source"]["path"], f"plugins/{distribution['product_id']}")
+                current = releases[max(releases)]
                 self.assertEqual(
                     current["package_source"],
                     {"repository": CURRENT, "revision": None, "path": f"plugins/{distribution['product_id']}"},
                 )
-                self.assertEqual(policies[sequence + 1]["status"], "active")
+                self.assertEqual(policies[current["sequence"]]["status"], "active")
                 package = registry.ROOT / current["package_source"]["path"]
                 self.assertEqual(current["package_version"], registry.read_object(package / "plugin.json")["version"])
                 self.assertEqual(current["tree_digest"], registry.directory_tree_digest(package))

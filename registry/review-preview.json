@@ -2236,7 +2236,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2246,7 +2246,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2256,7 +2256,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2266,7 +2266,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2276,7 +2276,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2286,7 +2286,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2296,7 +2296,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2306,7 +2306,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2316,7 +2316,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2326,7 +2326,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2352,7 +2352,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         },
         {
           "targets": [
@@ -2398,7 +2398,7 @@
             }
           ],
           "distribution_id": "777genius/context7",
-          "release_sequence": 3
+          "release_sequence": 4
         }
       ],
       "distributions": [
@@ -2406,8 +2406,8 @@
           "id": "777genius/context7",
           "kind": "community",
           "status": "active",
-          "release_sequence": 3,
-          "package_version": "0.2.1",
+          "release_sequence": 4,
+          "package_version": "0.2.2",
           "components": [
             "mcp"
           ],
@@ -2460,8 +2460,8 @@
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:9220051c7d8423acc8a9b41c016ba60552ef2637a483bb7db60064942b00116a",
-          "manifest_digest": "sha256:8d3921be2db9daa757b6083bbadee26038751134554af9cfccb74c97967ea355"
+          "tree_digest": "sha256:7efde1ee6ac005e6b4f7b205a72ace200005c3377a7e303b4c323872748f4cc5",
+          "manifest_digest": "sha256:64e86df5ae3c49bfb23519d2ee83be7f508dd06ac9fbcd7b21f6e38aa23f34d5"
         },
         {
           "id": "upstash/context7",
@@ -2995,7 +2995,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3005,7 +3005,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3015,7 +3015,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3025,7 +3025,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3035,7 +3035,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3045,7 +3045,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3055,7 +3055,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3065,7 +3065,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3075,7 +3075,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3085,7 +3085,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3111,7 +3111,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -3157,7 +3157,7 @@
             }
           ],
           "distribution_id": "777genius/firebase",
-          "release_sequence": 4
+          "release_sequence": 5
         }
       ],
       "distributions": [
@@ -3165,8 +3165,8 @@
           "id": "777genius/firebase",
           "kind": "community",
           "status": "active",
-          "release_sequence": 4,
-          "package_version": "0.2.2",
+          "release_sequence": 5,
+          "package_version": "0.2.3",
           "components": [
             "mcp"
           ],
@@ -3219,8 +3219,8 @@
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:330c919a37accbfa408c8a19459bbd19ac5ac51c93a51acf03abd26a96f7cded",
-          "manifest_digest": "sha256:8bb74f3d10e4ba2ed4e1f02218ed4e2f468ba6a77e80dc26add7efd775bd5b7b"
+          "tree_digest": "sha256:082c691d98c244861db7931b916336188a2ad87de75cd9d3e0d1042b1bad242b",
+          "manifest_digest": "sha256:a82b126d4b7e50a343e217e444444ed755685f785e47f4abc0c913410a1b1d09"
         }
       ]
     },
@@ -4777,7 +4777,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4787,7 +4787,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4797,7 +4797,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4807,7 +4807,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4817,7 +4817,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4827,7 +4827,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4837,7 +4837,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4847,7 +4847,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4857,7 +4857,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4867,7 +4867,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4893,7 +4893,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         },
         {
           "targets": [
@@ -4939,7 +4939,7 @@
             }
           ],
           "distribution_id": "777genius/hubspot-developer",
-          "release_sequence": 4
+          "release_sequence": 5
         }
       ],
       "distributions": [
@@ -4947,8 +4947,8 @@
           "id": "777genius/hubspot-developer",
           "kind": "community",
           "status": "active",
-          "release_sequence": 4,
-          "package_version": "0.2.2",
+          "release_sequence": 5,
+          "package_version": "0.2.3",
           "components": [
             "mcp"
           ],
@@ -5001,8 +5001,8 @@
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:467da672168c6d69e4df178ada4f0f606c9f7ec7bfa11744eece7e6c9ef275ba",
-          "manifest_digest": "sha256:84663d734bd6c3cb232a485f71ce9f9673d2a5dce58c097397debebcecbfaac5"
+          "tree_digest": "sha256:adc16ff599904d52954321e6c9437a8f01949ee857a433d9e37ae97db4c407ff",
+          "manifest_digest": "sha256:79e3eb54dec634886411729e176f7c1b3085f2e1ac980a870952f98818de7b3d"
         }
       ]
     },

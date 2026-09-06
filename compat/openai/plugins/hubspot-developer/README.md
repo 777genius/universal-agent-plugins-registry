@@ -1,6 +1,6 @@
 # HubSpot Developer
 
-Preview HubSpot Developer MCP integration for project scaffolding, CMS, builds, logs, and app workflows via the HubSpot CLI.
+HubSpot Developer MCP integration for project scaffolding, CMS, builds, logs, and app workflows via the HubSpot CLI.
 
 <!-- agentplugins-install:start -->
 ## Install
@@ -14,8 +14,7 @@ This is an independent community package for [Agent Plugins 1.0](https://agent-p
 
 - Component: MCP server
 - Transport: `stdio`
-- Runtime: integrity-locked prerelease `@hubspot/cli@8.14.0-beta.1`; install scripts are disabled, and the platform-optional `fsevents` script is separately lock-accounted
-- Preview status: this integration remains preview until HubSpot publishes `8.14.0` stable and that release is reviewed
+- Runtime: integrity-locked `@hubspot/cli@8.14.0`; install scripts are disabled, and the platform-optional `fsevents` script is separately lock-accounted
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Upstream documentation: https://developers.hubspot.com/mcp
 - Privacy: HubSpot CLI usage tracking is disabled by default
