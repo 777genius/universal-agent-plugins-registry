@@ -1,7 +1,7 @@
 {
   "repository": "777genius/universal-agent-plugins-registry",
   "schema_version": 1,
-  "local_evidence_main_anchor": "8d5dc4581d1e74adb8b7d3dd94d853bdae219e8d",
+  "local_evidence_main_anchor": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
   "snapshot_lifetime_days": 30,
   "trusted_external_evidence": [
     {
@@ -21,6 +21,66 @@
       "revision": "358ba031677f0969a2a3fc844686813dadae065b",
       "path": "registry/evidence/context7-upstream/cli-0.1.13/kiro.json",
       "digest": "sha256:980a6b184fa1e70e409529b29d323f68dd6e296d703fcca45888c49c7bbe08f6"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/claude.json",
+      "digest": "sha256:cbfa1056adb586bbfd5b69e10983e940b053741168752072f1ddb778d9c4e46a"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/cline.json",
+      "digest": "sha256:3a3435d6739d9a93c68c6cbe9b0683e3ffdf4755c8dab2ed66ba2230f72607ac"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/codex.json",
+      "digest": "sha256:05293359a651034534594304174c0da03c61bbb1babc3644f74ec9b227b25639"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/copilot.json",
+      "digest": "sha256:5d5d804839994060e58b10f7698fa2db47ebb03bb78ba2a0ca62ec1bf9e2d02e"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/cursor.json",
+      "digest": "sha256:64408199aafb149101345100158136a9fe6844cf17760808272a32b8d7848197"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/gemini.json",
+      "digest": "sha256:8bf052928ac9154409760f77d9b7fabc388f21606b9c3bbb80b3cc03fd7a889d"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/kiro.json",
+      "digest": "sha256:c4098d29cdd67f81281a38d9c7353562ffc5187c2189fb60a47ac8f147307ef8"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/opencode.json",
+      "digest": "sha256:fb3693397f7498fb6700b6f7cf5810fdd65ef034a9bac7d29420b5e6da34e7e1"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/vscode.json",
+      "digest": "sha256:37d4f95edbd03b41ebdebf7d8918501ba189a240248b234142ea5ca336a696bf"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9/clients/windsurf.json",
+      "digest": "sha256:c8aa7cfb69e7675d55ae3c731c38bb14234fc3c321a0c386ff4fa5f0b7dac1c7"
     },
     {
       "repository": "777genius/universal-agent-plugins-registry",

@@ -1142,7 +1142,7 @@ class DirectoryDomainTests(unittest.TestCase):
                 if distribution["id"] == "777genius/context7" and policy["release_sequence"] >= 2:
                     expected_minimum = "0.1.26"
                 if distribution["id"] == "upstash/context7":
-                    expected_minimum = "0.1.13"
+                    expected_minimum = "0.1.51"
                 if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] >= 2:
                     expected_minimum = "0.1.26"
                 if (
@@ -1205,16 +1205,19 @@ class DirectoryDomainTests(unittest.TestCase):
             active_sequence,
         )
         context7_resolution = registry.resolve_directory(source, "context7", ["codex"])
-        self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("777genius/context7", 4))
-        for target in ("codex", "cursor", "kiro"):
+        self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("upstash/context7", 1))
+        context7_clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
+        for target in context7_clients:
             with self.subTest(target=target):
                 upstream = registry.resolve_directory(source, "upstash/context7", [target])
                 self.assertEqual(
                     (upstream["distribution_id"], upstream["release_sequence"]),
                     ("upstash/context7", 1),
                 )
-        with self.assertRaisesRegex(registry.RegistryError, r"upstash/context7: .* evidence .* for copilot"):
-            registry.resolve_directory(source, "upstash/context7", ["copilot"])
+        all_clients = registry.resolve_directory(source, "context7", context7_clients)
+        self.assertEqual((all_clients["distribution_id"], all_clients["release_sequence"]), ("upstash/context7", 1))
+        bridge = registry.resolve_directory(source, "777genius/context7", context7_clients)
+        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 4))
 
         context7 = next(
             product for product in registry.directory_preview(source)["products"]
@@ -1294,10 +1297,7 @@ class DirectoryDomainTests(unittest.TestCase):
                 policy = next(item for item in distribution["release_policies"] if item["release_sequence"] == resolved["release_sequence"])
                 by_client = {target["client"]: target for target in policy["targets"]}
                 self.assertEqual({client: by_client[client]["delivery"] for client in clients}, expected_delivery)
-                minimum = "0.1.26" if distribution["id"] in {
-                    "777genius/cloudflare-bridge", "777genius/cloudflare-bindings-bridge",
-                    "777genius/cloudflare-observability-bridge",
-                } else "0.1.26"
+                minimum = "0.1.51" if distribution["id"] == "upstash/context7" else "0.1.26"
                 self.assertEqual(policy["minimum_installer_version"], minimum)
 
     def test_chrome_preview_preserves_complete_target_resolution_without_runtime_claims(self) -> None:
@@ -1648,9 +1648,15 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(context7["tree_digest"], "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8")
         self.assertEqual(context7["manifest_digest"], "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236")
         context7_policy = distributions["upstash/context7"]["release_policies"][0]
+        context7_clients = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf")
         self.assertEqual(
             {target["client"]: target["authentication"] for target in context7_policy["targets"]},
-            {client: "required" for client in ("codex", "cursor", "copilot", "vscode", "kiro")},
+            {client: "required" for client in context7_clients},
+        )
+        self.assertEqual(context7_policy["minimum_installer_version"], "0.1.51")
+        self.assertEqual(
+            {item["client"] for item in source["evidence"] if item["id"] in context7_policy["current_evidence"]},
+            set(context7_clients),
         )
 
     def test_upstream_publisher_owner_comparison_is_case_insensitive(self) -> None:

@@ -2222,183 +2222,183 @@
         "mcp",
         "plugins"
       ],
-      "default_distribution": "777genius/context7",
+      "default_distribution": "upstash/context7",
       "fallback_order": [
-        "777genius/context7",
-        "upstash/context7"
+        "upstash/context7",
+        "777genius/context7"
       ],
       "target_resolutions": [
         {
           "targets": [
             {
               "client": "claude",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "cline",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "codex",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "copilot",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "cursor",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "gemini",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "kiro",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "opencode",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "vscode",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "windsurf",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "codex",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "cursor",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "copilot",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "vscode",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "kiro",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         },
         {
           "targets": [
             {
               "client": "codex",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "cursor",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "copilot",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "vscode",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "kiro",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "claude",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "gemini",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "opencode",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "cline",
-              "authentication": "not_required"
+              "authentication": "required"
             },
             {
               "client": "windsurf",
-              "authentication": "not_required"
+              "authentication": "required"
             }
           ],
-          "distribution_id": "777genius/context7",
-          "release_sequence": 4
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
         }
       ],
       "distributions": [
@@ -2483,14 +2483,49 @@
               "authentication": "required"
             },
             {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
               "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
               "authentication": "required"
             }
           ],
           "current_evidence": [
-            "context7/upstash-materialization-codex-cli-0.1.13",
-            "context7/upstash-materialization-cursor-cli-0.1.13",
-            "context7/upstash-materialization-kiro-cli-0.1.13"
+            "promotion/context7/769c6cd22c3d/claude",
+            "promotion/context7/769c6cd22c3d/cline",
+            "promotion/context7/769c6cd22c3d/codex",
+            "promotion/context7/769c6cd22c3d/copilot",
+            "promotion/context7/769c6cd22c3d/cursor",
+            "promotion/context7/769c6cd22c3d/gemini",
+            "promotion/context7/769c6cd22c3d/kiro",
+            "promotion/context7/769c6cd22c3d/opencode",
+            "promotion/context7/769c6cd22c3d/vscode",
+            "promotion/context7/769c6cd22c3d/windsurf"
           ],
           "source": {
             "repository": "upstash/context7",
