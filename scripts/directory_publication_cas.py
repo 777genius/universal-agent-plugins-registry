@@ -167,7 +167,7 @@ def validate_materialized_descendant(repo: Path, materialized: str, signed: str)
 
 
 def validate_staged_lineage(repo: Path, current: str, signed: str) -> str:
-    """Return the exact site materialization below safe Discovery-only appends."""
+    """Return the exact site materialization below safe signed-index appends."""
     _require_sha(current, "current ledger")
     _require_sha(signed, "signed ledger")
     if _git(repo, ["merge-base", "--is-ancestor", signed, current], check=False).returncode != 0:
@@ -187,8 +187,15 @@ def validate_staged_lineage(repo: Path, current: str, signed: str) -> str:
         changed = _git(
             repo, ["diff-tree", "--no-commit-id", "--name-only", "-r", previous, descendant],
         ).stdout.splitlines()
-        if not changed or any(not path.startswith("discovery/") for path in changed):
-            raise CasError("staged ledger has a non-Discovery post-materialization append")
+        namespaces = {path.split("/", 1)[0] for path in changed if "/" in path}
+        if not changed or len(namespaces) != 1 or namespaces.isdisjoint({"discovery", "security"}):
+            raise CasError("staged ledger has a non-index post-materialization append")
+        namespace = next(iter(namespaces))
+        if any(not path.startswith(f"{namespace}/") for path in changed):
+            raise CasError("staged ledger mixes post-materialization index namespaces")
+        message = _git(repo, ["show", "-s", "--format=%B", descendant]).stdout
+        if re.fullmatch(rf"chore\({namespace}\): publish sequence [1-9][0-9]*\n\n", message) is None:
+            raise CasError("staged ledger index append has an invalid commit message")
         previous = descendant
     if _git(repo, ["diff", "--quiet", signed, current, "--", "registry"], check=False).returncode != 0:
         raise CasError("staged ledger changed signed registry bytes")

@@ -260,7 +260,7 @@ class BarePublicationCasTests(unittest.TestCase):
             cas.RefState(main_new, ledger_new, self.source),
         )
 
-    def test_staged_lineage_preserves_discovery_append_and_approves_materialization(self) -> None:
+    def test_staged_lineage_preserves_signed_index_appends_and_approves_materialization(self) -> None:
         marker, signed = self.objects()
         self.publish(marker, signed)
         materialized = self.commit_object(
@@ -270,20 +270,24 @@ class BarePublicationCasTests(unittest.TestCase):
             materialized, "discovery/latest.json", "{}\n",
             "chore(discovery): publish sequence 2",
         )
+        security = self.commit_path(
+            discovery, "security/latest.json", "{}\n",
+            "chore(security): publish sequence 3",
+        )
         self.assertEqual(
-            cas.validate_staged_lineage(self.publisher, discovery, signed),
+            cas.validate_staged_lineage(self.publisher, security, signed),
             materialized,
         )
         git(
             self.publisher, "push", "-q", "origin",
-            f"{discovery}:refs/heads/directory-publication-ledger",
+            f"{security}:refs/heads/directory-publication-ledger",
         )
         main_new = self.commit_object(marker, "mechanical evidence pointers")
-        ledger_new = self.commit_object(discovery, "permanent evidence")
+        ledger_new = self.commit_object(security, "permanent evidence")
         self.assertEqual(
             cas.evidence_transition(
                 self.publisher, "origin", main_old=marker, main_new=main_new,
-                ledger_old=discovery, ledger_new=ledger_new,
+                ledger_old=security, ledger_new=ledger_new,
                 approval_target=materialized, approval_tag=APPROVAL_TAG,
             ),
             "published",
@@ -296,7 +300,7 @@ class BarePublicationCasTests(unittest.TestCase):
             cas.RefState(main_new, ledger_new, materialized),
         )
 
-    def test_staged_lineage_rejects_non_discovery_append(self) -> None:
+    def test_staged_lineage_rejects_non_index_append(self) -> None:
         _marker, signed = self.objects()
         materialized = self.commit_object(
             signed, "chore(directory): materialize signed production site"
@@ -304,8 +308,31 @@ class BarePublicationCasTests(unittest.TestCase):
         hostile = self.commit_path(
             materialized, "index.html", "changed\n", "hostile site append",
         )
-        with self.assertRaisesRegex(cas.CasError, "non-Discovery"):
+        with self.assertRaisesRegex(cas.CasError, "non-index"):
             cas.validate_staged_lineage(self.publisher, hostile, signed)
+
+    def test_staged_lineage_rejects_mixed_or_mislabeled_index_append(self) -> None:
+        _marker, signed = self.objects()
+        materialized = self.commit_object(
+            signed, "chore(directory): materialize signed production site"
+        )
+        mislabeled = self.commit_path(
+            materialized, "security/latest.json", "{}\n",
+            "chore(discovery): publish sequence 2",
+        )
+        with self.assertRaisesRegex(cas.CasError, "invalid commit message"):
+            cas.validate_staged_lineage(self.publisher, mislabeled, signed)
+
+        git(self.publisher, "checkout", "-q", "--detach", materialized)
+        for namespace in ("discovery", "security"):
+            target = self.publisher / namespace / "latest.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("{}\n")
+            git(self.publisher, "add", str(target.relative_to(self.publisher)))
+        git(self.publisher, "commit", "-qm", "chore(discovery): publish sequence 2")
+        mixed = git(self.publisher, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(cas.CasError, "non-index"):
+            cas.validate_staged_lineage(self.publisher, mixed, signed)
 
     def test_evidence_transition_resolves_lost_response_by_exact_three_ref_readback(self) -> None:
         main_new = self.commit_object(self.source, "mechanical evidence pointers")
