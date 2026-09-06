@@ -132,10 +132,11 @@ public tuple is:
   reviewed public package in the future-publish lane; the 0.1.51 package itself
   remains immutable.
 - GitHub-hosted run `34009449785` validates the current public npm package,
-  reviewed and discovered packages across eight direct-install clients, and the
-  live desktop/mobile site against the merged registry code. The site also
-  exposes the two separately labelled final-step delivery clients; this is UI
-  evidence, not a claim that their client-side activation ran in this workflow.
+  reviewed and discovered packages across eight client targets, covering managed
+  installation and prepared-package delivery, plus the live desktop/mobile site
+  against the merged registry code. The site displays eight automatic and two
+  final-step delivery modes; this is not proof that runtime or activation ran in
+  all ten clients.
   Compatibility mirror run `34009298114` promoted Directory 36, Discovery 39,
   and Security 5 to the product origin before the final consumer smoke.
 - The public browser artifact covers 1440x1000 and 390x844 viewports with no UI
