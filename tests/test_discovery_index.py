@@ -22,6 +22,7 @@ from scripts.build_discovery_index import (
     DiscoveryError,
     GitHubAPI,
     GitHubHTTPError,
+    MAX_GITHUB_REQUEST_ATTEMPTS,
     MAX_GITHUB_RETRY_DELAY_SECONDS,
     MAX_PREVIOUS_SNAPSHOT_BYTES,
     SameOriginRedirect,
@@ -501,10 +502,10 @@ class DiscoveryIndexTests(unittest.TestCase):
             self.assertEqual(api.get("test"), {"ok": True})
         sleep.assert_called_once_with(1)
 
-    def test_github_api_five_sleep_exhaustion_includes_bounded_body(self):
+    def test_github_api_bounded_exhaustion_includes_response_body(self):
         api = GitHubAPI("test-token")
         api.opener = mock.Mock()
-        bodies = [mock.Mock() for _ in range(6)]
+        bodies = [mock.Mock() for _ in range(MAX_GITHUB_REQUEST_ATTEMPTS)]
         for body in bodies:
             body.read.return_value = b'{"message":"still unavailable"}'
         api.opener.open.side_effect = [
@@ -516,10 +517,30 @@ class DiscoveryIndexTests(unittest.TestCase):
         with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
             with self.assertRaisesRegex(GitHubHTTPError, "still unavailable"):
                 api.get("test")
-        self.assertEqual(api.opener.open.call_count, 6)
-        self.assertEqual(sleep.call_args_list, [mock.call(30)] * 5)
+        self.assertEqual(api.opener.open.call_count, MAX_GITHUB_REQUEST_ATTEMPTS)
+        self.assertEqual(
+            sleep.call_args_list,
+            [mock.call(30)] * (MAX_GITHUB_REQUEST_ATTEMPTS - 1),
+        )
         for body in bodies:
             body.read.assert_called_once_with(4096)
+
+    def test_github_api_can_recover_after_the_previous_attempt_limit(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok":true}'
+        api = GitHubAPI("test-token")
+        api.opener = mock.Mock()
+        api.opener.open.side_effect = [
+            urllib.error.HTTPError(
+                "https://api.github.com/test", 429, "Too Many Requests", {},
+                io.BytesIO(b'{"message":"try again in 1s"}'),
+            )
+            for _ in range(6)
+        ] + [response]
+        with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
+            self.assertEqual(api.get("test"), {"ok": True})
+        self.assertEqual(api.opener.open.call_count, 7)
+        self.assertEqual(sleep.call_args_list, [mock.call(1)] * 6)
 
     def test_github_api_non_retryable_error_does_not_sleep(self):
         api = GitHubAPI("test-token")
