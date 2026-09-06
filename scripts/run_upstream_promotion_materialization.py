@@ -18,6 +18,21 @@ class MaterializationError(Exception):
     pass
 
 
+CLIENT_ROOTS = {
+    "codex": ("home", ".codex"),
+    "cursor": ("home", ".cursor"),
+    "copilot": ("home", ".copilot"),
+    "vscode": ("config", "Code/User"),
+    "kiro": ("home", ".kiro"),
+    "claude": ("home", ".claude"),
+    "gemini": ("home", ".gemini"),
+    "opencode": ("config", "opencode"),
+    "cline": ("home", ".vscode/extensions/cline.cline"),
+    "windsurf": ("home", ".codeium/windsurf"),
+}
+CLIENT_ORDER = tuple(CLIENT_ROOTS)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise MaterializationError(message)
@@ -64,16 +79,58 @@ def checked_identity(data: dict[str, Any], args: argparse.Namespace) -> dict[str
     }
 
 
+def validate_info_clients(value: Any, clients: list[str]) -> None:
+    require(isinstance(value, list), "info clients are absent")
+    shared_backend = {"copilot", "vscode"}
+    expected_bindings = len(clients) - (1 if shared_backend.issubset(clients) else 0)
+    require(len(value) == expected_bindings, "info physical binding count differs")
+    logical_surfaces: set[str] = set()
+    shared_bindings = 0
+    for item in value:
+        require(isinstance(item, dict), "info client binding is malformed")
+        client_id = item.get("client_id")
+        require(isinstance(client_id, str) and client_id in clients, "info client identity differs")
+        require(item.get("materialization") == "materialized", "info reports incomplete materialization")
+        affected = item.get("affected_surfaces")
+        surfaces = {client_id}
+        if affected is not None:
+            require(
+                isinstance(affected, list)
+                and all(isinstance(surface, str) for surface in affected)
+                and len(affected) == len(set(affected)),
+                "info affected surfaces are malformed",
+            )
+            surfaces = set(affected)
+            require(client_id in surfaces, "info physical owner is absent from affected surfaces")
+        if surfaces == shared_backend:
+            shared_bindings += 1
+        else:
+            require(surfaces == {client_id}, "info reports an unexpected shared backend")
+        require(logical_surfaces.isdisjoint(surfaces), "info logical client surfaces overlap")
+        logical_surfaces.update(surfaces)
+    require(logical_surfaces == set(clients), "info logical client coverage differs")
+    require(
+        shared_bindings == (1 if shared_backend.issubset(clients) else 0),
+        "info shared Copilot and VS Code binding differs",
+    )
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     clients = args.targets.split(",")
-    require(clients and len(clients) == len(set(clients)) and set(clients) <= {"codex", "cursor", "kiro"}, "targets are invalid")
+    require(
+        clients
+        and clients == [client for client in CLIENT_ORDER if client in clients]
+        and len(clients) == len(set(clients)),
+        "targets are invalid or not in canonical order",
+    )
     root = args.sandbox.resolve()
     require(not root.exists(), "sandbox already exists")
     roots = {name: root / name for name in ("home", "state", "workspace", "config", "cache", "tmp")}
     for path in roots.values():
         path.mkdir(parents=True)
-    for name in (".codex", ".cursor", ".kiro"):
-        (roots["home"] / name).mkdir()
+    for client in clients:
+        root_name, relative = CLIENT_ROOTS[client]
+        (roots[root_name] / relative).mkdir(parents=True, exist_ok=False)
     environment = {
         "PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
         "HOME": str(roots["home"]), "USERPROFILE": str(roots["home"]),
@@ -102,6 +159,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         info = invoke(args.cli, "info", [args.product_id, *common], env=environment, cwd=roots["workspace"])
         info_data = info.get("data")
         require(isinstance(info_data, dict) and info_data.get("name") == args.product_id, "info identity differs")
+        validate_info_clients(info_data.get("clients"), clients)
         doctor = invoke(args.cli, "doctor", [args.product_id, *common], env=environment, cwd=roots["workspace"])
         require(isinstance(doctor.get("data"), dict), "doctor data is absent")
         remove = invoke(
@@ -117,7 +175,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "schema_version": 1, "outcome": "passed", "product_id": args.product_id,
             "repository": args.repository, "revision": args.revision, "path": args.path,
             "materialized_source": {
-                "kind": "local_bridge" if local_path is not None else "official_upstream",
+                "kind": args.local_source_kind if local_path is not None else "official_upstream",
                 "path": str(local_path.resolve()) if local_path is not None else args.path,
             },
             "clients": clients, "installer_version": args.installer_version,
@@ -141,6 +199,10 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--path", required=True)
     parser.add_argument("--local-path", type=Path)
+    parser.add_argument(
+        "--local-source-kind", choices=("local_bridge", "official_checkout"),
+        default="local_bridge",
+    )
     parser.add_argument("--targets", required=True)
     parser.add_argument("--sandbox", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

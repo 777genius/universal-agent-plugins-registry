@@ -1,0 +1,168 @@
+name: Context7 official package materialization
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/context7-upstream-materialization.yml"
+      - "scripts/run_upstream_promotion_materialization.py"
+      - "tests/test_upstream_promotion.py"
+      - "tests/e2e/catalog-bwrap.apparmor"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/context7-upstream-materialization.yml"
+      - "scripts/run_upstream_promotion_materialization.py"
+      - "tests/test_upstream_promotion.py"
+      - "tests/e2e/catalog-bwrap.apparmor"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: context7-upstream-materialization-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AGENTPLUGINS_VERSION: "0.1.51"
+  AGENTPLUGINS_NPM_INTEGRITY: sha512-R3KrYWcQAsJ3ogu0SA460rIJkUVisKrxtexFWg9lAX5PvuRtSb/UJCDCqCkhr+XezlNsB6olxZZJ80U6W2DWDQ==
+  CLAUDE_CODE_VERSION: "2.1.263"
+  CLAUDE_CODE_NPM_INTEGRITY: sha512-kvvBK6/69iTRYnq0TKVyxVZs1CxYCJGojshQSP+2qaDb66A2xtI4zbCuqkZUWLkFGmHSRqhFf/ATpzH2UNKcwg==
+  COPILOT_VERSION: "1.0.83"
+  COPILOT_NPM_INTEGRITY: sha512-M8uZI0V0dahYV1KZij3nGDxaXEGG7I7YUZzQPI7NEZkL/83Nl/tNTbPdxKtdWZbOmWoXsPKXty/eEYoj6RHDhA==
+  CONTEXT7_REVISION: 769c6cd22c3d95462d1f55d789e9532cabefa5a9
+  CONTEXT7_TREE_DIGEST: sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8
+  CONTEXT7_MANIFEST_DIGEST: sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236
+  TARGETS: codex,cursor,copilot,vscode,kiro,claude,gemini,opencode,cline,windsurf
+
+jobs:
+  materialize:
+    name: Exact official Context7 on ten current clients
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: upstash/context7
+          ref: ${{ env.CONTEXT7_REVISION }}
+          path: context7-upstream
+          persist-credentials: false
+          sparse-checkout: plugins/agent-plugins/context7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.20.0"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Authenticate the exact released CLI
+        run: |
+          npm install --global npm@12.0.2
+          test "$(npm --version)" = 12.0.2
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"/{home,cache,tmp}
+          test "$(npm view "universal-agent-plugins@${AGENTPLUGINS_VERSION}" dist.integrity)" = "$AGENTPLUGINS_NPM_INTEGRITY"
+          test "$(npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity)" = "$CLAUDE_CODE_NPM_INTEGRITY"
+          test "$(npm view "@github/copilot@${COPILOT_VERSION}" dist.integrity)" = "$COPILOT_NPM_INTEGRITY"
+          env HOME="$tools/home" TMPDIR="$tools/tmp" NPM_CONFIG_CACHE="$tools/cache" \
+            npm install --prefix "$tools" --no-audit --no-fund \
+              "universal-agent-plugins@${AGENTPLUGINS_VERSION}" \
+              "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+              "@github/copilot@${COPILOT_VERSION}"
+          npm audit signatures --prefix "$tools"
+          test "$(node -p "require('${tools}/node_modules/universal-agent-plugins/package.json').version")" = "$AGENTPLUGINS_VERSION"
+          test "$(node -p "require('${tools}/node_modules/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION"
+          test "$(node -p "require('${tools}/node_modules/@github/copilot/package.json').version")" = "$COPILOT_VERSION"
+          test "$("$tools/node_modules/.bin/agentplugins" version)" = "agentplugins ${AGENTPLUGINS_VERSION}"
+          node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"
+          test "$("$tools/node_modules/.bin/claude" --version | cut -d ' ' -f 1)" = "$CLAUDE_CODE_VERSION"
+          test "$("$tools/node_modules/.bin/copilot" --version | sed -n 's/^GitHub Copilot CLI \([0-9.]*\)\.$/\1/p')" = "$COPILOT_VERSION"
+          echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Validate the immutable official checkout
+        run: |
+          test "$(git -C context7-upstream rev-parse HEAD)" = "$CONTEXT7_REVISION"
+          git -C context7-upstream diff --quiet "$CONTEXT7_REVISION" -- plugins/agent-plugins/context7
+          test -f context7-upstream/plugins/agent-plugins/context7/plugin.json
+          test -f context7-upstream/plugins/agent-plugins/context7/mcp.json
+
+      - name: Install the current stable Ubuntu bubblewrap package
+        run: |
+          sudo apt-get update
+          candidate="$(apt-cache policy bubblewrap | awk '$1 == "Candidate:" {print $2}')"
+          test -n "$candidate"
+          test "$candidate" != '(none)'
+          sudo apt-get install --yes --no-install-recommends "bubblewrap=$candidate"
+          test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$candidate"
+          test -f /usr/bin/bwrap
+          test ! -L /usr/bin/bwrap
+          test "$(stat -c '%U:%G:%a' /usr/bin/bwrap)" = root:root:755
+
+      - name: Allow user namespaces only for the root-owned bubblewrap executable
+        id: isolation_profile
+        run: |
+          test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
+          profile=/etc/apparmor.d/uap-catalog-bwrap
+          test ! -e "$profile"
+          test ! -L "$profile"
+          if sudo grep -R -q -F /usr/bin/bwrap /etc/apparmor.d; then
+            echo "An existing bubblewrap AppArmor policy requires review" >&2
+            exit 1
+          else
+            test "$?" -eq 1
+          fi
+          sudo /usr/sbin/apparmor_parser --skip-kernel-load --skip-cache tests/e2e/catalog-bwrap.apparmor
+          echo "profile_owned=true" >> "$GITHUB_OUTPUT"
+          sudo install -o root -g root -m 0644 tests/e2e/catalog-bwrap.apparmor "$profile"
+          sudo /usr/sbin/apparmor_parser --add --skip-cache "$profile"
+
+      - name: Materialize, inspect, diagnose, remove, and verify cleanup
+        run: |
+          evidence="$RUNNER_TEMP/context7-evidence/evidence.json"
+          mkdir -p "$(dirname "$evidence")"
+          python3 scripts/run_upstream_promotion_materialization.py \
+            --cli "$RUNNER_TEMP/tools/node_modules/.bin/agentplugins" \
+            --installer-version "$AGENTPLUGINS_VERSION" \
+            --product-id context7 --repository upstash/context7 \
+            --revision "$CONTEXT7_REVISION" --path plugins/agent-plugins/context7 \
+            --local-path "$GITHUB_WORKSPACE/context7-upstream/plugins/agent-plugins/context7" \
+            --local-source-kind official_checkout --targets "$TARGETS" \
+            --sandbox "$RUNNER_TEMP/context7-sandbox" --output "$evidence" \
+            --run-repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --source-sha "$GITHUB_SHA"
+          python3 - "$evidence" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text())
+          assert value["outcome"] == "passed"
+          assert value["clients"] == os.environ["TARGETS"].split(",")
+          assert value["materialized_source"]["kind"] == "official_checkout"
+          assert value["package"]["tree_digest"] == os.environ["CONTEXT7_TREE_DIGEST"]
+          assert value["package"]["manifest_digest"] == os.environ["CONTEXT7_MANIFEST_DIGEST"]
+          assert set(value["operations"].values()) == {"passed"}
+          assert value["sandbox"] == {"kind": "disposable", "real_user_project_used": False, "removed": True}
+          body = path.read_bytes()
+          path.with_suffix(".sha256").write_text(hashlib.sha256(body).hexdigest() + "  evidence.json\n")
+          PY
+
+      - name: Remove only this job's ephemeral AppArmor allowance
+        if: ${{ always() && steps.isolation_profile.outputs.profile_owned == 'true' }}
+        run: |
+          profile=/etc/apparmor.d/uap-catalog-bwrap
+          test -f "$profile"
+          test ! -L "$profile"
+          test "$(stat -c '%U:%G:%a' "$profile")" = root:root:644
+          sudo /usr/sbin/apparmor_parser --remove "$profile"
+          sudo unlink "$profile"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: context7-official-ten-client-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/context7-evidence
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false

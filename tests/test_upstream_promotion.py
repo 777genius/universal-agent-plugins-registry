@@ -142,7 +142,7 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "data={}\n"
                 "if cmd=='add' and dry: data={'revision':'b'*40}\n"
                 "elif cmd=='add': data={'status':'completed','succeeded':3,'failed':0,'targets':targets,'plugin':'github','revision':'b'*40,'tree_digest':'sha256:'+'1'*64,'manifest_digest':'sha256:'+'2'*64,'version':'','target_outcomes':{x:{'outcome':'passed'} for x in clients}}\n"
-                "elif cmd=='info': data={'name':'github'}\n"
+                "elif cmd=='info': data={'name':'github','clients':[{'client_id':x,'materialization':'materialized'} for x in clients]}\n"
                 "elif cmd=='doctor': data={'healthy':True}\n"
                 "elif cmd=='remove': data={'status':'completed','succeeded':3,'failed':0,'targets':targets,'plugin_data_preserved':False,'data_retained':False}\n"
                 "elif cmd=='list': data={'installations':[]}\n"
@@ -156,11 +156,89 @@ class UpstreamPromotionTests(unittest.TestCase):
                 path="agent-plugin", targets="codex,cursor,kiro", sandbox=sandbox,
                 run_repository="777genius/universal-agent-plugins", run_id="1",
                 run_attempt="1", source_sha="c" * 40, keep_sandbox=False,
+                local_source_kind="local_bridge",
             )
             result = lifecycle.run(args)
             self.assertEqual(result["outcome"], "passed")
             self.assertEqual(result["clients"], ["codex", "cursor", "kiro"])
             self.assertFalse(sandbox.exists())
+
+    def test_materialization_runner_accepts_all_current_clients_in_canonical_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cli = root / "agentplugins"
+            clients = list(lifecycle.CLIENT_ORDER)
+            cli.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json,sys\n"
+                f"clients={clients!r}\n"
+                "cmd=sys.argv[1]; dry='--dry-run' in sys.argv\n"
+                "targets=[{'target':x,'status':'external_completed'} for x in clients]\n"
+                "data={}\n"
+                "if cmd=='add' and dry: data={'revision':'b'*40}\n"
+                "elif cmd=='add': data={'status':'completed','succeeded':len(clients),'failed':0,'targets':targets,'plugin':'context7','revision':'b'*40,'tree_digest':'sha256:'+'1'*64,'manifest_digest':'sha256:'+'2'*64,'version':'1.0.0','target_outcomes':{x:{'outcome':'passed'} for x in clients}}\n"
+                "elif cmd=='info':\n"
+                " infos=[]\n"
+                " for x in clients:\n"
+                "  if x=='vscode' and 'copilot' in clients: continue\n"
+                "  item={'client_id':x,'materialization':'materialized'}\n"
+                "  if x=='copilot' and 'vscode' in clients: item['affected_surfaces']=['copilot','vscode']\n"
+                "  infos.append(item)\n"
+                " data={'name':'context7','clients':infos}\n"
+                "elif cmd=='doctor': data={'healthy':True}\n"
+                "elif cmd=='remove': data={'status':'completed','succeeded':len(clients),'failed':0,'targets':targets,'plugin_data_preserved':False,'data_retained':False}\n"
+                "elif cmd=='list': data={'installations':[]}\n"
+                "print(json.dumps({'schema_version':1,'command':cmd,'result':'success','data':data}))\n"
+            )
+            cli.chmod(0o755)
+            sandbox = root / "sandbox"
+            args = argparse.Namespace(
+                cli=cli, installer_version="0.1.51", product_id="context7",
+                repository="upstash/context7", revision=MERGE_SHA,
+                path="plugins/agent-plugins/context7", targets=",".join(clients),
+                sandbox=sandbox, run_repository=CURRENT_REGISTRY_REPOSITORY,
+                run_id="1", run_attempt="1", source_sha="c" * 40,
+                keep_sandbox=True, local_source_kind="official_checkout",
+            )
+            result = lifecycle.run(args)
+            self.assertEqual(result["clients"], clients)
+            for client, (root_name, relative) in lifecycle.CLIENT_ROOTS.items():
+                self.assertTrue((sandbox / root_name / relative).is_dir(), client)
+
+    def test_materialization_runner_rejects_noncanonical_or_unknown_targets(self) -> None:
+        base = argparse.Namespace(
+            cli=Path("/missing"), installer_version="0.1.51", product_id="context7",
+            repository="upstash/context7", revision=MERGE_SHA,
+            path="plugins/agent-plugins/context7", sandbox=Path("/missing-sandbox"),
+            run_repository=CURRENT_REGISTRY_REPOSITORY, run_id="1", run_attempt="1",
+            source_sha="c" * 40, keep_sandbox=False,
+            local_source_kind="local_bridge",
+        )
+        for targets in ("cursor,codex", "codex,codex", "chatgpt", "unknown"):
+            with self.subTest(targets=targets), self.assertRaisesRegex(
+                lifecycle.MaterializationError, "canonical order"
+            ):
+                lifecycle.run(argparse.Namespace(**vars(base), targets=targets))
+
+    def test_context7_workflow_uses_an_authenticated_real_claude_cli(self) -> None:
+        workflow = (ROOT / ".github/workflows/context7-upstream-materialization.yml").read_text()
+        self.assertIn('CLAUDE_CODE_VERSION: "2.1.263"', workflow)
+        self.assertIn(
+            "CLAUDE_CODE_NPM_INTEGRITY: "
+            "sha512-kvvBK6/69iTRYnq0TKVyxVZs1CxYCJGojshQSP+2qaDb66A2xtI4zbCuqkZUWLkFGmHSRqhFf/ATpzH2UNKcwg==",
+            workflow,
+        )
+        self.assertIn('COPILOT_VERSION: "1.0.83"', workflow)
+        self.assertIn(
+            "COPILOT_NPM_INTEGRITY: "
+            "sha512-M8uZI0V0dahYV1KZij3nGDxaXEGG7I7YUZzQPI7NEZkL/83Nl/tNTbPdxKtdWZbOmWoXsPKXty/eEYoj6RHDhA==",
+            workflow,
+        )
+        self.assertIn('npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity', workflow)
+        self.assertIn('"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"', workflow)
+        self.assertIn('"@github/copilot@${COPILOT_VERSION}"', workflow)
+        self.assertIn('node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"', workflow)
+        self.assertIn('echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"', workflow)
 
     def test_select_refuses_a_merged_pr_when_reviewed_head_changed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
