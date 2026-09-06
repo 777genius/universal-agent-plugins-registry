@@ -56,20 +56,24 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 280)
+        self.assertEqual(len(artifact["rows"]), 283)
         self.assertEqual(len(artifact["static_metadata"]), 2)
         self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
         self.assertEqual({row["client"] for row in chrome}, set(gate.CATALOG_CLIENTS))
-        self.assertEqual(
-            {(row["selector"], row["client"]) for row in artifact["rows"]},
-            {(alias, client) for alias in gate.ALIASES for client in gate.CATALOG_CLIENTS},
+        self.assertTrue(
+            {(alias, client) for alias in gate.ALIASES for client in gate.CATALOG_CLIENTS}
+            <= {(row["selector"], row["client"]) for row in artifact["rows"]},
         )
         self.assertEqual({row["distribution_id"] for row in chrome}, {"777genius/chrome-devtools-bridge"})
         bridge = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
         active_sequence = next(item["release_sequence"] for item in bridge["release_policies"] if item["status"] == "active")
         self.assertEqual({row["release_sequence"] for row in chrome}, {active_sequence})
         self.assertTrue(all(row["fallback_reason"] for row in chrome))
+        github = [row for row in artifact["rows"] if row["selector"] == "github/github"]
+        self.assertEqual({row["client"] for row in github}, set(gate.CORE))
+        self.assertEqual({row["distribution_id"] for row in github}, {"github/github"})
+        self.assertTrue(all(row["fallback_reason"] is None for row in github))
         self.assertIs(artifact["runtime_claims"], False)
         self.assertTrue(all(row["oauth"] == "not_tested" for row in artifact["mcp_probes"]))
         gate.validate_artifact(artifact, self.expected())
@@ -683,7 +687,11 @@ class CatalogContractTests(unittest.TestCase):
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                self.assertEqual(lifecycle.call_count, 28)
+                self.assertEqual(lifecycle.call_count, 29)
+                default_call = next(call for call in lifecycle.call_args_list
+                                    if call.args[2]["selector"] == "github/github")
+                self.assertEqual(default_call.args[1].name, "default-github")
+                self.assertEqual(default_call.args[3], gate.CORE)
                 self.assertEqual(acquire.call_count, 4)
                 self.assertEqual(static.call_count, 2)
                 self.assertEqual(probe.call_count, 4)
