@@ -2791,7 +2791,7 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
       "package_source": {
         "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "384fef6c0bcbc99439cebb4e0646ae8b8d5b8345",
+        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
         "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
@@ -3439,7 +3439,7 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
       "package_source": {
         "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "384fef6c0bcbc99439cebb4e0646ae8b8d5b8345",
+        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
         "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
@@ -4801,7 +4801,7 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
       "package_source": {
         "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "384fef6c0bcbc99439cebb4e0646ae8b8d5b8345",
+        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
         "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
