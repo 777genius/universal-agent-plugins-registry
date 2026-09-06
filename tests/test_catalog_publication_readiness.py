@@ -73,6 +73,17 @@ class CatalogContractTests(unittest.TestCase):
         context7_fallback = [row for row in artifact["rows"] if row["selector"] == "777genius/context7"]
         self.assertEqual({row["client"] for row in context7_fallback}, set(gate.CATALOG_CLIENTS))
         self.assertEqual({row["distribution_id"] for row in context7_fallback}, {"777genius/context7"})
+        upstream_context7 = [row for row in artifact["mcp_probes"]
+                             if row["distribution_id"] == "upstash/context7"]
+        self.assertEqual(len(upstream_context7), 2)
+        self.assertTrue(all(row["status"] == "not_tested" for row in upstream_context7))
+        self.assertTrue(all(row["scope"] == "authentication_required_exact_package"
+                            and len(row["compatibility_evidence"]) == len(gate.CATALOG_CLIENTS)
+                            for row in upstream_context7))
+        credential_free = [row for row in artifact["mcp_probes"]
+                           if row["distribution_id"] != "upstash/context7"]
+        self.assertTrue(all(row["status"] == "passed" and row["compatibility_evidence"] == []
+                            for row in credential_free))
         github = [row for row in artifact["rows"] if row["selector"] == "github/github"]
         self.assertEqual({row["client"] for row in github}, set(gate.CORE))
         self.assertEqual({row["distribution_id"] for row in github}, {"github/github"})
@@ -80,6 +91,15 @@ class CatalogContractTests(unittest.TestCase):
         self.assertIs(artifact["runtime_claims"], False)
         self.assertTrue(all(row["oauth"] == "not_tested" for row in artifact["mcp_probes"]))
         gate.validate_artifact(artifact, self.expected())
+
+    def test_authenticated_mcp_probe_requires_exact_evidence_and_never_claims_runtime(self):
+        selection = gate.selected(self.snapshot, "context7", gate.CATALOG_CLIENTS)
+        contract = gate.probe_contract(selection, "tools/list")
+        self.assertEqual(contract["status"], "not_tested")
+        self.assertEqual(contract["account_runtime"], "not_tested")
+        selection["policy"]["current_evidence"] = []
+        with self.assertRaisesRegex(ValueError, "lacks exact compatibility evidence"):
+            gate.probe_contract(selection, "tools/list")
 
     def test_rejects_mutated_identity_partial_rows_runtime_claims_and_extra_fields(self):
         for mutation in (
@@ -767,7 +787,9 @@ class CatalogContractTests(unittest.TestCase):
                 self.assertEqual(default_call.args[3], gate.CORE)
                 self.assertEqual(acquire.call_count, 5)
                 self.assertEqual(static.call_count, 2)
-                self.assertEqual(probe.call_count, 6)
+                # The two authenticated upstream Context7 checks are bound to
+                # exact compatibility evidence and never start OAuth here.
+                self.assertEqual(probe.call_count, 4)
                 self.assertFalse(args.sandbox.exists())
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 

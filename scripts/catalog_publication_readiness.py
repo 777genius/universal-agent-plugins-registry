@@ -263,12 +263,21 @@ def static_rows(snapshot: dict) -> list[dict]:
 
 def probe_contract(selection: dict, method: str) -> dict:
     plugin = selection["product_id"]
+    authentication = {target["authentication"] for target in selection["policy"]["targets"]}
+    require(len(authentication) == 1, f"{plugin}: mixed MCP authentication policy")
+    requires_account = authentication == {"required"}
+    if requires_account:
+        require(bool(selection["policy"]["current_evidence"]),
+                f"{plugin}: authenticated MCP package lacks exact compatibility evidence")
     return {"product_id": plugin, "distribution_id": selection["distribution_id"],
             "release_sequence": selection["release_sequence"], "package_source": selection["package_source"],
             "tree_digest": selection["tree_digest"], "manifest_digest": selection["manifest_digest"],
             "method": method, "tool": None if method == "tools/list" else
             ("resolve-library-id" if plugin == "context7" else "search_cloudflare_documentation"),
-            "status": "passed", "scope": "package_mcp_component", "account_runtime": "not_tested", "oauth": "not_tested"}
+            "status": "not_tested" if requires_account else "passed",
+            "scope": "authentication_required_exact_package" if requires_account else "package_mcp_component",
+            "compatibility_evidence": selection["policy"]["current_evidence"] if requires_account else [],
+            "account_runtime": "not_tested", "oauth": "not_tested"}
 
 
 def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
@@ -668,6 +677,11 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
             for method in ("tools/list", "tools/call"):
                 args.failure_phase = "mcp:" + selection["product_id"] + ":" + method
                 contract = probe_contract(selection, method)
+                # This job is deliberately credential-free. Authenticated MCP
+                # endpoints are bound to their exact package/evidence tuple
+                # above and must not start an OAuth flow in CI.
+                if contract["status"] == "not_tested":
+                    continue
                 tool_args = ({"libraryName": "playwright", "query": "Playwright locators quick start"}
                              if selection["product_id"] == "context7" else {"query": "Workers bindings versus environment variables"})
                 result = inspector_check(selection["product_id"], method=method, plugin_root=package,
