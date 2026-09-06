@@ -2293,17 +2293,18 @@ sys.modules['catalog_process_isolation']=module
         for required in ('https://777genius.github.io/universal-agent-plugins/',
                          'registry.snapshot_sequence >= 20', 'discovery.sequence >= 20',
                          'discovery.records.length >= 2000', 'navigator.clipboard.readText()',
-                         'recently found community packages',
+                         "toHaveAttribute('data-discovery-state', /current|cached/",
                          "toContainText('Found on GitHub')",
                          'assert.deepEqual(errors, [])', 'width: 390', 'width: 1440',
-                         "'.plugin-card__ribbon', { hasText: /^Reviewed plugin$/",
+                         "'.plugin-card__ribbon', { hasText: /^reviewed listing$/i",
                          "failure === 'net::ERR_ABORTED'",
                          "new URL('discovery/latest.json', base).pathname",
                          '![502, 503, 504].includes(status)',
                          'attempt <= 4',
                          'assert.equal(actual.origin, expected.origin)',
                          'normalizePath(actual.pathname)',
-                         'discovery:upstash/context7//plugins/agent-plugins/context7'):
+                         "new URL('discovery/.browser-lkg.json', siteBase)",
+                         'discovery:vectorize-io/hindsight//hindsight-integrations/agent-plugin'):
             self.assertIn(required, source)
         for forbidden in ('.route(', 'route.fulfill', 'addInitScript', 'executablePath', 'child_process'):
             self.assertNotIn(forbidden, source)

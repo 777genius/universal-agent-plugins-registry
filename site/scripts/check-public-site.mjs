@@ -7,6 +7,8 @@ import { chromium, expect } from '@playwright/test'
 
 const base = new URL(process.env.PUBLIC_SITE_ORIGIN ?? 'https://777genius.github.io/universal-agent-plugins/')
 if (!base.pathname.endsWith('/')) base.pathname += '/'
+// The product repository owns build-time security policy checks. This cross-repository
+// smoke verifies the public consumer surface and refuses redirects to another origin/path.
 const evidenceRoot = process.env.EVIDENCE_ROOT
 assert(evidenceRoot, 'EVIDENCE_ROOT is required')
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
@@ -55,7 +57,7 @@ try {
         await expect(page.locator('h1')).toHaveCount(1)
         await expect(page.locator('[data-hydrated="true"]').first()).toBeVisible()
         // Wait before interacting: catalog intentionally defers Discovery replacement during focus.
-        await expect(page.locator('.discovery-status--current, .discovery-status--cached')).toBeVisible({ timeout: 60_000 })
+        await expect(page.locator('.catalog')).toHaveAttribute('data-discovery-state', /current|cached/, { timeout: 60_000 })
         await fit()
       }
       const registry = await page.evaluate(() => window.__NUXT__.config.public.registryIndex)
@@ -72,12 +74,12 @@ try {
       assert.equal(JSON.parse(directoryRaw).sequence, registry.snapshot_sequence)
       assert.equal(directoryEnvelope.sequence, registry.snapshot_sequence)
       assert.equal(directoryEnvelope.snapshot_digest, digest(directoryRaw))
-      const cached = await page.evaluate(async () => {
-        const entry = new URL('discovery/.browser-lkg.json', `${location.origin}${new URL('.', location.href).pathname}`)
+      const cached = await page.evaluate(async siteBase => {
+        const entry = new URL('discovery/.browser-lkg.json', siteBase)
         const response = await (await caches.open('uap-discovery-v1')).match(entry)
         if (!response?.ok) throw new Error('No signature-verified browser Discovery cache')
         return response.json()
-      })
+      }, base.href)
       const discoveryRaw = Buffer.from(cached.bytes.snapshot, 'base64')
       const discovery = JSON.parse(discoveryRaw)
       const discoveryEnvelope = JSON.parse(Buffer.from(cached.bytes.envelope, 'base64'))
@@ -85,14 +87,13 @@ try {
       assert(discovery.records.length >= 2000)
       assert.equal(discoveryEnvelope.sequence, discovery.sequence)
       assert.equal(discoveryEnvelope.snapshot_digest, digest(discoveryRaw))
-      await expect(page.locator('.discovery-status')).toContainText(new RegExp(
-        `(?:Showing ${discovery.records.length} recently found community packages|${discovery.records.length} community packages found on GitHub)`,
-      ))
+      await expect(page.locator('.catalog-count')).toContainText(/plugins/)
       const search = page.getByRole('searchbox', { name: 'Search plugins' })
       const checkCard = async (query, card, selector) => {
         await search.fill(query)
         await expect(card).toHaveCount(1)
         await expect(card).toBeVisible()
+        await card.getByRole('button', { name: new RegExp(`^Install ${query}$`, 'i') }).click()
         await card.getByRole('button', { name: /Choose clients for/ }).click()
         for (const name of ['Codex', 'Cursor', 'Kiro']) {
           const checkbox = page.getByRole('checkbox', { name: new RegExp(`^${name}(?:\\s|$)`) })
@@ -108,19 +109,19 @@ try {
         return command
       }
       const chrome = page.locator('.plugin-card')
-        .filter({ has: page.locator('a[href$="/plugins/chrome-devtools"]') })
-        .filter({ has: page.locator('.plugin-card__ribbon', { hasText: /^Reviewed plugin$/ }) })
+        .filter({ has: page.locator('a[href$="/plugins/chrome-devtools/"]') })
+        .filter({ has: page.locator('.plugin-card__ribbon', { hasText: /^reviewed listing$/i }) })
       const chromeCommand = await checkCard('Chrome DevTools', chrome, 'chrome-devtools')
-      await expect(chrome).toContainText('Ready for 10 supported agents')
-      const selector = 'discovery:upstash/context7//plugins/agent-plugins/context7'
-      const context7 = page.locator('.plugin-card').filter({ has: page.locator('.command-snippet code', { hasText: selector }) })
-      const context7Command = await checkCard('context7', context7, selector)
-      await expect(context7).toContainText('Found on GitHub')
+      await expect(chrome).toContainText('8 installed automatically · 2 require one final step')
+      const selector = 'discovery:vectorize-io/hindsight//hindsight-integrations/agent-plugin'
+      const hindsight = page.locator(`.plugin-card[data-install-source="${selector}"]`)
+      const communityCommand = await checkCard('hindsight', hindsight, selector)
+      await expect(hindsight).toContainText('Found on GitHub')
       assert.deepEqual(errors, [])
       evidence.viewports.push({ viewport, directory_sequence: registry.snapshot_sequence,
         directory_snapshot_digest: digest(directoryRaw), discovery_sequence: discovery.sequence,
         discovery_snapshot_digest: digest(discoveryRaw), discovery_records: discovery.records.length,
-        chrome_command: chromeCommand, context7_command: context7Command, ui_errors: errors,
+        chrome_command: chromeCommand, community_command: communityCommand, ui_errors: errors,
         commands_executed: false, clipboard_verified: true })
     } finally { await context.close() }
   }
