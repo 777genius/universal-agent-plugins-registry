@@ -79,6 +79,42 @@ def checked_identity(data: dict[str, Any], args: argparse.Namespace) -> dict[str
     }
 
 
+def validate_info_clients(value: Any, clients: list[str]) -> None:
+    require(isinstance(value, list), "info clients are absent")
+    shared_backend = {"copilot", "vscode"}
+    expected_bindings = len(clients) - (1 if shared_backend.issubset(clients) else 0)
+    require(len(value) == expected_bindings, "info physical binding count differs")
+    logical_surfaces: set[str] = set()
+    shared_bindings = 0
+    for item in value:
+        require(isinstance(item, dict), "info client binding is malformed")
+        client_id = item.get("client_id")
+        require(isinstance(client_id, str) and client_id in clients, "info client identity differs")
+        require(item.get("materialization") == "materialized", "info reports incomplete materialization")
+        affected = item.get("affected_surfaces")
+        surfaces = {client_id}
+        if affected is not None:
+            require(
+                isinstance(affected, list)
+                and all(isinstance(surface, str) for surface in affected)
+                and len(affected) == len(set(affected)),
+                "info affected surfaces are malformed",
+            )
+            surfaces = set(affected)
+            require(client_id in surfaces, "info physical owner is absent from affected surfaces")
+        if surfaces == shared_backend:
+            shared_bindings += 1
+        else:
+            require(surfaces == {client_id}, "info reports an unexpected shared backend")
+        require(logical_surfaces.isdisjoint(surfaces), "info logical client surfaces overlap")
+        logical_surfaces.update(surfaces)
+    require(logical_surfaces == set(clients), "info logical client coverage differs")
+    require(
+        shared_bindings == (1 if shared_backend.issubset(clients) else 0),
+        "info shared Copilot and VS Code binding differs",
+    )
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     clients = args.targets.split(",")
     require(
@@ -123,16 +159,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         info = invoke(args.cli, "info", [args.product_id, *common], env=environment, cwd=roots["workspace"])
         info_data = info.get("data")
         require(isinstance(info_data, dict) and info_data.get("name") == args.product_id, "info identity differs")
-        info_clients = info_data.get("clients")
-        require(isinstance(info_clients, list) and len(info_clients) == len(clients), "info client count differs")
-        require(
-            {item.get("client_id") for item in info_clients if isinstance(item, dict)} == set(clients),
-            "info client identities differ",
-        )
-        require(
-            all(item.get("materialization") == "materialized" for item in info_clients),
-            "info reports incomplete materialization",
-        )
+        validate_info_clients(info_data.get("clients"), clients)
         doctor = invoke(args.cli, "doctor", [args.product_id, *common], env=environment, cwd=roots["workspace"])
         require(isinstance(doctor.get("data"), dict), "doctor data is absent")
         remove = invoke(
