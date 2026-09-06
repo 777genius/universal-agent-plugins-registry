@@ -100,24 +100,24 @@ manual certification or runtime proof.
 The previous release and publisher notes remain in Git history. The current
 public tuple is:
 
-- CLI main: `b0b4268e964fa5808debbcc998bd174670faeb6e`; the public release commit is
+- CLI main: `a281a54c77f618903868008f838858aa3acbf0ca`; the public release commit is
   `aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c`.
-- Registry evidence checkpoint: `5db2c89c99d876ecb2be8a884705e50434489c10`.
+- Registry workflow checkpoint: `76fb1a22fb85b86f80b3b4cc4c92b5c749c34e3d`.
   This documentation-only closure may advance registry `main` without changing
   the signed production tuple below.
 - Public GitHub release: [`agentplugins-v0.1.51`](https://github.com/777genius/universal-agent-plugins/releases/tag/agentplugins-v0.1.51), immutable and non-draft, with six native binaries, checksums, and `release-manifest.json`.
 - npm: `universal-agent-plugins@0.1.51` is public and is the `latest` tag. The
   Trusted Publisher workflow is working; no token workaround is used.
-- Directory sequence 36: 28 products and 36 distributions. Public snapshot
-  digest: `sha256:2d3fa2b6c88a50cd3143a8d32b56a4560462b2b0328c3f29e40c37b07e227b16`.
-- Discovery sequence 39: 3,024 records, source commit
-  `3a994c89e94419ea389c6302b964b75d35b628e2`, publication `34003029529-1`.
+- Directory sequence 37: 28 products and 36 distributions. Public snapshot
+  digest: `sha256:f03cbf0e4e12e0f01d59497765ef547e5ed83df9cc11223bf1c9a64d3d06ba7f`.
+- Discovery sequence 40: 3,024 records, source commit
+  `e0fdeb1761017ccdbeb137423c716b9b22bc62ce`, publication `34014943629-2`.
   The signed envelope, snapshot, search projection, and latest pointer are
   public and return HTTP 200.
-- Security sequence 5: 2,751 subjects in the signed snapshot; 2,746 checks
+- Security sequence 8: 2,751 subjects in the signed snapshot; 2,746 checks
   completed and five upstream sources were temporarily unavailable. Publication
-  `34004900232-1`, digest
-  `sha256:9f27ad24d7fa5bec57bca83302797d765907cb478bfb3c611bd41addf83b880e`.
+  `34017085675-1`, digest
+  `sha256:7f24057d9e37d9905cc2371621e25dc201000347a95594ec7001d71ea24242a7`.
 - Public CLI search resolves reviewed short names before Discovery and works
   from a fresh home without executing an indexed package.
 - A fresh isolated public Directory lifecycle passed for the upstream
@@ -131,14 +131,19 @@ public tuple is:
   The merged E2E hardening workflow also proves immutable-source repair for a
   reviewed public package in the future-publish lane; the 0.1.51 package itself
   remains immutable.
-- GitHub-hosted run `34009449785` validates the current public npm package,
-  reviewed and discovered packages across eight client targets, covering managed
+- GitHub-hosted run `34018131609` validates the current public npm package,
+  reviewed and discovered packages across ten client targets, covering managed
   installation and prepared-package delivery, plus the live desktop/mobile site
-  against the merged registry code. The site displays eight automatic and two
-  final-step delivery modes; this is not proof that runtime or activation ran in
-  all ten clients.
-  Compatibility mirror run `34009298114` promoted Directory 36, Discovery 39,
-  and Security 5 to the product origin before the final consumer smoke.
+  against the merged registry code. It includes the Chrome DevTools lifecycle for
+  Claude Code, Gemini CLI, OpenCode, Cline, and Windsurf, plus reviewed-package
+  lifecycle coverage for Codex, Cursor, and Kiro. This is installation/lifecycle
+  evidence, not a claim that account-bound OAuth or tool runtime ran in every
+  client. Compatibility mirror run `34017913047` promoted Directory 37,
+  Discovery 40, and Security 8 to the product origin before the final consumer
+  smoke; all mirrored feed files match the Registry origin byte for byte.
+- Catalog readiness run `34014230574` passed 30 lifecycle cases, 293 explicit
+  target rows, and four credential-free MCP probes before Directory 37 was
+  published.
 - The public browser artifact covers 1440x1000 and 390x844 viewports with no UI
   errors or horizontal overflow. It verifies exact reviewed and Discovery
   commands plus clipboard output without executing either command in the page.
@@ -273,7 +278,7 @@ as environment limitations, not fixed by changing production contracts.
       authoring input only.
 - [x] Six native `agentplugins-v0.1.51` artifacts, checksums, and manifest are
       public and verified.
-- [x] Directory 36, Discovery 39, and Security 5 are signed, complete, public,
+- [x] Directory 37, Discovery 40, and Security 8 are signed, complete, public,
       and distinct; Discovery has 3,024 records at the current checkpoint.
 - [x] CLI Pages product site and byte-for-byte compatibility mirror are green.
 - [x] Public CLI Discovery search works without package execution.
@@ -291,7 +296,7 @@ as environment limitations, not fixed by changing production contracts.
 - [x] npm `0.1.51` is published with provenance and verified from a clean project.
 - [x] Post-publish `0.1.51` lifecycle evidence is recorded here.
 - [x] Final GitHub, Pages, Registry, npm, and Actions smoke is green at the
-      Directory 36 / Discovery 39 / Security 5 production tuple.
+      Directory 37 / Discovery 40 / Security 8 production tuple.
 
 ## 11. Delivery order from the current state
 
@@ -340,16 +345,16 @@ as manually runtime-tested unless the corresponding E2E evidence is present.
 ### Final production checkpoint (2026-09-06)
 
 ```text
-CLI main SHA: b0b4268e964fa5808debbcc998bd174670faeb6e
+CLI main SHA: a281a54c77f618903868008f838858aa3acbf0ca
 CLI release SHA/tag: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c / agentplugins-v0.1.51 (six platform builds and native runtime E2E green)
-Registry evidence checkpoint: 5db2c89c99d876ecb2be8a884705e50434489c10
-Directory: sequence 36, publication 33999541782, snapshot sha256:2d3fa2b6c88a50cd3143a8d32b56a4560462b2b0328c3f29e40c37b07e227b16
-Directory source/signed/materialized/shared ledger: b7e5c1057c425ba10665913cbc2f51c7542d98ef / 2cc8f63ef842b7f6d3e6bf7bb5a30905805d2350 / 4bc0b22633dcf8182f5023ff5113d184f10fe116 / 3796029af3d797436da6b3cac281f2750fa27a8a
-Discovery: sequence 39, 3,024 records, publication 34003029529-1, snapshot sha256:ad02eeb8f4b0493538f9d46dd14b7bacb22f0258eee445ce7b1d50a33bcac543, HTTP 200 pointers/snapshot/envelope/search
-Security: sequence 5, 2,751 subjects, publication 34004900232-1, snapshot sha256:9f27ad24d7fa5bec57bca83302797d765907cb478bfb3c611bd41addf83b880e
-Catalog readiness: 283 explicit target rows, 4 MCP package probes, 11 source-policy cases, all passed in fresh credential-free roots (run 34006985551)
-Pages: compatibility mirror 34009298114 and final desktop/mobile public consumer smoke 34009449785 green at Directory 36 / Discovery 39 / Security 5
-CLI search: public Directory 36 / Discovery 39, deterministic reviewed-first results
-npm: 0.1.51 public latest with Trusted Publisher provenance; synthetic 3-target lifecycle and upstream github/github Codex/Cursor lifecycle green
+Registry workflow checkpoint: 76fb1a22fb85b86f80b3b4cc4c92b5c749c34e3d
+Directory: sequence 37, publication 34011780953, snapshot sha256:f03cbf0e4e12e0f01d59497765ef547e5ed83df9cc11223bf1c9a64d3d06ba7f
+Directory source/signed/materialized/shared ledger: 42a39583aedec856d606e44272cef02df371049f / 64afda0a65d9cbaf2bbe7e206cf753047b72fae3 / 67d227a2a06d744e30fa91c8ca0fb2a3cde2d776 / 3796029af3d797436da6b3cac281f2750fa27a8a
+Discovery: sequence 40, 3,024 records, publication 34014943629-2, snapshot sha256:9eba42619f65bd505af0914d5f67c72d0e9ef65a6416306761024d2d02c38605, signed tag commit 0fbb75d440a98813a9db84f853df5d843e294c6f
+Security: sequence 8, 2,751 subjects, 2,746 checked, 5 unavailable, publication 34017085675-1, snapshot sha256:7f24057d9e37d9905cc2371621e25dc201000347a95594ec7001d71ea24242a7, signed tag commit 10915f6773dabb53ad1513dcdc3c9e4b900ba856
+Catalog readiness: 30 lifecycle cases, 293 explicit target rows, and 4 credential-free MCP probes passed (run 34014230574)
+Pages: compatibility mirror 34017913047 and final 9-job public consumer E2E 34018131609 green at Directory 37 / Discovery 40 / Security 8; product-origin feed files match Registry byte for byte
+CLI search: public Directory 37 / Discovery 40, deterministic reviewed-first results
+npm: 0.1.51 public latest with Trusted Publisher provenance and integrity sha512-R3KrYWcQAsJ3ogu0SA460rIJkUVisKrxtexFWg9lAX5PvuRtSb/UJCDCqCkhr+XezlNsB6olxZZJ80U6W2DWDQ==; synthetic 3-target lifecycle and upstream github/github Codex/Cursor lifecycle green
 OAuth/account runtime: not claimed by this checkpoint
 ```
