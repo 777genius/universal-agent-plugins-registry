@@ -312,6 +312,10 @@ jobs:
             exit 1
           fi
 
+      - name: Bind the production launch identity to the reviewed Directory
+        if: steps.selection.outputs.decision != 'none'
+        run: python3 scripts/upstream_promotion.py sync-production-identity --root .
+
       - name: Commit, push, and open the protected promotion PR
         if: steps.selection.outputs.decision != 'none'
         env:
@@ -324,7 +328,9 @@ jobs:
           DECISION: ${{ steps.selection.outputs.decision }}
         run: |
           git add -- registry catalog "compat/openai/plugins/${PRODUCT_ID}" \
-            "registry/upstream-promotion-audit/${PRODUCT_ID}/${MERGE_SHA}"
+            "registry/upstream-promotion-audit/${PRODUCT_ID}/${MERGE_SHA}" \
+            scripts/run_launch_evidence_e2e.py tests/e2e/production-launch.json \
+            tests/test_run_launch_evidence_e2e.py
           if test "$DECISION" = promote_bridge; then
             subject="feat(directory): review locked ${PRODUCT_ID} bridge"
           else

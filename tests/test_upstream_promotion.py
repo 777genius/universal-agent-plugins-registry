@@ -292,7 +292,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             )
             candidate = root / "candidate"
             candidate.mkdir()
-            for name in ("assets", "bridges", "compat", "plugins", "registry", "docs"):
+            for name in ("assets", "bridges", "compat", "plugins", "registry", "docs", "scripts", "tests"):
                 shutil.copytree(ROOT / name, candidate / name)
             next_sequence = next_chrome_bridge_sequence()
             candidate_watch = promotion.read_object(candidate / "registry/upstream-promotions.json")
@@ -371,6 +371,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             (candidate / "registry/review-search.json").write_bytes(
                 bridge_promotion.encoded(bridge_promotion.directory_search(directory))
             )
+            promotion.sync_production_directory_identity(candidate)
             product = next(item for item in directory["products"] if item["id"] == "chrome-devtools")
             projected = candidate / "compat/openai/plugins/chrome-devtools"
             shutil.rmtree(projected)
@@ -381,7 +382,13 @@ class UpstreamPromotionTests(unittest.TestCase):
                 None,
                 brand_assets=candidate / "assets",
             )
-            run_git(candidate, "add", "registry", "compat/openai/plugins/chrome-devtools")
+            run_git(
+                candidate,
+                "add",
+                "registry",
+                "compat/openai/plugins/chrome-devtools",
+                *(path.as_posix() for path in promotion.PRODUCTION_DIRECTORY_IDENTITY_PATHS),
+            )
             run_git(candidate, "commit", "-qm", "feat(directory): review locked chrome-devtools bridge")
             head_sha = run_git(candidate, "rev-parse", "HEAD")
             verdict = bridge_promotion.verify_pr(
@@ -424,6 +431,20 @@ class UpstreamPromotionTests(unittest.TestCase):
             shutil.copy2(
                 ROOT / "registry/publication/config.json",
                 repository / "registry/publication/config.json",
+            )
+            (repository / "scripts").mkdir()
+            shutil.copy2(
+                ROOT / "scripts/run_launch_evidence_e2e.py",
+                repository / "scripts/run_launch_evidence_e2e.py",
+            )
+            (repository / "tests/e2e").mkdir(parents=True)
+            shutil.copy2(
+                ROOT / "tests/e2e/production-launch.json",
+                repository / "tests/e2e/production-launch.json",
+            )
+            shutil.copy2(
+                ROOT / "tests/test_run_launch_evidence_e2e.py",
+                repository / "tests/test_run_launch_evidence_e2e.py",
             )
             run_git(repository, "add", ".")
             run_git(repository, "commit", "-qm", "base")
@@ -489,6 +510,9 @@ class UpstreamPromotionTests(unittest.TestCase):
             source = promotion.read_object(repository / "registry/directory.json")
             (repository / "registry/review-preview.json").write_bytes(promotion.encoded(promotion.directory_preview(source)))
             (repository / "registry/review-search.json").write_bytes(promotion.encoded(promotion.directory_search(source)))
+            sync = promotion.sync_production_directory_identity(repository)
+            self.assertEqual(sync["directory_source_digest"], promotion.sha256((repository / "registry/directory.json").read_bytes()))
+            self.assertEqual(set(sync["changed_paths"]), {path.as_posix() for path in promotion.PRODUCTION_DIRECTORY_IDENTITY_PATHS})
             run_git(repository, "add", ".")
             run_git(repository, "commit", "-qm", "promotion")
             head = run_git(repository, "rev-parse", "HEAD")
