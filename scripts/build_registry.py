@@ -88,6 +88,12 @@ LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.13"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
 LOCKED_NPM_LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
+    ("@hubspot/cli", "8.14.0"): frozenset({
+        (
+            "node_modules/esbuild", "0.25.12",
+            "sha512-bbPBYYrtZbkt6Os6FiTLCTFxvq4tt3JKall1vRwshA3fdVztsLAatFaZobhkBC8/BrPetoa0oksYoKXoG4ryJg==",
+        ),
+    }),
     ("@hubspot/cli", "8.14.0-beta.1"): frozenset({
         (
             "node_modules/esbuild", "0.25.12",
@@ -100,8 +106,20 @@ LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
             "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
         ),
     }),
+    ("firebase-tools", "15.29.0"): frozenset({
+        (
+            "node_modules/protobufjs", "7.6.5",
+            "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
+        ),
+    }),
 }
 LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST = {
+    ("@hubspot/cli", "8.14.0"): frozenset({
+        (
+            "node_modules/fsevents", "2.3.3",
+            "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
+        ),
+    }),
     ("@hubspot/cli", "8.14.0-beta.1"): frozenset({
         (
             "node_modules/fsevents", "2.3.3",
@@ -110,6 +128,13 @@ LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST = {
     }),
 }
 LOCKED_NPM_SECURITY_OVERRIDES = {
+    ("@upstash/context7-mcp", "4.0.5"): {
+        "qs": "6.16.0",
+    },
+    ("@hubspot/cli", "8.14.0"): {
+        "@sentry/node": "10.71.0",
+        "qs": "6.16.0",
+    },
     ("@hubspot/cli", "8.14.0-beta.1"): {
         "@sentry/node": "10.71.0",
     },
@@ -120,6 +145,14 @@ LOCKED_NPM_SECURITY_OVERRIDES = {
     ("firebase-tools", "15.28.1"): {
         "@google-cloud/pubsub": "6.0.1",
         "gaxios": "8.0.0",
+    },
+    # stream-json deliberately stays on Firebase's compatible 1.x range: the
+    # patched 3.x API removes the CommonJS paths Firebase imports. Its advisory
+    # applies to import/framework commands that are not exposed by this MCP.
+    ("firebase-tools", "15.29.0"): {
+        "@google-cloud/pubsub": "6.0.1",
+        "gaxios": "8.0.0",
+        "qs": "6.16.0",
     },
 }
 
