@@ -28,7 +28,16 @@ from build_registry import (
     validate_locked_npm_runtime,
     validated_package_facts,
 )
-from upstream_promotion import PromotionError, git, pretty, read_object, require, sha256
+from upstream_promotion import (
+    PRODUCTION_DIRECTORY_IDENTITY_PATHS,
+    PromotionError,
+    git,
+    pretty,
+    read_object,
+    require,
+    sha256,
+    verify_production_directory_identity,
+)
 from repository_identity import active_registry_repository
 
 
@@ -387,6 +396,7 @@ def verify_pr(
     promotion_paths = sorted(git(repository, "diff", "--name-only", bridge_commit, head_sha).splitlines())
     allowed_promotion_paths = {
         "registry/directory.json", "registry/review-preview.json", "registry/review-search.json", audit_path,
+        *(path.as_posix() for path in PRODUCTION_DIRECTORY_IDENTITY_PATHS),
     }
     openai_root = f"compat/openai/plugins/{product_id}"
     require(
@@ -398,6 +408,7 @@ def verify_pr(
         any(item.startswith(f"{openai_root}/") for item in promotion_paths),
         "locked bridge promotion omitted its OpenAI compatibility projection",
     )
+    verify_production_directory_identity(repository)
     raw, review = read_object(repository / raw_path), read_object(repository / audit_path)
     require(review.get("promotion_kind") == "locked_bridge", "locked bridge review kind is invalid")
     require(review.get("auto_merge") is False and review.get("manual_review_required") is True, "locked bridge manual review boundary is absent")

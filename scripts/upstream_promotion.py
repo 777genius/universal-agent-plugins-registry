@@ -31,6 +31,11 @@ BRANCH_RE = re.compile(
     r"^automation/upstream-promotion-([a-z0-9]+(?:-[a-z0-9]+)*)-([0-9a-f]{12})-([0-9a-f]{12})$"
 )
 MAX_JSON_BYTES = 262_144
+PRODUCTION_DIRECTORY_IDENTITY_PATHS = (
+    Path("tests/e2e/production-launch.json"),
+    Path("scripts/run_launch_evidence_e2e.py"),
+    Path("tests/test_run_launch_evidence_e2e.py"),
+)
 
 
 class PromotionError(Exception):
@@ -52,6 +57,53 @@ def pretty(value: object) -> bytes:
 
 def sha256(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def sync_production_directory_identity(root: Path) -> dict[str, Any]:
+    """Move the frozen launch identity with an explicitly reviewed Directory change."""
+    directory_digest = sha256((root / "registry/directory.json").read_bytes())
+    config_path = root / PRODUCTION_DIRECTORY_IDENTITY_PATHS[0]
+    config = read_object(config_path)
+    previous_digest = config.get("directory_source_digest")
+    require(
+        isinstance(previous_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", previous_digest) is not None,
+        "production Directory digest is invalid",
+    )
+    changed = []
+    for relative in PRODUCTION_DIRECTORY_IDENTITY_PATHS:
+        path = root / relative
+        body = path.read_text()
+        require(
+            body.count(previous_digest) == 1,
+            f"{relative}: expected exactly one frozen Directory digest",
+        )
+        updated = body.replace(previous_digest, directory_digest)
+        if updated != body:
+            path.write_text(updated)
+            changed.append(relative.as_posix())
+    verify_production_directory_identity(root)
+    return {
+        "schema_version": 1,
+        "outcome": "synchronized",
+        "directory_source_digest": directory_digest,
+        "changed_paths": changed,
+    }
+
+
+def verify_production_directory_identity(root: Path) -> str:
+    directory_digest = sha256((root / "registry/directory.json").read_bytes())
+    config = read_object(root / PRODUCTION_DIRECTORY_IDENTITY_PATHS[0])
+    require(
+        config.get("directory_source_digest") == directory_digest,
+        "production Directory digest differs from registry/directory.json",
+    )
+    for relative in PRODUCTION_DIRECTORY_IDENTITY_PATHS[1:]:
+        require(
+            (root / relative).read_text().count(directory_digest) == 1,
+            f"{relative}: frozen Directory digest is missing or ambiguous",
+        )
+    return directory_digest
 
 
 def read_object(path: Path, *, max_bytes: int = MAX_JSON_BYTES) -> dict[str, Any]:
@@ -506,10 +558,12 @@ def verify_pr(args: argparse.Namespace) -> dict[str, Any]:
     expected_paths = sorted([
         raw_path, *leaf_paths, "registry/directory.json", "registry/review-preview.json",
         "registry/publication/config.json",
+        *(path.as_posix() for path in PRODUCTION_DIRECTORY_IDENTITY_PATHS),
         f"{audit_root}/promotion-candidate.json", f"{audit_root}/review-record.json",
     ])
     actual_paths = sorted(git(args.repository, "diff", "--name-only", args.base_sha, args.head_sha).splitlines())
     require(actual_paths == expected_paths, f"promotion PR changed unexpected paths: {actual_paths!r} != {expected_paths!r}")
+    verify_production_directory_identity(args.repository)
     review_path = args.repository / audit_root / "review-record.json"
     candidate_path = args.repository / audit_root / "promotion-candidate.json"
     review, candidate = read_object(review_path), read_object(candidate_path)
@@ -648,6 +702,8 @@ def parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--review-record", type=Path, required=True)
     apply_parser.add_argument("--directory", type=Path, required=True)
     apply_parser.add_argument("--publication-config", type=Path, required=True)
+    sync = commands.add_parser("sync-production-identity")
+    sync.add_argument("--root", type=Path, default=ROOT)
     verify = commands.add_parser("verify-pr")
     verify.add_argument("--repository", type=Path, required=True)
     verify.add_argument("--base-sha", required=True)
@@ -667,6 +723,8 @@ def main() -> int:
             result = review_record(args)
         elif args.command == "apply":
             result = apply_candidate(args)
+        elif args.command == "sync-production-identity":
+            result = sync_production_directory_identity(args.root)
         else:
             result = verify_pr(args)
     except (PromotionError, RegistryError, jsonschema.ValidationError, OSError, KeyError, ValueError, json.JSONDecodeError) as error:

@@ -703,6 +703,25 @@ sys.modules['catalog_process_isolation']=module
             step for step in job["steps"]
             if step.get("name") == "Finalize and validate the review-required bridge promotion"
         )
+        identity = next(
+            step for step in job["steps"]
+            if step.get("name") == "Bind the production launch identity to the reviewed Directory"
+        )
+        self.assertEqual(identity["if"], "steps.selection.outputs.decision != 'none'")
+        self.assertEqual(
+            identity["run"],
+            "python3 scripts/upstream_promotion.py sync-production-identity --root .",
+        )
+        publish = next(
+            step for step in job["steps"]
+            if step.get("name") == "Commit, push, and open the protected promotion PR"
+        )
+        for path in (
+            "scripts/run_launch_evidence_e2e.py",
+            "tests/e2e/production-launch.json",
+            "tests/test_run_launch_evidence_e2e.py",
+        ):
+            self.assertIn(path, publish["run"])
         self.assertIn(
             '--previous-revision "${{ steps.predecessor.outputs.revision }}"',
             finalize["run"],
