@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "promotion/context7/769c6cd22c3d/vscode",
+  "product_id": "context7",
+  "distribution_id": "upstash/context7",
+  "release_sequence": 1,
+  "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+  "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+  "source_repository": "upstash/context7",
+  "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+  "source_path": "plugins/agent-plugins/context7",
+  "level": "materialization",
+  "outcome": "passed",
+  "client": "vscode",
+  "client_version": "isolated-configuration-fixture",
+  "installer_version": "0.1.51",
+  "adapter_version": "agentplugins-0.1.51",
+  "os": "linux",
+  "architecture": "amd64",
+  "dependency_identity": "agentplugins@0.1.51",
+  "observed_at": "2026-09-06T03:29:41Z"
+}
