@@ -18,6 +18,21 @@ class MaterializationError(Exception):
     pass
 
 
+CLIENT_ROOTS = {
+    "codex": ("home", ".codex"),
+    "cursor": ("home", ".cursor"),
+    "copilot": ("home", ".copilot"),
+    "vscode": ("config", "Code/User"),
+    "kiro": ("home", ".kiro"),
+    "claude": ("home", ".claude"),
+    "gemini": ("home", ".gemini"),
+    "opencode": ("config", "opencode"),
+    "cline": ("home", ".vscode/extensions/cline.cline"),
+    "windsurf": ("home", ".codeium/windsurf"),
+}
+CLIENT_ORDER = tuple(CLIENT_ROOTS)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise MaterializationError(message)
@@ -66,14 +81,20 @@ def checked_identity(data: dict[str, Any], args: argparse.Namespace) -> dict[str
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     clients = args.targets.split(",")
-    require(clients and len(clients) == len(set(clients)) and set(clients) <= {"codex", "cursor", "kiro"}, "targets are invalid")
+    require(
+        clients
+        and clients == [client for client in CLIENT_ORDER if client in clients]
+        and len(clients) == len(set(clients)),
+        "targets are invalid or not in canonical order",
+    )
     root = args.sandbox.resolve()
     require(not root.exists(), "sandbox already exists")
     roots = {name: root / name for name in ("home", "state", "workspace", "config", "cache", "tmp")}
     for path in roots.values():
         path.mkdir(parents=True)
-    for name in (".codex", ".cursor", ".kiro"):
-        (roots["home"] / name).mkdir()
+    for client in clients:
+        root_name, relative = CLIENT_ROOTS[client]
+        (roots[root_name] / relative).mkdir(parents=True, exist_ok=False)
     environment = {
         "PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
         "HOME": str(roots["home"]), "USERPROFILE": str(roots["home"]),
@@ -102,6 +123,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         info = invoke(args.cli, "info", [args.product_id, *common], env=environment, cwd=roots["workspace"])
         info_data = info.get("data")
         require(isinstance(info_data, dict) and info_data.get("name") == args.product_id, "info identity differs")
+        info_clients = info_data.get("clients")
+        require(isinstance(info_clients, list) and len(info_clients) == len(clients), "info client count differs")
+        require(
+            {item.get("client_id") for item in info_clients if isinstance(item, dict)} == set(clients),
+            "info client identities differ",
+        )
+        require(
+            all(item.get("materialization") == "materialized" for item in info_clients),
+            "info reports incomplete materialization",
+        )
         doctor = invoke(args.cli, "doctor", [args.product_id, *common], env=environment, cwd=roots["workspace"])
         require(isinstance(doctor.get("data"), dict), "doctor data is absent")
         remove = invoke(
@@ -117,7 +148,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "schema_version": 1, "outcome": "passed", "product_id": args.product_id,
             "repository": args.repository, "revision": args.revision, "path": args.path,
             "materialized_source": {
-                "kind": "local_bridge" if local_path is not None else "official_upstream",
+                "kind": args.local_source_kind if local_path is not None else "official_upstream",
                 "path": str(local_path.resolve()) if local_path is not None else args.path,
             },
             "clients": clients, "installer_version": args.installer_version,
@@ -141,6 +172,10 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--path", required=True)
     parser.add_argument("--local-path", type=Path)
+    parser.add_argument(
+        "--local-source-kind", choices=("local_bridge", "official_checkout"),
+        default="local_bridge",
+    )
     parser.add_argument("--targets", required=True)
     parser.add_argument("--sandbox", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
