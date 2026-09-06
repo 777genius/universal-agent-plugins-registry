@@ -155,7 +155,7 @@ class CatalogContractTests(unittest.TestCase):
         selected = gate.selected(self.snapshot, "chrome-devtools", gate.CHROME)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == selected["distribution_id"])
         for policy in distribution["release_policies"]:
-            policy["minimum_installer_version"] = "0.1.27"
+            policy["minimum_installer_version"] = "0.1.52"
         with self.assertRaisesRegex(ValueError, "newer CLI"):
             gate.plan(self.snapshot)
         self.snapshot = catalog()

@@ -32,8 +32,8 @@ env:
   SIGNED_LEDGER_SHA: ${{ inputs.signed_ledger_sha }}
   MATERIALIZED_LEDGER_SHA: ${{ inputs.materialized_ledger_sha }}
   BASELINE_LEDGER_SHA: ${{ inputs.baseline_ledger_sha }}
-  AGENTPLUGINS_VERSION: "0.1.26"
-  AGENTPLUGINS_COMMIT: 24c2a74340d382abdc03a9f65563b951a9c1fcfb
+  AGENTPLUGINS_VERSION: "0.1.51"
+  AGENTPLUGINS_COMMIT: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c
   SOURCE_POLICY_AGENTPLUGINS_VERSION: "0.1.24"
   SOURCE_POLICY_AGENTPLUGINS_COMMIT: c78c79e44efd5ad07083d63436d9170b107df6cb
   CLAUDE_CODE_VERSION: "2.1.251"
@@ -140,14 +140,14 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/release"
           gh release download "agentplugins-v${AGENTPLUGINS_VERSION}" \
-            --repo 777genius/plugin-kit-ai \
+            --repo 777genius/universal-agent-plugins \
             --pattern "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
             --pattern checksums.txt --pattern release-manifest.json \
             --dir "$RUNNER_TEMP/release"
           cd "$RUNNER_TEMP/release"
-          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = 9867ad3cac009c45616ff41c06e019ada2c74a10e14a4f025c003971732a20a4
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 2ec815b4f6a9ead2f0c0a0ac00bf914620093fa4096f894f4300c6ad0b2bf223
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 859618eec97dc7f28f599d6c9ff098c155cfb524d8ffc4481737dc1af06bff30
+          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = bc2b5e546394eb176eebd97226972eec9c60f8f1518bc7981ead6ea752c57a53
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = ca47809c05bb5a409232d81e72284cd007c0a88bef6a6c2d416c9e1795d798f3
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = a602e493cc911af64b33a9f572c8925c719b6416e5672c744c0e6673159856b4
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib, json, os
@@ -164,8 +164,8 @@ jobs:
           assert asset["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
           PY
           for asset in "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
-            gh attestation verify "$asset" --repo 777genius/plugin-kit-ai \
-              --signer-workflow 777genius/plugin-kit-ai/.github/workflows/agentplugins-release.yml \
+            gh attestation verify "$asset" --repo 777genius/universal-agent-plugins \
+              --signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml \
               --source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners
           done
           chmod +x "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
