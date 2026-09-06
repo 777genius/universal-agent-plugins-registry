@@ -64,6 +64,24 @@ class BarePublicationCasTests(unittest.TestCase):
         git(self.publisher, "commit", "-qm", message)
         return git(self.publisher, "rev-parse", "HEAD")
 
+    def commit_feed(self, parent: str, feed: str, sequence: int) -> str:
+        git(self.publisher, "checkout", "-q", "--detach", parent)
+        stem = f"{sequence:020d}"
+        paths = [
+            f"{feed}/latest.json",
+            f"{feed}/snapshots/{stem}.envelope.json",
+            f"{feed}/snapshots/{stem}.json",
+        ]
+        if feed == "discovery":
+            paths.append(f"{feed}/search/{stem}.json")
+        for path in paths:
+            target = self.publisher / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("{}\n")
+        git(self.publisher, "add", *paths)
+        git(self.publisher, "commit", "-qm", f"chore({feed}): publish sequence {sequence}")
+        return git(self.publisher, "rev-parse", "HEAD")
+
     def objects(self, publication_id: str = "run-1", message: str = "ledger Q") -> tuple[str, str]:
         marker = cas.create_marker(self.publisher, self.source, publication_id)
         ledger = self.commit_object(self.source, message)
@@ -260,30 +278,28 @@ class BarePublicationCasTests(unittest.TestCase):
             cas.RefState(main_new, ledger_new, self.source),
         )
 
-    def test_staged_lineage_preserves_discovery_append_and_approves_materialization(self) -> None:
+    def test_staged_lineage_preserves_discovery_and_security_appends_and_approves_materialization(self) -> None:
         marker, signed = self.objects()
         self.publish(marker, signed)
         materialized = self.commit_object(
             signed, "chore(directory): materialize signed production site"
         )
-        discovery = self.commit_path(
-            materialized, "discovery/latest.json", "{}\n",
-            "chore(discovery): publish sequence 2",
-        )
+        discovery = self.commit_feed(materialized, "discovery", 2)
+        security = self.commit_feed(discovery, "security", 3)
         self.assertEqual(
-            cas.validate_staged_lineage(self.publisher, discovery, signed),
+            cas.validate_staged_lineage(self.publisher, security, signed),
             materialized,
         )
         git(
             self.publisher, "push", "-q", "origin",
-            f"{discovery}:refs/heads/directory-publication-ledger",
+            f"{security}:refs/heads/directory-publication-ledger",
         )
         main_new = self.commit_object(marker, "mechanical evidence pointers")
-        ledger_new = self.commit_object(discovery, "permanent evidence")
+        ledger_new = self.commit_object(security, "permanent evidence")
         self.assertEqual(
             cas.evidence_transition(
                 self.publisher, "origin", main_old=marker, main_new=main_new,
-                ledger_old=discovery, ledger_new=ledger_new,
+                ledger_old=security, ledger_new=ledger_new,
                 approval_target=materialized, approval_tag=APPROVAL_TAG,
             ),
             "published",
@@ -296,7 +312,7 @@ class BarePublicationCasTests(unittest.TestCase):
             cas.RefState(main_new, ledger_new, materialized),
         )
 
-    def test_staged_lineage_rejects_non_discovery_append(self) -> None:
+    def test_staged_lineage_rejects_non_feed_append(self) -> None:
         _marker, signed = self.objects()
         materialized = self.commit_object(
             signed, "chore(directory): materialize signed production site"
@@ -304,8 +320,30 @@ class BarePublicationCasTests(unittest.TestCase):
         hostile = self.commit_path(
             materialized, "index.html", "changed\n", "hostile site append",
         )
-        with self.assertRaisesRegex(cas.CasError, "non-Discovery"):
+        with self.assertRaisesRegex(cas.CasError, "unsupported post-materialization"):
             cas.validate_staged_lineage(self.publisher, hostile, signed)
+
+    def test_staged_lineage_rejects_feed_mutation_or_mixed_paths(self) -> None:
+        _marker, signed = self.objects()
+        materialized = self.commit_object(
+            signed, "chore(directory): materialize signed production site"
+        )
+        discovery = self.commit_feed(materialized, "discovery", 2)
+        mutated = self.commit_path(
+            discovery, "discovery/snapshots/00000000000000000002.json", "changed\n",
+            "chore(discovery): publish sequence 3",
+        )
+        with self.assertRaisesRegex(cas.CasError, "exact immutable publication shape"):
+            cas.validate_staged_lineage(self.publisher, mutated, signed)
+
+        mixed = self.commit_feed(discovery, "security", 3)
+        git(self.publisher, "checkout", "-q", "--detach", mixed)
+        (self.publisher / "index.html").write_text("changed\n")
+        git(self.publisher, "add", "index.html")
+        git(self.publisher, "commit", "--amend", "-qm", "chore(security): publish sequence 3")
+        mixed = git(self.publisher, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(cas.CasError, "exact immutable publication shape"):
+            cas.validate_staged_lineage(self.publisher, mixed, signed)
 
     def test_evidence_transition_resolves_lost_response_by_exact_three_ref_readback(self) -> None:
         main_new = self.commit_object(self.source, "mechanical evidence pointers")
