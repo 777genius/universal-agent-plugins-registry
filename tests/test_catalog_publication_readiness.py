@@ -107,6 +107,56 @@ class CatalogContractTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 gate.context(args, self.snapshot, self.identity)
 
+    def test_identity_accepts_omitted_empty_version_but_not_a_wrong_version(self):
+        selection = gate.selected(self.snapshot, "github", gate.CORE)
+        self.assertEqual(selection["package_version"], "")
+        source = selection["package_source"]
+        data = {
+            "plugin": selection["product_id"],
+            "source": f"{source['repository']}//{source['path']}",
+            "revision": source["revision"],
+            "tree_digest": selection["tree_digest"],
+            "manifest_digest": selection["manifest_digest"],
+            "directory": {
+                "product_id": selection["product_id"],
+                "distribution_id": selection["distribution_id"],
+                "distribution_kind": selection["distribution_kind"],
+                "desired_release_sequence": selection["release_sequence"],
+                "snapshot_schema": 1,
+                "snapshot_sequence": self.identity["sequence"],
+                "snapshot_digest": self.identity["snapshot_digest"],
+            },
+        }
+
+        gate.check_identity(data, selection, self.identity)
+        data["version"] = "unexpected"
+        with self.assertRaisesRegex(ValueError, "wrong version"):
+            gate.check_identity(data, selection, self.identity)
+
+    def test_identity_still_requires_a_nonempty_version(self):
+        selection = gate.selected(self.snapshot, "context7", gate.CORE)
+        self.assertTrue(selection["package_version"])
+        source = selection["package_source"]
+        data = {
+            "plugin": selection["product_id"],
+            "source": f"{source['repository']}//{source['path']}",
+            "revision": source["revision"],
+            "tree_digest": selection["tree_digest"],
+            "manifest_digest": selection["manifest_digest"],
+            "directory": {
+                "product_id": selection["product_id"],
+                "distribution_id": selection["distribution_id"],
+                "distribution_kind": selection["distribution_kind"],
+                "desired_release_sequence": selection["release_sequence"],
+                "snapshot_schema": 1,
+                "snapshot_sequence": self.identity["sequence"],
+                "snapshot_digest": self.identity["snapshot_digest"],
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "wrong version"):
+            gate.check_identity(data, selection, self.identity)
+
     def test_new_uncovered_target_policy_fails_closed(self):
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "upstash/context7")
         policy = next(item for item in distribution["release_policies"] if item["status"] == "active")

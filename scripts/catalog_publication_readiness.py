@@ -332,10 +332,14 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
 
 def check_identity(data: dict, selection: dict, ctx: dict) -> None:
     source = selection["package_source"]
+    # The CLI omits an optional empty package version from its JSON report.
+    # Normalize only that field; a missing non-empty version must still fail.
+    identity = dict(data)
+    identity.setdefault("version", "")
     for key, expected in {"plugin": selection["product_id"], "version": selection["package_version"],
                           "source": f"{source['repository']}//{source['path']}", "revision": source["revision"],
                           "tree_digest": selection["tree_digest"], "manifest_digest": selection["manifest_digest"]}.items():
-        require(data.get(key) == expected, f"CLI selected wrong {key}")
+        require(identity.get(key) == expected, f"CLI selected wrong {key}")
     directory = data.get("directory", {})
     for key, expected in {"product_id": selection["product_id"], "distribution_id": selection["distribution_id"],
                           "distribution_kind": selection["distribution_kind"], "desired_release_sequence": selection["release_sequence"],
