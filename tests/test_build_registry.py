@@ -1377,6 +1377,12 @@ class DirectoryDomainTests(unittest.TestCase):
             ("@hubspot/cli", "8.14.0"),
             registry.LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST,
         )
+        for historical in (("@hubspot/cli", "8.14.0-beta.1"), ("firebase-tools", "15.28.1")):
+            self.assertTrue(
+                historical in registry.LOCKED_NPM_SECURITY_OVERRIDES
+                or historical in registry.LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST,
+                f"historical runtime policy must remain available for {historical}",
+            )
 
     def test_firebase_locked_runtime_is_active_at_sequence_five(self) -> None:
         package = registry.ROOT / "plugins" / "firebase"
