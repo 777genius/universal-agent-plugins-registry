@@ -2812,7 +2812,7 @@
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:f208567833612fed4e0f0784029a08692f53e00a1d5df4005c188439524c93be",
+          "tree_digest": "sha256:7efde1ee6ac005e6b4f7b205a72ace200005c3377a7e303b4c323872748f4cc5",
           "manifest_digest": "sha256:64e86df5ae3c49bfb23519d2ee83be7f508dd06ac9fbcd7b21f6e38aa23f34d5",
           "components": [
             "mcp"
@@ -3460,7 +3460,7 @@
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-        "tree_digest": "sha256:93bc0a22f594f72fb7b884abc27a0841251c6c7673e7ad5368daecd4aae05fe8",
+          "tree_digest": "sha256:082c691d98c244861db7931b916336188a2ad87de75cd9d3e0d1042b1bad242b",
           "manifest_digest": "sha256:a82b126d4b7e50a343e217e444444ed755685f785e47f4abc0c913410a1b1d09",
           "components": [
             "mcp"
@@ -4822,8 +4822,8 @@
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-        "tree_digest": "sha256:d6acbc5c5b50dfd4ae2cc699c80e7d660c44b3d0a2d455210954071136574d8b",
-          "manifest_digest": "sha256:f53098656008e93bfe91b5dfe6d07340b7d99b7dbfbff730749c3ec9273e6daf",
+          "tree_digest": "sha256:adc16ff599904d52954321e6c9437a8f01949ee857a433d9e37ae97db4c407ff",
+          "manifest_digest": "sha256:79e3eb54dec634886411729e176f7c1b3085f2e1ac980a870952f98818de7b3d",
           "components": [
             "mcp"
           ]

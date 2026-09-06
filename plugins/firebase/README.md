@@ -14,7 +14,7 @@ This is an independent community package for [Agent Plugins 1.0](https://agent-p
 
 - Component: MCP server
 - Transport: `stdio`
-- Runtime: integrity-locked `firebase-tools@15.28.1`; install scripts are disabled. The ignored `protobufjs@7.6.5` install script is allowlisted by exact path, version, and integrity; optional `fsevents` and `re2` are omitted
+- Runtime: integrity-locked `firebase-tools@15.29.0`; install scripts are disabled. The ignored `protobufjs@7.6.5` install script is allowlisted by exact path, version, and integrity; optional `fsevents` and `re2` are omitted
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Security audit: the exact lockfile reports 0 known vulnerabilities after reviewed overrides pin fixed transitive dependency lines
 - Upstream documentation: https://firebase.google.com

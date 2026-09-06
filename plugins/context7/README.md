@@ -14,7 +14,7 @@ This is an independent community package for [Agent Plugins 1.0](https://agent-p
 
 - Component: MCP server
 - Transport: `stdio`
-- Runtime: integrity-locked `@upstash/context7-mcp@4.0.3`; install scripts are disabled
+- Runtime: integrity-locked `@upstash/context7-mcp@4.0.5`; install scripts are disabled
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Upstream documentation: https://context7.com
 - Authentication: No credential is declared by the package. Context7 may apply its own service limits.
