@@ -349,7 +349,7 @@ CLI main SHA: a281a54c77f618903868008f838858aa3acbf0ca
 CLI release SHA/tag: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c / agentplugins-v0.1.51 (six platform builds and native runtime E2E green)
 Registry workflow checkpoint: 76fb1a22fb85b86f80b3b4cc4c92b5c749c34e3d
 Directory: sequence 37, publication 34011780953, snapshot sha256:f03cbf0e4e12e0f01d59497765ef547e5ed83df9cc11223bf1c9a64d3d06ba7f
-Directory source/signed/materialized/shared ledger: 42a39583aedec856d606e44272cef02df371049f / 64afda0a65d9cbaf2bbe7e206cf753047b72fae3 / 67d227a2a06d744e30fa91c8ca0fb2a3cde2d776 / 3796029af3d797436da6b3cac281f2750fa27a8a
+Directory source/signed/materialized/current shared ledger: 42a39583aedec856d606e44272cef02df371049f / 64afda0a65d9cbaf2bbe7e206cf753047b72fae3 / 67d227a2a06d744e30fa91c8ca0fb2a3cde2d776 / 10915f6773dabb53ad1513dcdc3c9e4b900ba856
 Discovery: sequence 40, 3,024 records, publication 34014943629-2, snapshot sha256:9eba42619f65bd505af0914d5f67c72d0e9ef65a6416306761024d2d02c38605, signed tag commit 0fbb75d440a98813a9db84f853df5d843e294c6f
 Security: sequence 8, 2,751 subjects, 2,746 checked, 5 unavailable, publication 34017085675-1, snapshot sha256:7f24057d9e37d9905cc2371621e25dc201000347a95594ec7001d71ea24242a7, signed tag commit 10915f6773dabb53ad1513dcdc3c9e4b900ba856
 Catalog readiness: 30 lifecycle cases, 293 explicit target rows, and 4 credential-free MCP probes passed (run 34014230574)
