@@ -22,6 +22,7 @@ const packages = {
   'cloudflare-bindings': { type: 'remote', url: 'https://bindings.mcp.cloudflare.com/mcp' },
   'cloudflare-observability': { type: 'remote', url: 'https://observability.mcp.cloudflare.com/mcp' },
   firecrawl: { type: 'remote', url: 'https://mcp.firecrawl.dev/v2/mcp' },
+  tinyfish: { type: 'remote', url: 'https://agent.tinyfish.ai/mcp' },
   playwright: { type: 'locked-local' },
 };
 const name = process.argv[2];

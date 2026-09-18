@@ -56,7 +56,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 293)
+        self.assertEqual(len(artifact["rows"]), 303)
         self.assertEqual(len(artifact["static_metadata"]), 2)
         self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
@@ -768,7 +768,7 @@ class CatalogContractTests(unittest.TestCase):
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                self.assertEqual(lifecycle.call_count, 30)
+                self.assertEqual(lifecycle.call_count, 31)
                 default_call = next(call for call in lifecycle.call_args_list
                                     if call.args[2]["selector"] == "github/github")
                 self.assertEqual(default_call.args[1].name, "default-github")
