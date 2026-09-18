@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "product_count": 28,
+  "product_count": 29,
   "products": [
     {
       "id": "agent-code-navigator",
@@ -6895,6 +6895,238 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:4605084fd9f2f773c8eafa3741b31f639f5f5a8771320d8a7a91f5a5e1db1034",
           "manifest_digest": "sha256:bb0672e8cd411b1c8e0872a5f7f0abc95f9c68f008802d42a2cd16a689deeb11"
+        }
+      ]
+    },
+    {
+      "id": "tinyfish",
+      "display_name": "TinyFish",
+      "description": "Community package for TinyFish MCP. Search the live web, fetch clean page content, and run browser automations through TinyFish's hosted server.",
+      "aliases": [
+        "tinyfish"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "browser-automation",
+        "fetch",
+        "mcp",
+        "search",
+        "tinyfish"
+      ],
+      "default_distribution": "777genius/tinyfish-bridge",
+      "fallback_order": [
+        "777genius/tinyfish-bridge"
+      ],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "claude",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cline",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "gemini",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kiro",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/tinyfish-bridge",
+          "release_sequence": 1
+        }
+      ],
+      "distributions": [
+        {
+          "id": "777genius/tinyfish-bridge",
+          "kind": "community_bridge",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "1.2.4",
+          "components": [
+            "mcp"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/tinyfish"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:78fb42e51c7c11cf2cefc8891bc7dbb40b8777e84d7299549176bfcac23025a1",
+          "manifest_digest": "sha256:6f3dc73deeb2c23ea38e55d3981bd1e24a681308902001b8e3dd7dd36fea826f"
         }
       ]
     },

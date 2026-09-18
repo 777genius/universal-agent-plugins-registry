@@ -50,6 +50,7 @@ CANONICAL_PRODUCT_IDS = {
     "statsig",
     "stripe",
     "supabase",
+    "tinyfish",
     "vercel",
 }
 
@@ -1055,6 +1056,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "firecrawl": ["777genius/firecrawl-bridge"],
             "playwright": ["777genius/playwright-bridge"],
             "github": ["777genius/github", "777genius/github-bridge"],
+            "tinyfish": ["777genius/tinyfish-bridge"],
         }
         distribution_ids = {item["id"] for item in source["distributions"]}
         if "github/github" in distribution_ids:
@@ -1638,6 +1640,7 @@ class DirectoryDomainTests(unittest.TestCase):
             "777genius/firecrawl-bridge": ("firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e"),
             "777genius/playwright-bridge": ("microsoft/playwright-mcp", "8a13ef8e9f7385a0f89477922127f31cbfde9761"),
             "777genius/github-bridge": ("github/github-mcp-server", "fcdd664099f957c4a7dc183d9381cef191e8c8a9"),
+            "777genius/tinyfish-bridge": ("tinyfish-io/tinyfish-cookbook", "8615317f6db58ae776dd53817ac30668c1db5ef8"),
         }
         for distribution_id, provenance in expected.items():
             release = distributions[distribution_id]["releases"][-1]

@@ -908,6 +908,36 @@
     },
     {
       "schema_version": 1,
+      "id": "tinyfish",
+      "display_name": "TinyFish",
+      "description": "Community package for TinyFish MCP. Search the live web, fetch clean page content, and run browser automations through TinyFish's hosted server.",
+      "manifest_name": "tinyfish",
+      "aliases": [
+        "tinyfish"
+      ],
+      "reserved_aliases": [
+        "tinyfish"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "browser-automation",
+        "fetch",
+        "mcp",
+        "search",
+        "tinyfish"
+      ],
+      "minimum_capabilities": {
+        "skills": "optional",
+        "mcp": "required"
+      },
+      "default_distribution": "777genius/tinyfish-bridge",
+      "distributions": [
+        "777genius/tinyfish-bridge"
+      ]
+    },
+    {
+      "schema_version": 1,
       "id": "vercel",
       "display_name": "Vercel",
       "description": "Community package for the official Vercel hosted MCP plugin for project, deployment, log, and documentation workflows through Vercel's remote MCP service.",
@@ -2789,10 +2819,10 @@
           "package_version": "0.2.1",
           "manifest_name": "context7",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "package_source": {
-        "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
-        "path": "plugins/context7"
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
+            "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:9220051c7d8423acc8a9b41c016ba60552ef2637a483bb7db60064942b00116a",
@@ -3437,10 +3467,10 @@
           "package_version": "0.2.2",
           "manifest_name": "firebase",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "package_source": {
-        "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
-        "path": "plugins/firebase"
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
+            "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:330c919a37accbfa408c8a19459bbd19ac5ac51c93a51acf03abd26a96f7cded",
@@ -4799,10 +4829,10 @@
           "package_version": "0.2.2",
           "manifest_name": "hubspot-developer",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "package_source": {
-        "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
-        "path": "plugins/hubspot-developer"
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
+            "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:467da672168c6d69e4df178ada4f0f606c9f7ec7bfa11744eece7e6c9ef275ba",
@@ -6046,6 +6076,127 @@
             "mcp"
           ],
           "published_at": "2026-08-09T22:28:33Z"
+        }
+      ],
+      "release_policies": [
+        {
+          "release_sequence": 1,
+          "status": "active",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "777genius/tinyfish-bridge",
+      "product_id": "tinyfish",
+      "kind": "community_bridge",
+      "status": "active",
+      "packager": "777genius",
+      "releases": [
+        {
+          "sequence": 1,
+          "package_version": "1.2.4",
+          "manifest_name": "tinyfish",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/tinyfish"
+          },
+          "build_provenance": {
+            "upstream_repository": "tinyfish-io/tinyfish-cookbook",
+            "upstream_revision": "8615317f6db58ae776dd53817ac30668c1db5ef8"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:78fb42e51c7c11cf2cefc8891bc7dbb40b8777e84d7299549176bfcac23025a1",
+          "manifest_digest": "sha256:6f3dc73deeb2c23ea38e55d3981bd1e24a681308902001b8e3dd7dd36fea826f",
+          "components": [
+            "mcp"
+          ]
         }
       ],
       "release_policies": [

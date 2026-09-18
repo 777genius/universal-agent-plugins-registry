@@ -110,6 +110,10 @@
       "text": "supabase community package for the official supabase mcp integration for development and database operations from agent workflows. supabase agent-plugins ai-agents backend mcp plugins postgres supabase"
     },
     {
+      "product_id": "tinyfish",
+      "text": "tinyfish community package for tinyfish mcp. search the live web, fetch clean page content, and run browser automations through tinyfish's hosted server. tinyfish agent-plugins ai-agents browser-automation fetch mcp search tinyfish"
+    },
+    {
       "product_id": "vercel",
       "text": "vercel community package for the official vercel hosted mcp plugin for project, deployment, log, and documentation workflows through vercel's remote mcp service. vercel agent-plugins ai-agents deployments mcp plugins vercel"
     }

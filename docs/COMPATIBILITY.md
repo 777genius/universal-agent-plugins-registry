@@ -44,6 +44,7 @@ update; changing source is an explicit `switch`.
 | `statsig` | Streamable HTTP | Client-managed Statsig authorization |
 | `stripe` | Streamable HTTP | Client-managed Stripe OAuth; may expose write tools |
 | `supabase` | Streamable HTTP | Client-managed auth and project scoping; development/test data only per upstream guidance |
+| `tinyfish` | Streamable HTTP | Client-managed TinyFish OAuth |
 | `vercel` | Streamable HTTP | Client-managed Vercel OAuth |
 
 ## OpenAI delivery boundary
@@ -51,7 +52,7 @@ update; changing source is an explicit `switch`.
 | Package group | Count | Codex | ChatGPT |
 | --- | ---: | --- | --- |
 | stdio MCP | 6 | Generated `.mcp.json` package | Not supported; Codex-only |
-| Streamable HTTP MCP | 21 | Generated `.mcp.json` package | Requires a registered `.app.json` binding |
+| Streamable HTTP MCP | 22 | Generated `.mcp.json` package | Requires a registered `.app.json` binding |
 | Skills-only | 1 | Generated skills package | Separate skills package; package UI E2E not claimed |
 
 Cloudflare Docs is the only remote package with a registered ChatGPT

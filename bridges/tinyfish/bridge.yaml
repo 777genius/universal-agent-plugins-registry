@@ -1,0 +1,26 @@
+schema_version: 1
+product_id: tinyfish
+distribution_id: 777genius/tinyfish-bridge
+upstream:
+  repository: tinyfish-io/tinyfish-cookbook
+  revision: 8615317f6db58ae776dd53817ac30668c1db5ef8
+  license:
+    spdx: MIT
+    attribution_paths:
+      - path: LICENSE
+        sha256: sha256:4d4da43c65dc3974303640a51c2217eaa12db4b81220074357bc6d4b7b13f87f
+  provenance:
+    paths:
+      - path: plugins/tinyfish/.mcp.json
+        sha256: sha256:e06245ff3f4ae9319ed4899622303b02b86f1e2c10d84cbdf564292af0638668
+      - path: plugins/tinyfish/.claude-plugin/plugin.json
+        sha256: sha256:4f4840be6e5c76beb70006687c60d5cdd5a6aa3fb7bb9199a0c1b29cfedf227c
+copy: []
+overlay: overlay
+overlay_replacements: []
+output: plugins/tinyfish
+executable_paths: []
+expected_version: 1.2.4
+components:
+  mcp_servers: [tinyfish]
+  skills: []
