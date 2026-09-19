@@ -302,6 +302,28 @@ class SecurityIndexTests(unittest.TestCase):
             }))
             self.assertEqual(previous_records(previous), {})
 
+    def test_main_loads_discovery_snapshot_at_discovery_contract_limit(self) -> None:
+        from scripts.discovery_publication import MAX_SNAPSHOT_BYTES
+
+        self.assertEqual(security_index.MAX_DISCOVERY_SNAPSHOT_BYTES, MAX_SNAPSHOT_BYTES)
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary) / "discovery.json"
+            snapshot.write_text("{}", encoding="utf-8")
+            lintai = Path(temporary) / "lintai"
+            lintai.write_text("#!/bin/sh\n", encoding="utf-8")
+            lintai.chmod(0o755)
+            output = Path(temporary) / "out.json"
+            with mock.patch.object(security_index, "read_json", side_effect=PublicationError("boom")) as reader, \
+                    mock.patch.object(sys, "argv", [
+                        "security_index.py",
+                        "--discovery-snapshot", str(snapshot),
+                        "--lintai", str(lintai),
+                        "--output", str(output),
+                    ]):
+                self.assertEqual(security_index.main(), 1)
+            reader.assert_called_once()
+            self.assertEqual(reader.call_args.kwargs["max_bytes"], MAX_SNAPSHOT_BYTES)
+
 
 class SecurityPublicationTests(unittest.TestCase):
     def test_signed_feed_is_append_only_and_domain_separated(self) -> None:
