@@ -1150,6 +1150,10 @@ def resolve_npm_package(
     }
 
 
+def current_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -1300,7 +1304,7 @@ def validated_directory_environment(
         validate_snapshot_semantics(snapshot)
         if envelope["sequence"] != snapshot["sequence"] or envelope["snapshot_schema_version"] != snapshot["snapshot_schema_version"]:
             raise PublicationError("Directory envelope identity does not match snapshot")
-        now = datetime.now(timezone.utc)
+        now = current_utc()
         if now < parse_timestamp(snapshot["generated_at"], "generated_at"):
             raise PublicationError("Directory snapshot is not yet valid")
         if now >= parse_timestamp(snapshot["expires_at"], "expires_at"):
