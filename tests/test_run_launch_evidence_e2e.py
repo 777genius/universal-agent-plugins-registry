@@ -2166,7 +2166,7 @@ with tempfile.TemporaryDirectory() as temporary:
             invalid_envelope["signature"] = "A" * 86 + "=="
             invalid_path = Path(tmp) / "envelope.json"
             invalid_path.write_bytes(e2e.canonical_json(invalid_envelope))
-            with self.assertRaisesRegex(ValueError, "invalid Ed25519"):
+            with directory_fixture_clock(), self.assertRaisesRegex(ValueError, "invalid Ed25519"):
                 e2e.validated_directory_environment(
                     "https://directory.example.test/registry/",
                     PUBLICATION / "snapshot.json",
