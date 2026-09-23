@@ -102,27 +102,25 @@ function processIsDead(pid) {
   }
 }
 
-async function abandonedLockDigest(lockPath) {
-  const body = await lockOwnerBody(lockPath);
-  const pid = lockPID(body);
-  if (!pid || !processIsDead(pid)) return null;
-  return sha256(body).slice("sha256:".length);
-}
-
-async function unverifiableLockDigest(lockPath) {
-  if (lockPID(await lockOwnerBody(lockPath))) return null;
-  let before;
+async function lockSnapshot(lockPath) {
   try {
-    before = await lstat(lockPath);
+    const identity = await lstat(lockPath);
+    if (!identity.isDirectory()) return null;
+    return { identity, ownerBody: await lockOwnerBody(lockPath) };
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
-  if (!before.isDirectory() || Date.now() - before.mtimeMs < OWNERLESS_GRACE_MS) return null;
+}
 
-  // Publish a complete claim with an atomic hard link. Its presence also
-  // keeps the retired directory non-empty, so a delayed reclaimer cannot
-  // rename a replacement lock over that generation's tombstone.
+function sameOwnerBody(left, right) {
+  return left === null ? right === null : right !== null && left.equals(right);
+}
+
+async function retirementMarkerDigest(lockPath) {
+  // Every retirement path uses the same immutable marker. A retained,
+  // non-empty tombstone then prevents a delayed contender from moving the
+  // next generation's lock to a different destination.
   const markerPath = join(lockPath, RECLAIM_MARKER);
   const candidate = `${lockPath}.reclaim-${process.pid}-${randomUUID()}`;
   const claim = Buffer.from(`${JSON.stringify({ pid: process.pid, token: randomUUID() })}\n`);
@@ -140,22 +138,19 @@ async function unverifiableLockDigest(lockPath) {
         if (readError?.code === "ENOENT") return null;
         throw readError;
       }
-      const claimantPID = lockPID(markerBody);
-      if (!claimantPID || !processIsDead(claimantPID)) return null;
     }
   } finally {
     await rm(candidate, { force: true });
   }
-
-  let after;
-  try {
-    after = await lstat(lockPath);
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
-  }
-  if (before.dev !== after.dev || before.ino !== after.ino || lockPID(await lockOwnerBody(lockPath))) return null;
   return sha256(markerBody).slice("sha256:".length);
+}
+
+async function sameLockSnapshot(lockPath, before) {
+  const after = await lockSnapshot(lockPath);
+  return after !== null &&
+    before.identity.dev === after.identity.dev &&
+    before.identity.ino === after.identity.ino &&
+    sameOwnerBody(before.ownerBody, after.ownerBody);
 }
 
 function retiredLockPath(lockPath, digest) {
@@ -163,10 +158,13 @@ function retiredLockPath(lockPath, digest) {
 }
 
 async function reclaimAbandonedLock(lockPath) {
-  const digest = await abandonedLockDigest(lockPath) || await unverifiableLockDigest(lockPath);
+  const before = await lockSnapshot(lockPath);
+  if (!before) return false;
+  const pid = lockPID(before.ownerBody);
+  if (pid ? !processIsDead(pid) : Date.now() - before.identity.mtimeMs < OWNERLESS_GRACE_MS) return false;
+  const digest = await retirementMarkerDigest(lockPath);
   if (!digest) return false;
-  // A stable, non-empty destination lets only one contender move a given
-  // generation. Normal owner release uses this same retained destination.
+  if (!(await sameLockSnapshot(lockPath, before)) || (pid && !processIsDead(pid))) return false;
   try {
     await rename(lockPath, retiredLockPath(lockPath, digest));
     return true;
@@ -174,6 +172,18 @@ async function reclaimAbandonedLock(lockPath) {
     if (["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM"].includes(error?.code)) return false;
     throw error;
   }
+}
+
+async function releaseOwnedLock(lockPath, ownerBody) {
+  const before = await lockSnapshot(lockPath);
+  if (!before || !sameOwnerBody(before.ownerBody, ownerBody)) {
+    throw new Error("runtime lock ownership changed before release; installed runtime was preserved");
+  }
+  const digest = await retirementMarkerDigest(lockPath);
+  if (!digest || !(await sameLockSnapshot(lockPath, before))) {
+    throw new Error("runtime lock ownership changed during release; installed runtime was preserved");
+  }
+  await rename(lockPath, retiredLockPath(lockPath, digest));
 }
 
 async function acquireLock(lockPath, target, expected) {
@@ -195,7 +205,7 @@ async function acquireLock(lockPath, target, expected) {
           !(await readFile(join(lockPath, "owner.json"))).equals(Buffer.from(ownerBody))) {
         throw new Error("runtime lock ownership changed during acquisition; retry");
       }
-      return { ownerDigest: sha256(Buffer.from(ownerBody)).slice("sha256:".length) };
+      return { ownerBody: Buffer.from(ownerBody) };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       const ready = await readyRuntime(target, expected);
@@ -280,7 +290,7 @@ async function installRuntime(runtimeRoot, pluginData, config, lockBody, lockDig
     return installed;
   } finally {
     await rm(temporary, { recursive: true, force: true });
-    await rename(lockPath, retiredLockPath(lockPath, acquired.ownerDigest));
+    await releaseOwnedLock(lockPath, acquired.ownerBody);
   }
 }
 

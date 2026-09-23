@@ -2340,6 +2340,7 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             retired = list(lock.parent.glob(lock.name + ".retired-*"))
             self.assertEqual(len(retired), 2)
             self.assertTrue(all((item / "owner.json").is_file() for item in retired))
+            self.assertTrue(all((item / ".agentplugins-reclaim.json").is_file() for item in retired))
 
     def test_expired_unverifiable_lock_is_reclaimed(self) -> None:
         for owner_body in (None, "{", json.dumps({"pid": 0})):
@@ -2435,6 +2436,56 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             finally:
                 contender.terminate()
                 contender.communicate(timeout=5)
+
+    def test_late_owner_cannot_split_retirement_destinations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            barrier = root / "before-retirement"
+            source = launcher.read_text()
+            target = "await rename(lockPath, retiredLockPath(lockPath, digest));"
+            self.assertGreaterEqual(source.count(target), 1)
+            launcher.write_text(source.replace(
+                target,
+                "if (process.env.TEST_PAUSE_RECLAIM_BEFORE_RENAME) {"
+                "\n      await writeFile(process.env.TEST_PAUSE_RECLAIM_BEFORE_RENAME + '.observed', 'yes');"
+                "\n      while (!(await exists(process.env.TEST_PAUSE_RECLAIM_BEFORE_RENAME + '.resume')))"
+                " await new Promise(resolve => setTimeout(resolve, 10));"
+                "\n    }\n    " + target,
+                1,
+            ))
+            first = subprocess.Popen(
+                [node, str(launcher)], cwd=root,
+                env={**environment, "TEST_PAUSE_RECLAIM_BEFORE_RENAME": str(barrier)},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not barrier.with_suffix(".observed").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(barrier.with_suffix(".observed").is_file())
+                lock.joinpath("owner.json").write_text(json.dumps({"pid": 999_999_999, "token": "late"}))
+                second = subprocess.run(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertEqual(second.stdout, "READY\n")
+                replacement = json.dumps({"pid": os.getpid(), "token": "replacement"})
+                lock.mkdir()
+                lock.joinpath("owner.json").write_text(replacement)
+                barrier.with_suffix(".resume").write_text("go")
+                first_stdout, first_stderr = first.communicate(timeout=5)
+                self.assertEqual(first.returncode, 0, first_stderr)
+                self.assertEqual(first_stdout, "READY\n")
+                self.assertEqual(lock.joinpath("owner.json").read_text(), replacement)
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                if first.poll() is None:
+                    first.kill()
+                    first.communicate(timeout=5)
 
     def test_interrupted_cold_start_recovers_without_manual_cache_cleanup(self) -> None:
         if os.name == "nt":
