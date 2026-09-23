@@ -2341,6 +2341,101 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             self.assertEqual(len(retired), 2)
             self.assertTrue(all((item / "owner.json").is_file() for item in retired))
 
+    def test_expired_unverifiable_lock_is_reclaimed(self) -> None:
+        for owner_body in (None, "{", json.dumps({"pid": 0})):
+            with self.subTest(owner_body=owner_body), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                node, launcher, lock, environment = self.fixture(root)
+                if owner_body is not None:
+                    lock.joinpath("owner.json").write_text(owner_body)
+                old = time.time() - 45
+                os.utime(lock, (old, old))
+                result = subprocess.run(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "READY\n")
+                self.assertFalse(lock.exists())
+                retired = list(lock.parent.glob(lock.name + ".retired-*"))
+                self.assertEqual(len(retired), 2)
+                self.assertTrue(any((item / ".agentplugins-reclaim.json").is_file() for item in retired))
+
+    def test_expired_unverifiable_lock_recovers_after_claimant_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.joinpath(".agentplugins-reclaim.json").write_text(
+                json.dumps({"pid": 999_999_999, "token": "interrupted"})
+            )
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            result = subprocess.run(
+                [node, str(launcher)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "READY\n")
+            self.assertFalse(lock.exists())
+
+    def test_concurrent_ownerless_recovery_installs_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            processes = [
+                subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                for _ in range(2)
+            ]
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(stdout, "READY\n")
+            self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            self.assertFalse(lock.exists())
+
+    def test_owner_arriving_after_reclaim_claim_is_not_stolen(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            barrier = root / "reclaim-claim"
+            source = launcher.read_text()
+            target = "await link(candidate, markerPath);"
+            self.assertEqual(source.count(target), 1)
+            instrumented = source.replace(
+                target,
+                target + "\n      await writeFile(process.env.TEST_PAUSE_AFTER_CLAIM + '.observed', 'yes');"
+                "\n      while (!(await exists(process.env.TEST_PAUSE_AFTER_CLAIM + '.resume')))"
+                " await new Promise(resolve => setTimeout(resolve, 10));",
+            )
+            launcher.write_text(instrumented)
+            contender = subprocess.Popen(
+                [node, str(launcher)], cwd=root,
+                env={**environment, "TEST_PAUSE_AFTER_CLAIM": str(barrier)},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not barrier.with_suffix(".observed").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(barrier.with_suffix(".observed").is_file())
+                owner = json.dumps({"pid": os.getpid(), "token": "late-owner"})
+                lock.joinpath("owner.json").write_text(owner)
+                barrier.with_suffix(".resume").write_text("go")
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    contender.communicate(timeout=0.6)
+                self.assertEqual(lock.joinpath("owner.json").read_text(), owner)
+                self.assertEqual(list(lock.parent.glob(lock.name + ".retired-*")), [])
+            finally:
+                contender.terminate()
+                contender.communicate(timeout=5)
+
     def test_interrupted_cold_start_recovers_without_manual_cache_cleanup(self) -> None:
         if os.name == "nt":
             self.skipTest("process-group interruption fixture is POSIX-only")
@@ -2427,15 +2522,16 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
                 self.assertTrue((lock / "owner.json").is_file())
                 barrier = root / "owner-read"
                 source = launcher.read_text()
-                target = 'body = await readFile(join(lockPath, "owner.json"));'
+                target = 'return await readFile(join(lockPath, "owner.json"));'
                 self.assertEqual(source.count(target), 1)
                 instrumented = source.replace(
                     target,
-                    target + "\n    if (process.env.TEST_PAUSE_AFTER_OWNER_READ) {"
+                    'const body = await readFile(join(lockPath, "owner.json"));'
+                    + "\n    if (process.env.TEST_PAUSE_AFTER_OWNER_READ) {"
                     "\n      await writeFile(process.env.TEST_PAUSE_AFTER_OWNER_READ + '.observed', body);"
                     "\n      while (!(await exists(process.env.TEST_PAUSE_AFTER_OWNER_READ + '.resume')))"
                     " await new Promise(resolve => setTimeout(resolve, 10));"
-                    "\n    }",
+                    "\n    }\n    return body;",
                 )
                 launcher.write_text(instrumented)
                 contender = subprocess.Popen(

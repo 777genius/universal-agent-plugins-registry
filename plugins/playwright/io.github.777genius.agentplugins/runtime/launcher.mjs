@@ -6,6 +6,7 @@ import { constants } from "node:fs";
 import {
   chmod,
   copyFile,
+  link,
   lstat,
   mkdir,
   readFile,
@@ -21,7 +22,9 @@ import { fileURLToPath } from "node:url";
 const RUNTIME_SCHEMA_VERSION = 1;
 const INSTALL_TIMEOUT_MS = 600_000;
 const LOCK_WAIT_MS = INSTALL_TIMEOUT_MS + 120_000;
+const OWNERLESS_GRACE_MS = 30_000;
 const POLL_MS = 250;
+const RECLAIM_MARKER = ".agentplugins-reclaim.json";
 
 function fail(message) {
   process.stderr.write(`agentplugins runtime: ${message}\n`);
@@ -69,28 +72,90 @@ async function readyRuntime(target, expected) {
   }
 }
 
-async function abandonedLockDigest(lockPath) {
-  let body;
+async function lockOwnerBody(lockPath) {
   try {
-    body = await readFile(join(lockPath, "owner.json"));
+    return await readFile(join(lockPath, "owner.json"));
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
+}
+
+function lockPID(body) {
+  if (!body) return null;
   let owner;
   try {
     owner = JSON.parse(body.toString("utf8"));
   } catch {
     return null;
   }
-  if (!owner || typeof owner !== "object" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return null;
+  return owner && typeof owner === "object" && Number.isSafeInteger(owner.pid) && owner.pid > 0
+    ? owner.pid : null;
+}
+
+function processIsDead(pid) {
   try {
-    process.kill(owner.pid, 0);
-    return null;
+    process.kill(pid, 0);
+    return false;
   } catch (error) {
-    if (error?.code !== "ESRCH") return null;
+    return error?.code === "ESRCH";
   }
+}
+
+async function abandonedLockDigest(lockPath) {
+  const body = await lockOwnerBody(lockPath);
+  const pid = lockPID(body);
+  if (!pid || !processIsDead(pid)) return null;
   return sha256(body).slice("sha256:".length);
+}
+
+async function unverifiableLockDigest(lockPath) {
+  if (lockPID(await lockOwnerBody(lockPath))) return null;
+  let before;
+  try {
+    before = await lstat(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!before.isDirectory() || Date.now() - before.mtimeMs < OWNERLESS_GRACE_MS) return null;
+
+  // Publish a complete claim with an atomic hard link. Its presence also
+  // keeps the retired directory non-empty, so a delayed reclaimer cannot
+  // rename a replacement lock over that generation's tombstone.
+  const markerPath = join(lockPath, RECLAIM_MARKER);
+  const candidate = `${lockPath}.reclaim-${process.pid}-${randomUUID()}`;
+  const claim = Buffer.from(`${JSON.stringify({ pid: process.pid, token: randomUUID() })}\n`);
+  let markerBody = claim;
+  await writeFile(candidate, claim, { mode: 0o600, flag: "wx" });
+  try {
+    try {
+      await link(candidate, markerPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        markerBody = await readFile(markerPath);
+      } catch (readError) {
+        if (readError?.code === "ENOENT") return null;
+        throw readError;
+      }
+      const claimantPID = lockPID(markerBody);
+      if (!claimantPID || !processIsDead(claimantPID)) return null;
+    }
+  } finally {
+    await rm(candidate, { force: true });
+  }
+
+  let after;
+  try {
+    after = await lstat(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  if (before.dev !== after.dev || before.ino !== after.ino || lockPID(await lockOwnerBody(lockPath))) return null;
+  return sha256(markerBody).slice("sha256:".length);
 }
 
 function retiredLockPath(lockPath, digest) {
@@ -98,7 +163,7 @@ function retiredLockPath(lockPath, digest) {
 }
 
 async function reclaimAbandonedLock(lockPath) {
-  const digest = await abandonedLockDigest(lockPath);
+  const digest = await abandonedLockDigest(lockPath) || await unverifiableLockDigest(lockPath);
   if (!digest) return false;
   // A stable, non-empty destination lets only one contender move a given
   // generation. Normal owner release uses this same retained destination.
@@ -124,8 +189,11 @@ async function acquireLock(lockPath, target, expected) {
           { mode: 0o600, flag: "wx" },
         );
       } catch (error) {
-        await rm(lockPath, { recursive: true, force: true });
-        throw error;
+        throw new Error(`could not record runtime lock owner: ${error.message}`);
+      }
+      if (await exists(join(lockPath, RECLAIM_MARKER)) ||
+          !(await readFile(join(lockPath, "owner.json"))).equals(Buffer.from(ownerBody))) {
+        throw new Error("runtime lock ownership changed during acquisition; retry");
       }
       return { ownerDigest: sha256(Buffer.from(ownerBody)).slice("sha256:".length) };
     } catch (error) {
