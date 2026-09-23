@@ -359,6 +359,7 @@ class RealBridgeCohortTests(unittest.TestCase):
         self.assertEqual(playwright["args"], [
             "${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs",
         ])
+        self.assertNotIn("cwd", playwright)
         playwright_runtime = json.loads((ROOT / "plugins/playwright/io.github.777genius.agentplugins/runtime/runtime.json").read_text())
         self.assertEqual((playwright_runtime["package"], playwright_runtime["version"]), ("@playwright/mcp", "0.0.80"))
         self.assertEqual(github["url"], "https://api.githubcopilot.com/mcp/")
