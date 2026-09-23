@@ -86,7 +86,12 @@ DIRECTORY_MINIMUM_INSTALLER_VERSION = "0.1.8"
 LOCKED_NPM_RUNTIME_PATH = "io.github.777genius.agentplugins/runtime"
 LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.13"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
-LOCKED_NPM_LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
+LOCKED_NPM_LAUNCHER_DIGESTS = frozenset({
+    # Existing published packages retain their reviewed launcher bytes.
+    "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a",
+    # Playwright recovers a dead npm-install owner without an age-only lock steal.
+    "sha256:d741f8f02dcda6956c99191113cb5462dbb42c39b90708d4ae2e9d2913b266bd",
+})
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
     ("@hubspot/cli", "8.14.0-beta.1"): frozenset({
         (
@@ -1253,7 +1258,7 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         all(path.is_file() and not path.is_symlink() for path in (launcher, package_path, lock_path, config_path)),
         f"{runtime_root}: launcher, package.json, package-lock.json, and runtime.json are required",
     )
-    require(digest_bytes(launcher.read_bytes()) == LOCKED_NPM_LAUNCHER_DIGEST, f"{launcher}: launcher is not the reviewed implementation")
+    require(digest_bytes(launcher.read_bytes()) in LOCKED_NPM_LAUNCHER_DIGESTS, f"{launcher}: launcher is not a reviewed implementation")
     package = read_object(package_path)
     config = read_object(config_path)
     lock_body = lock_path.read_bytes()

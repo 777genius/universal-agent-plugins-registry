@@ -4,7 +4,8 @@
     "playwright": {
       "type": "stdio",
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs"]
+      "args": ["${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs"],
+      "cwd": "${PLUGIN_DATA}"
     }
   }
 }

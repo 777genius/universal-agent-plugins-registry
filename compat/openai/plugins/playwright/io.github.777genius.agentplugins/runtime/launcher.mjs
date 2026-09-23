@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 const RUNTIME_SCHEMA_VERSION = 1;
 const INSTALL_TIMEOUT_MS = 600_000;
-const LOCK_STALE_MS = INSTALL_TIMEOUT_MS + 120_000;
+const LOCK_WAIT_MS = INSTALL_TIMEOUT_MS + 120_000;
 const POLL_MS = 250;
 
 function fail(message) {
@@ -69,24 +69,72 @@ async function readyRuntime(target, expected) {
   }
 }
 
+async function abandonedLockDigest(lockPath) {
+  let body;
+  try {
+    body = await readFile(join(lockPath, "owner.json"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  let owner;
+  try {
+    owner = JSON.parse(body.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!owner || typeof owner !== "object" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return null;
+  try {
+    process.kill(owner.pid, 0);
+    return null;
+  } catch (error) {
+    if (error?.code !== "ESRCH") return null;
+  }
+  return sha256(body).slice("sha256:".length);
+}
+
+function retiredLockPath(lockPath, digest) {
+  return `${lockPath}.retired-${digest}`;
+}
+
+async function reclaimAbandonedLock(lockPath) {
+  const digest = await abandonedLockDigest(lockPath);
+  if (!digest) return false;
+  // A stable, non-empty destination lets only one contender move a given
+  // generation. Normal owner release uses this same retained destination.
+  try {
+    await rename(lockPath, retiredLockPath(lockPath, digest));
+    return true;
+  } catch (error) {
+    if (["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM"].includes(error?.code)) return false;
+    throw error;
+  }
+}
+
 async function acquireLock(lockPath, target, expected) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
       await mkdir(lockPath);
-      await writeFile(
-        join(lockPath, "owner.json"),
-        `${JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })}\n`,
-        { mode: 0o600 },
-      );
-      return;
+      const ownerBody = `${JSON.stringify({ pid: process.pid, token: randomUUID(), created_at: new Date().toISOString() })}\n`;
+      try {
+        await writeFile(
+          join(lockPath, "owner.json"),
+          ownerBody,
+          { mode: 0o600, flag: "wx" },
+        );
+      } catch (error) {
+        await rm(lockPath, { recursive: true, force: true });
+        throw error;
+      }
+      return { ownerDigest: sha256(Buffer.from(ownerBody)).slice("sha256:".length) };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       const ready = await readyRuntime(target, expected);
       if (ready) return ready;
-      const lockStat = await stat(lockPath).catch(() => null);
-      if (lockStat && Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
-        await rm(lockPath, { recursive: true, force: true });
-        continue;
+      if (await reclaimAbandonedLock(lockPath)) continue;
+      if (Date.now() >= deadline) {
+        throw new Error("runtime installation lock is still held or cannot be verified; retry after the other installation finishes");
       }
       await new Promise((accept) => setTimeout(accept, POLL_MS));
     }
@@ -108,6 +156,8 @@ async function installRuntime(runtimeRoot, pluginData, config, lockBody, lockDig
 
   const temporary = join(store, `.tmp-${key}-${process.pid}-${randomUUID()}`);
   try {
+    const completedWhileWaiting = await readyRuntime(target, expected);
+    if (completedWhileWaiting) return completedWhileWaiting;
     await mkdir(temporary, { recursive: false, mode: 0o700 });
     await copyFile(join(runtimeRoot, "package.json"), join(temporary, "package.json"), constants.COPYFILE_EXCL);
     await writeFile(join(temporary, "package-lock.json"), lockBody, { mode: 0o600, flag: "wx" });
@@ -162,7 +212,7 @@ async function installRuntime(runtimeRoot, pluginData, config, lockBody, lockDig
     return installed;
   } finally {
     await rm(temporary, { recursive: true, force: true });
-    await rm(lockPath, { recursive: true, force: true });
+    await rename(lockPath, retiredLockPath(lockPath, acquired.ownerDigest));
   }
 }
 
