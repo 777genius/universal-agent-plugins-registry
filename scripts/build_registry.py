@@ -90,7 +90,7 @@ LOCKED_NPM_LAUNCHER_DIGESTS = frozenset({
     # Existing published packages retain their reviewed launcher bytes.
     "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a",
     # Playwright recovers a dead npm-install owner without an age-only lock steal.
-    "sha256:d741f8f02dcda6956c99191113cb5462dbb42c39b90708d4ae2e9d2913b266bd",
+    "sha256:7e52b8048ec67f6b21b27c0602a1c132b54019e82ea7804d321563141d0c5a36",
 })
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
     ("@hubspot/cli", "8.14.0-beta.1"): frozenset({

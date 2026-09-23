@@ -2312,7 +2312,8 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             "fs.mkdirSync('node_modules/@playwright/mcp', {recursive:true});\n"
             "fs.mkdirSync('node_modules/.bin', {recursive:true});\n"
             "fs.writeFileSync('node_modules/@playwright/mcp/cli.js', "
-            "\"process.stdout.write('READY\\\\n')\\n\");\n"
+            "\"require('node:fs').writeFileSync(process.env.PLUGIN_DATA + '/server-cwd', process.cwd()); "
+            "process.stdout.write('READY\\\\n')\\n\");\n"
         )
         fake_npm.chmod(0o755)
         environment = os.environ.copy()
@@ -2334,6 +2335,7 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "READY\n")
+            self.assertEqual((root / "plugin-data/server-cwd").read_text(), str((root / "plugin-data").resolve()))
             self.assertFalse(lock.exists())
             retired = list(lock.parent.glob(lock.name + ".retired-*"))
             self.assertEqual(len(retired), 2)

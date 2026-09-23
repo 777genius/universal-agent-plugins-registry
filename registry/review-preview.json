@@ -5964,7 +5964,7 @@
             "path": "plugins/playwright"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:2c4711eb9221d5a0b19dced4754729de4edca4c27ea9d945a79a23b256f25452",
+          "tree_digest": "sha256:85474640b07f6c4f1c8912a755c8c631bbd9d60d2271264c4e5c33e1101c2ebc",
           "manifest_digest": "sha256:8419b5c9e67894c2312048c4fe30e3ea920d00101d02641230183dd7ab4d3b31"
         }
       ]

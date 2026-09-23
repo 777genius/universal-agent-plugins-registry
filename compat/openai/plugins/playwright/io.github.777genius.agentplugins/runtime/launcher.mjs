@@ -255,6 +255,7 @@ async function main() {
     [pathKey]: inheritedPath ? `${runtimeBin}${delimiter}${inheritedPath}` : runtimeBin,
   };
   const child = spawnSync(process.execPath, [entrypoint, ...process.argv.slice(2)], {
+    cwd: pluginData,
     env: childEnv,
     stdio: "inherit",
     windowsHide: true,
