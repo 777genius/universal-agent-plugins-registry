@@ -1,0 +1,210 @@
+name: Compose current production Pages
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "29 */6 * * *"
+  workflow_call:
+    outputs:
+      directory_commit:
+        description: Approved Directory materialization selected after the Pages lock
+        value: ${{ jobs.compose.outputs.directory_commit }}
+      ledger_head:
+        description: Authenticated feed head selected after the Pages lock
+        value: ${{ jobs.compose.outputs.ledger_head }}
+      marker_status:
+        description: Monotonic production marker outcome, or unchanged when already current
+        value: ${{ jobs.record_production_marker.outputs.status || 'unchanged' }}
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    name: Serialize, authenticate, and deploy the latest approved composition
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: registry-production-pages
+      cancel-in-progress: false
+      queue: max
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pages: write
+      id-token: write
+    outputs:
+      directory_commit: ${{ steps.plan.outputs.directory_commit }}
+      ledger_head: ${{ steps.plan.outputs.ledger_head }}
+      production_marker: ${{ steps.plan.outputs.production_marker }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned signature verification dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+      - name: Require live owner protection and terminal external deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 trusted-source/scripts/pages_compositor.py require-intent-policy \
+            --repository "${GITHUB_REPOSITORY}"
+          python3 trusted-source/scripts/pages_compositor.py require-terminal-deployments \
+            --repository "${GITHUB_REPOSITORY}" \
+            --frontier trusted-source/registry/publication/pages-deployment-frontier.json
+      - name: Select the latest authenticated Directory intent and feed head after lock
+        id: plan
+        run: |
+          git init ledger
+          git -C ledger remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          python3 trusted-source/scripts/pages_compositor.py plan \
+            --repo ledger --contract trusted-source/registry/publication/production-marker.json \
+            --output "${RUNNER_TEMP}/composition.json"
+          echo "directory_commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["directory_commit"])' "${RUNNER_TEMP}/composition.json")" >> "$GITHUB_OUTPUT"
+          echo "ledger_head=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ledger_head"])' "${RUNNER_TEMP}/composition.json")" >> "$GITHUB_OUTPUT"
+          echo "production_marker=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["production_marker"])' "${RUNNER_TEMP}/composition.json")" >> "$GITHUB_OUTPUT"
+      - name: Verify current signatures and compose approved site with live feeds
+        run: |
+          ledger_head="${{ steps.plan.outputs.ledger_head }}"
+          directory_commit="${{ steps.plan.outputs.directory_commit }}"
+          sequence="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sequence"])' "${RUNNER_TEMP}/composition.json")"
+          git -C ledger checkout --detach "${ledger_head}"
+          git -C ledger worktree add --detach ../production-pages-tree "${directory_commit}"
+          python3 trusted-source/scripts/verify_directory_publication.py \
+            --feed production-pages-tree/registry/schemas/1 \
+            --trusted-keys trusted-source/registry/publication/trusted-keys.json \
+            --minimum-sequence "${sequence}" --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          test -f ledger/discovery/latest.json
+          python3 trusted-source/scripts/verify_discovery_index.py \
+            --feed ledger/discovery \
+            --trusted-keys trusted-source/registry/discovery/trusted-keys.json \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if test -f ledger/security/latest.json; then
+            python3 trusted-source/scripts/verify_security_index.py \
+              --feed ledger/security \
+              --trusted-keys trusted-source/registry/discovery/trusted-keys.json
+          else
+            test ! -e production-pages-tree/security
+          fi
+          python3 trusted-source/scripts/pages_compositor.py require-feed-freshness \
+            --ledger-path ledger
+          test -z "$(find ledger/discovery ledger/security production-pages-tree -type l -print -quit 2>/dev/null)"
+          mkdir -p production-pages-tree/discovery
+          rsync -a --delete ledger/discovery/ production-pages-tree/discovery/
+          diff -qr ledger/discovery production-pages-tree/discovery
+          if test -f ledger/security/latest.json; then
+            mkdir -p production-pages-tree/security
+            rsync -a --delete ledger/security/ production-pages-tree/security/
+            diff -qr ledger/security production-pages-tree/security
+          fi
+          test -z "$(git -C production-pages-tree diff --name-only -- . ':!discovery' ':!security')"
+          test -z "$(git -C production-pages-tree ls-files --others --exclude-standard | awk '$0 !~ /^(discovery|security)\//')"
+          tar --directory production-pages-tree -cf "${RUNNER_TEMP}/artifact.tar" --exclude=.git --exclude=.github .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
+          retention-days: 1
+      - name: Reject stale composition or an uncertain earlier external deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 trusted-source/scripts/pages_compositor.py require-intent-policy \
+            --repository "${GITHUB_REPOSITORY}"
+          python3 trusted-source/scripts/pages_compositor.py require-current \
+            --repo ledger --contract trusted-source/registry/publication/production-marker.json \
+            --plan "${RUNNER_TEMP}/composition.json"
+          python3 trusted-source/scripts/pages_compositor.py require-terminal-deployments \
+            --repository "${GITHUB_REPOSITORY}" \
+            --frontier trusted-source/registry/publication/pages-deployment-frontier.json
+          sequence="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sequence"])' "${RUNNER_TEMP}/composition.json")"
+          python3 trusted-source/scripts/verify_directory_publication.py \
+            --feed production-pages-tree/registry/schemas/1 \
+            --trusted-keys trusted-source/registry/publication/trusted-keys.json \
+            --minimum-sequence "${sequence}" \
+            --now "$(date -u -d '+15 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+          python3 trusted-source/scripts/pages_compositor.py require-feed-freshness \
+            --ledger-path ledger --minimum-validity-seconds 900
+      - name: Deploy only the freshly rechecked composition
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+
+  record_production_marker:
+    name: Catch up the production marker after exact Pages success
+    needs: compose
+    if: ${{ needs.compose.outputs.directory_commit != needs.compose.outputs.production_marker }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: directory-production-marker
+      cancel-in-progress: false
+      queue: max
+    environment: directory-publication
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pages: read
+    outputs:
+      status: ${{ steps.marker.outputs.status || steps.receipt.outputs.status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.compose.outputs.directory_commit }}
+          path: exact-pages-tree
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact successful Pages deployment receipt
+        id: receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_PRODUCTION_COMMIT: ${{ needs.compose.outputs.directory_commit }}
+        run: |
+          test "$(git -C exact-pages-tree rev-parse HEAD)" = "${EXPECTED_PRODUCTION_COMMIT}"
+          status="$(python3 trusted-source/scripts/pages_compositor.py require-successful-deployment \
+            --repository "${GITHUB_REPOSITORY}" \
+            --frontier trusted-source/registry/publication/pages-deployment-frontier.json)"
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+      - name: Acquire dedicated publisher token
+        id: publisher
+        if: steps.receipt.outputs.status == 'current'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DIRECTORY_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.DIRECTORY_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Advance marker monotonically or accept a newer marker
+        id: marker
+        if: steps.receipt.outputs.status == 'current'
+        env:
+          PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
+          EXPECTED_PRODUCTION_COMMIT: ${{ needs.compose.outputs.directory_commit }}
+        run: |
+          marker_ref="$(python3 -c 'import json; print(json.load(open("trusted-source/registry/publication/production-marker.json"))["marker_ref"])')"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
+          status="$(GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="${auth_header}" \
+          python3 trusted-source/scripts/directory_publication_cas.py production-publish \
+            --repo exact-pages-tree --production-new "${EXPECTED_PRODUCTION_COMMIT}" \
+            --production-tag "${marker_ref}")"
+          echo "status=${status}" >> "$GITHUB_OUTPUT"

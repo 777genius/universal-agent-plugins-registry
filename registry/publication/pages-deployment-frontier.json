@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repository": "777genius/universal-agent-plugins-registry",
+  "environment": "github-pages",
+  "deployment_id": 6730784893,
+  "deployment_sha": "979d36608d493bb9254ee1ababd84d76da519eb7",
+  "success_status_id": 18991768733,
+  "success_log_url": "https://github.com/777genius/universal-agent-plugins-registry/actions/runs/36537151189/job/109333796334",
+  "pre_cutover_backend_cancellation": {
+    "deployment_id": 5838143812,
+    "deployment_sha": "6b7e9bf1aff3b72ab0ac99738e2aa1cee250d03d",
+    "failure_status_id": 16630867285,
+    "backend_status": "deployment_cancelled",
+    "cancellation_request_id": "F3D4:28DF11:579B2A5:57AAF66:6ABB90BB",
+    "cancellation_response_utc": "2026-09-29T10:19:39Z"
+  }
+}

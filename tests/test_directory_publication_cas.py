@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -77,7 +79,7 @@ class BarePublicationCasTests(unittest.TestCase):
         for path in paths:
             target = self.publisher / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("{}\n")
+            target.write_text(f'{{"sequence":{sequence}}}\n')
         git(self.publisher, "add", *paths)
         git(self.publisher, "commit", "-qm", f"chore({feed}): publish sequence {sequence}")
         return git(self.publisher, "rev-parse", "HEAD")
@@ -92,10 +94,40 @@ class BarePublicationCasTests(unittest.TestCase):
         ):
             target = self.publisher / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(f"sequence {sequence}\n")
+            body = {"sequence": sequence}
+            if path.endswith(f"snapshots/{stem}.json"):
+                body["publication_id"] = "run-1"
+            target.write_text(json.dumps(body, sort_keys=True) + "\n")
             git(self.publisher, "add", path)
         git(self.publisher, "commit", "-qm", "chore(directory): publish signed snapshot")
         return git(self.publisher, "rev-parse", "HEAD")
+
+    def prepared_directory_site(self, parent: str | None = None) -> tuple[str, str]:
+        parent = parent or self.source
+        unsigned = self.commit_directory(parent)
+        unsigned_site = self.commit_path(
+            unsigned, "index.html", "new site\n",
+            "chore(directory): materialize signed production site",
+        )
+        identity = {**os.environ, "GIT_AUTHOR_NAME": cas.MARKER_NAME,
+                    "GIT_AUTHOR_EMAIL": cas.MARKER_EMAIL,
+                    "GIT_COMMITTER_NAME": cas.MARKER_NAME,
+                    "GIT_COMMITTER_EMAIL": cas.MARKER_EMAIL}
+
+        def bot_commit(tree_source: str, parent: str, message: str) -> str:
+            return subprocess.run(
+                [GIT, "-C", str(self.publisher), "commit-tree",
+                 git(self.publisher, "show", "-s", "--format=%T", tree_source),
+                 "-p", parent, "-m", message],
+                check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=identity,
+            ).stdout.strip()
+
+        signed = bot_commit(unsigned, parent, "chore(directory): publish signed snapshot")
+        materialized = bot_commit(
+            unsigned_site, signed, "chore(directory): materialize signed production site",
+        )
+        return signed, materialized
 
     def objects(self, publication_id: str = "run-1", message: str = "ledger Q") -> tuple[str, str]:
         marker = cas.create_marker(self.publisher, self.source, publication_id)
@@ -387,6 +419,208 @@ class BarePublicationCasTests(unittest.TestCase):
                 publication_id="run-1",
             )
 
+    def test_rebased_materialization_preserves_two_feed_publications_during_approval(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed, materialized = self.prepared_directory_site()
+        first = self.commit_feed(self.source, "discovery", 1)
+        second = self.commit_feed(first, "discovery", 2)
+        git(self.publisher, "push", "-q", "origin", f"{second}:refs/heads/directory-publication-ledger")
+        tag = TAG_ONE.replace("00000000000000000001", "00000000000000000002")
+        result = cas.atomic_rebased_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, prepared_signed=signed,
+            prepared_materialized=materialized, authenticated_head=second,
+            sequence_tag=tag, publication_id="run-1",
+        )
+        self.assertEqual(result.status, "published")
+        self.assertEqual(git(self.publisher, "rev-parse", f"{result.signed}^"), second)
+        self.assertEqual(git(self.publisher, "rev-parse", f"{result.materialized}^"), result.signed)
+        self.assertEqual(self.state(tag).sequence_tag, result.signed)
+        self.assertEqual(self.state(tag), cas.RefState(marker, result.materialized, result.signed))
+        self.assertEqual(git(self.publisher, "show", f"{result.signed}:discovery/latest.json"), '{"sequence":2}')
+        self.assertEqual(git(self.publisher, "show", f"{result.materialized}:index.html"), "new site")
+        self.assertEqual(
+            git(self.publisher, "rev-parse", f"{signed}:registry/schemas/1"),
+            git(self.publisher, "rev-parse", f"{result.signed}:registry/schemas/1"),
+        )
+        self.assertEqual(cas.atomic_rebased_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, prepared_signed=signed,
+            prepared_materialized=materialized, authenticated_head=second,
+            sequence_tag=tag, publication_id="run-1",
+        ).status, "committed")
+
+    def test_rebased_materialization_resolves_lost_response_without_resigning(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed, materialized = self.prepared_directory_site()
+        first = self.commit_feed(self.source, "discovery", 1)
+        git(self.publisher, "push", "-q", "origin", f"{first}:refs/heads/directory-publication-ledger")
+        tag = TAG_ONE.replace("00000000000000000001", "00000000000000000002")
+        pushes = []
+
+        def lose_response(arguments):
+            pushes.append(arguments)
+            git(self.publisher, *arguments)
+            return False
+
+        result = cas.atomic_rebased_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, prepared_signed=signed,
+            prepared_materialized=materialized, authenticated_head=first,
+            sequence_tag=tag, publication_id="run-1", push_runner=lose_response,
+        )
+        self.assertEqual(result.status, "published")
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(self.state(tag), cas.RefState(marker, result.materialized, result.signed))
+
+    def test_rebased_materialization_requires_reauthentication_after_lost_response_and_feed_append(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed, materialized = self.prepared_directory_site()
+        first = self.commit_feed(self.source, "discovery", 1)
+        git(self.publisher, "push", "-q", "origin", f"{first}:refs/heads/directory-publication-ledger")
+        tag = TAG_ONE.replace("00000000000000000001", "00000000000000000002")
+        later = ""
+
+        def publish_then_advance(arguments):
+            nonlocal later
+            git(self.publisher, *arguments)
+            committed_site = arguments[-2].split(":", 1)[0]
+            later = self.commit_feed(committed_site, "discovery", 2)
+            git(self.publisher, "push", "-q", "origin", f"{later}:refs/heads/directory-publication-ledger")
+            return False
+
+        with self.assertRaisesRegex(cas.CasError, "not authenticated"):
+            cas.atomic_rebased_materialized_transition(
+                self.publisher, "origin", source=self.source, marker=marker,
+                ledger_old=self.source, prepared_signed=signed,
+                prepared_materialized=materialized, authenticated_head=first,
+                sequence_tag=tag, publication_id="run-1", push_runner=publish_then_advance,
+            )
+        self.assertEqual(self.state(tag).ledger, later)
+        result = cas.atomic_rebased_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, prepared_signed=signed,
+            prepared_materialized=materialized, authenticated_head=later,
+            sequence_tag=tag, publication_id="run-1",
+        )
+        self.assertEqual(result.status, "committed")
+        self.assertEqual(result.ledger_head, later)
+
+    def test_rebased_materialization_authenticates_discovery_recovery_during_approval(self) -> None:
+        first = self.commit_feed(self.source, "discovery", 1)
+        recovery_tag = "refs/tags/discovery-index-sequence-00000000000000000001"
+        git(self.publisher, "tag", recovery_tag, first)
+        git(self.publisher, "push", "-q", "origin", f"{first}:{recovery_tag}")
+        git(self.publisher, "checkout", "-q", "--detach", first)
+        git(self.publisher, "rm", "-qr", "discovery")
+        git(self.publisher, "commit", "-qm", "test: simulate absent ledger feed")
+        missing = git(self.publisher, "rev-parse", "HEAD")
+        git(self.publisher, "push", "-q", "origin", f"{missing}:refs/heads/directory-publication-ledger")
+        signed, materialized = self.prepared_directory_site(missing)
+        git(self.publisher, "checkout", "-q", "--detach", missing)
+        git(self.publisher, "checkout", recovery_tag, "--", "discovery")
+        stem = f"{2:020d}"
+        for path in (f"discovery/search/{stem}.json", f"discovery/snapshots/{stem}.json",
+                     f"discovery/snapshots/{stem}.envelope.json"):
+            target = self.publisher / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("new signed bytes\n")
+        (self.publisher / "discovery/latest.json").write_text('{"sequence":2}\n')
+        git(self.publisher, "add", "discovery")
+        git(self.publisher, "commit", "-qm", "chore(discovery): publish sequence 2")
+        recovered = git(self.publisher, "rev-parse", "HEAD")
+        git(self.publisher, "push", "-q", "origin", f"{recovered}:refs/heads/directory-publication-ledger")
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        tag = TAG_ONE.replace("00000000000000000001", "00000000000000000002")
+        result = cas.atomic_rebased_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=missing, prepared_signed=signed,
+            prepared_materialized=materialized, authenticated_head=recovered,
+            sequence_tag=tag, publication_id="run-1",
+        )
+        self.assertEqual(result.status, "published")
+        self.assertEqual(
+            git(self.publisher, "show", f"{result.signed}:discovery/snapshots/{1:020d}.json"),
+            '{"sequence":1}',
+        )
+
+    def test_promotion_intent_is_create_only_and_binds_final_rebased_identity(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed, materialized = self.prepared_directory_site()
+        first = self.commit_feed(self.source, "discovery", 1)
+        git(self.publisher, "push", "-q", "origin", f"{first}:refs/heads/directory-publication-ledger")
+        tag = TAG_ONE.replace("00000000000000000001", "00000000000000000002")
+        published = cas.atomic_rebased_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, prepared_signed=signed,
+            prepared_materialized=materialized, authenticated_head=first,
+            sequence_tag=tag, publication_id="run-1",
+        )
+        snapshot = git(self.publisher, "show", f"{published.signed}:registry/schemas/1/snapshots/{2:020d}.json") + "\n"
+        digest = "sha256:" + hashlib.sha256(snapshot.encode()).hexdigest()
+        readiness = "sha256:" + "1" * 64
+        pushes = []
+
+        def lose_response(arguments):
+            pushes.append(arguments)
+            git(self.publisher, *arguments)
+            return False
+
+        self.assertEqual(cas.publish_promotion_intent(
+            self.publisher, "origin", materialized=published.materialized,
+            signed=published.signed, sequence=2, publication_id="run-1",
+            snapshot_digest=digest, readiness_digest=readiness,
+            push_runner=lose_response,
+        ), "published")
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(cas.publish_promotion_intent(
+            self.publisher, "origin", materialized=published.materialized,
+            signed=published.signed, sequence=2, publication_id="run-1",
+            snapshot_digest=digest, readiness_digest=readiness,
+        ), "committed")
+        intent_ref = cas.promotion_intent_ref(2)
+        intent_oid = self.state(intent_ref).sequence_tag
+        self.assertIsNotNone(intent_oid)
+        parsed = cas.parse_promotion_intent(self.publisher, intent_ref, intent_oid)
+        self.assertEqual(parsed["materialized"], published.materialized)
+        self.assertEqual(parsed["signed"], published.signed)
+        self.assertEqual(parsed["readiness_digest"], readiness)
+        with self.assertRaisesRegex(cas.CasError, "another object"):
+            cas.publish_promotion_intent(
+                self.publisher, "origin", materialized=published.materialized,
+                signed=published.signed, sequence=2, publication_id="run-1",
+                snapshot_digest=digest, readiness_digest="sha256:" + "2" * 64,
+            )
+        with self.assertRaisesRegex(cas.CasError, "signed snapshot identity"):
+            cas.publish_promotion_intent(
+                self.publisher, "origin", materialized=published.materialized,
+                signed=published.signed, sequence=2, publication_id="run-1",
+                snapshot_digest="sha256:" + "0" * 64, readiness_digest=readiness,
+            )
+        with self.assertRaisesRegex(cas.CasError, "exact signed child"):
+            cas.publish_promotion_intent(
+                self.publisher, "origin", materialized=self.source,
+                signed=published.signed, sequence=2, publication_id="run-1",
+                snapshot_digest=digest, readiness_digest=readiness,
+            )
+        self.assertEqual(self.state(intent_ref).sequence_tag, intent_oid)
+
+    def test_rebased_materialization_rejects_unauthenticated_movement(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed, materialized = self.prepared_directory_site()
+        first = self.commit_feed(self.source, "discovery", 1)
+        second = self.commit_feed(first, "discovery", 2)
+        git(self.publisher, "push", "-q", "origin", f"{second}:refs/heads/directory-publication-ledger")
+        tag = TAG_ONE.replace("00000000000000000001", "00000000000000000002")
+        with self.assertRaisesRegex(cas.CasError, "conflict"):
+            cas.atomic_rebased_materialized_transition(
+                self.publisher, "origin", source=self.source, marker=marker,
+                ledger_old=self.source, prepared_signed=signed,
+                prepared_materialized=materialized, authenticated_head=first,
+                sequence_tag=tag, publication_id="run-1",
+            )
+        self.assertEqual(self.state(tag), cas.RefState(self.source, second, None))
+
     def test_evidence_transition_atomically_moves_two_refs_and_tags_gated_ledger(self) -> None:
         main_new = self.commit_object(self.source, "mechanical evidence pointers")
         ledger_new = self.commit_object(self.source, "permanent evidence")
@@ -549,7 +783,7 @@ class BarePublicationCasTests(unittest.TestCase):
         ), "published")
         self.assertEqual(self.state(PRODUCTION_TAG).sequence_tag, second)
 
-    def test_production_transition_rejects_rollback_and_unrelated_lineage(self) -> None:
+    def test_production_transition_accepts_superseded_marker_without_rollback(self) -> None:
         first = self.commit_object(self.source, "first production tree")
         second = self.commit_object(first, "second production tree")
         unrelated = self.commit_object(self.source, "unrelated production tree")
@@ -557,13 +791,15 @@ class BarePublicationCasTests(unittest.TestCase):
             self.publisher, "origin", production_new=second,
             production_tag=PRODUCTION_TAG,
         )
-        for candidate in (first, unrelated):
-            with self.subTest(candidate=candidate):
-                with self.assertRaisesRegex(cas.CasError, "roll back or change ledger lineage"):
-                    cas.production_transition(
-                        self.publisher, "origin", production_new=candidate,
-                        production_tag=PRODUCTION_TAG,
-                    )
+        self.assertEqual(cas.production_transition(
+            self.publisher, "origin", production_new=first,
+            production_tag=PRODUCTION_TAG,
+        ), "superseded")
+        with self.assertRaisesRegex(cas.CasError, "roll back or change ledger lineage"):
+            cas.production_transition(
+                self.publisher, "origin", production_new=unrelated,
+                production_tag=PRODUCTION_TAG,
+            )
         self.assertEqual(self.state(PRODUCTION_TAG).sequence_tag, second)
 
     def test_production_transition_resolves_lost_push_response(self) -> None:
