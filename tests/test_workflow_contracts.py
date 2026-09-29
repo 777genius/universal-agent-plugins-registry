@@ -1613,7 +1613,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('"${EXISTING_MATERIALIZED_COMMIT}..${EXPECTED_LEDGER_HEAD}"', body)
         self.assertLess(
             body.index('if test -n "${EXISTING_MATERIALIZED_COMMIT}"'),
-            body.index("rsync -a --delete"),
+            body.index("rsync -a --checksum --delete"),
         )
         self.assertIn("commit --allow-empty", body)
         self.assertEqual(body.count("':!security'"), 1)
@@ -1648,6 +1648,7 @@ sys.modules['catalog_process_isolation']=module
         rsync = shutil.which("rsync")
         if rsync is None:
             self.skipTest("rsync is not installed")
+        body = commands(load(DIRECTORY_PUBLICATION)["jobs"]["materialize_site"])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             generated = root / "generated"
@@ -1656,17 +1657,20 @@ sys.modules['catalog_process_isolation']=module
             (ledger / "registry").mkdir(parents=True)
             (ledger / "discovery").mkdir()
             (ledger / "security").mkdir()
-            (generated / "index.html").write_text("new generated site\n")
-            (ledger / "index.html").write_text("old site\n")
+            (generated / "index.html").write_text("new page\n")
+            (ledger / "index.html").write_text("old page\n")
+            stamp = 1_700_000_000
+            os.utime(generated / "index.html", (stamp, stamp))
+            os.utime(ledger / "index.html", (stamp, stamp))
             (ledger / "stale.html").write_text("remove me\n")
             (ledger / "registry" / "latest.json").write_text("directory\n")
             (ledger / "discovery" / "latest.json").write_text("discovery\n")
             (ledger / "security" / "latest.json").write_text("security\n")
-            subprocess.run([
-                rsync, "-a", "--delete", "--exclude=.git", "--exclude=registry",
-                "--exclude=/discovery", "--exclude=/security", str(generated) + "/", str(ledger) + "/",
-            ], check=True)
-            self.assertEqual((ledger / "index.html").read_text(), "new generated site\n")
+            command = next(shlex.split(line.strip()) for line in body.splitlines()
+                           if line.strip().startswith("rsync "))
+            subprocess.run([rsync, *command[1:-2], str(generated) + "/", str(ledger) + "/"],
+                           check=True)
+            self.assertEqual((ledger / "index.html").read_text(), "new page\n")
             self.assertFalse((ledger / "stale.html").exists())
             self.assertEqual((ledger / "registry" / "latest.json").read_text(), "directory\n")
             self.assertEqual((ledger / "discovery" / "latest.json").read_text(), "discovery\n")

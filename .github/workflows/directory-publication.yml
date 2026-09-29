@@ -1007,7 +1007,7 @@ jobs:
             git -C ledger diff --cached --exit-code
           else
             test "$(git -C ledger rev-parse "${EXPECTED_LEDGER_COMMIT}^")" = "${EXPECTED_LEDGER_HEAD}"
-            rsync -a --delete --exclude=.git --exclude=registry --exclude=/discovery --exclude=/security "${RUNNER_TEMP}/validated-site/" ledger/
+            rsync -a --checksum --delete --exclude=.git --exclude=registry --exclude=/discovery --exclude=/security "${RUNNER_TEMP}/validated-site/" ledger/
             git -C ledger diff --exit-code -- registry/schemas/1/snapshots
             git -C ledger diff --exit-code -- registry
             git -C ledger diff --exit-code -- discovery
