@@ -10,6 +10,7 @@ on:
       - "schemas/security-*.schema.json"
       - "scripts/security_index.py"
       - "scripts/security_publication.py"
+      - "scripts/feed_append_cas.py"
       - "scripts/sign_security_index.py"
       - "scripts/verify_security_index.py"
       - "scripts/observe_security_index.py"
@@ -169,7 +170,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ledger_commit: ${{ steps.commit.outputs.ledger_commit }}
+      ledger_commit: ${{ steps.publish.outputs.ledger_commit }}
       sequence: ${{ steps.sign.outputs.sequence }}
       source_commit: ${{ needs.scan.outputs.source_commit }}
     steps:
@@ -203,7 +204,11 @@ jobs:
         run: |
           test "$(git -C source rev-parse HEAD)" = "${{ needs.scan.outputs.source_commit }}"
           test "sha256:$(sha256sum candidate/security-candidate.json | cut -d' ' -f1)" = "${EXPECTED_CANDIDATE_DIGEST}"
-          test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_HEAD}"
+          git -C ledger fetch --no-tags origin "${EXPECTED_LEDGER_HEAD}"
+          python3 source/scripts/feed_append_cas.py history-verify \
+            --repo ledger --base "${EXPECTED_LEDGER_HEAD}" \
+            --head "$(git -C ledger rev-parse HEAD)" \
+            --feed security --dependency-feed discovery
           if test -f "ledger/${FEED_PATH}/latest.json"; then
             python3 source/scripts/verify_security_index.py \
               --feed "ledger/${FEED_PATH}" \
@@ -262,7 +267,6 @@ jobs:
             else test "${status}" = A; fi
           done
           git commit -m "chore(security): publish sequence ${SEQUENCE}"
-          echo "ledger_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Acquire dedicated publisher token
         id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -273,42 +277,22 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
       - name: Atomically append branch and immutable sequence tag
+        id: publish
         working-directory: ledger
         env:
           PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
           SEQUENCE: ${{ steps.sign.outputs.sequence }}
         run: |
-          tag="security-index-sequence-$(printf '%020d' "${SEQUENCE}")"
-          git tag "${tag}"
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
-          local_commit="$(git rev-parse HEAD)"
-          base_commit="$(git rev-parse HEAD^)"
-          push_log="$(mktemp)"
-          remote_log="$(mktemp)"
-          for attempt in 1 2 3; do
-            set +e
-            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="${auth_header}" \
-              git push --atomic origin "HEAD:refs/heads/${LEDGER_BRANCH}" "refs/tags/${tag}:refs/tags/${tag}" >"${push_log}" 2>&1
-            status=$?
-            set -e
-            cat "${push_log}"
-            if test "${status}" -eq 0; then exit 0; fi
-            if ! grep -Eqi 'HTTP (429|5[0-9]{2})|Could not resolve host|Connection (reset|timed out)|remote end hung up unexpectedly' "${push_log}"; then
-              exit "${status}"
-            fi
-            set +e
-            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="${auth_header}" \
-              git ls-remote --refs origin "refs/heads/${LEDGER_BRANCH}" "refs/tags/${tag}" >"${remote_log}" 2>&1
-            remote_status=$?
-            set -e
-            if test "${remote_status}" -ne 0; then exit "${status}"; fi
-            branch_commit="$(awk -v ref="refs/heads/${LEDGER_BRANCH}" '$2 == ref { print $1 }' "${remote_log}")"
-            tag_commit="$(awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }' "${remote_log}")"
-            if test "${branch_commit}" = "${local_commit}" && test "${tag_commit}" = "${local_commit}"; then exit 0; fi
-            if ! { test "${branch_commit}" = "${base_commit}" && test -z "${tag_commit}"; }; then exit 1; fi
-            if test "${attempt}" -eq 3; then exit "${status}"; fi
-            sleep "$((attempt * 2))"
-          done
+          candidate="$(git rev-parse HEAD)"
+          result="$(GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="${auth_header}" \
+            python3 ../source/scripts/feed_append_cas.py append \
+              --repo . --feed security --dependency-feed discovery \
+              --candidate "${candidate}" --sequence "${SEQUENCE}")"
+          echo "${result}"
+          echo "ledger_commit=${result##* }" >> "$GITHUB_OUTPUT"
 
   incomplete-scan:
     name: Report incomplete assessment without replacing LKG
