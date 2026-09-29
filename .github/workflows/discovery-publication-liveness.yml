@@ -1,0 +1,36 @@
+name: Discovery publication liveness
+
+on:
+  schedule:
+    - cron: "31 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: discovery-publication-liveness
+  cancel-in-progress: true
+
+jobs:
+  unblock:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: directory-publication-ledger
+          path: _publication-ledger
+          persist-credentials: false
+      - name: Release only an abandoned unsigned Directory approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/unblock_discovery_publication.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --feed _publication-ledger/discovery
