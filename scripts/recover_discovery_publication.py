@@ -104,7 +104,11 @@ def main() -> int:
     candidate = select_stale_approval(runs, jobs_for_run, now=now, expires_at=expires_at)
     if candidate is not None:
         run_id, job_name = candidate
-        print(f"Directory run {run_id} blocks Discovery at waiting job {job_name!r}; review this approval now")
+        print(
+            f"Directory run {run_id} blocks Discovery at waiting job {job_name!r}. "
+            f"Review https://github.com/{args.repo}/actions/runs/{run_id}, "
+            "then approve or reject the exact pending publication and refresh Discovery."
+        )
         return 1
     if expires_at <= now:
         print(f"Discovery expired at {expires_at.isoformat()}; no safely identifiable Directory blocker found")
