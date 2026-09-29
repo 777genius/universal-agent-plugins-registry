@@ -462,8 +462,11 @@ jobs:
     outputs:
       ledger_commit: ${{ needs.prepare.outputs.resume_signed_ledger_commit || steps.commit.outputs.ledger_commit }}
       materialized_ledger_commit: ${{ needs.prepare.outputs.resume_materialized_ledger_commit || steps.commit.outputs.materialized_ledger_commit }}
-      ledger_head: ${{ needs.prepare.outputs.resume_ledger_head || steps.commit.outputs.materialized_ledger_commit || steps.commit.outputs.ledger_commit }}
+      ledger_head: ${{ needs.prepare.outputs.resume_ledger_head || needs.prepare.outputs.ledger_head }}
       marker_commit: ${{ needs.prepare.outputs.resume_marker_commit || steps.marker.outputs.commit }}
+      signed_bundle_digest: ${{ steps.commit.outputs.signed_bundle_digest }}
+      marker_bundle_digest: ${{ steps.commit.outputs.marker_bundle_digest }}
+      signed_artifact_name: ${{ steps.commit.outputs.signed_artifact_name }}
       publication_id: ${{ needs.prepare.outputs.resume_publication_id || github.run_id }}
       sequence: ${{ needs.prepare.outputs.resume_sequence || steps.signed.outputs.sequence }}
       snapshot_digest: ${{ needs.prepare.outputs.resume_snapshot_digest || steps.signed.outputs.snapshot_digest }}
@@ -576,29 +579,18 @@ jobs:
             --result ../publication-result.json
           echo "sequence=$(/usr/bin/python3 -c 'import json; print(json.load(open("../publication-result.json"))["sequence"])')" >> "$GITHUB_OUTPUT"
           echo "snapshot_digest=$(/usr/bin/python3 -c 'import json; print(json.load(open("../publication-result.json"))["snapshot_digest"])')" >> "$GITHUB_OUTPUT"
-      - name: Acquire dedicated publisher token
-        id: publisher
-        if: inputs.resume_publication_id == ''
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.DIRECTORY_PUBLISHER_APP_ID }}
-          private-key: ${{ secrets.DIRECTORY_PUBLISHER_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-      - name: Enforce append-only diff and commit atomically
+      - name: Enforce append-only diff and prepare exact signed objects
         id: commit
         if: inputs.resume_publication_id == ''
         working-directory: ledger
         env:
-          PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
           PUBLISHED_SEQUENCE: ${{ steps.signed.outputs.sequence }}
           INITIALIZE_LEDGER: ${{ needs.prepare.outputs.initialize_ledger }}
           EVENT_SOURCE_COMMIT: ${{ github.sha }}
           MARKER_COMMIT: ${{ steps.marker.outputs.commit }}
         run: |
           git -C ../trusted-source fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
-          observed_main="$(git -C ../trusted-source rev-parse refs/remotes/origin/main)"
-          test "${observed_main}" = "${EVENT_SOURCE_COMMIT}" || test "${observed_main}" = "${MARKER_COMMIT}"
+          test "$(git -C ../trusted-source rev-parse refs/remotes/origin/main)" = "${EVENT_SOURCE_COMMIT}"
           tag_name="directory-publication-schema-1-sequence-$(printf '%020d' "${PUBLISHED_SEQUENCE}")"
           git add -N registry/schemas/1
           if git diff --name-status -- registry/schemas/1/snapshots | awk '$1 != "A" { exit 1 }'; then :; else
@@ -628,28 +620,26 @@ jobs:
             git diff --exit-code "${ledger_commit}" HEAD -- registry
           fi
           ledger_old="$(git rev-parse "${ledger_commit}^")"
-          git -C ../trusted-source fetch --no-tags ../ledger "${ledger_commit}"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
-          GIT_CONFIG_COUNT=1 \
-          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-          GIT_CONFIG_VALUE_0="${auth_header}" \
-          python3 ../trusted-source/scripts/directory_publication_cas.py publish \
-            --repo ../trusted-source \
-            --source "${EVENT_SOURCE_COMMIT}" \
-            --marker "${MARKER_COMMIT}" \
-            --ledger-old "${ledger_old}" \
-            --ledger-new "${ledger_commit}" \
-            --sequence-tag "refs/tags/${tag_name}" \
-            --materialized-output ../materialized-ledger.commit
+          test "${ledger_old}" = "${{ needs.prepare.outputs.ledger_head }}"
+          mkdir -p ../signed-objects
+          git update-ref refs/bundles/directory-signed "${ledger_commit}"
+          git bundle create ../signed-objects/signed-ledger.bundle refs/bundles/directory-signed "^${ledger_old}"
+          git -C ../trusted-source update-ref refs/bundles/directory-marker "${MARKER_COMMIT}"
+          git -C ../trusted-source bundle create ../signed-objects/publication-marker.bundle refs/bundles/directory-marker "^${EVENT_SOURCE_COMMIT}"
+          test "$(stat -c %s ../signed-objects/signed-ledger.bundle)" -le 33554432
+          test "$(stat -c %s ../signed-objects/publication-marker.bundle)" -le 1048576
           echo "ledger_commit=${ledger_commit}" >> "$GITHUB_OUTPUT"
-          if test -f ../materialized-ledger.commit; then
-            materialized_ledger_commit="$(tr -d '\n' < ../materialized-ledger.commit)"
-            [[ "${materialized_ledger_commit}" =~ ^[0-9a-f]{40}$ ]]
-          else
-            materialized_ledger_commit=""
-          fi
-          echo "materialized_ledger_commit=${materialized_ledger_commit}" >> "$GITHUB_OUTPUT"
+          echo "signed_bundle_digest=sha256:$(sha256sum ../signed-objects/signed-ledger.bundle | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "marker_bundle_digest=sha256:$(sha256sum ../signed-objects/publication-marker.bundle | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "signed_artifact_name=directory-signed-objects-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
           echo "main_parent=${MARKER_COMMIT}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: inputs.resume_publication_id == ''
+        with:
+          name: ${{ steps.commit.outputs.signed_artifact_name }}
+          path: signed-objects
+          if-no-files-found: error
+          retention-days: 1
       - name: Reuse only the pre-authenticated staged identity
         if: inputs.resume_publication_id != ''
         env:
@@ -697,10 +687,34 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.sign.outputs.ledger_commit }}
+          ref: ${{ inputs.resume_publication_id != '' && needs.sign.outputs.ledger_commit || needs.sign.outputs.ledger_head }}
           path: ledger
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.resume_publication_id == ''
+        with:
+          name: ${{ needs.sign.outputs.signed_artifact_name }}
+          path: ${{ runner.temp }}/signed-objects
+      - name: Import the exact signed commit without publishing it
+        if: inputs.resume_publication_id == ''
+        env:
+          EXPECTED_LEDGER_PARENT: ${{ needs.sign.outputs.ledger_head }}
+          EXPECTED_SIGNED_COMMIT: ${{ needs.sign.outputs.ledger_commit }}
+          EXPECTED_BUNDLE_DIGEST: ${{ needs.sign.outputs.signed_bundle_digest }}
+        run: |
+          bundle="${RUNNER_TEMP}/signed-objects/signed-ledger.bundle"
+          test -f "${bundle}" && test ! -L "${bundle}"
+          test "$(stat -c %h "${bundle}")" = 1
+          test "$(stat -c %s "${bundle}")" -le 33554432
+          test "sha256:$(sha256sum "${bundle}" | cut -d ' ' -f 1)" = "${EXPECTED_BUNDLE_DIGEST}"
+          test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_PARENT}"
+          git -C ledger bundle verify "${bundle}"
+          test "$(git -C ledger bundle list-heads "${bundle}")" = "${EXPECTED_SIGNED_COMMIT} refs/bundles/directory-signed"
+          git -C ledger fetch --no-tags "${bundle}" refs/bundles/directory-signed
+          test "$(git -C ledger show -s --format=%P "${EXPECTED_SIGNED_COMMIT}")" = "${EXPECTED_LEDGER_PARENT}"
+          test "$(git -C ledger rev-list "${EXPECTED_LEDGER_PARENT}..${EXPECTED_SIGNED_COMMIT}" | wc -l)" -eq 1
+          git -C ledger checkout --detach "${EXPECTED_SIGNED_COMMIT}"
       - name: Export the exact signed snapshot and remove the ledger checkout
         id: snapshot
         env:
@@ -719,9 +733,19 @@ jobs:
           test ! -e "${GITHUB_WORKSPACE}/ledger"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.sign.outputs.marker_commit }}
+          ref: ${{ inputs.resume_publication_id != '' && needs.sign.outputs.marker_commit || github.sha }}
           path: trusted-source
           persist-credentials: false
+      - name: Recreate the unpublished source marker locally
+        if: inputs.resume_publication_id == ''
+        working-directory: trusted-source
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          MARKER_COMMIT: ${{ needs.sign.outputs.marker_commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${SOURCE_COMMIT}"
+          test "$(python3 scripts/directory_publication_cas.py marker --repo . --source "${SOURCE_COMMIT}" --publication-id "${GITHUB_RUN_ID}")" = "${MARKER_COMMIT}"
+          git checkout --detach "${MARKER_COMMIT}"
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.34.5
@@ -805,7 +829,7 @@ jobs:
           retention-days: 1
 
   materialize_site:
-    name: Validate and materialize static artifact
+    name: Validate and atomically publish signed static artifact
     needs: [sign, build_site]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -889,6 +913,64 @@ jobs:
           git -C ledger fetch origin "${EXPECTED_LEDGER_HEAD}"
           git -C ledger checkout --detach FETCH_HEAD
           test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_HEAD}"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.resume_publication_id == ''
+        with:
+          name: ${{ needs.sign.outputs.signed_artifact_name }}
+          path: ${{ runner.temp }}/signed-objects
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.resume_publication_id == ''
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: inputs.resume_publication_id == ''
+        with:
+          python-version: "3.13"
+      - name: Authenticate transported signed objects and current signature lifetime
+        if: inputs.resume_publication_id == ''
+        env:
+          EXPECTED_LEDGER_PARENT: ${{ needs.sign.outputs.ledger_head }}
+          EXPECTED_SIGNED_COMMIT: ${{ needs.sign.outputs.ledger_commit }}
+          EXPECTED_MARKER_COMMIT: ${{ needs.sign.outputs.marker_commit }}
+          EXPECTED_SIGNED_BUNDLE_DIGEST: ${{ needs.sign.outputs.signed_bundle_digest }}
+          EXPECTED_MARKER_BUNDLE_DIGEST: ${{ needs.sign.outputs.marker_bundle_digest }}
+          EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
+          EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
+        run: |
+          artifact="${RUNNER_TEMP}/signed-objects"
+          test -z "$(find "${artifact}" -mindepth 1 ! -type f -print -quit)"
+          test -z "$(find "${artifact}" -type f -links +1 -print -quit)"
+          printf '%s\n' publication-marker.bundle signed-ledger.bundle > "${RUNNER_TEMP}/expected-bundles.paths"
+          find "${artifact}" -type f -printf '%P\n' | LC_ALL=C sort > "${RUNNER_TEMP}/actual-bundles.paths"
+          diff -u "${RUNNER_TEMP}/expected-bundles.paths" "${RUNNER_TEMP}/actual-bundles.paths"
+          test "$(stat -c %s "${artifact}/signed-ledger.bundle")" -le 33554432
+          test "$(stat -c %s "${artifact}/publication-marker.bundle")" -le 1048576
+          test "sha256:$(sha256sum "${artifact}/signed-ledger.bundle" | cut -d ' ' -f 1)" = "${EXPECTED_SIGNED_BUNDLE_DIGEST}"
+          test "sha256:$(sha256sum "${artifact}/publication-marker.bundle" | cut -d ' ' -f 1)" = "${EXPECTED_MARKER_BUNDLE_DIGEST}"
+          test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_PARENT}"
+          test "$(git -C trusted-source rev-parse HEAD)" = "${GITHUB_SHA}"
+          git -C ledger fetch --no-tags origin "${GITHUB_SHA}"
+          git -C ledger bundle verify "${artifact}/signed-ledger.bundle"
+          git -C ledger bundle verify "${artifact}/publication-marker.bundle"
+          test "$(git -C ledger bundle list-heads "${artifact}/signed-ledger.bundle")" = "${EXPECTED_SIGNED_COMMIT} refs/bundles/directory-signed"
+          test "$(git -C ledger bundle list-heads "${artifact}/publication-marker.bundle")" = "${EXPECTED_MARKER_COMMIT} refs/bundles/directory-marker"
+          git -C ledger fetch --no-tags "${artifact}/signed-ledger.bundle" refs/bundles/directory-signed
+          git -C ledger fetch --no-tags "${artifact}/publication-marker.bundle" refs/bundles/directory-marker
+          test "$(git -C ledger show -s --format=%P "${EXPECTED_SIGNED_COMMIT}")" = "${EXPECTED_LEDGER_PARENT}"
+          test "$(git -C ledger rev-list "${EXPECTED_LEDGER_PARENT}..${EXPECTED_SIGNED_COMMIT}" | wc -l)" -eq 1
+          test "$(python3 trusted-source/scripts/directory_publication_cas.py marker --repo ledger --source "${GITHUB_SHA}" --publication-id "${GITHUB_RUN_ID}")" = "${EXPECTED_MARKER_COMMIT}"
+          git -C ledger checkout --detach "${EXPECTED_SIGNED_COMMIT}"
+          feed=ledger/registry/schemas/1
+          snapshot="${feed}/snapshots/$(printf '%020d' "${EXPECTED_SEQUENCE}").json"
+          test "sha256:$(sha256sum "${snapshot}" | cut -d ' ' -f 1)" = "${EXPECTED_SNAPSHOT_DIGEST}"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "${snapshot}")" = "${EXPECTED_MARKER_COMMIT}"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["publication_id"])' "${snapshot}")" = "${GITHUB_RUN_ID}"
+          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+          python3 trusted-source/scripts/verify_directory_publication.py \
+            --feed "${feed}" --trusted-keys trusted-source/registry/publication/trusted-keys.json \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --minimum-sequence "${EXPECTED_SEQUENCE}"
       - name: Copy only validated static files and commit with hooks disabled
         id: commit
         env:
@@ -896,7 +978,11 @@ jobs:
           EXPECTED_LEDGER_HEAD: ${{ needs.sign.outputs.ledger_head }}
           EXISTING_MATERIALIZED_COMMIT: ${{ needs.sign.outputs.materialized_ledger_commit }}
         run: |
-          test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_HEAD}"
+          if test -n "${EXISTING_MATERIALIZED_COMMIT}"; then
+            test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_HEAD}"
+          else
+            test "$(git -C ledger rev-parse HEAD)" = "${EXPECTED_LEDGER_COMMIT}"
+          fi
           if test -n "${EXISTING_MATERIALIZED_COMMIT}"; then
             git -C ledger fetch --no-tags origin "${EXISTING_MATERIALIZED_COMMIT}"
             test "$(git -C ledger show -s --format=%P "${EXISTING_MATERIALIZED_COMMIT}")" = "${EXPECTED_LEDGER_COMMIT}"
@@ -918,7 +1004,7 @@ jobs:
             git -C ledger diff --exit-code
             git -C ledger diff --cached --exit-code
           else
-            test "${EXPECTED_LEDGER_HEAD}" = "${EXPECTED_LEDGER_COMMIT}"
+            test "$(git -C ledger rev-parse "${EXPECTED_LEDGER_COMMIT}^")" = "${EXPECTED_LEDGER_HEAD}"
             rsync -a --delete --exclude=.git --exclude=registry --exclude=/discovery --exclude=/security "${RUNNER_TEMP}/validated-site/" ledger/
             git -C ledger diff --exit-code -- registry/schemas/1/snapshots
             git -C ledger diff --exit-code -- registry
@@ -945,23 +1031,41 @@ jobs:
           private-key: ${{ secrets.DIRECTORY_PUBLISHER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-      - name: Push the bounded ledger commit
+      - name: Publish the signed and materialized commits with exact CAS
         env:
           PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
           EXPECTED_LEDGER_COMMIT: ${{ needs.sign.outputs.ledger_commit }}
           EXPECTED_LEDGER_HEAD: ${{ needs.sign.outputs.ledger_head }}
+          EXPECTED_MARKER_COMMIT: ${{ needs.sign.outputs.marker_commit }}
+          EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
+          PUBLICATION_ID: ${{ needs.sign.outputs.publication_id }}
+          EXISTING_MATERIALIZED_COMMIT: ${{ needs.sign.outputs.materialized_ledger_commit }}
           MATERIALIZED_LEDGER_COMMIT: ${{ steps.commit.outputs.ledger_commit }}
         run: |
           git -C ledger diff --exit-code
           git -C ledger diff --cached --exit-code
           git -C ledger diff --exit-code "${EXPECTED_LEDGER_COMMIT}" HEAD -- registry/schemas/1/snapshots
           git -C ledger diff --exit-code "${EXPECTED_LEDGER_COMMIT}" HEAD -- registry
+          if test -z "${EXISTING_MATERIALIZED_COMMIT}"; then
+            git -C ledger diff --exit-code "${EXPECTED_LEDGER_COMMIT}" HEAD -- discovery security
+          fi
           test "$(git -C ledger rev-parse HEAD)" = "${MATERIALIZED_LEDGER_COMMIT}"
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
-          GIT_CONFIG_COUNT=1 \
-          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-          GIT_CONFIG_VALUE_0="${auth_header}" \
-          bash -c '
+          if test -z "${EXISTING_MATERIALIZED_COMMIT}"; then
+            tag_name="refs/tags/directory-publication-schema-1-sequence-$(printf '%020d' "${EXPECTED_SEQUENCE}")"
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="${auth_header}" \
+            python3 trusted-source/scripts/directory_publication_cas.py materialize-publish \
+              --repo ledger --source "${GITHUB_SHA}" --marker "${EXPECTED_MARKER_COMMIT}" \
+              --ledger-old "${EXPECTED_LEDGER_HEAD}" --signed "${EXPECTED_LEDGER_COMMIT}" \
+              --materialized "${MATERIALIZED_LEDGER_COMMIT}" --sequence-tag "${tag_name}" \
+              --publication-id "${PUBLICATION_ID}"
+          else
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="${auth_header}" \
+            bash -c '
             set -o pipefail
             ledger_ref=refs/heads/directory-publication-ledger
             for attempt in 1 2 3; do
@@ -983,7 +1087,8 @@ jobs:
             done
             echo "materialization push failed with exact pre-state still present" >&2
             exit 1
-          '
+            '
+          fi
 
   gate_exact_staged_publication:
     name: Gate the exact staged publication identity

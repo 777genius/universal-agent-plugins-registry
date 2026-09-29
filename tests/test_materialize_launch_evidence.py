@@ -662,11 +662,11 @@ class PermanentCommitTests(unittest.TestCase):
     def test_whole_run_retry_accepts_only_exact_persisted_state(self) -> None:
         publication_source_commit = "6" * 40
         signed = self.parent
-        (self.repo / "discovery").mkdir()
-        (self.repo / "discovery" / "materialized.json").write_text("{}\n")
-        git(self.repo, "add", "discovery/materialized.json")
+        (self.repo / "index.html").write_text("materialized site\n")
+        git(self.repo, "add", "index.html")
         git(self.repo, "commit", "-qm", "chore(directory): materialize signed production site")
         materialized = git(self.repo, "rev-parse", "HEAD")
+        (self.repo / "discovery").mkdir()
         discovery_commits = []
         for sequence in (1, 2):
             stem = f"{sequence:020d}"

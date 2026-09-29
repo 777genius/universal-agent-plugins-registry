@@ -1750,6 +1750,8 @@ class PublicationWorkflowTests(unittest.TestCase):
             {
                 "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
                 "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
             },
         )
         step_names = [step.get("name", "") for step in site_job["steps"] if isinstance(step, dict)]
@@ -1757,9 +1759,12 @@ class PublicationWorkflowTests(unittest.TestCase):
             step_names.index("Reject unsafe archive entries and verify the artifact"),
             step_names.index("Fetch the exact shared-ledger head without credentials"),
         )
-        for forbidden in ("npm", "pnpm", "node ", "python", "trusted-source"):
+        for forbidden in ("npm", "pnpm", "node "):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, site_commands.lower())
+        self.assertIn("verify_directory_publication.py", site_commands)
+        self.assertIn("directory_publication_cas.py materialize-publish", site_commands)
+        self.assertIn("EXPECTED_SIGNED_BUNDLE_DIGEST", site_commands)
         self.assertIn("EXPECTED_ARCHIVE_DIGEST", json.dumps(site_job))
         self.assertIn("EXPECTED_MANIFEST_DIGEST", json.dumps(site_job))
         self.assertIn("EXPECTED_SNAPSHOT_DIGEST", json.dumps(site_job))
@@ -1827,7 +1832,9 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertEqual(production_observation["permissions"], {"contents": "read"})
         self.assertIn("EXISTING_MATERIALIZED_COMMIT", site_commands)
         self.assertIn("commit --allow-empty", site_commands)
-        self.assertIn('--materialized-output ../materialized-ledger.commit', signer_commands)
+        self.assertIn("git bundle create ../signed-objects/signed-ledger.bundle", signer_commands)
+        self.assertIn("git -C ../trusted-source bundle create ../signed-objects/publication-marker.bundle", signer_commands)
+        self.assertNotIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", json.dumps(signer))
         for match in __import__("re").findall(r"uses:\s+([^\s]+)", text):
             if match.startswith("./"):
                 self.assertIn(match, {

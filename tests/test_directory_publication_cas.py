@@ -38,8 +38,8 @@ class BarePublicationCasTests(unittest.TestCase):
         self.publisher = root / "publisher"
         git(root, "init", "--bare", "-q", str(self.remote))
         git(root, "init", "-q", str(self.publisher))
-        git(self.publisher, "config", "user.name", "test")
-        git(self.publisher, "config", "user.email", "test@example.com")
+        git(self.publisher, "config", "user.name", "iliya")
+        git(self.publisher, "config", "user.email", "iliyazelenkog@gmail.com")
         (self.publisher / "source.txt").write_text("reviewed source\n")
         git(self.publisher, "add", "source.txt")
         git(self.publisher, "commit", "-qm", "source")
@@ -80,6 +80,21 @@ class BarePublicationCasTests(unittest.TestCase):
             target.write_text("{}\n")
         git(self.publisher, "add", *paths)
         git(self.publisher, "commit", "-qm", f"chore({feed}): publish sequence {sequence}")
+        return git(self.publisher, "rev-parse", "HEAD")
+
+    def commit_directory(self, parent: str, sequence: int = 2) -> str:
+        git(self.publisher, "checkout", "-q", "--detach", parent)
+        stem = f"{sequence:020d}"
+        for path in (
+            "registry/schemas/1/latest.json",
+            f"registry/schemas/1/snapshots/{stem}.envelope.json",
+            f"registry/schemas/1/snapshots/{stem}.json",
+        ):
+            target = self.publisher / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"sequence {sequence}\n")
+            git(self.publisher, "add", path)
+        git(self.publisher, "commit", "-qm", "chore(directory): publish signed snapshot")
         return git(self.publisher, "rev-parse", "HEAD")
 
     def objects(self, publication_id: str = "run-1", message: str = "ledger Q") -> tuple[str, str]:
@@ -260,6 +275,117 @@ class BarePublicationCasTests(unittest.TestCase):
         self.assertEqual(cas.materialize_transition(
             self.publisher, "origin", ledger_old=ledger, ledger_new=materialized,
         ), "committed")
+
+    def test_atomic_materialization_publishes_marker_signed_tag_and_site_together(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed = self.commit_directory(self.source)
+        materialized = self.commit_path(
+            signed, "index.html", "new site\n", "chore(directory): materialize signed production site",
+        )
+        publish = lambda push_runner=None: cas.atomic_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, signed=signed, materialized=materialized,
+            sequence_tag=TAG_ONE.replace("00000000000000000001", "00000000000000000002"),
+            publication_id="run-1", push_runner=push_runner,
+        )
+        before = cas.read_ref_state(self.publisher, "origin", "refs/heads/main", "refs/heads/directory-publication-ledger", TAG_ONE.replace("00000000000000000001", "00000000000000000002"))
+        self.assertEqual(before, cas.RefState(self.source, self.source, None))
+        self.assertEqual(publish(), "published")
+        self.assertEqual(publish(), "committed")
+        self.assertEqual(
+            cas.read_ref_state(self.publisher, "origin", "refs/heads/main", "refs/heads/directory-publication-ledger", TAG_ONE.replace("00000000000000000001", "00000000000000000002")),
+            cas.RefState(marker, materialized, signed),
+        )
+        self.assertEqual(cas.validate_staged_lineage(self.publisher, materialized, signed), materialized)
+
+    def test_signed_object_bundles_reconstruct_exact_unpublished_commits(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed = self.commit_directory(self.source)
+        root = Path(self.temporary.name)
+        signed_bundle = root / "signed-ledger.bundle"
+        marker_bundle = root / "publication-marker.bundle"
+        git(self.publisher, "update-ref", "refs/bundles/directory-signed", signed)
+        git(self.publisher, "update-ref", "refs/bundles/directory-marker", marker)
+        git(self.publisher, "bundle", "create", str(signed_bundle), "refs/bundles/directory-signed", f"^{self.source}")
+        git(self.publisher, "bundle", "create", str(marker_bundle), "refs/bundles/directory-marker", f"^{self.source}")
+        receiver = root / "receiver"
+        git(root, "init", "-q", str(receiver))
+        git(receiver, "remote", "add", "origin", str(self.remote))
+        git(receiver, "fetch", "--no-tags", "origin", self.source)
+        for bundle, ref, expected in (
+            (signed_bundle, "refs/bundles/directory-signed", signed),
+            (marker_bundle, "refs/bundles/directory-marker", marker),
+        ):
+            git(receiver, "bundle", "verify", str(bundle))
+            self.assertEqual(git(receiver, "bundle", "list-heads", str(bundle)), f"{expected} {ref}")
+            git(receiver, "fetch", "--no-tags", str(bundle), ref)
+            self.assertEqual(git(receiver, "rev-parse", "FETCH_HEAD"), expected)
+
+    def test_atomic_materialization_conflict_never_publishes_partial_refs(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed = self.commit_directory(self.source)
+        materialized = self.commit_path(
+            signed, "index.html", "new site\n", "chore(directory): materialize signed production site",
+        )
+        intervening = self.commit_feed(self.source, "discovery", 1)
+        git(self.publisher, "push", "-q", "origin", f"{intervening}:refs/heads/directory-publication-ledger")
+        with self.assertRaisesRegex(cas.CasError, "conflict"):
+            cas.atomic_materialized_transition(
+                self.publisher, "origin", source=self.source, marker=marker,
+                ledger_old=self.source, signed=signed, materialized=materialized,
+                sequence_tag=TAG_ONE.replace("00000000000000000001", "00000000000000000002"),
+                publication_id="run-1",
+            )
+        self.assertEqual(
+            cas.read_ref_state(self.publisher, "origin", "refs/heads/main", "refs/heads/directory-publication-ledger", TAG_ONE.replace("00000000000000000001", "00000000000000000002")),
+            cas.RefState(self.source, intervening, None),
+        )
+
+    def test_atomic_materialization_accepts_lost_response_only_after_exact_readback(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed = self.commit_directory(self.source)
+        materialized = self.commit_path(
+            signed, "index.html", "new site\n", "chore(directory): materialize signed production site",
+        )
+        pushes = []
+
+        def lose_response(arguments):
+            pushes.append(arguments)
+            git(self.publisher, *arguments)
+            return False
+
+        self.assertEqual(cas.atomic_materialized_transition(
+            self.publisher, "origin", source=self.source, marker=marker,
+            ledger_old=self.source, signed=signed, materialized=materialized,
+            sequence_tag=TAG_ONE.replace("00000000000000000001", "00000000000000000002"),
+            publication_id="run-1", push_runner=lose_response,
+        ), "published")
+        self.assertEqual(len(pushes), 1)
+        self.assertIn("--atomic", pushes[0])
+
+    def test_atomic_materialization_rejects_feed_mutation_and_wrong_parent(self) -> None:
+        marker = cas.create_marker(self.publisher, self.source, "run-1")
+        signed = self.commit_directory(self.source)
+        wrong_parent = self.commit_path(
+            self.source, "index.html", "new site\n", "chore(directory): materialize signed production site",
+        )
+        with self.assertRaisesRegex(cas.CasError, "exact signed-commit child"):
+            cas.atomic_materialized_transition(
+                self.publisher, "origin", source=self.source, marker=marker,
+                ledger_old=self.source, signed=signed, materialized=wrong_parent,
+                sequence_tag=TAG_ONE.replace("00000000000000000001", "00000000000000000002"),
+                publication_id="run-1",
+            )
+        altered_feed = self.commit_path(
+            signed, "discovery/latest.json", "changed\n", "chore(directory): materialize signed production site",
+        )
+        with self.assertRaisesRegex(cas.CasError, "feed bytes"):
+            cas.atomic_materialized_transition(
+                self.publisher, "origin", source=self.source, marker=marker,
+                ledger_old=self.source, signed=signed, materialized=altered_feed,
+                sequence_tag=TAG_ONE.replace("00000000000000000001", "00000000000000000002"),
+                publication_id="run-1",
+            )
 
     def test_evidence_transition_atomically_moves_two_refs_and_tags_gated_ledger(self) -> None:
         main_new = self.commit_object(self.source, "mechanical evidence pointers")
@@ -519,7 +645,9 @@ class MarkerBindingContractTests(unittest.TestCase):
         self.assertEqual(build_artifact["env"]["SOURCE_COMMIT"], "${{ needs.sign.outputs.marker_commit }}")
         materialize_verify = next(step for step in workflow["jobs"]["materialize_site"]["steps"] if step.get("name") == "Reject unsafe archive entries and verify the artifact")
         self.assertEqual(materialize_verify["env"]["EXPECTED_SOURCE_COMMIT"], "${{ needs.sign.outputs.marker_commit }}")
-        self.assertIn("ref: ${{ needs.sign.outputs.marker_commit }}", workflow_text)
+        marker = next(step for step in workflow["jobs"]["build_site"]["steps"] if step.get("name") == "Recreate the unpublished source marker locally")
+        self.assertIn('test "$(python3 scripts/directory_publication_cas.py marker', marker["run"])
+        self.assertIn('git checkout --detach "${MARKER_COMMIT}"', marker["run"])
         preparer = (ROOT / "scripts" / "prepare_directory_publication.py").read_text()
         self.assertIn('package_source["revision"] = source_commit', preparer)
 
