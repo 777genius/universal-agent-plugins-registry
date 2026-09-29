@@ -639,9 +639,12 @@ class WorkflowHardeningTests(unittest.TestCase):
         self.assertNotIn("refs/remotes/origin", signer)
         self.assertIn("OBSERVED_SOURCE_COMMIT", signer)
         self.assertNotIn("DIRECTORY_ED25519_PRIVATE_KEY", json.dumps(freshness))
-        self.assertLess(publisher.rindex("rev-parse refs/remotes/origin/main"), publisher.index("directory_publication_cas.py publish"))
-        self.assertIn("--source \"${EVENT_SOURCE_COMMIT}\"", publisher)
-        self.assertIn("--marker \"${MARKER_COMMIT}\"", publisher)
+        self.assertLess(publisher.rindex("rev-parse refs/remotes/origin/main"), publisher.index("git bundle create"))
+        self.assertIn('test "$(git -C ../trusted-source rev-parse refs/remotes/origin/main)" = "${EVENT_SOURCE_COMMIT}"', publisher)
+        self.assertIn("--source \"${GITHUB_SHA}\"", next(
+            step["run"] for step in workflow["jobs"]["materialize_site"]["steps"]
+            if step.get("name") == "Publish the signed and materialized commits with exact CAS"
+        ))
 
     def test_only_app_tokens_write_ledger_and_floor_tags_are_atomic(self) -> None:
         text = (ROOT / ".github" / "workflows" / "directory-publication.yml").read_text()
@@ -652,7 +655,7 @@ class WorkflowHardeningTests(unittest.TestCase):
         self.assertEqual(workflow["jobs"]["materialize_site"]["permissions"]["contents"], "read")
         self.assertEqual(workflow["jobs"]["sign"]["environment"], "directory-publication")
         self.assertEqual(workflow["jobs"]["materialize_site"]["environment"], "directory-publication-materialization")
-        self.assertEqual(text.count("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"), 4)
+        self.assertEqual(text.count("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"), 3)
         cas_helper = (SCRIPTS / "directory_publication_cas.py").read_text()
         self.assertIn('"push", "--atomic"', cas_helper)
         self.assertIn('f"--force-with-lease={main_ref}:{source}"', cas_helper)
@@ -724,7 +727,7 @@ class WorkflowHardeningTests(unittest.TestCase):
         self.assertEqual(len(seed_steps), 1)
         self.assertEqual(seed_steps[0].get("id"), "signed")
         marker = next(step for step in sign_steps if step.get("id") == "marker")
-        publisher = next(step for step in sign_steps if step.get("id") == "publisher")
+        publisher = next(step for step in workflow["jobs"]["materialize_site"]["steps"] if step.get("id") == "publisher")
         self.assertNotIn("DIRECTORY_ED25519_PRIVATE_KEY", json.dumps(marker))
         self.assertNotIn("DIRECTORY_ED25519_PRIVATE_KEY", json.dumps(publisher))
         for job_name in ("prepare", "build_site", "materialize_site", "deploy"):

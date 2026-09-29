@@ -1626,6 +1626,32 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("commit --allow-empty", body)
         self.assertEqual(body.count("':!security'"), 1)
 
+    def test_directory_resume_preserves_feed_appends_and_reuses_signer_attempt_artifact(self) -> None:
+        workflow = load(DIRECTORY_PUBLICATION)
+        signer = workflow["jobs"]["sign"]
+        build = workflow["jobs"]["build_site"]
+        materialize = workflow["jobs"]["materialize_site"]
+        self.assertEqual(signer["outputs"]["signed_artifact_name"], "${{ steps.commit.outputs.signed_artifact_name }}")
+        upload = next(step for step in signer["steps"] if str(step.get("uses", "")).startswith("actions/upload-artifact"))
+        self.assertEqual(upload["with"]["name"], "${{ steps.commit.outputs.signed_artifact_name }}")
+        for job in (build, materialize):
+            download = next(
+                step for step in job["steps"]
+                if str(step.get("uses", "")).startswith("actions/download-artifact")
+                and step.get("with", {}).get("name") == "${{ needs.sign.outputs.signed_artifact_name }}"
+            )
+            self.assertEqual(download["if"], "inputs.resume_publication_id == ''")
+        push = next(
+            step["run"] for step in materialize["steps"]
+            if step.get("name") == "Publish the signed and materialized commits with exact CAS"
+        )
+        self.assertIn(
+            'if test -z "${EXISTING_MATERIALIZED_COMMIT}"; then\n'
+            '  git -C ledger diff --exit-code "${EXPECTED_LEDGER_COMMIT}" HEAD -- discovery security\n'
+            'fi', push,
+        )
+        self.assertIn("directory_publication_cas.py materialize-publish", push)
+
     def test_directory_materialization_delete_semantics_keep_signed_feeds(self) -> None:
         rsync = shutil.which("rsync")
         if rsync is None:
@@ -2756,9 +2782,10 @@ console.log(JSON.stringify(files));
         ):
             self.assertIn("needs.prepare.outputs.resume_", signer["outputs"][output])
         signing_step = next(step for step in signer["steps"] if step.get("id") == "signed")
-        publisher_step = next(step for step in signer["steps"] if step.get("id") == "publisher")
+        publisher_step = next(step for step in workflow["jobs"]["materialize_site"]["steps"] if step.get("id") == "publisher")
         self.assertEqual(signing_step["if"], "inputs.resume_publication_id == ''")
-        self.assertEqual(publisher_step["if"], "inputs.resume_publication_id == ''")
+        self.assertIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(publisher_step))
+        self.assertNotIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(signer))
 
         persist = workflow["jobs"]["record_launch_approval"]
         source_checkout = next(
@@ -2811,9 +2838,10 @@ console.log(JSON.stringify(files));
 
         signer = workflow["jobs"]["sign"]
         signing_step = next(step for step in signer["steps"] if step.get("id") == "signed")
-        publisher_step = next(step for step in signer["steps"] if step.get("id") == "publisher")
+        publisher_step = next(step for step in workflow["jobs"]["materialize_site"]["steps"] if step.get("id") == "publisher")
         self.assertEqual(signing_step["if"], "inputs.resume_publication_id == ''")
-        self.assertEqual(publisher_step["if"], "inputs.resume_publication_id == ''")
+        self.assertIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(publisher_step))
+        self.assertNotIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(signer))
 
     def test_protected_observer_preflights_oidc_claim_names_without_logging_token(self) -> None:
         workflow = load(LAUNCH)

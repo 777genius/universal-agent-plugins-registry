@@ -159,8 +159,8 @@ def validate_materialized_descendant(repo: Path, materialized: str, signed: str)
     parents = _git(repo, ["show", "-s", "--format=%P", materialized]).stdout.strip().split()
     if parents != [signed]:
         raise CasError("materialized ledger is not the exact signed-commit child")
-    if _git(repo, ["diff", "--quiet", signed, materialized, "--", "registry"], check=False).returncode != 0:
-        raise CasError("materialized ledger changed signed registry bytes")
+    if _git(repo, ["diff", "--quiet", signed, materialized, "--", "registry", "discovery", "security"], check=False).returncode != 0:
+        raise CasError("materialized ledger changed signed registry bytes or feed bytes")
     message = _git(repo, ["show", "-s", "--format=%B", materialized]).stdout
     if message != "chore(directory): materialize signed production site\n\n":
         raise CasError("materialized ledger commit message is invalid")
@@ -340,6 +340,90 @@ def materialize_transition(
     raise CasError("materialization push failed with exact pre-state still present")
 
 
+def atomic_materialized_transition(
+    repo: Path, remote: str, *, source: str, marker: str, ledger_old: str,
+    signed: str, materialized: str, sequence_tag: str, publication_id: str,
+    attempts: int = 3,
+    push_runner: Callable[[Sequence[str]], bool] | None = None,
+) -> str:
+    """Publish P, S and M in one ref transaction, with S the sole parent of M."""
+    for value, label in (
+        (source, "source"), (marker, "marker"), (ledger_old, "old ledger"),
+        (signed, "signed ledger"), (materialized, "materialized ledger"),
+    ):
+        _require_sha(value, label)
+    if not re.fullmatch(r"refs/tags/directory-publication-schema-1-sequence-[0-9]{20}", sequence_tag):
+        raise CasError("sequence tag is outside the publication namespace")
+    if not 1 <= attempts <= 3:
+        raise CasError("attempt count must be between one and three")
+    validate_marker(repo, marker, source, publication_id)
+    if _git(repo, ["show", "-s", "--format=%P", signed]).stdout.strip().split() != [ledger_old]:
+        raise CasError("signed ledger is not the exact old-ledger child")
+    sequence = int(sequence_tag.rsplit("-", 1)[1])
+    if sequence < 1:
+        raise CasError("sequence tag must name a positive sequence")
+    stem = f"{sequence:020d}"
+    expected = {
+        "registry/schemas/1/latest.json": {"A", "M"},
+        f"registry/schemas/1/snapshots/{stem}.envelope.json": {"A"},
+        f"registry/schemas/1/snapshots/{stem}.json": {"A"},
+    }
+    if sequence == 1:
+        expected["registry/schemas/1/ledger-contract.json"] = {"A"}
+    changed = _git(
+        repo, ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", ledger_old, signed],
+    ).stdout.splitlines()
+    actual: dict[str, str] = {}
+    for change in changed:
+        fields = change.split("\t")
+        if len(fields) != 2 or fields[1] in actual:
+            raise CasError("signed Directory append has malformed path changes")
+        actual[fields[1]] = fields[0]
+    if set(actual) != set(expected) or any(actual[path] not in statuses for path, statuses in expected.items()):
+        raise CasError("signed Directory append is not the exact immutable publication shape")
+    for path in expected:
+        entry = _git(repo, ["ls-tree", signed, "--", path]).stdout.strip().split(None, 3)
+        if len(entry) != 4 or entry[0] != "100644" or entry[1] != "blob" or entry[3] != path:
+            raise CasError("signed Directory append contains a non-regular publication file")
+    validate_materialized_descendant(repo, materialized, signed)
+
+    main_ref = "refs/heads/main"
+    ledger_ref = "refs/heads/directory-publication-ledger"
+    before = RefState(source, ledger_old, None)
+    committed = RefState(marker, materialized, signed)
+    arguments = [
+        "-c", "core.hooksPath=/dev/null", "push", "--atomic",
+        f"--force-with-lease={main_ref}:{source}",
+        f"--force-with-lease={ledger_ref}:{ledger_old}",
+        f"--force-with-lease={sequence_tag}:",
+        remote,
+        f"{marker}:{main_ref}", f"{materialized}:{ledger_ref}",
+        f"{signed}:{sequence_tag}",
+    ]
+    for _attempt in range(attempts):
+        try:
+            state = read_ref_state(repo, remote, main_ref, ledger_ref, sequence_tag)
+        except subprocess.CalledProcessError:
+            continue
+        if state == committed:
+            return "committed"
+        if state != before:
+            raise CasError(f"materialized publication ref conflict: observed {state}")
+        if push_runner is not None:
+            push_runner(arguments)
+        else:
+            _git(repo, arguments, check=False)
+        try:
+            state = read_ref_state(repo, remote, main_ref, ledger_ref, sequence_tag)
+        except subprocess.CalledProcessError:
+            continue
+        if state == committed:
+            return "published"
+        if state != before:
+            raise CasError(f"materialized publication ref conflict after push: observed {state}")
+    raise CasError("materialized publication push failed with exact pre-state still present")
+
+
 def evidence_transition(
     repo: Path, remote: str, *, main_old: str, main_new: str,
     ledger_old: str, ledger_new: str, approval_target: str, approval_tag: str,
@@ -476,6 +560,16 @@ def main() -> int:
     materialize_parser.add_argument("--remote", default="origin")
     materialize_parser.add_argument("--ledger-old", required=True)
     materialize_parser.add_argument("--ledger-new", required=True)
+    atomic_materialize_parser = subparsers.add_parser("materialize-publish")
+    atomic_materialize_parser.add_argument("--repo", type=Path, default=Path.cwd())
+    atomic_materialize_parser.add_argument("--remote", default="origin")
+    atomic_materialize_parser.add_argument("--source", required=True)
+    atomic_materialize_parser.add_argument("--marker", required=True)
+    atomic_materialize_parser.add_argument("--ledger-old", required=True)
+    atomic_materialize_parser.add_argument("--signed", required=True)
+    atomic_materialize_parser.add_argument("--materialized", required=True)
+    atomic_materialize_parser.add_argument("--sequence-tag", required=True)
+    atomic_materialize_parser.add_argument("--publication-id", required=True)
     evidence_parser = subparsers.add_parser("evidence-publish")
     evidence_parser.add_argument("--repo", type=Path, default=Path.cwd())
     evidence_parser.add_argument("--remote", default="origin")
@@ -521,6 +615,13 @@ def main() -> int:
             result = materialize_transition(
                 args.repo, args.remote, ledger_old=args.ledger_old,
                 ledger_new=args.ledger_new,
+            )
+        elif args.command == "materialize-publish":
+            result = atomic_materialized_transition(
+                args.repo, args.remote, source=args.source, marker=args.marker,
+                ledger_old=args.ledger_old, signed=args.signed,
+                materialized=args.materialized, sequence_tag=args.sequence_tag,
+                publication_id=args.publication_id,
             )
         elif args.command == "evidence-publish":
             result = evidence_transition(
