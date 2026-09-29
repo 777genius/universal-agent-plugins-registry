@@ -52,6 +52,10 @@ jobs:
           python-version: "3.13"
       - name: Install pinned signature verification dependencies
         run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+      - name: Prepare protected Pages checkpoint reader
+        run: |
+          git init pages-checkpoint
+          git -C pages-checkpoint remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
       - name: Require live owner protection and terminal external deployments
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,7 +64,8 @@ jobs:
             --repository "${GITHUB_REPOSITORY}"
           python3 trusted-source/scripts/pages_compositor.py require-terminal-deployments \
             --repository "${GITHUB_REPOSITORY}" \
-            --frontier trusted-source/registry/publication/pages-deployment-frontier.json
+            --frontier trusted-source/registry/publication/pages-deployment-frontier.json \
+            --checkpoint-repo pages-checkpoint
       - name: Select the latest authenticated Directory intent and feed head after lock
         id: plan
         run: |
@@ -126,7 +131,8 @@ jobs:
             --plan "${RUNNER_TEMP}/composition.json"
           python3 trusted-source/scripts/pages_compositor.py require-terminal-deployments \
             --repository "${GITHUB_REPOSITORY}" \
-            --frontier trusted-source/registry/publication/pages-deployment-frontier.json
+            --frontier trusted-source/registry/publication/pages-deployment-frontier.json \
+            --checkpoint-repo pages-checkpoint
           sequence="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sequence"])' "${RUNNER_TEMP}/composition.json")"
           python3 trusted-source/scripts/verify_directory_publication.py \
             --feed production-pages-tree/registry/schemas/1 \
@@ -140,6 +146,51 @@ jobs:
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+
+  record_pages_checkpoint:
+    name: Advance durable terminal Pages deployment checkpoint
+    needs: compose
+    if: ${{ always() && (needs.compose.result == 'success' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: registry-production-pages
+      cancel-in-progress: false
+      queue: max
+    environment: discovery-publication
+    permissions:
+      contents: read
+      deployments: read
+      actions: read
+      pages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-source
+          persist-credentials: false
+      - name: Acquire dedicated checkpoint publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.DISCOVERY_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+      - name: Authenticate and advance largest closed prefix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHER_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          git init pages-checkpoint
+          git -C pages-checkpoint remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${PUBLISHER_TOKEN}" | base64 -w0)"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="${auth_header}" \
+          python3 trusted-source/scripts/pages_deployment_checkpoint.py advance \
+            --repo pages-checkpoint --repository "${GITHUB_REPOSITORY}" \
+            --baseline trusted-source/registry/publication/pages-deployment-frontier.json
 
   record_production_marker:
     name: Catch up the production marker after exact Pages success
@@ -180,7 +231,8 @@ jobs:
           test "$(git -C exact-pages-tree rev-parse HEAD)" = "${EXPECTED_PRODUCTION_COMMIT}"
           status="$(python3 trusted-source/scripts/pages_compositor.py require-successful-deployment \
             --repository "${GITHUB_REPOSITORY}" \
-            --frontier trusted-source/registry/publication/pages-deployment-frontier.json)"
+            --frontier trusted-source/registry/publication/pages-deployment-frontier.json \
+            --checkpoint-repo exact-pages-tree)"
           echo "status=${status}" >> "$GITHUB_OUTPUT"
       - name: Acquire dedicated publisher token
         id: publisher
