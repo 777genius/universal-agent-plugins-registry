@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from scripts.recover_discovery_publication import PRESIGN_JOB, pending_directory_environment, select_unsigned_blocker
+from scripts.recover_discovery_publication import PRESIGN_JOB, select_unsigned_blocker
 
 
 NOW = datetime(2026, 9, 29, tzinfo=timezone.utc)
@@ -55,29 +55,14 @@ class DiscoveryPublicationLivenessTests(unittest.TestCase):
             select_unsigned_blocker([run(12)], lambda _: approval(hours_old=1), now=NOW, expires_at=NOW),
         )
 
-    def test_only_exact_pending_directory_environment_can_be_rejected(self) -> None:
-        self.assertEqual(
-            pending_directory_environment([
-                {"environment": {"name": "github-pages", "id": 1}},
-                {"environment": {"name": "directory-publication", "id": 42}},
-            ]),
-            42,
-        )
-        self.assertIsNone(pending_directory_environment([{"environment": {"name": "github-pages", "id": 1}}]))
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
-            pending_directory_environment([
-                {"environment": {"name": "directory-publication", "id": 42}},
-                {"environment": {"name": "directory-publication", "id": 43}},
-            ])
-        with self.assertRaisesRegex(ValueError, "invalid"):
-            pending_directory_environment([{"environment": {"name": "directory-publication", "id": True}}])
-
     def test_ci_is_read_only_and_outside_shared_publication_lock(self) -> None:
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/discovery-publication-liveness.yml").read_text()
+        directory = (Path(__file__).resolve().parents[1] / ".github/workflows/directory-publication.yml").read_text()
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("actions: write", workflow)
         self.assertNotIn("directory-publication-schema-1", workflow)
         self.assertIn("actions: read", workflow)
+        self.assertNotIn("  schedule:", directory)
 
 
 if __name__ == "__main__":

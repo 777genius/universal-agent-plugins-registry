@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Detect a stale Directory approval that blocks expiring Discovery.
+"""Flag a stale Directory approval before it can silently expire Discovery.
 
-Scheduled CI reports the blocker without mutation. An owner can use --reject
-to reject only the still-pending environment deployment atomically; this never
-cancels a workflow that may have started signing after the observation.
+This check is read-only. Directory approvals protect signing and publication;
+an operator must review any flagged run before changing its state.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from typing import Callable
 
 REPOSITORY = "777genius/universal-agent-plugins-registry"
 PRESIGN_JOB = "Authenticate staged publication or append a signed sequence"
-ENVIRONMENT = "directory-publication"
 
 
 def timestamp(value: str) -> datetime:
@@ -78,34 +76,9 @@ def gh_json(endpoint: str, *, raw: bool = False) -> dict:
     return value
 
 
-def gh_list(endpoint: str) -> list:
-    value = gh_value(endpoint)
-    if not isinstance(value, list):
-        raise ValueError(f"GitHub response for {endpoint} was not an array")
-    return value
-
-
-def pending_directory_environment(deployments: list) -> int | None:
-    matches = [
-        item for item in deployments
-        if isinstance(item, dict)
-        and isinstance(item.get("environment"), dict)
-        and item["environment"].get("name") == ENVIRONMENT
-    ]
-    if not matches:
-        return None
-    if len(matches) != 1:
-        raise ValueError("ambiguous Directory pending deployment")
-    environment_id = matches[0]["environment"].get("id")
-    if not isinstance(environment_id, int) or isinstance(environment_id, bool) or environment_id <= 0:
-        raise ValueError("invalid Directory environment ID")
-    return environment_id
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=REPOSITORY)
-    parser.add_argument("--reject", action="store_true", help="owner-only atomic rejection of pending approval")
     args = parser.parse_args()
     if args.repo != REPOSITORY or (os.environ.get("GITHUB_REPOSITORY") not in {None, args.repo}):
         raise ValueError("unexpected repository identity")
@@ -133,36 +106,13 @@ def main() -> int:
         return jobs
 
     candidate = select_unsigned_blocker(runs, jobs_for_run, now=now, expires_at=expires_at)
-    if candidate is None:
-        print(f"Discovery expires at {expires_at.isoformat()}; no safely rejectable Directory approval found")
-        return 0
-    if not args.reject:
-        print(f"Directory run {candidate} blocks Discovery refresh before signing; owner rejection is required")
+    if candidate is not None:
+        print(f"Directory run {candidate} blocks Discovery before signing; review this pending approval now")
         return 1
-
-    actor = gh_json("user").get("login")
-    if actor != "777genius":
-        raise ValueError("only the required owner reviewer may reject this deployment")
-    current = gh_json(f"{base}/actions/runs/{candidate}")
-    if select_unsigned_blocker([current], jobs_for_run, now=now, expires_at=expires_at) != candidate:
-        print(f"Directory run {candidate} advanced; leaving it untouched")
-        return 0
-    pending = gh_list(f"{base}/actions/runs/{candidate}/pending_deployments")
-    environment_id = pending_directory_environment(pending)
-    if environment_id is None:
-        print(f"Directory run {candidate} has no pending {ENVIRONMENT} deployment; leaving it untouched")
-        return 0
-    subprocess.run(
-        [
-            "gh", "api", "--method", "POST",
-            f"{base}/actions/runs/{candidate}/pending_deployments",
-            "-F", f"environment_ids[]={environment_id}",
-            "-f", "state=rejected",
-            "-f", "comment=Stale unsigned Directory approval rejected to restore Discovery feed freshness.",
-        ],
-        check=True,
-    )
-    print(f"Rejected pending unsigned Directory approval in run {candidate}; dispatch a fresh Discovery refresh")
+    if expires_at <= now:
+        print(f"Discovery expired at {expires_at.isoformat()}; no safely identifiable Directory blocker found")
+        return 1
+    print(f"Discovery expires at {expires_at.isoformat()}; no stale Directory approval found")
     return 0
 
 

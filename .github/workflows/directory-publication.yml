@@ -23,8 +23,6 @@ on:
       - "scripts/sign_directory_publication.py"
       - "scripts/catalog_publication_readiness.py"
       - ".github/workflows/catalog-publication-readiness.yml"
-  schedule:
-    - cron: "17 4 * * 1"
   workflow_dispatch:
     inputs:
       publication_mode:
