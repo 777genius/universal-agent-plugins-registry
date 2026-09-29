@@ -299,13 +299,12 @@ after append is repaired by the six-hour compositor schedule or manual dispatch.
 The schedule may redeploy unchanged bytes (at most four scheduled attempts per
 day). The checked-in `pages-deployment-frontier.json` records the one
 owner-audited cutover baseline, including its exact successful environment
-status and the canceled pre-cutover backend receipt. At runtime, GitHub must
-still return that exact success status; only statuses newer than the frontier
-are scanned, with a 10,000-deployment bound. This is a temporary cutover
-checkpoint, not permanent retention architecture: PR2c must add automatic
-durable frontier advancement before 2026-12-28, ahead of the 90-day Actions
-retention risk. If the anchor becomes unavailable first, deployment fails
-closed; never silently skip unverified history. After Pages succeeds, a separate protected job checks that exact
+status and the canceled pre-cutover backend receipt. Before the durable
+checkpoint branch is initialized, GitHub must still return that exact success
+status. After initialization, only statuses newer than the authenticated
+checkpoint frontier are scanned, with a 10,000-deployment bound. If the
+baseline status becomes unavailable before initialization, deployment fails
+closed. After Pages succeeds, a separate protected job checks that exact
 run/attempt's successful Pages deployment receipt and advances the production
 marker monotonically; a late older marker job reports superseded rather than
 rolling it back. This marker job does not hold the Pages lock, but its owner
@@ -314,6 +313,75 @@ jobs use a separate bounded FIFO queue so an approval wait never holds the
 Pages lock or blocks feed signing. Operators should inspect and resolve old
 waiting marker approvals rather than allowing that queue to grow. Staged ledger
 `HEAD` is never treated as production by itself.
+
+### Durable Pages deployment checkpoint
+
+Before enabling the checkpoint writer, add two active repository branch rulesets
+targeting only `refs/heads/pages-publication-checkpoints`:
+
+1. `Pages checkpoint publisher updates` restricts **creation** and **update**;
+   only the installed Discovery publisher App (Integration actor `4684827`) has
+   an always-allowed bypass.
+2. `Pages checkpoint immutable history` blocks **deletion** and
+   **non-fast-forward** updates and requires linear history, with no bypass
+   actors. This includes the publisher App.
+
+Verify both bypass lists and the absence of a preexisting checkpoint branch
+with an administration-capable `gh` session at cutover.
+The read-only runtime API may omit bypass actors, so the workflow checks every
+visible rule but cannot prove a hidden list. The same App's
+`DISCOVERY_PUBLISHER_APP_ID` and `DISCOVERY_PUBLISHER_APP_PRIVATE_KEY` are read
+from the `discovery-publication` environment; no Directory approval or signing
+credential is used. The branch is separate from the Directory ledger and
+production marker. Never create or reset it manually.
+
+The first writer run verifies the checked-in baseline's exact deployment and
+success status while GitHub still returns them, then creates an orphan root
+commit containing only canonical `checkpoint.json`. Every later commit has
+one parent and records its previous commit, baseline manifest SHA-256, observed
+deployment listing, highest closed deployment, exact terminal evidence for
+the newly closed prefix, and any reclosed older deployments. The workflow authenticates the active rulesets and
+the entire fast-forward chain before trusting its head. Its old receipts stay
+in protected Git history when Actions job/status retention expires; runtime
+then skips only deployments at or below the authenticated frontier. A changed,
+malformed, or untrusted branch fails closed. If the branch is absent, the
+checked-in baseline still requires live status evidence; it cannot be silently
+treated as a durable checkpoint.
+
+The writer runs after each successful Pages compose with the Pages concurrency
+group, using the `discovery-publication` environment because a GitHub job has
+only one environment. The six-hour schedule and manual dispatch also run it
+after a failed compose, allowing catch-up when a completed deployment was left
+without a checkpoint. It scans up to 10,000 deployment records in descending
+ID order until it reaches the exact prior frontier, then advances oldest-first only
+through exact success, prior success behind an inactive status, a completed
+skipped/successful deploy action, or a uniquely bound backend cancellation.
+An in-flight or ambiguous deployment stops the prefix; a failed/inactive
+environment status alone never closes it. A compare-and-swap Git push, exact
+readback after an uncertain response, and bounded retry resolve competing
+writers without resetting history. Failure to find the old frontier or to
+authenticate any historical checkpoint is a deployment stop, not a reason to
+skip unknown records. Operator recovery is to restore API proof or resolve the
+specific external deployment before retrying the scheduled/manual workflow.
+
+Each archived receipt also pins the deployment's `updated_at`. Before any new
+deploy or marker advance, the workflow compares every archived deployment in
+the bounded listing with that value. A late status or new run on an old ID
+blocks until the checkpoint writer obtains exact terminal proof and appends a
+`reclosed_delta`. An inactive status with its prior success can be reclosed;
+a fresh in-progress backend cannot. This check reads deployment metadata, not
+expired historical statuses. If metadata or the old deployment disappears,
+the boundary fails closed.
+
+The writer waits up to five seconds for the latest status timestamp second
+to close, then rereads the exact deployment and latest status before its CAS
+push. It validates the candidate with the same full ancestry checker used by
+readers before publishing an immutable root or append. During the first day
+after each archived receipt, preflight also compares its latest status ID,
+state, and job URL to catch a same-second status collision. An exact current
+Pages run/job may pass the archived freshness check while its own deployment
+is still in progress, including if GitHub reuses an old environment deployment
+ID. Other runs remain blocked; the writer must reclose that ID after success.
 
 The compositor refuses expired Directory or feed snapshots even when their
 immutable provenance is valid. If Pages is stale or lost, dispatch the

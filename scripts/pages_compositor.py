@@ -336,10 +336,22 @@ def _backend_cancelled_for_unique_sha(
 
 def _verified_deployment_frontier(
     repository: str, token: str, path: Path | None,
-    fetch: Callable[[str, str], object],
-) -> int | None:
+    fetch: Callable[[str, str], object], checkpoint_repo: Path | None = None,
+    current_job: Callable[[], tuple[int, int]] | None = None,
+    allowed_current_states: frozenset[str] = frozenset(),
+) -> tuple[int | None, int | None]:
     if path is None:
-        return None
+        return None, None
+    if checkpoint_repo is not None:
+        from pages_deployment_checkpoint import read_checkpoint, require_archived_freshness
+        head, frontier_id, archived = read_checkpoint(checkpoint_repo, "origin", path, repository,
+                                                      token=token, fetch=fetch)
+        if head is not None:
+            current_deployment = require_archived_freshness(
+                repository, token, archived, fetch, current_job=current_job,
+                allowed_current_states=allowed_current_states,
+            )
+            return frontier_id, current_deployment
     receipt = json.loads(path.read_text(encoding="utf-8"))
     if (not isinstance(receipt, dict) or receipt.get("schema_version") != 1
             or receipt.get("repository") != repository or receipt.get("environment") != "github-pages"):
@@ -361,12 +373,13 @@ def _verified_deployment_frontier(
             or not isinstance(status, dict) or status.get("id") != status_id
             or status.get("state") != "success" or status.get("log_url") != log_url):
         raise CasError("Pages deployment frontier no longer has exact success evidence")
-    return deployment_id
+    return deployment_id, None
 
 
 def require_terminal_previous_deployments(
     repository: str, token: str, *, run_id: int | None = None,
     run_attempt: int | None = None, frontier: Path | None = None,
+    checkpoint_repo: Path | None = None,
     fetch: Callable[[str, str], object] = _gh_json,
 ) -> None:
     """A cancelled runner can leave an external Pages deployment in flight."""
@@ -376,7 +389,6 @@ def require_terminal_previous_deployments(
         raise CasError("GitHub API token is missing")
     if (run_id is None) != (run_attempt is None) or (run_id is not None and (run_id < 1 or run_attempt < 1)):
         raise CasError("current Pages run identity is incomplete")
-    frontier_id = _verified_deployment_frontier(repository, token, frontier, fetch)
     self_deployment: int | None = None
     current_job_id: int | None = None
 
@@ -385,6 +397,12 @@ def require_terminal_previous_deployments(
         if current_job_id is None:
             current_job_id = _current_compositor_job_id(repository, token, run_id, run_attempt, fetch)
         return current_job_id
+
+    frontier_id, archived_self = _verified_deployment_frontier(
+        repository, token, frontier, fetch, checkpoint_repo,
+        current_job=(lambda: (run_id, job_in_current_attempt())) if run_id is not None else None,
+        allowed_current_states=frozenset({"queued", "waiting", "pending", "in_progress"}),
+    )
 
     for page in range(1, 101):
         deployments = fetch(
@@ -399,7 +417,7 @@ def require_terminal_previous_deployments(
             deployment_id = deployment.get("id")
             if not isinstance(deployment_id, int) or deployment_id < 1:
                 raise CasError("GitHub Pages deployment ID is invalid")
-            if frontier_id is None or deployment_id > frontier_id:
+            if frontier_id is None or deployment_id > frontier_id or deployment_id == archived_self:
                 ids.append(deployment_id)
 
         def latest_status(deployment_id: int) -> object:
@@ -433,17 +451,30 @@ def require_terminal_previous_deployments(
 
 def require_successful_current_deployment(
     repository: str, token: str, *, run_id: int, run_attempt: int,
-    frontier: Path | None = None,
+    frontier: Path | None = None, checkpoint_repo: Path | None = None,
     fetch: Callable[[str, str], object] = _gh_json,
 ) -> str:
     """Bind a protected marker update to this exact successful Pages job."""
     if (re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
             or not token or run_id < 1 or run_attempt < 1):
         raise CasError("current Pages deployment request is invalid")
-    frontier_id = _verified_deployment_frontier(repository, token, frontier, fetch)
     job_id = _current_compositor_job_id(repository, token, run_id, run_attempt, fetch)
+    frontier_id, archived_self = _verified_deployment_frontier(
+        repository, token, frontier, fetch, checkpoint_repo,
+        current_job=lambda: (run_id, job_id),
+        allowed_current_states=frozenset({"success"}),
+    )
     matched: list[tuple[int, str]] = []
     receipts: list[tuple[int, str]] = []
+    if checkpoint_repo is not None and _git(checkpoint_repo, [
+        "rev-parse", "--verify", "refs/remotes/pages-checkpoint",
+    ], check=False).returncode == 0:
+        from pages_deployment_checkpoint import archived_receipts
+        for archived in archived_receipts(checkpoint_repo):
+            deployment_id, state = archived["deployment_id"], archived["status_state"]
+            receipts.append((deployment_id, state))
+            if _status_job_id(repository, {"log_url": archived["status_log_url"]}, run_id) == job_id:
+                matched.append((deployment_id, state))
     for page in range(1, 101):
         deployments = fetch(
             f"repos/{repository}/deployments?environment=github-pages&per_page=100&page={page}", token,
@@ -456,7 +487,7 @@ def require_successful_current_deployment(
             deployment_id = deployment.get("id")
             if not isinstance(deployment_id, int) or deployment_id < 1:
                 raise CasError("GitHub Pages deployment ID is invalid")
-            if frontier_id is not None and deployment_id <= frontier_id:
+            if frontier_id is not None and deployment_id <= frontier_id and deployment_id != archived_self:
                 continue
             statuses = fetch(f"repos/{repository}/deployments/{deployment_id}/statuses?per_page=1", token)
             if not isinstance(statuses, list) or len(statuses) != 1 or not isinstance(statuses[0], dict):
@@ -551,9 +582,11 @@ def main() -> int:
     receipt = commands.add_parser("require-terminal-deployments")
     receipt.add_argument("--repository", required=True)
     receipt.add_argument("--frontier", type=Path)
+    receipt.add_argument("--checkpoint-repo", type=Path)
     successful = commands.add_parser("require-successful-deployment")
     successful.add_argument("--repository", required=True)
     successful.add_argument("--frontier", type=Path)
+    successful.add_argument("--checkpoint-repo", type=Path)
     policy = commands.add_parser("require-intent-policy")
     policy.add_argument("--repository", required=True)
     freshness = commands.add_parser("require-feed-freshness")
@@ -575,6 +608,7 @@ def main() -> int:
                 run_id=int(raw_run) if raw_run else None,
                 run_attempt=int(raw_attempt) if raw_attempt else None,
                 frontier=args.frontier,
+                checkpoint_repo=args.checkpoint_repo,
             )
         elif args.command == "require-feed-freshness":
             require_current_feed_freshness(
@@ -586,6 +620,7 @@ def main() -> int:
                 run_id=int(os.environ["GITHUB_RUN_ID"]),
                 run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]),
                 frontier=args.frontier,
+                checkpoint_repo=args.checkpoint_repo,
             ))
         else:
             require_protected_intent_policy(args.repository, os.environ.get("GH_TOKEN", ""))
