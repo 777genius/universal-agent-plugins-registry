@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -1587,7 +1588,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("pages_compositor.py require-current", deploy_body)
         self.assertIn("verify_discovery_index.py", deploy_body)
         self.assertIn("verify_security_index.py", deploy_body)
-        self.assertIn("rsync -a --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
         self.assertIn("tar --directory production-pages-tree", deploy_body)
         marker = json.loads((ROOT / "registry/publication/production-marker.json").read_text())
         self.assertRegex(marker["bootstrap_materialized_commit"], r"^[0-9a-f]{40}$")
@@ -1671,6 +1672,32 @@ sys.modules['catalog_process_isolation']=module
             self.assertEqual((ledger / "discovery" / "latest.json").read_text(), "discovery\n")
             self.assertEqual((ledger / "security" / "latest.json").read_text(), "security\n")
 
+    def test_pages_compositor_copies_changed_feed_with_same_size_and_mtime(self) -> None:
+        rsync = shutil.which("rsync")
+        if rsync is None:
+            self.skipTest("rsync is not installed")
+        compose = load(PAGES_COMPOSITOR)["jobs"]["compose"]
+        stage = next(step["run"] for step in compose["steps"]
+                     if "rsync -a" in step.get("run", ""))
+        lines = [shlex.split(line.strip()) for line in stage.splitlines()
+                 if line.strip().startswith("rsync ")]
+        self.assertEqual(len(lines), 2)
+        for command in lines:
+            with self.subTest(feed=command[-2]):
+                with tempfile.TemporaryDirectory() as temporary:
+                    source = Path(temporary) / "source"
+                    target = Path(temporary) / "target"
+                    source.mkdir()
+                    target.mkdir()
+                    (source / "latest.json").write_text("new!\n")
+                    (target / "latest.json").write_text("old!\n")
+                    stamp = 1_700_000_000
+                    os.utime(source / "latest.json", (stamp, stamp))
+                    os.utime(target / "latest.json", (stamp, stamp))
+                    subprocess.run([rsync, *command[1:-2], str(source) + "/", str(target) + "/"],
+                                   check=True, capture_output=True, text=True)
+                    self.assertEqual((target / "latest.json").read_text(), "new!\n")
+
     def test_security_index_binds_exact_discovery_subjects_and_preserves_directory(self) -> None:
         workflow = load(SECURITY_INDEX)
         self.assertNotIn("concurrency", workflow)
@@ -1703,8 +1730,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("pages_compositor.py plan", deploy_body)
         self.assertIn("verify_discovery_index.py", deploy_body)
         self.assertIn("verify_security_index.py", deploy_body)
-        self.assertIn("rsync -a --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
-        self.assertIn("rsync -a --delete ledger/security/ production-pages-tree/security/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/security/ production-pages-tree/security/", deploy_body)
         self.assertIn("observe_security_index.py", commands(workflow["jobs"]["observe"]))
 
     def test_pages_concurrency_isolates_prs_from_production(self) -> None:

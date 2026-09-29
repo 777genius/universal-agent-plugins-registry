@@ -104,11 +104,11 @@ jobs:
             --ledger-path ledger
           test -z "$(find ledger/discovery ledger/security production-pages-tree -type l -print -quit 2>/dev/null)"
           mkdir -p production-pages-tree/discovery
-          rsync -a --delete ledger/discovery/ production-pages-tree/discovery/
+          rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/
           diff -qr ledger/discovery production-pages-tree/discovery
           if test -f ledger/security/latest.json; then
             mkdir -p production-pages-tree/security
-            rsync -a --delete ledger/security/ production-pages-tree/security/
+            rsync -a --checksum --delete ledger/security/ production-pages-tree/security/
             diff -qr ledger/security production-pages-tree/security
           fi
           test -z "$(git -C production-pages-tree diff --name-only -- . ':!discovery' ':!security')"
