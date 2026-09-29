@@ -52,7 +52,10 @@ def select_stale_approval(
             name = job.get("name")
             if not isinstance(name, str) or not name:
                 raise ValueError("invalid waiting Directory job name")
-            if now - timestamp(job["created_at"]) >= approval_grace:
+            created_at = job.get("created_at")
+            if not isinstance(created_at, str) or not created_at:
+                raise ValueError(f"waiting Directory job {name!r} has no created_at")
+            if now - timestamp(created_at) >= approval_grace:
                 return run_id, name
     return None
 

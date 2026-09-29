@@ -58,6 +58,15 @@ class DiscoveryPublicationLivenessTests(unittest.TestCase):
             select_stale_approval([run(12)], lambda _: approval(hours_old=1), now=NOW, expires_at=NOW),
         )
 
+    def test_missing_wait_timestamp_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "has no created_at"):
+            select_stale_approval(
+                [run(12)],
+                lambda _: [{"name": "Record the exact tree deployed to production", "status": "waiting"}],
+                now=NOW,
+                expires_at=NOW,
+            )
+
     def test_ci_is_read_only_and_outside_shared_publication_lock(self) -> None:
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/discovery-publication-liveness.yml").read_text()
         self.assertNotIn("pull_request:", workflow)
