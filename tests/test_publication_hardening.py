@@ -649,13 +649,38 @@ class WorkflowHardeningTests(unittest.TestCase):
     def test_only_app_tokens_write_ledger_and_floor_tags_are_atomic(self) -> None:
         text = (ROOT / ".github" / "workflows" / "directory-publication.yml").read_text()
         workflow = yaml.load(text, Loader=yaml.BaseLoader)
-        self.assertNotIn("github.token", text)
-        self.assertNotIn("GH_TOKEN", text)
         self.assertEqual(workflow["jobs"]["sign"]["permissions"]["contents"], "read")
         self.assertEqual(workflow["jobs"]["materialize_site"]["permissions"]["contents"], "read")
         self.assertEqual(workflow["jobs"]["sign"]["environment"], "directory-publication")
         self.assertEqual(workflow["jobs"]["materialize_site"]["environment"], "directory-publication-materialization")
-        self.assertEqual(text.count("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"), 3)
+        app_token_action = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
+        writer_steps = {
+            "materialize_site": "Publish the signed and materialized commits with exact CAS",
+            "record_launch_approval": "Atomically persist both refs and approve only the gated ledger",
+            "promotion_intent": "Create only the immutable intent for the exact gated publication",
+        }
+        for job_name, writer_name in writer_steps.items():
+            job = workflow["jobs"][job_name]
+            with self.subTest(job=job_name):
+                self.assertEqual(job["permissions"]["contents"], "read")
+                publisher = next(step for step in job["steps"] if step.get("id") == "publisher")
+                writer = next(step for step in job["steps"] if step.get("name") == writer_name)
+                self.assertEqual(publisher["uses"], app_token_action)
+                self.assertEqual(writer["env"]["PUBLISHER_TOKEN"], "${{ steps.publisher.outputs.token }}")
+                self.assertNotIn("github.token", json.dumps(writer))
+                self.assertNotIn("GH_TOKEN", json.dumps(writer))
+        github_token_steps = [
+            (job_name, step)
+            for job_name, job in workflow["jobs"].items()
+            for step in job.get("steps", [])
+            if isinstance(step, dict) and ("github.token" in json.dumps(step) or "GH_TOKEN" in json.dumps(step))
+        ]
+        self.assertEqual(
+            [(job_name, step.get("name")) for job_name, step in github_token_steps],
+            [("promotion_intent", "Rehash the exact gated readiness bytes and require protected intent policy")],
+        )
+        self.assertEqual(github_token_steps[0][1]["env"]["GH_TOKEN"], "${{ github.token }}")
+        self.assertIn("pages_compositor.py require-intent-policy", github_token_steps[0][1]["run"])
         cas_helper = (SCRIPTS / "directory_publication_cas.py").read_text()
         self.assertIn('"push", "--atomic"', cas_helper)
         self.assertIn('f"--force-with-lease={main_ref}:{source}"', cas_helper)
@@ -668,8 +693,15 @@ class WorkflowHardeningTests(unittest.TestCase):
         self.assertIn('f"--force-with-lease={ledger_ref}:{ledger_old}"', cas_helper)
         self.assertIn("merge-base --is-ancestor", text)
         self.assertEqual(workflow["concurrency"], {
-            "group": "directory-publication-schema-1",
+            "group": "directory-publication-schema-1-directory",
             "cancel-in-progress": "false",
+            "queue": "max",
+        })
+        pages_workflow = yaml.load((ROOT / ".github" / "workflows" / "pages-production-compositor.yml").read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(pages_workflow["jobs"]["compose"]["concurrency"], {
+            "group": "registry-production-pages",
+            "cancel-in-progress": "false",
+            "queue": "max",
         })
         self.assertGreaterEqual(text.count("merge-base --is-ancestor"), 3)
         self.assertIn('merge-base --is-ancestor "${seed_commit}" HEAD', text)
@@ -747,8 +779,11 @@ class WorkflowHardeningTests(unittest.TestCase):
         documentation = (ROOT / "registry" / "publication" / "README.md").read_text()
         self.assertIn("`bcd2ba49218906704ab6c1aa796996da409d3eb1` (`v3.2.0`)", documentation)
         self.assertNotIn("a8d616148505b5069dccd32f177bb87d7f39123b", documentation)
-        self.assertIn("ten active repository rulesets", documentation)
-        self.assertEqual(documentation.count("**no bypass actors**"), 5)
+        self.assertIn("`Directory promotion intent publisher creation`", documentation)
+        self.assertIn("`Directory promotion intent immutable`", documentation)
+        self.assertIn("`directory-publication-schema-1-promotion-intent-*`", documentation)
+        self.assertIn("**Restrict updates** and **Restrict deletions** and **no bypass actors**", documentation)
+        self.assertGreaterEqual(documentation.count("**no bypass actors**"), 6)
         self.assertIn("even the publisher cannot reset the branch", documentation)
         self.assertIn("administrators", documentation)
         self.assertIn("deploy keys", documentation)
