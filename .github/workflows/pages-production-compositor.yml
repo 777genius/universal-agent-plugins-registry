@@ -191,6 +191,7 @@ jobs:
           private-key: ${{ secrets.DIRECTORY_PUBLISHER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - name: Advance marker monotonically or accept a newer marker
         id: marker
         if: steps.receipt.outputs.status == 'current'

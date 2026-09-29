@@ -1753,6 +1753,7 @@ sys.modules['catalog_process_isolation']=module
                          "${{ steps.marker.outputs.status || steps.receipt.outputs.status }}")
         publisher = next(step for step in marker["steps"] if step.get("id") == "publisher")
         self.assertEqual(publisher["if"], "steps.receipt.outputs.status == 'current'")
+        self.assertEqual(publisher["with"]["permission-contents"], "write")
         self.assertIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", yaml.safe_dump(marker))
 
     def test_launch_pr_is_fixture_only_and_has_no_secrets_or_runtime_claim(self) -> None:
