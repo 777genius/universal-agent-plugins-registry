@@ -68,7 +68,7 @@ Before enabling `.github/workflows/directory-publication.yml`:
    Administration, Workflows, Environments, or other permission. Its installation
    token is the only credential allowed to update the ledger branch or create
    publication-floor tags; the workflow's generic `GITHUB_TOKEN` stays read-only.
-3. Create ten active repository rulesets. The ledger branch update gate targets only
+3. Create the active repository rulesets. The ledger branch update gate targets only
    `directory-publication-ledger`, enables **Restrict updates**, and names only
    the installed `uap-directory-publisher` App as an always-allowed bypass actor.
    A second branch immutability guard targets the same branch, blocks deletion
@@ -94,6 +94,20 @@ Before enabling `.github/workflows/directory-publication.yml`:
    deletion guard blocks deletion with **no bypass actors**. Unlike sequence and
    launch-approval tags, this marker is intentionally advanced after each
    successful Pages deployment and never before it.
+   Before enabling the Pages compositor, add a creation gate named
+   `Directory promotion intent publisher creation` targeting only
+   `directory-publication-schema-1-promotion-intent-*`, with **Restrict
+   creations** and only the installed publisher App (Integration actor
+   `4684827`) as always-allowed bypass. Add a separate guard named
+   `Directory promotion intent immutable` for the same exact prefix with
+   **Restrict updates** and **Restrict deletions** and **no bypass actors**.
+   The compositor checks the publicly readable names, active state, exact
+   namespace, and rule types before trusting an intent. GitHub omits bypass
+   actors from read-only API responses, so an owner must verify the exact
+   publisher-only creation bypass and no-bypass immutability with `gh` using
+   an administration-capable session immediately before cutover. Later ruleset
+   administration remains a trusted control-plane boundary; do not present
+   the read-only runtime check as proof of the hidden bypass lists.
    In addition, split `main` protection into two rulesets before enabling
    publication. The `main` update/review gate must retain required PRs, strict
    portable-catalog status checks, and resolved conversations for everyone except the installed dedicated
@@ -163,8 +177,9 @@ browser pages.
 
 ## Operation and recovery
 
-Pushes to `main`, a weekly schedule, and manual emergency dispatch use one
-non-cancelling concurrency group. For source head `S`, the no-secret jobs derive
+Pushes to `main`, a weekly schedule, and manual emergency dispatch use a
+Directory-only non-cancelling concurrency group. Discovery and Security can
+append signed feeds while Directory awaits approval. For source head `S`, the no-secret jobs derive
 a deterministic marker `P` from `S` and `github.run_id`. `P` has exactly parent
 `S`, the same tree, a fixed publisher identity, and a bounded hash-derived UTC
 timestamp. It therefore changes no paths and does not recurse through the
@@ -172,30 +187,28 @@ workflow's path-filtered push trigger. Candidate `source_commit`, new
 in-repository release revisions, generated-site provenance, and downstream
 materialization all bind to `P`.
 
-The publication push is a real GitHub receive-pack update of `main` from `S` to
-`P`. One atomic command updates `main`, advances the ledger from exact `L` to
-signed commit `Q`, and creates the absent immutable sequence tag at `Q`; every
-ref has an explicit expected-old lease. Each of at most three attempts reads all
-three refs and accepts only the exact pre-state or the exact committed state.
-Any mixed state is terminal. An ambiguous or lost response is resolved by the
-same exact multi-ref readback. A retry never recreates the marker, regenerates
-or rebases `Q`, or reallocates the sequence. `github.run_id` is the publication
-ID, so an exact rerun recognizes the already-committed `P`/`Q`/tag state.
-Materialization separately advances the ledger with an explicit exact `Q`
-lease and accepts only exact idempotent readback; a competing ledger child fails
-closed.
+The signer first prepares immutable signed snapshot bytes in `S0` and site
+bytes in `M0`, without publishing either commit. After materialization approval,
+the privileged job authenticates the current ledger `H` and its feed lineage,
+then recreates `S1` with exactly the `S0` signed bytes on parent `H`, and `M1`
+with exactly the `M0` static bytes on parent `S1`. The atomic receive-pack
+transition updates `main` to marker `P`, ledger `H` to `M1`, and creates the
+absent sequence tag at `S1`, all with exact expected-old leases. Signed bytes
+are never regenerated on CAS retry. Unknown, partial, or unauthenticated
+readback fails closed; an exact committed tuple is idempotent. Feed changes
+after the protected authentication require a new authenticated attempt.
 
-The only accepted post-signing state is `(main=P, ledger=M, tag=Q)`, where `M`
-is the single-parent site-materialization child of `Q`, has the fixed
-materialization commit message, and leaves all `registry/` bytes unchanged. An
-exact run retry authenticates that tuple, skips the initial three-ref CAS,
-reuses `Q` and its signed bytes, rebuilds the site, and requires the rebuilt tree
-to equal `M` before reusing it. Any unrelated descendant, registry change,
-moved tag, or different rebuilt tree is terminal.
+The accepted state is `(main=P, ledger=M1 or a protected feed descendant,
+sequence tag=S1)`. `M1` is the immediate materialization child of `S1`,
+preserves feed and signed-registry bytes, and matches the prepared site tree.
+An exact run retry rebuilds the same site and validates the authenticated
+lineage without allocating a sequence. Approval waits beyond the signed
+snapshot lifetime fail cleanly; operators must publish a newly signed higher
+sequence rather than extend an expired signature.
 
-Pushing `M` is staging, not production promotion. The gate reads `latest.json`
-and both versioned artifacts from the immutable raw-commit origin for `M` and
-requires the exact run publication ID, sequence, snapshot digest, `Q` tag, and
+Pushing `M1` is staging, not production promotion. The gate reads `latest.json`
+and both versioned artifacts from the immutable raw-commit origin for `M1` and
+requires the exact run publication ID, sequence, snapshot digest, `S1` tag, and
 ledger identity.
 
 ### Required catalog readiness
@@ -210,7 +223,7 @@ eligibility changes are compared with signed production, never with an
 unpromoted staging snapshot.
 
 The artifact binds source and workflow commits, run/attempt, publication ID,
-sequence, snapshot digest, `Q`, `M`, and the authenticated released CLI.
+sequence, snapshot digest, `S1`, `M1`, and the authenticated released CLI.
 A separate job validates the canonical artifact before obtaining an OIDC
 attestation; the producer has no OIDC, signing, publisher, or account secrets.
 CLI/MCP children also have a read-only filesystem outside their disposable
@@ -218,8 +231,11 @@ case, isolated process visibility, and no access to producer control files.
 This Linux process sandbox is required; environment scrubbing alone is not a
 fallback and no VM is provisioned.
 The final gate verifies provenance and identity again. A failed, skipped,
-incomplete, or wrong-tuple gate cannot deploy. No new persistent approval tag
-or independent approval service is introduced.
+incomplete, or wrong-tuple gate cannot create an intent. The protected
+publisher hashes the exact gated readiness artifact and creates one immutable
+promotion-intent tag targeting `M1`, binding its run, sequence, signed digest,
+and readiness digest. This protected tag is the durable approval receipt after
+the Actions artifact expires; it contains no secret or executable code.
 
 Catalog evidence explicitly sets `runtime_claims=false`. Native preparation,
 registration, public MCP calls, authenticated model runtime, OAuth, and ChatGPT
@@ -229,7 +245,7 @@ checks. Missing account results remain untested and must not update the hero
 matrix or runtime approval marker.
 
 A failed deployment or gate leaves the prior GitHub Pages production pointer
-in place and is retried from the already signed `Q` and authenticated `M`;
+in place and is retried from the already signed `S1` and authenticated `M1`;
 it never allocates a new sequence merely to repeat a test.
 
 ### Separate account-runtime evidence
@@ -267,17 +283,68 @@ The scheduled production observer resolves
 that exact ledger commit, and compares it byte-for-byte with Pages. Before the
 first protected deployment creates this marker, `production-marker.json`
 selects the already deployed sequence-13 materialized child as a one-time
-bootstrap and binds it to the sequence-13 tag. Discovery deployments overlay
-only their signed `discovery/` feed on that exact production tree. Staged ledger
-`HEAD` is never treated as production. After Pages succeeds, the
-publisher advances the production marker with an exact lease, monotonic lineage
-check, and exact readback; a lost response is safe to retry.
+bootstrap and binds it to the sequence-13 tag. A Pages-only job lock with a
+bounded queue rereads all refs after acquisition, selects the highest eligible
+protected intent by sequence, and overlays the latest authenticated Discovery
+and Security feeds. It rechecks signatures, expiry, policy, ref identity, and
+all prior external Pages deployment terminal receipts immediately before
+dispatch. One nonterminal deployment from its exact current Actions job/attempt
+is expected; any other or ambiguous one stops deployment. A failed environment
+receipt alone does not prove that the Pages backend stopped: pre-dispatch
+skipped and action-success steps are safe, but a started failed/cancelled
+deploy action requires separate backend evidence before another deploy.
+An inactive historical receipt is safe only with an earlier success status
+for that same deployment. A cancelled caller
+after append is repaired by the six-hour compositor schedule or manual dispatch.
+The schedule may redeploy unchanged bytes (at most four scheduled attempts per
+day). The checked-in `pages-deployment-frontier.json` records the one
+owner-audited cutover baseline, including its exact successful environment
+status and the canceled pre-cutover backend receipt. At runtime, GitHub must
+still return that exact success status; only statuses newer than the frontier
+are scanned, with a 10,000-deployment bound. This is a temporary cutover
+checkpoint, not permanent retention architecture: PR2c must add automatic
+durable frontier advancement before 2026-12-28, ahead of the 90-day Actions
+retention risk. If the anchor becomes unavailable first, deployment fails
+closed; never silently skip unverified history. After Pages succeeds, a separate protected job checks that exact
+run/attempt's successful Pages deployment receipt and advances the production
+marker monotonically; a late older marker job reports superseded rather than
+rolling it back. This marker job does not hold the Pages lock, but its owner
+approval can delay feed observers even though Pages is already live. Marker
+jobs use a separate bounded FIFO queue so an approval wait never holds the
+Pages lock or blocks feed signing. Operators should inspect and resolve old
+waiting marker approvals rather than allowing that queue to grow. Staged ledger
+`HEAD` is never treated as production by itself.
 
-The publisher validates the latest ledger signature even after client expiry.
-Expired data can supply only the sequence and immutable provenance for recovery,
-never client eligibility. If Pages is stale or lost, redeploy the exact protected
-branch commit. A Directory rollback is a newly reviewed, higher-sequence
-snapshot. Never rewrite, delete, or re-serve an older historical artifact.
+The compositor refuses expired Directory or feed snapshots even when their
+immutable provenance is valid. If Pages is stale or lost, dispatch the
+compositor after external deployment status becomes terminal. A Directory
+rollback is a newly reviewed, higher-sequence snapshot. Never rewrite, delete,
+or re-serve an older historical artifact.
+
+### Pages compositor cutover and rollback
+
+Before merging a workflow change from the older shared-lock deployers, use
+`gh run list` and `gh run view` for the Directory, Discovery, and Security
+workflows. Drain every old YAML Pages job, including queued and waiting runs;
+cancel only an explicitly identified unsigned old run after checking its job
+state. An old queued run retains the old YAML and can otherwise deploy stale
+bytes after the new compositor starts. Do not merge while any old Pages deploy
+or external `github-pages` deployment is nonterminal.
+
+The repository owner then installs the paired promotion-intent tag rulesets
+specified above and reads both back with administration-capable `gh api` to
+verify actor `4684827` is the sole creation bypass and update/deletion have
+none. Do not create an intent while the namespace is unprotected. Verify the
+new workflow and exact-head CI, then use an approved Directory canary and a
+feed append to prove latest recomposition, marker advancement, and production
+observations. The compositor itself rechecks the readable policy at runtime.
+
+For rollback, first stop new callers and drain or safely cancel exact active
+Pages jobs; wait for all external Pages deployment statuses to become terminal.
+Revert the workflow code through a reviewed change, preserving the signed
+ledger, immutable intent tags, production marker, and rulesets. Never delete
+or move those refs to undo a release. Resume from the latest authenticated
+state with a newly approved higher Directory sequence when needed.
 
 Key rotation has one concrete overlap/retirement gate:
 
