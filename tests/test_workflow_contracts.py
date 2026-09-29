@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -1587,7 +1588,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("pages_compositor.py require-current", deploy_body)
         self.assertIn("verify_discovery_index.py", deploy_body)
         self.assertIn("verify_security_index.py", deploy_body)
-        self.assertIn("rsync -a --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
         self.assertIn("tar --directory production-pages-tree", deploy_body)
         marker = json.loads((ROOT / "registry/publication/production-marker.json").read_text())
         self.assertRegex(marker["bootstrap_materialized_commit"], r"^[0-9a-f]{40}$")
@@ -1612,7 +1613,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('"${EXISTING_MATERIALIZED_COMMIT}..${EXPECTED_LEDGER_HEAD}"', body)
         self.assertLess(
             body.index('if test -n "${EXISTING_MATERIALIZED_COMMIT}"'),
-            body.index("rsync -a --delete"),
+            body.index("rsync -a --checksum --delete"),
         )
         self.assertIn("commit --allow-empty", body)
         self.assertEqual(body.count("':!security'"), 1)
@@ -1647,6 +1648,7 @@ sys.modules['catalog_process_isolation']=module
         rsync = shutil.which("rsync")
         if rsync is None:
             self.skipTest("rsync is not installed")
+        body = commands(load(DIRECTORY_PUBLICATION)["jobs"]["materialize_site"])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             generated = root / "generated"
@@ -1655,21 +1657,50 @@ sys.modules['catalog_process_isolation']=module
             (ledger / "registry").mkdir(parents=True)
             (ledger / "discovery").mkdir()
             (ledger / "security").mkdir()
-            (generated / "index.html").write_text("new generated site\n")
-            (ledger / "index.html").write_text("old site\n")
+            (generated / "index.html").write_text("new page\n")
+            (ledger / "index.html").write_text("old page\n")
+            stamp = 1_700_000_000
+            os.utime(generated / "index.html", (stamp, stamp))
+            os.utime(ledger / "index.html", (stamp, stamp))
             (ledger / "stale.html").write_text("remove me\n")
             (ledger / "registry" / "latest.json").write_text("directory\n")
             (ledger / "discovery" / "latest.json").write_text("discovery\n")
             (ledger / "security" / "latest.json").write_text("security\n")
-            subprocess.run([
-                rsync, "-a", "--delete", "--exclude=.git", "--exclude=registry",
-                "--exclude=/discovery", "--exclude=/security", str(generated) + "/", str(ledger) + "/",
-            ], check=True)
-            self.assertEqual((ledger / "index.html").read_text(), "new generated site\n")
+            command = next(shlex.split(line.strip()) for line in body.splitlines()
+                           if line.strip().startswith("rsync "))
+            subprocess.run([rsync, *command[1:-2], str(generated) + "/", str(ledger) + "/"],
+                           check=True)
+            self.assertEqual((ledger / "index.html").read_text(), "new page\n")
             self.assertFalse((ledger / "stale.html").exists())
             self.assertEqual((ledger / "registry" / "latest.json").read_text(), "directory\n")
             self.assertEqual((ledger / "discovery" / "latest.json").read_text(), "discovery\n")
             self.assertEqual((ledger / "security" / "latest.json").read_text(), "security\n")
+
+    def test_pages_compositor_copies_changed_feed_with_same_size_and_mtime(self) -> None:
+        rsync = shutil.which("rsync")
+        if rsync is None:
+            self.skipTest("rsync is not installed")
+        compose = load(PAGES_COMPOSITOR)["jobs"]["compose"]
+        stage = next(step["run"] for step in compose["steps"]
+                     if "rsync -a" in step.get("run", ""))
+        lines = [shlex.split(line.strip()) for line in stage.splitlines()
+                 if line.strip().startswith("rsync ")]
+        self.assertEqual(len(lines), 2)
+        for command in lines:
+            with self.subTest(feed=command[-2]):
+                with tempfile.TemporaryDirectory() as temporary:
+                    source = Path(temporary) / "source"
+                    target = Path(temporary) / "target"
+                    source.mkdir()
+                    target.mkdir()
+                    (source / "latest.json").write_text("new!\n")
+                    (target / "latest.json").write_text("old!\n")
+                    stamp = 1_700_000_000
+                    os.utime(source / "latest.json", (stamp, stamp))
+                    os.utime(target / "latest.json", (stamp, stamp))
+                    subprocess.run([rsync, *command[1:-2], str(source) + "/", str(target) + "/"],
+                                   check=True, capture_output=True, text=True)
+                    self.assertEqual((target / "latest.json").read_text(), "new!\n")
 
     def test_security_index_binds_exact_discovery_subjects_and_preserves_directory(self) -> None:
         workflow = load(SECURITY_INDEX)
@@ -1703,8 +1734,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("pages_compositor.py plan", deploy_body)
         self.assertIn("verify_discovery_index.py", deploy_body)
         self.assertIn("verify_security_index.py", deploy_body)
-        self.assertIn("rsync -a --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
-        self.assertIn("rsync -a --delete ledger/security/ production-pages-tree/security/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/security/ production-pages-tree/security/", deploy_body)
         self.assertIn("observe_security_index.py", commands(workflow["jobs"]["observe"]))
 
     def test_pages_concurrency_isolates_prs_from_production(self) -> None:
