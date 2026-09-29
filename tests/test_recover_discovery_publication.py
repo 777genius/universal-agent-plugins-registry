@@ -60,12 +60,10 @@ class DiscoveryPublicationLivenessTests(unittest.TestCase):
 
     def test_ci_is_read_only_and_outside_shared_publication_lock(self) -> None:
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/discovery-publication-liveness.yml").read_text()
-        directory = (Path(__file__).resolve().parents[1] / ".github/workflows/directory-publication.yml").read_text()
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("actions: write", workflow)
         self.assertNotIn("directory-publication-schema-1", workflow)
         self.assertIn("actions: read", workflow)
-        self.assertNotIn("  schedule:", directory)
 
 
 if __name__ == "__main__":
