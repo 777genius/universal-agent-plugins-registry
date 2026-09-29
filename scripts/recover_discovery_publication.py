@@ -17,9 +17,6 @@ from typing import Callable
 
 
 REPOSITORY = "777genius/universal-agent-plugins-registry"
-PRESIGN_JOB = "Authenticate staged publication or append a signed sequence"
-
-
 def timestamp(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
@@ -27,7 +24,7 @@ def timestamp(value: str) -> datetime:
     return parsed
 
 
-def select_unsigned_blocker(
+def select_stale_approval(
     runs: list[dict],
     jobs_for_run: Callable[[int], list[dict]],
     *,
@@ -35,17 +32,14 @@ def select_unsigned_blocker(
     expires_at: datetime,
     minimum_remaining: timedelta = timedelta(hours=60),
     approval_grace: timedelta = timedelta(hours=6),
-) -> int | None:
-    """Select only an old first-attempt schedule/push waiting before signing."""
+) -> tuple[int, str] | None:
+    """Report an old waiting job; never infer that its publication is unsigned."""
     if expires_at - now > minimum_remaining:
         return None
     candidates = sorted(
         (
             run for run in runs
-            if run.get("status") == "waiting"
-            and run.get("run_attempt") == 1
-            and run.get("event") in {"schedule", "push"}
-            and run.get("head_branch") == "main"
+            if run.get("status") == "waiting" and run.get("head_branch") == "main"
         ),
         key=lambda run: (run["created_at"], run["id"]),
     )
@@ -53,11 +47,13 @@ def select_unsigned_blocker(
         run_id = run["id"]
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
             raise ValueError("invalid Directory run ID")
-        presign = [job for job in jobs_for_run(run_id) if job.get("name") == PRESIGN_JOB]
-        if len(presign) != 1 or presign[0].get("status") != "waiting":
-            continue
-        if now - timestamp(presign[0]["created_at"]) >= approval_grace:
-            return run_id
+        waiting = [job for job in jobs_for_run(run_id) if job.get("status") == "waiting"]
+        for job in waiting:
+            name = job.get("name")
+            if not isinstance(name, str) or not name:
+                raise ValueError("invalid waiting Directory job name")
+            if now - timestamp(job["created_at"]) >= approval_grace:
+                return run_id, name
     return None
 
 
@@ -105,9 +101,10 @@ def main() -> int:
             raise ValueError("Directory jobs response is invalid")
         return jobs
 
-    candidate = select_unsigned_blocker(runs, jobs_for_run, now=now, expires_at=expires_at)
+    candidate = select_stale_approval(runs, jobs_for_run, now=now, expires_at=expires_at)
     if candidate is not None:
-        print(f"Directory run {candidate} blocks Discovery before signing; review this pending approval now")
+        run_id, job_name = candidate
+        print(f"Directory run {run_id} blocks Discovery at waiting job {job_name!r}; review this approval now")
         return 1
     if expires_at <= now:
         print(f"Discovery expired at {expires_at.isoformat()}; no safely identifiable Directory blocker found")
