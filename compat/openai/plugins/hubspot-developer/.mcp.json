@@ -11,7 +11,8 @@
         "agentplugins"
       ],
       "env": {
-        "HUBSPOT_CLI_VERSION": "8.14.0"
+        "HUBSPOT_CLI_VERSION": "8.15.0",
+        "HUBSPOT_MCP_STANDALONE": "false"
       }
     }
   }

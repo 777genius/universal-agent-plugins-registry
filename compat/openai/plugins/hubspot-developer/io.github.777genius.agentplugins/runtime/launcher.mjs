@@ -111,14 +111,21 @@ async function installRuntime(runtimeRoot, pluginData, config, lockBody, lockDig
     await mkdir(temporary, { recursive: false, mode: 0o700 });
     await copyFile(join(runtimeRoot, "package.json"), join(temporary, "package.json"), constants.COPYFILE_EXCL);
     await writeFile(join(temporary, "package-lock.json"), lockBody, { mode: 0o600, flag: "wx" });
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     const installArgs = ["ci", "--ignore-scripts", "--omit=dev"];
     if (config.omit_optional) installArgs.push("--omit=optional");
     installArgs.push("--no-audit", "--no-fund");
+    // Windows .cmd files require cmd.exe. Only fixed tokens enter its command;
+    // plugin paths and user arguments stay out of shell syntax. /d disables AutoRun.
+    const windows = process.platform === "win32";
+    const npm = windows ? "cmd.exe" : "npm";
+    const npmArgs = windows
+      ? ["/d", "/s", "/c", ["npm.cmd", ...installArgs].join(" ")]
+      : installArgs;
     const result = spawnSync(
       npm,
-      installArgs,
+      npmArgs,
       {
+        shell: false,
         cwd: temporary,
         env: {
           ...process.env,
