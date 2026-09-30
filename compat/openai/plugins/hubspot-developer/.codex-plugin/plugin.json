@@ -1,7 +1,7 @@
 {
   "name": "hubspot-developer",
-  "version": "0.2.3",
-  "description": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.14.0.",
+  "version": "0.2.4",
+  "description": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.15.0.",
   "author": {
     "name": "777genius",
     "url": "https://github.com/777genius"
@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "HubSpot Developer",
     "shortDescription": "HubSpot developer tools",
-    "longDescription": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.14.0.",
+    "longDescription": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.15.0.",
     "developerName": "777genius",
     "category": "Developer Tools",
     "capabilities": [
