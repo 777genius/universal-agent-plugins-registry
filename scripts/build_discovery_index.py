@@ -83,6 +83,29 @@ class DiscoveryError(Exception):
     pass
 
 
+class ProgressReporter:
+    """Emit only explicit operational fields, outside all signed artifacts."""
+
+    def __init__(self, *, stream=None, monotonic=None):  # noqa: ANN001
+        self.stream = stream if stream is not None else sys.stderr
+        self.monotonic = monotonic or time.monotonic
+        self.started_at = self.monotonic()
+        self.lock = threading.Lock()
+
+    def __call__(self, event: str, **fields: Any) -> None:
+        with self.lock:
+            line = json.dumps({
+                "event": event, "elapsed_seconds": round(self.monotonic() - self.started_at, 3),
+                **fields,
+            }, sort_keys=True)
+            try:
+                print(line, file=self.stream, flush=True)
+            except (OSError, ValueError):
+                # Progress is best-effort: a closed/broken stderr must not
+                # change candidate completeness or signed artifact bytes.
+                pass
+
+
 class GitHubHTTPError(DiscoveryError):
     def __init__(self, status: int, path: str, detail: str):
         super().__init__(f"GitHub API {path} failed with HTTP {status}: {detail}")
@@ -138,7 +161,8 @@ class SameOriginRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class GitHubAPI:
-    def __init__(self, token: str, *, search_monotonic=None, search_sleep=None):  # noqa: ANN001
+    def __init__(self, token: str, *, search_monotonic=None, search_sleep=None,
+                 progress: ProgressReporter | None = None):  # noqa: ANN001
         require(bool(token), "GITHUB_TOKEN is required")
         self.token = token
         self.origin = "https://api.github.com"
@@ -147,6 +171,7 @@ class GitHubAPI:
         self._search_sleep = search_sleep or time.sleep
         self._search_lock = threading.Lock()
         self._last_search_request_at: float | None = None
+        self.progress = progress or (lambda *args, **kwargs: None)
 
     def _pace_code_search(self) -> None:
         if self._last_search_request_at is not None:
@@ -162,6 +187,7 @@ class GitHubAPI:
         url = self.origin + "/" + path.lstrip("/") + query
         encoded = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         code_search = path.lstrip("/") == "search/code"
+        endpoint = "code_search" if code_search else "graphql" if path == "graphql" else "other"
         for attempt in range(MAX_GITHUB_REQUEST_ATTEMPTS):
             request = urllib.request.Request(url, headers={
                 "Accept": "application/vnd.github+json",
@@ -218,11 +244,17 @@ class GitHubAPI:
                         if message_delay < delay_cap and point and fraction.strip("0"):
                             message_delay += 1
                         delay = max(delay, message_delay)
-                time.sleep(max(1, min(delay, delay_cap)))
+                delay = max(1, min(delay, delay_cap))
+                self.progress("http_retry", endpoint=endpoint, attempt=attempt + 1,
+                              status=error.code, delay_seconds=delay)
+                time.sleep(delay)
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
                 if attempt + 1 == MAX_GITHUB_REQUEST_ATTEMPTS:
                     raise DiscoveryError(f"GitHub API {path} failed: {error}") from error
-                time.sleep(min(attempt + 1, 5))
+                delay = min(attempt + 1, 5)
+                self.progress("transport_retry", endpoint=endpoint, attempt=attempt + 1,
+                              error_type=type(error).__name__, delay_seconds=delay)
+                time.sleep(delay)
         raise DiscoveryError(f"GitHub API {path} exhausted retries")
 
     def get(self, path: str, parameters: dict[str, object] | None = None) -> dict[str, Any]:
@@ -259,12 +291,16 @@ def search_code_page(api: GitHubAPI, query: str, page: int) -> dict[str, Any]:
     })
 
 
-def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
+                          progress: ProgressReporter | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    report = progress or (lambda *args, **kwargs: None)
     queue = [(0, maximum_size)]
     partitions: list[dict[str, Any]] = []
     items: dict[tuple[str, str], dict[str, Any]] = {}
     while queue:
         minimum, maximum = queue.pop(0)
+        report("partition_start", size_min=minimum, size_max=maximum, pending=len(queue),
+               completed=len(partitions))
         query = partition_query(base_query, minimum, maximum)
         first = search_code_page(api, query, 1)
         total = first.get("total_count")
@@ -276,6 +312,8 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int) ->
             require(minimum < maximum, f"exact-size search partition {query!r} still exceeds {SEARCH_PARTITION_MAX} results")
             midpoint = (minimum + maximum) // 2
             queue[0:0] = [(minimum, midpoint), (midpoint + 1, maximum)]
+            report("partition_split", size_min=minimum, size_max=maximum, total_count=total,
+                   pending=len(queue))
             continue
         stable_items: list[dict[str, Any]] | None = None
         stable_total = 0
@@ -330,11 +368,14 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int) ->
         for item in stable_items:
             key = (item["repository"].casefold(), item["manifest_path"].casefold())
             items[key] = item
+        report("partition_end", size_min=minimum, size_max=maximum, total_count=stable_total,
+               completed=len(partitions), pending=len(queue), candidates=len(items))
     partitions.sort(key=lambda item: (item["size_min"], item["size_max"]))
     return [items[key] for key in sorted(items)], partitions
 
 
-def repository_states(api: GitHubAPI, repositories: list[str]) -> dict[str, dict[str, Any]]:
+def repository_states(api: GitHubAPI, repositories: list[str],
+                      progress: ProgressReporter | None = None) -> dict[str, dict[str, Any]]:
     """Resolve immutable default heads in bounded GraphQL batches.
 
     A per-repository REST metadata + commit flow exceeds the 1,000 requests/hour
@@ -342,6 +383,7 @@ def repository_states(api: GitHubAPI, repositories: list[str]) -> dict[str, dict
     GraphQL aliases retain the same repository/default-head trust boundary while
     reducing that phase to one request per 50 repositories.
     """
+    report = progress or (lambda *args, **kwargs: None)
     original_by_identity: dict[str, str] = {}
     for repository in repositories:
         original_by_identity.setdefault(repository.casefold(), repository)
@@ -349,6 +391,7 @@ def repository_states(api: GitHubAPI, repositories: list[str]) -> dict[str, dict
     states: dict[str, dict[str, Any]] = {}
     for offset in range(0, len(identities), REPOSITORY_GRAPHQL_BATCH):
         batch = identities[offset:offset + REPOSITORY_GRAPHQL_BATCH]
+        report("graphql_batch_start", offset=offset, count=len(batch), total=len(identities))
         declarations: list[str] = []
         selections: list[str] = []
         variables: dict[str, object] = {}
@@ -392,6 +435,7 @@ def repository_states(api: GitHubAPI, repositories: list[str]) -> dict[str, dict
                 "repository": full_name.casefold(), "revision": revision, "stars": stars,
                 "updated_at": updated, "available": True,
             }
+        report("graphql_batch_end", completed=offset + len(batch), total=len(identities))
     return states
 
 
@@ -674,6 +718,7 @@ def scan_repository(repository_name: str, state: dict[str, Any],
 def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, generated_at: str,
                     previous_records: list[dict[str, Any]], mirror_root: Path | None = None,
                     repository_workers: int = DEFAULT_REPOSITORY_WORKERS,
+                    progress: ProgressReporter | None = None,
                     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     parse_timestamp(generated_at, "generated_at")
     require(type(repository_workers) is int and 1 <= repository_workers <= MAX_REPOSITORY_WORKERS,
@@ -684,6 +729,9 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     # nothing to refresh; continue as a discover scan so the signed index does
     # not remain permanently empty while accurately recording the scan mode.
     effective_mode = "discover" if mode == "refresh" and not previous_records else mode
+    report = progress or (lambda *args, **kwargs: None)
+    report("phase_start", phase="candidate", mode=effective_mode, requested_mode=mode,
+           previous_records=len(previous_records))
     previous = {record_identity(item["repository"], item["package_path"]): item for item in previous_records}
     partitions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []
@@ -692,13 +740,18 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
         for record in previous_records:
             paths.setdefault(record["repository"], set()).add(record["package_path"])
     else:
-        items, partitions = discover_search_items(api, config["query"], config["maximum_file_size"])
+        report("phase_start", phase="global_search")
+        items, partitions = discover_search_items(api, config["query"], config["maximum_file_size"], progress)
+        report("phase_end", phase="global_search", candidates=len(items), partitions=len(partitions))
         by_identity = {(item["repository"].casefold(), item["manifest_path"].casefold()): item for item in items}
         for seed in config["seeds"]:
             seed_query = config["query"] + " repo:" + seed["repository"]
             for prefix in seed["paths"] or [""]:
                 scoped_query = seed_query + (" path:" + prefix if prefix else "")
-                seed_items, seed_partitions = discover_search_items(api, scoped_query, config["maximum_file_size"])
+                report("phase_start", phase="seed_search", repository=seed["repository"])
+                seed_items, seed_partitions = discover_search_items(api, scoped_query, config["maximum_file_size"], progress)
+                report("phase_end", phase="seed_search", repository=seed["repository"],
+                       candidates=len(seed_items), partitions=len(seed_partitions))
                 partitions.extend(seed_partitions)
                 for item in seed_items:
                     by_identity[(item["repository"].casefold(), item["manifest_path"].casefold())] = item
@@ -708,7 +761,9 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     records: dict[str, dict[str, Any]] = dict(previous)
     reviewed = reviewed_release_map(DIRECTORY_SOURCE)
     discovered = {record_identity(repository, path) for repository, package_paths in paths.items() for path in package_paths}
-    states = repository_states(api, list(paths))
+    report("phase_start", phase="repository_states", repositories=len(paths))
+    states = repository_states(api, list(paths), progress)
+    report("phase_end", phase="repository_states", repositories=len(states))
     repository_jobs: dict[str, tuple[dict[str, Any], list[tuple[str, str, dict[str, Any] | None]]]] = {}
     for repository_name in sorted(paths):
         state = states[repository_name]
@@ -749,13 +804,25 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             continue
         repository_jobs[repository_name] = (state, pending)
     completed: dict[str, tuple[dict[str, dict[str, Any]], list[dict[str, str]]]] = {}
+
+    def run_repository(repository_name, state, pending):  # noqa: ANN001
+        report("repository_start", repository=repository_name, packages=len(pending))
+        try:
+            result = scan_repository(repository_name, state, pending, generated_at, reviewed, mirror_root,
+                                     getattr(api, "token", None))
+        except Exception as error:
+            report("repository_end", repository=repository_name, result="failed", error_type=type(error).__name__)
+            raise
+        report("repository_end", repository=repository_name, records=len(result[0]), diagnostics=len(result[1]))
+        return result
+
+    report("phase_start", phase="repository_validation", repositories=len(repository_jobs))
     if repository_jobs:
         worker_count = min(repository_workers, len(repository_jobs))
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="discovery-repository") as executor:
             futures = {
                 executor.submit(
-                    scan_repository, repository_name, state, pending, generated_at, reviewed, mirror_root,
-                    getattr(api, "token", None),
+                    run_repository, repository_name, state, pending,
                 ): repository_name
                 for repository_name, (state, pending) in repository_jobs.items()
             }
@@ -768,6 +835,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                         "kind": "scan_error", "repository": repository_name, "path": "",
                         "error": f"repository scan failed: {error}",
                     }])
+    report("phase_end", phase="repository_validation", repositories=len(completed))
     # Futures may complete in any order. Merge only by source order so records
     # and diagnostics remain byte-for-byte deterministic.
     for repository_name in sorted(completed):
@@ -827,6 +895,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
         "generated_at": generated_at,
         "records": ordered,
     }, SEARCH_SCHEMA, "Discovery candidate records")
+    report("phase_end", phase="candidate", complete=complete, records=len(ordered), diagnostics=len(diagnostics))
     return candidate, diagnostics
 
 
@@ -859,23 +928,28 @@ def main() -> int:
     parser.add_argument("--mirror-root", type=Path)
     parser.add_argument("--repository-workers", type=int, default=DEFAULT_REPOSITORY_WORKERS)
     args = parser.parse_args()
+    progress = ProgressReporter()
     try:
-        api = GitHubAPI(os.environ.get("GITHUB_TOKEN", ""))
+        api = GitHubAPI(os.environ.get("GITHUB_TOKEN", ""), progress=progress)
         candidate, diagnostics = build_candidate(
             api=api, config=load_config(args.config), mode=args.mode, generated_at=args.generated_at,
             previous_records=load_previous(args.previous_snapshot), mirror_root=args.mirror_root,
             repository_workers=args.repository_workers,
+            progress=progress,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.diagnostics_output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(canonical_json(candidate))
         args.diagnostics_output.write_bytes(canonical_json({"schema_version": 1, "diagnostics": diagnostics}))
+        progress("completion", complete=candidate["complete"], records=len(candidate["records"]),
+                 diagnostics=len(diagnostics))
         if not candidate["complete"]:
             print(f"Discovery scan incomplete: {len(diagnostics)} diagnostics; previous index must remain active", file=sys.stderr)
             return 3
         print(f"Discovery scan complete: {len(candidate['records'])} records")
         return 0
     except (DiscoveryError, OSError, ValueError, jsonschema.SchemaError) as error:
+        progress("completion", complete=False, error_type=type(error).__name__)
         print(f"Discovery build failed: {error}", file=sys.stderr)
         return 1
 

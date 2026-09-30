@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
@@ -27,12 +28,14 @@ from scripts.build_discovery_index import (
     MAX_GITHUB_REQUEST_ATTEMPTS,
     MAX_GITHUB_RETRY_DELAY_SECONDS,
     MAX_PREVIOUS_SNAPSHOT_BYTES,
+    ProgressReporter,
     SameOriginRedirect,
     bounded_package_files,
     build_candidate,
     deduplicate_records,
     discover_search_items,
     load_previous,
+    main,
     make_record,
     package_facts,
     repository_states,
@@ -242,6 +245,149 @@ def previous_snapshot(records: list[dict[str, object]]) -> dict[str, object]:
 
 
 class DiscoveryIndexTests(unittest.TestCase):
+    def test_progress_is_flushed_before_acquisition_and_preserves_output_bytes(self):
+        # This fails if long acquisition starts silently, progress is buffered,
+        # or operational data changes the candidate/diagnostic artifacts.
+        class Stream(io.StringIO):
+            def flush(self):
+                self.flushed = self.getvalue()
+
+        stream = Stream()
+        reporter = ProgressReporter(stream=stream, monotonic=iter(range(100)).__next__)
+        test = self
+
+        class ObservedAPI(FixtureAPI):
+            def get(self, path, parameters=None):
+                events = [json.loads(line) for line in stream.flushed.splitlines()]
+                test.assertEqual(events[-1]["event"], "partition_start")
+                test.assertTrue(any(item["event"] == "phase_start" and
+                                    item.get("phase") in {"global_search", "seed_search"} for item in events))
+                return super().get(path, parameters)
+
+            def graphql(self, query, variables):
+                test.assertEqual(json.loads(stream.flushed.splitlines()[-1])["event"], "graphql_batch_start")
+                return super().graphql(query, variables)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirror, revision = create_mirror(root)
+            config = {"schema_version": 1, "query": '"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" filename:plugin.json',
+                      "maximum_file_size": 10, "maximum_records": 100,
+                      "seeds": [{"repository": "owner/repo", "paths": ["packages"]}]}
+            expected, diagnostics = build_candidate(api=FixtureAPI(revision), config=config, mode="discover",
+                generated_at="2026-08-27T00:00:00Z", previous_records=[], mirror_root=mirror)
+            config_path, output, diagnostic_output = root / "config.json", root / "candidate.json", root / "diagnostics.json"
+            config_path.write_text(json.dumps(config))
+            with (mock.patch("sys.argv", ["build_discovery_index.py", "--mode", "discover", "--config", str(config_path),
+                    "--output", str(output), "--diagnostics-output", str(diagnostic_output),
+                    "--generated-at", "2026-08-27T00:00:00Z", "--mirror-root", str(mirror)]),
+                  mock.patch("scripts.build_discovery_index.GitHubAPI", return_value=ObservedAPI(revision)),
+                  mock.patch("scripts.build_discovery_index.ProgressReporter", return_value=reporter)):
+                self.assertEqual(main(), 0)
+            self.assertEqual(output.read_bytes(), canonical_json(expected))
+            self.assertEqual(diagnostic_output.read_bytes(), canonical_json({"schema_version": 1, "diagnostics": diagnostics}))
+        events = [json.loads(line) for line in stream.flushed.splitlines()]
+        self.assertEqual(events[-1]["event"], "completion")
+        self.assertTrue(events[-1]["complete"])
+        self.assertIn("repository_start", [item["event"] for item in events])
+        self.assertIn("repository_end", [item["event"] for item in events])
+        elapsed = [item["elapsed_seconds"] for item in events]
+        self.assertEqual(elapsed, sorted(elapsed))
+        self.assertGreater(elapsed[-1], elapsed[0])
+
+    def test_broken_progress_stream_does_not_change_candidate_or_diagnostics(self):
+        # A write/flush failure must not make a successfully scanned repository
+        # incomplete or replace its records with scan_error diagnostics.
+        with tempfile.TemporaryDirectory() as temporary:
+            mirror, revision = create_mirror(Path(temporary))
+            arguments = dict(api=FixtureAPI(revision), mode="discover", generated_at="2026-08-27T00:00:00Z",
+                previous_records=[], mirror_root=mirror,
+                config={"schema_version": 1, "query": "filename:plugin.json", "maximum_file_size": 10,
+                        "maximum_records": 100, "seeds": []})
+            expected = build_candidate(**arguments)
+            self.assertTrue(expected[0]["complete"])
+            self.assertEqual(len(expected[0]["records"]), 1)
+            self.assertEqual(expected[1], [])
+            for operation in ("write", "flush"):
+                for error in (OSError("broken pipe"), ValueError("closed stream")):
+                    with self.subTest(operation=operation, error=type(error).__name__):
+                        stream = mock.Mock()
+                        getattr(stream, operation).side_effect = error
+                        actual = build_candidate(**arguments, progress=ProgressReporter(stream=stream))
+                        self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+                        self.assertTrue(getattr(stream, operation).called)
+
+    def test_retry_progress_redacts_request_and_response_secrets_without_changing_delay(self):
+        # A response body, header, URL or token copied into progress is a leak.
+        stream = io.StringIO()
+        secret = "fixture-secret-token"
+        api = GitHubAPI(secret, progress=ProgressReporter(stream=stream))
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok":true}'
+        api.opener = mock.Mock()
+        api.opener.open.side_effect = [urllib.error.HTTPError(
+            "https://api.github.com/" + secret, 429, secret,
+            {"Retry-After": "999", "Authorization": secret}, io.BytesIO(secret.encode())), response]
+        with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
+            self.assertEqual(api.get(secret, {"token": secret}), {"ok": True})
+        sleep.assert_called_once_with(MAX_GITHUB_RETRY_DELAY_SECONDS)
+        self.assertNotIn(secret, stream.getvalue())
+        event = json.loads(stream.getvalue())
+        self.assertEqual(event["status"], 429)
+        self.assertEqual(event["attempt"], 1)
+        self.assertEqual(event["delay_seconds"], MAX_GITHUB_RETRY_DELAY_SECONDS)
+
+    def test_progress_preserves_incomplete_missing_mirror_and_previous_record(self):
+        previous = candidate_record("a" * 40)
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            arguments = dict(api=FixtureAPI("b" * 40), mode="refresh", generated_at="2026-08-27T06:00:00Z",
+                previous_records=[previous], mirror_root=Path(temporary),
+                config={"schema_version": 1, "query": "schema", "maximum_file_size": 10, "maximum_records": 100, "seeds": []})
+            expected = build_candidate(**arguments)
+            actual = build_candidate(**arguments, progress=ProgressReporter(stream=stream))
+        self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+        self.assertFalse(actual[0]["complete"])
+        self.assertEqual(actual[0]["records"], [previous])
+        self.assertIn("offline mirror does not exist", actual[1][0]["error"])
+        self.assertFalse(json.loads(stream.getvalue().splitlines()[-1])["complete"])
+
+    def test_workflow_budget_accounts_for_authenticated_empty_refresh(self):
+        # Execute the workflow selector: a requested refresh must not receive
+        # the short budget when the builder would promote it to discover.
+        workflow = yaml.load((ROOT / ".github/workflows/discovery-index.yml").read_text(), Loader=yaml.BaseLoader)
+        scan = workflow["jobs"]["scan"]
+        steps = scan["steps"]
+        selector = next(step for step in steps if step.get("id") == "mode")
+        ledger = next(step for step in steps if step.get("id") == "ledger")
+        build = next(step for step in steps if step.get("id") == "scan")
+        self.assertLess(steps.index(ledger), steps.index(selector))
+        self.assertEqual(selector["env"]["PREVIOUS_SNAPSHOT"], "${{ steps.ledger.outputs.path }}")
+        self.assertEqual(build["timeout-minutes"], "${{ fromJSON(steps.mode.outputs.timeout_minutes) }}")
+        self.assertGreaterEqual(int(scan["timeout-minutes"]), 330)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            populated, empty = root / "populated.json", root / "empty.json"
+            populated.write_bytes(canonical_json(previous_snapshot([candidate_record("a" * 40)])))
+            empty.write_bytes(canonical_json(previous_snapshot([])))
+            cases = [("workflow_dispatch", "", "refresh", populated, "refresh", 120),
+                     ("workflow_dispatch", "", "refresh", empty, "refresh", 300),
+                     ("workflow_dispatch", "", "refresh", "", "refresh", 300),
+                     ("workflow_dispatch", "", "discover", populated, "discover", 300),
+                     ("schedule", "11 3 * * 0", "", populated, "reconcile", 300),
+                     ("schedule", "43 2 * * *", "", populated, "discover", 300),
+                     ("schedule", "17 */6 * * *", "", populated, "refresh", 120),
+                     ("push", "", "", populated, "discover", 300)]
+            for index, (event, schedule, requested, snapshot, mode, budget) in enumerate(cases):
+                with self.subTest(event=event, requested=requested, snapshot=snapshot):
+                    output = root / f"output-{index}"
+                    result = subprocess.run(["bash", "-e", "-c", selector["run"]], cwd=ROOT, capture_output=True, text=True,
+                        env={**os.environ, "EVENT_NAME": event, "SCHEDULE": schedule, "REQUESTED_MODE": requested,
+                             "PREVIOUS_SNAPSHOT": str(snapshot), "GITHUB_OUTPUT": str(output)})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(values, {"value": mode, "timeout_minutes": str(budget)})
+
     def test_package_facts_omits_author_without_required_name(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
