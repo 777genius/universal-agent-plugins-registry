@@ -604,17 +604,32 @@ def deduplicate_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(unique.values())
 
 
-def candidate_paths(items: list[dict[str, Any]]) -> dict[str, set[str]]:
+def candidate_paths(items: list[dict[str, Any]]) -> tuple[dict[str, set[str]], list[dict[str, str]]]:
     result: dict[str, set[str]] = {}
+    diagnostics: list[dict[str, str]] = []
     canonical_keys: dict[str, str] = {}
     for item in items:
         repository = item["repository"]
-        key = canonical_keys.setdefault(repository.casefold(), repository)
-        manifest = PurePosixPath(item["manifest_path"])
-        require(manifest.name == "plugin.json", f"invalid manifest path {manifest}")
+        manifest_path = item["manifest_path"]
+        try:
+            # Validate the original hit before pathlib can normalize unsafe paths.
+            manifest = portable_path(manifest_path, "manifest path")
+        except BridgeError as error:
+            diagnostics.append({
+                "kind": "unsupported_source", "repository": repository,
+                "path": manifest_path, "error": str(error),
+            })
+            continue
+        if manifest.name != "plugin.json":
+            diagnostics.append({
+                "kind": "unsupported_source", "repository": repository,
+                "path": manifest_path, "error": f"invalid manifest path {manifest_path}",
+            })
+            continue
         package_path = "" if str(manifest.parent) == "." else normalized_path(str(manifest.parent))
+        key = canonical_keys.setdefault(repository.casefold(), repository)
         result.setdefault(key, set()).add(package_path)
-    return result
+    return result, diagnostics
 
 
 def scan_repository(repository_name: str, state: dict[str, Any],
@@ -671,6 +686,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     effective_mode = "discover" if mode == "refresh" and not previous_records else mode
     previous = {record_identity(item["repository"], item["package_path"]): item for item in previous_records}
     partitions: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, str]] = []
     if effective_mode == "refresh":
         paths: dict[str, set[str]] = {}
         for record in previous_records:
@@ -688,9 +704,8 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                     by_identity[(item["repository"].casefold(), item["manifest_path"].casefold())] = item
         items = [by_identity[key] for key in sorted(by_identity)]
         partitions.sort(key=lambda item: (item["query"], item["size_min"], item["size_max"]))
-        paths = candidate_paths(items)
+        paths, diagnostics = candidate_paths(items)
     records: dict[str, dict[str, Any]] = dict(previous)
-    diagnostics: list[dict[str, str]] = []
     reviewed = reviewed_release_map(DIRECTORY_SOURCE)
     discovered = {record_identity(repository, path) for repository, package_paths in paths.items() for path in package_paths}
     states = repository_states(api, list(paths))

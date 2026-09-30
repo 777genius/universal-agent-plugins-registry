@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -105,6 +107,19 @@ class FixtureAPI:
             raise AssertionError(query)
 
 
+class SearchFixtureAPI(FixtureAPI):
+    def __init__(self, revision: str, hits: list[tuple[str, str]]):
+        super().__init__(revision)
+        self.hits = hits
+
+    def get(self, path: str, parameters: dict[str, object] | None = None):
+        if path != "search/code":
+            raise AssertionError(path)
+        return {"total_count": len(self.hits), "incomplete_results": False, "items": [
+            {"path": path, "repository": {"full_name": repository}} for repository, path in self.hits
+        ]}
+
+
 class DiscoveryAcquisitionTests(unittest.TestCase):
     def test_nonportable_git_path_is_package_invalid_not_scan_incomplete(self) -> None:
         repository = mock.Mock(root=Path("/tmp/inert-mirror"), revision="a" * 40)
@@ -130,7 +145,17 @@ class DiscoveryAcquisitionTests(unittest.TestCase):
 
 
 def git(directory: Path, *arguments: str) -> str:
-    completed = subprocess.run(["git", *arguments], cwd=directory, check=True, text=True, stdout=subprocess.PIPE)
+    if arguments[0] == "commit":
+        for identity in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+            if not git(directory, "var", identity).startswith("iliya <iliyazelenkog@gmail.com> "):
+                raise AssertionError(f"invalid fixture {identity}")
+    environment = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "iliya", "GIT_AUTHOR_EMAIL": "iliyazelenkog@gmail.com",
+        "GIT_COMMITTER_NAME": "iliya", "GIT_COMMITTER_EMAIL": "iliyazelenkog@gmail.com",
+    }
+    completed = subprocess.run(["git", *arguments], cwd=directory, check=True, text=True,
+                               stdout=subprocess.PIPE, env=environment)
     return completed.stdout.strip()
 
 
@@ -138,8 +163,8 @@ def create_mirror(root: Path, package_path: str = "packages/demo", repository: s
     source = root / "source"
     source.mkdir()
     git(source, "init", "--quiet", "--initial-branch=main")
-    git(source, "config", "user.email", "fixture@example.test")
-    git(source, "config", "user.name", "Fixture")
+    git(source, "config", "user.email", "iliyazelenkog@gmail.com")
+    git(source, "config", "user.name", "iliya")
     package = source / package_path
     package.mkdir(parents=True, exist_ok=True)
     (package / "plugin.json").write_text(json.dumps({
@@ -157,7 +182,7 @@ def create_mirror(root: Path, package_path: str = "packages/demo", repository: s
     }), encoding="utf-8")
     git(source, "add", "plugin.json" if not package_path else package_path + "/plugin.json",
         "mcp.json" if not package_path else package_path + "/mcp.json")
-    git(source, "commit", "--quiet", "-m", "fixture")
+    git(source, "commit", "--quiet", "-m", "test: add package fixture")
     revision = git(source, "rev-parse", "HEAD")
     mirror_root = root / "mirrors"
     bare = mirror_root / (repository + ".git")
@@ -716,6 +741,84 @@ class DiscoveryIndexTests(unittest.TestCase):
             self.assertEqual(diagnostics, [])
             self.assertEqual(len(candidate["records"]), 1)
             self.assertEqual(candidate["mode"], "discover")
+
+    def test_build_candidate_skips_unsupported_source_paths_deterministically(self):
+        # A single unsupported search hit must not prevent proven ASCII packages
+        # from being indexed, nor silently become a different normalized path.
+        invalid_paths = {
+            "packages/\u00e9/plugin.json": "path must be non-empty ASCII",
+            "../plugin.json": "invalid portable path segment",
+            "packages\\demo/plugin.json": "ambiguous separator or escape",
+            "packages/demo%2fother/plugin.json": "ambiguous separator or escape",
+            "packages/\x00/plugin.json": "Windows-incompatible path segment",
+            "CON/plugin.json": "Windows-reserved path segment",
+            "packages/.git/plugin.json": "Git metadata is forbidden",
+            "/packages/demo/plugin.json": "path must be normalized and relative",
+            "packages//demo/plugin.json": "path must be normalized and relative",
+            "packages/./demo/plugin.json": "path must be normalized and relative",
+            "packages/demo/plugin.json/": "path must be normalized and relative",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirror, _ = create_mirror(root)
+            source = root / "source"
+            shutil.copytree(source / "packages/demo", source / "packages/\u00e9")
+            git(source, "add", "packages/\u00e9")
+            git(source, "commit", "--quiet", "-m", "test: add unsupported source fixture")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirror / "owner/repo.git", "fetch", "--quiet", str(source), "main")
+            hits = [("owner/repo", "packages/demo/plugin.json")]
+            hits.extend(("owner/repo", path) for path in invalid_paths)
+            hits.append(("foreign/repo", "packages/\u00e9/plugin.json"))
+            arguments = {
+                "config": {"schema_version": 1, "query": "schema filename:plugin.json", "maximum_file_size": 10,
+                           "maximum_records": 100, "seeds": []},
+                "mode": "discover", "generated_at": "2026-08-27T00:00:00Z",
+                "previous_records": [], "mirror_root": mirror,
+            }
+            result = build_candidate(api=SearchFixtureAPI(revision, hits), **arguments)
+            reversed_result = build_candidate(api=SearchFixtureAPI(revision, list(reversed(hits))), **arguments)
+        self.assertEqual(canonical_json(list(result)), canonical_json(list(reversed_result)))
+        candidate, diagnostics = result
+        self.assertTrue(candidate["complete"])
+        self.assertEqual([(item["repository"], item["package_path"], item["revision"])
+                          for item in candidate["records"]], [("owner/repo", "packages/demo", revision)])
+        expected = sorted(hits[1:], key=lambda item: (item[0].casefold(), item[1].casefold()))
+        self.assertEqual([(item["repository"], item["path"]) for item in diagnostics], expected)
+        for item in diagnostics:
+            with self.subTest(path=item["path"]):
+                self.assertEqual(item["kind"], "unsupported_source")
+                self.assertIn(invalid_paths[item["path"]], item["error"])
+
+    def test_build_candidate_supports_safe_ascii_root_and_nested_paths(self):
+        for package_path in ("", "packages/demo", "Packages/Safe_1.2-3"):
+            with self.subTest(package_path=package_path), tempfile.TemporaryDirectory() as temporary:
+                mirror, revision = create_mirror(Path(temporary), package_path=package_path)
+                candidate, diagnostics = build_candidate(
+                    api=SearchFixtureAPI(revision, [("owner/repo", (package_path + "/" if package_path else "") + "plugin.json")]),
+                    config={"schema_version": 1, "query": "schema", "maximum_file_size": 10,
+                            "maximum_records": 100, "seeds": []},
+                    mode="discover", generated_at="2026-08-27T00:00:00Z", previous_records=[], mirror_root=mirror,
+                )
+                self.assertTrue(candidate["complete"])
+                self.assertEqual(diagnostics, [])
+                self.assertEqual([item["package_path"] for item in candidate["records"]], [package_path])
+
+    def test_unsupported_source_diagnostic_does_not_hide_real_scan_error(self):
+        previous = candidate_record("a" * 40)
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate, diagnostics = build_candidate(
+                api=SearchFixtureAPI("b" * 40, [("owner/repo", "packages/demo/plugin.json"),
+                                              ("owner/repo", "packages/\u00e9/plugin.json")]),
+                config={"schema_version": 1, "query": "schema", "maximum_file_size": 10,
+                        "maximum_records": 100, "seeds": []},
+                mode="discover", generated_at="2026-08-27T00:00:00Z", previous_records=[previous],
+                mirror_root=Path(temporary),
+            )
+        self.assertFalse(candidate["complete"])
+        self.assertEqual(candidate["records"], [previous])
+        self.assertEqual([item["kind"] for item in diagnostics], ["unsupported_source", "scan_error"])
+        self.assertIn("offline mirror does not exist", diagnostics[1]["error"])
 
     def test_empty_refresh_continues_as_deterministic_discover(self):
         with tempfile.TemporaryDirectory() as temporary:
