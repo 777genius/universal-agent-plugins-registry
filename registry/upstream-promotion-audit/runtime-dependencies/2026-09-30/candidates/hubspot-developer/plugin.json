@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hubspot-developer",
+  "version": "0.2.4",
+  "description": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.15.0.",
+  "author": {
+    "name": "777genius",
+    "url": "https://github.com/777genius"
+  },
+  "homepage": "https://developers.hubspot.com/mcp",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-plugins",
+    "ai-agents",
+    "cms",
+    "developer-tools",
+    "hubspot",
+    "mcp",
+    "plugins"
+  ]
+}

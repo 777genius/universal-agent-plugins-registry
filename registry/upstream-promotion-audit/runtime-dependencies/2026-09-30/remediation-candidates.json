@@ -1,0 +1,128 @@
+{
+  "format_version": 1,
+  "prepared_at": "2026-09-30",
+  "status": "unpublished_source_candidates",
+  "base_commit": "ac6806deb2fa77c618770a44d634c1f54e21639f",
+  "publication_authorized": false,
+  "candidates": [
+    {
+      "product_id": "context7",
+      "distribution_id": "777genius/context7",
+      "published_sequence": 4,
+      "published_package_version": "0.2.2",
+      "published_tree_digest": "sha256:7efde1ee6ac005e6b4f7b205a72ace200005c3377a7e303b4c323872748f4cc5",
+      "proposed_release_sequence": 5,
+      "candidate_package_version": "0.2.3",
+      "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/context7",
+      "candidate_tree_digest": "sha256:6d9d98dbd1e2f3282b480a402a7f6499f6d21e2f9a92ff691c012ccd6e40a6ed",
+      "candidate_manifest_digest": "sha256:e2cdec52bf8949e49aa28b0772d44f0d53dc99f4cc24d86a16abcff5d523ab23",
+      "runtime": {
+        "schema_version": 1,
+        "package": "@upstash/context7-mcp",
+        "version": "4.1.1",
+        "entrypoint": "node_modules/@upstash/context7-mcp/dist/index.js",
+        "package_lock_sha256": "sha256:1966772c2c313b06c5a0a06f2d07446349eaa2f6a5180f9c36ddabbd7cd89951",
+        "omit_optional": false
+      },
+      "audited_spike_lock_sha256": "sha256:1f9d616503215f79fc9553f12bbc22c0c557a1035d6ad88821e62f735a7c466a",
+      "npm_root_integrity": "sha512-fUARTIZGVKzlzQKDhKUg4aIQ3yEU/12STdfxJDDnLMSN7yyHiPvNHI05iFwxkv3vC8G76Wp27MwK6Jucl/C5pA==",
+      "closure_comparison": "identical dependency entries; only lock name and root-package name changed to production runtime identity",
+      "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/context7/npm-metadata.json",
+      "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/context7/audit-result.json"
+    },
+    {
+      "product_id": "firebase",
+      "distribution_id": "777genius/firebase",
+      "published_sequence": 5,
+      "published_package_version": "0.2.3",
+      "published_tree_digest": "sha256:082c691d98c244861db7931b916336188a2ad87de75cd9d3e0d1042b1bad242b",
+      "proposed_release_sequence": 6,
+      "candidate_package_version": "0.2.4",
+      "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/firebase",
+      "candidate_tree_digest": "sha256:f7b2b41cae28833fa00ac2635b4680e11235933db307c8777677d4f01cbb7bd3",
+      "candidate_manifest_digest": "sha256:ddf8c3ef2689d58aa8f6b78fd36af1d8733d2a56a9bad8ee19b1a78c10ec01b4",
+      "runtime": {
+        "schema_version": 1,
+        "package": "firebase-tools",
+        "version": "15.32.0",
+        "entrypoint": "node_modules/firebase-tools/lib/bin/firebase.js",
+        "package_lock_sha256": "sha256:67dd4b27a4b50e81d28762ce66f9f518ed17bf3378d185ae7e16532e052fb583",
+        "omit_optional": true
+      },
+      "audited_spike_lock_sha256": "sha256:e8e60cd89d3d7f5233cba21bbd3fc9fd6a62e0db85c89859be6ea9c3780da4ca",
+      "npm_root_integrity": "sha512-yp0SOQFALo3q2K2/pBmWTrAM4C0503zK3UJ5IDQzr4o7i+5RKh3ZPX4RTkumCFt3STtI7EuR61M8tDJjNZmTYg==",
+      "closure_comparison": "identical dependency entries; only lock name and root-package name changed to production runtime identity",
+      "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/firebase/npm-metadata.json",
+      "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/firebase/audit-result.json"
+    },
+    {
+      "product_id": "hubspot-developer",
+      "distribution_id": "777genius/hubspot-developer",
+      "published_sequence": 5,
+      "published_package_version": "0.2.3",
+      "published_tree_digest": "sha256:adc16ff599904d52954321e6c9437a8f01949ee857a433d9e37ae97db4c407ff",
+      "proposed_release_sequence": 6,
+      "candidate_package_version": "0.2.4",
+      "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/hubspot-developer",
+      "candidate_tree_digest": "sha256:fb9d9d975af9f422be3d585a742249141c2c5993eac6ba059a987dcf6790582b",
+      "candidate_manifest_digest": "sha256:593ea107aebd40c7c0846b468b8c0e9006de627ed6c22905b3a33b75134e7ef1",
+      "runtime": {
+        "schema_version": 1,
+        "package": "@hubspot/cli",
+        "version": "8.15.0",
+        "entrypoint": "node_modules/@hubspot/cli/bin/hs.js",
+        "package_lock_sha256": "sha256:6883234cc33910eb84a35760c713d235224a6a1bd6bd635969b71b4aa7d1830b",
+        "omit_optional": false
+      },
+      "audited_spike_lock_sha256": "sha256:c463c92656aaa98cfde18856980ad14291f3c88d26ea0b4a9f078e1bf5923ac1",
+      "npm_root_integrity": "sha512-NE6Xt+NBNb3yx7i1waFs7u4iZ6hF7uKLPUpSFDCjQjdmrHTJoHPwXFmHXA0I9QmJeulAOE1Es/cF5ftzjGil4g==",
+      "closure_comparison": "identical dependency entries; only lock name and root-package name changed to production runtime identity",
+      "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/hubspot-developer/npm-metadata.json",
+      "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/hubspot-developer/audit-result.json"
+    }
+  ],
+  "verification": {
+    "static_package_and_locked_runtime_validation": "passed",
+    "existing_focused_runtime_policy_tests": 9,
+    "published_package_tree_digests_preserved": true,
+    "npm_audit": {
+      "observed_at": "2026-09-30T14:25:01Z",
+      "command": "npm audit --omit=dev --json",
+      "known_vulnerabilities_each": 0,
+      "scope": "captured spike locks; candidates have exactly the same dependency entries"
+    },
+    "stdio_smoke": {
+      "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/smoke-result.json",
+      "node_version": "24.19.0",
+      "checks": [
+        "initialize",
+        "tools/list"
+      ],
+      "tool_counts": {
+        "context7": 2,
+        "firebase": 19,
+        "hubspot-developer": 22
+      },
+      "scope": "direct installed npm entrypoints in fresh HOME/project, not the bridge launcher, client activation, authenticated tool calls or provider workflows",
+      "server_info_version_note": "Firebase 0.3.0 and HubSpot 0.0.1 are internal MCP versions, not root CLI package versions"
+    },
+    "launcher_stdio_smoke": {
+      "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/launcher-smoke-result.json",
+      "status": "passed_for_all_three",
+      "scope": "cold reviewed launcher bootstrap and MCP initialize/tools/list on darwin/arm64 with Node 24.19.0 and fresh HOME/project/plugin data; no authenticated tool calls"
+    },
+    "npm_signatures": {
+      "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/npm-signatures-result.json",
+      "status": "all_installed_packages_verified",
+      "scope": "installed darwin/arm64 closures, not uninstalled optional platform packages or complete upstream source-to-artifact bindings"
+    }
+  },
+  "release_prerequisites": [
+    "Independent technical review and required CI on the exact candidate source commit.",
+    "Verify npm provenance/signatures as required by release review. npm metadata Git heads are claims, not verified source-to-artifact bindings; Context7 metadata has no Git head.",
+    "Complete release-required platform qualification beyond the passed actual launcher bootstrap on darwin/arm64 Node 24.19.0; do not equate tools/list with authenticated provider operations.",
+    "Resolve any retained revision=null predecessor to the exact accepted immutable source SHA whose tree matches the recorded digest before replacing plugins/<id>. Preserve release identity and historical policy, then append the proposed sequence with the new manifest/tree digest.",
+    "Materialize and review compatibility outputs and a new Directory release through the established promotion/publication procedure. No published identity or feed is replaced by this record.",
+    "Obtain explicit owner approval before publication."
+  ]
+}

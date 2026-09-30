@@ -1,0 +1,14 @@
+{
+  "name": "@upstash/context7-mcp",
+  "version": "4.1.1",
+  "dist.integrity": "sha512-fUARTIZGVKzlzQKDhKUg4aIQ3yEU/12STdfxJDDnLMSN7yyHiPvNHI05iFwxkv3vC8G76Wp27MwK6Jucl/C5pA==",
+  "dist.tarball": "https://registry.npmjs.org/@upstash/context7-mcp/-/context7-mcp-4.1.1.tgz",
+  "repository": {
+    "url": "git+https://github.com/upstash/context7.git",
+    "type": "git",
+    "directory": "packages/mcp"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  }
+}

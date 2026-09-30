@@ -1,0 +1,14 @@
+{
+  "name": "@hubspot/cli",
+  "version": "8.15.0",
+  "dist.integrity": "sha512-NE6Xt+NBNb3yx7i1waFs7u4iZ6hF7uKLPUpSFDCjQjdmrHTJoHPwXFmHXA0I9QmJeulAOE1Es/cF5ftzjGil4g==",
+  "dist.tarball": "https://registry.npmjs.org/@hubspot/cli/-/cli-8.15.0.tgz",
+  "gitHead": "5b312535e9711dbc07603eb7585b1e4da4781a1f",
+  "repository": {
+    "url": "git+https://github.com/HubSpot/hubspot-cli.git",
+    "type": "git"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
