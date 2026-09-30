@@ -207,7 +207,11 @@ function releaseChildHandles(child) {
   child.unref();
 }
 
-export function capturedProcess(command, args, { cwd, env, timeout = 240_000 }, summary) {
+export function capturedProcess(command, args, { cwd, env, timeout = 240_000, captureAuditExitOne = false }, summary) {
+  if (captureAuditExitOne) {
+    assert.equal(args[1], "audit", "exit 1 JSON capture is only for npm audit");
+    assert(args.includes("--json") && !args.includes("signatures"), "only advisory audit JSON may capture exit 1");
+  }
   return new Promise((accept, reject) => {
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32", windowsHide: true });
@@ -217,10 +221,13 @@ export function capturedProcess(command, args, { cwd, env, timeout = 240_000 }, 
       settled = true; clearTimeout(timer); clearTimeout(cleanupTimer);
       Object.assign(summary, { exit_code: code, signal, stdout_bytes: stdout.length, stdout_digest: digest(stdout),
         stderr_bytes: stderr.length, stderr_digest: digest(stderr) });
-      if (failure || code !== 0) {
+      if (failure || code !== 0 && !(captureAuditExitOne && code === 1 && signal === null)) {
         summary.error = safeMessage(failure?.message || `exit ${code}: ${stderr}`);
         releaseChildHandles(child); reject(new Error(summary.error));
-      } else accept(stdout.toString("utf8"));
+      } else {
+        if (code === 1) summary.expected_audit_exit_one_captured = true;
+        accept(stdout.toString("utf8"));
+      }
     };
     const terminate = (message) => {
       if (failure || settled) return;
@@ -242,6 +249,44 @@ export function capturedProcess(command, args, { cwd, env, timeout = 240_000 }, 
     child.on("error", (error) => terminate(error.message));
     child.on("close", finish);
   });
+}
+
+export function recordNpmAudit(body, audit) {
+  const observed = JSON.parse(body); // No filtering of noise, errors or non-JSON stdout.
+  if (observed.error) {
+    audit.public_diagnostic = { error: { code: safeMessage(observed.error.code || "unknown"),
+      message: safeMessage(observed.error.summary || observed.error.message || "npm audit error") } };
+    throw new Error(`npm audit registry error: ${audit.public_diagnostic.error.code}: ${audit.public_diagnostic.error.message}`);
+  }
+  const counts = observed.metadata?.vulnerabilities;
+  assert(Number.isSafeInteger(counts?.total) && counts.total >= 0, "npm audit must report a vulnerability total");
+  audit.vulnerabilities = counts;
+  audit.dependencies = observed.metadata.dependencies;
+  const packages = Object.entries(observed.vulnerabilities || {});
+  audit.public_diagnostic = {
+    package_count: packages.length,
+    truncated: packages.length > 100,
+    packages: packages.slice(0, 100).map(([name, vulnerability]) => ({
+      name: safeMessage(name).slice(0, 200), severity: safeMessage(vulnerability.severity || "unknown").slice(0, 50),
+      range: safeMessage(vulnerability.range || "unknown").slice(0, 500), is_direct: vulnerability.isDirect === true,
+      advisories: (vulnerability.via || []).filter((via) => typeof via === "object" && via !== null).slice(0, 20).map((via) => ({
+        source: Number.isSafeInteger(via.source) ? via.source : null,
+        id: String(via.url || "").match(/GHSA-[a-z0-9-]+/i)?.[0] || null,
+        name: safeMessage(via.name || via.dependency || name).slice(0, 200),
+        title: safeMessage(via.title || "").slice(0, 500),
+        severity: safeMessage(via.severity || "unknown").slice(0, 50),
+        range: safeMessage(via.range || "unknown").slice(0, 500),
+      })),
+      via_dependencies: (vulnerability.via || []).filter((via) => typeof via === "string").slice(0, 20)
+        .map((via) => safeMessage(via).slice(0, 200)),
+    })),
+  };
+  if (audit.exit_code !== 0 || counts.total !== 0) {
+    const details = audit.public_diagnostic.packages.slice(0, 10).map((item) =>
+      `${item.name} [${item.severity}, ${item.range}; ${item.advisories.map((a) => a.id || a.source).join(", ") || item.via_dependencies.join(", ")}]`).join("; ");
+    throw new Error(safeMessage(`npm audit exited ${audit.exit_code} with ${counts.total} vulnerabilities: ${details}`));
+  }
+  audit.status = "passed";
 }
 
 async function pinnedNpm(root, env) {
@@ -428,10 +473,9 @@ async function qualify(item, npm) {
     result.checks.materialization = { status: "passed", marker, marker_digest: digest(JSON.stringify(marker)), runtime_root: runtimeReal };
     const omit = ["--omit=dev", ...(candidate.runtime.omit_optional ? ["--omit=optional"] : [])];
     const audit = result.checks.npm_audit = { status: "running", command: ["audit", ...omit, "--json"] }; await save();
-    const auditBody = await capturedProcess(process.execPath, [npm.cli, ...audit.command], { cwd: runtimeRoot, env }, audit);
-    const audited = JSON.parse(auditBody);
-    assert.equal(audited.error, undefined); assert.equal(audited.metadata?.vulnerabilities?.total, 0);
-    audit.vulnerabilities = audited.metadata.vulnerabilities; audit.dependencies = audited.metadata.dependencies; audit.status = "passed";
+    const auditBody = await capturedProcess(process.execPath, [npm.cli, ...audit.command],
+      { cwd: runtimeRoot, env, captureAuditExitOne: true }, audit);
+    recordNpmAudit(auditBody, audit);
     const signatures = result.checks.npm_signatures = { status: "running", command: ["audit", "signatures", ...omit] }; await save();
     const signatureBody = await capturedProcess(process.execPath, [npm.cli, ...signatures.command], { cwd: runtimeRoot, env }, signatures);
     const count = Number(signatureBody.match(/audited (\d+) packages? in/)?.[1]);
@@ -480,6 +524,7 @@ try {
   evidence.status = "failed"; evidence.error = safeMessage(error.message); process.exitCode = 1;
 } finally {
   evidence.completed_at = new Date().toISOString(); await save();
+  if (validateOnly && evidence.status === "failed") console.error(evidence.error);
   if (!validateOnly) console.log(JSON.stringify({ status: evidence.status, evidence: output,
     candidates: evidence.results.map((r) => ({ id: r.product_id, status: r.status, error: r.error })) }));
 }

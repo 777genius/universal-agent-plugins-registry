@@ -1352,6 +1352,13 @@ class DirectoryDomainTests(unittest.TestCase):
 
     def test_reviewed_runtime_upgrade_allowlists_are_exact(self) -> None:
         self.assertEqual(
+            registry.LOCKED_NPM_SECURITY_OVERRIDES[("@hubspot/cli", "8.15.0")],
+            {
+                "@sentry/node": "10.71.0", "qs": "6.16.0", "js-yaml": "4.3.2",
+                "moment": "2.31.0", "axios": "1.20.0",
+            },
+        )
+        self.assertEqual(
             registry.LOCKED_NPM_SECURITY_OVERRIDES[("@upstash/context7-mcp", "4.0.5")],
             {"qs": "6.16.0"},
         )

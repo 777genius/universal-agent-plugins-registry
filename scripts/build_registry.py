@@ -159,13 +159,14 @@ LOCKED_NPM_SECURITY_OVERRIDES = {
         "gaxios": "8.0.0",
         "qs": "6.16.0",
     },
-    # The stable 8.15.0 root still pins vulnerable js-yaml and moment versions.
+    # The stable 8.15.0 root still pins vulnerable js-yaml, moment, and axios versions.
     # Keep their same-major patched versions exact throughout the closure.
     ("@hubspot/cli", "8.15.0"): {
         "@sentry/node": "10.71.0",
         "qs": "6.16.0",
         "js-yaml": "4.3.2",
         "moment": "2.31.0",
+        "axios": "1.20.0",
     },
     ("@hubspot/cli", "8.14.0-beta.1"): {
         "@sentry/node": "10.71.0",

@@ -64,19 +64,19 @@
       "proposed_release_sequence": 6,
       "candidate_package_version": "0.2.4",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/hubspot-developer",
-      "candidate_tree_digest": "sha256:c05b9b4ec55a6307232b4878850cfeaa8df4657721a9556d18f92a8d8d6314d3",
+      "candidate_tree_digest": "sha256:adce739e6b82b4f5af698fc5bc370c499e5c724a6c259795f0e35ecb79b2f30d",
       "candidate_manifest_digest": "sha256:593ea107aebd40c7c0846b468b8c0e9006de627ed6c22905b3a33b75134e7ef1",
       "runtime": {
         "schema_version": 1,
         "package": "@hubspot/cli",
         "version": "8.15.0",
         "entrypoint": "node_modules/@hubspot/cli/bin/hs.js",
-        "package_lock_sha256": "sha256:6883234cc33910eb84a35760c713d235224a6a1bd6bd635969b71b4aa7d1830b",
+        "package_lock_sha256": "sha256:5e2a940bfb5024ba2f4fb59dd9a0d977bd58ea952f95260dd779aa30095f1b92",
         "omit_optional": false
       },
       "audited_spike_lock_sha256": "sha256:c463c92656aaa98cfde18856980ad14291f3c88d26ea0b4a9f078e1bf5923ac1",
       "npm_root_integrity": "sha512-NE6Xt+NBNb3yx7i1waFs7u4iZ6hF7uKLPUpSFDCjQjdmrHTJoHPwXFmHXA0I9QmJeulAOE1Es/cF5ftzjGil4g==",
-      "closure_comparison": "identical dependency entries; only lock name and root-package name changed to production runtime identity",
+      "closure_comparison": "Historical spike closure retained except reviewed Axios1.20.0 override and deduplication of two old Axios/proxy subtrees; see source_followup.axios_remediation. Root package and other retained dependency entries are unchanged.",
       "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/hubspot-developer/npm-metadata.json",
       "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/hubspot-developer/audit-result.json"
     }
@@ -89,7 +89,7 @@
       "observed_at": "2026-09-30T14:25:01Z",
       "command": "npm audit --omit=dev --json",
       "known_vulnerabilities_each": 0,
-      "scope": "captured spike locks; candidates have exactly the same dependency entries"
+      "scope": "historical captured spike locks; precedes the HubSpot Axios1.20.0 follow-up. Context7/Firebase dependency entries remain identical; fresh exact-source qualification is required for the new HubSpot closure."
     },
     "stdio_smoke": {
       "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/smoke-result.json",
@@ -109,12 +109,12 @@
     "launcher_stdio_smoke": {
       "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/launcher-smoke-result.json",
       "status": "passed_for_all_three",
-      "scope": "cold reviewed launcher bootstrap and MCP initialize/tools/list on darwin/arm64 with Node 24.19.0 and fresh HOME/project/plugin data; no authenticated tool calls"
+      "scope": "historical cold launcher/bootstrap record before current follow-ups on darwin/arm64 Node24.19.0 with fresh HOME/project/plugin data; not qualification of current candidate bytes or the new HubSpot Axios closure; no authenticated tool calls"
     },
     "npm_signatures": {
       "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/npm-signatures-result.json",
       "status": "all_installed_packages_verified",
-      "scope": "installed darwin/arm64 closures, not uninstalled optional platform packages or complete upstream source-to-artifact bindings"
+      "scope": "historical installed darwin/arm64 closures before the HubSpot Axios1.20.0 follow-up, not the new HubSpot closure, uninstalled optional platform packages or complete upstream source-to-artifact bindings"
     }
   },
   "source_followup": {
@@ -123,7 +123,8 @@
     "hubspot_environment": "HUBSPOT_CLI_VERSION now matches locked root8.15.0 and HUBSPOT_MCP_STANDALONE=false prevents ambient standalone mode from selecting an npx subprocess outside the reviewed closure.",
     "upstream_inspection": "Integrity-verified @hubspot/cli8.15.0 tarball mcp-server/utils/command.js49-52 chooses NpxHubSpotCommand only when HUBSPOT_MCP_STANDALONE is true. Reviewed launcher prepends the locked runtime node_modules/.bin to PATH.",
     "windows_bootstrap": "Qualification run36757638737 demonstrated spawnSync npm.cmd EINVAL on Windows. Candidates now use cmd.exe /d /s /c with fixed npm ci flags only; paths remain separate cwd/env and user MCP arguments remain direct Node argv. Historical published launchers are unchanged. Fresh exact-source qualification is required.",
-    "historical_evidence_scope": "Existing smoke and signature records precede the README/environment and Windows launcher follow-ups; unchanged lockfiles retain audit/signature scope, but cold-launch platform evidence must be collected again for the new candidate tree digests."
+    "axios_remediation": "Qualification36761118259 passed all three cold MCP startups/materialization on all three OS; Context7/Firebase audit/signatures passed. HubSpot audit failed on12newAxiosadvisories, published after the historical14:25audit (GHSA-m8m8-qj5v-23w3 published2026-09-30T15:32:51Z). Added exact same-major Axios1.20.0 override; official registry latest metadata/tarball integrity verified. Metadata-only regenerated lock audit reports zero advisories. Fresh installed closure/platform/signature qualification remains required.",
+    "historical_evidence_scope": "Existing smoke/signature records precede the README/environment and Windows launcher follow-ups. HubSpot's lock additionally changed for Axios1.20.0; its historical installed closure evidence does not qualify the new closure. Fresh exact-source platform evidence is required for all current candidates."
   },
   "release_prerequisites": [
     "Independent technical review and required CI on the exact candidate source commit.",

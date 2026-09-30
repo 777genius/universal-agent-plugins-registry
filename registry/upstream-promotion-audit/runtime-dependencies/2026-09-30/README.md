@@ -11,7 +11,7 @@ published package sources, compatibility projections, or public runtime pins.
 | HubSpot Developer | `@hubspot/cli@8.14.0` | `@hubspot/cli@8.15.0` | `0.2.4` / `6` |
 
 All candidates retain the existing exact security overrides. HubSpot also needs
-same-major `js-yaml@4.3.2` and `moment@2.31.0`: updating its root alone leaves
+same-major `js-yaml@4.3.2`, `moment@2.31.0`, and `axios@1.20.0`: updating its root alone leaves
 affected dependencies. The new Firebase closure uses `protobufjs@7.6.6`; its
 ignored script is accounted for by exact path/version/integrity. Optional
 Firebase `fsevents` and `re2` remain omitted. HubSpot retains the existing exact
@@ -23,18 +23,21 @@ New validator policy keys are additive; historical keys remain unchanged.
 `remediation-candidates.json` binds each complete candidate package, its exact
 lock digest, the original audited spike lock digest, and the unchanged published
 tree digest. Candidate lock names were converted from temporary spike names to
-`agentplugins-runtime-<id>`; all dependency entries are identical. The reviewed
+`agentplugins-runtime-<id>`. Context7/Firebase dependency entries are identical;
+HubSpot additionally contains the reviewed Axios follow-up described below. The reviewed
 launcher and MCP arguments in the historical smoke records were unchanged.
 The current candidate launcher includes the Windows bootstrap fix described below.
 
-Each product's `audit-result.json` records zero known npm advisories observed on
-2026-09-30. Audit results depend on the advisory database at that time and are
+Each product's historical `audit-result.json` records zero known npm advisories
+for the then-prepared closure on 2026-09-30, before the HubSpot Axios follow-up.
+Audit results depend on the advisory database at that time and are
 not a security certification. `npm-metadata.json` records exact root integrity
 and repository metadata. Firebase and HubSpot advertise Git heads; their
 source-to-artifact bindings have not been independently verified. Context7's
 metadata provides no Git head. `npm-signatures-result.json` records successful
-registry signature verification for every installed package in each candidate
-closure, with npm attestation counts. Uninstalled platform-specific optional
+registry signature verification for every installed package in each historical
+closure, with npm attestation counts; it does not qualify the new HubSpot closure.
+Uninstalled platform-specific optional
 packages and complete upstream source-to-artifact bindings were not verified.
 
 `smoke-result.json` records successful credential-free `initialize` and
@@ -76,6 +79,16 @@ remain separate cwd/env values and user MCP arguments remain direct Node argv.
 The registry admits this exact reviewed launcher digest additively, preserving
 all historical published launcher bytes. Fresh exact-source platform evidence
 is required; the failed run is not qualification evidence for these new trees.
+
+The next run (`36761118259`) passed cold MCP startup and materialization for all
+three packages on all three OS. Context7/Firebase also passed audit/signatures.
+HubSpot's audit caught twelve new Axios advisories published after the original
+14:25 UTC audit, including `GHSA-m8m8-qj5v-23w3` at 15:32:51 UTC. Its root still
+pins Axios `1.19.0` and optional subtrees `1.18.1`; the unpublished candidate now
+overrides these to the verified stable `1.20.0`. Metadata-only lock regeneration
+deduplicated the old subtrees and reported zero advisories. This is not installed
+runtime or signature proof: fresh exact-source platform qualification remains
+required, and historical audit/smoke/signature records are not rewritten.
 
 These packages are community distributions without bridge recipes. The
 `upstream_bridge_promotion.py` path requires a watched, merged official upstream
