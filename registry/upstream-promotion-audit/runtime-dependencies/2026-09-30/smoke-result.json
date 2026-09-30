@@ -1,0 +1,99 @@
+{
+  "observed_at": "2026-09-30T14:25:01Z",
+  "node_version": "24.19.0",
+  "checks": [
+    "initialize",
+    "tools/list"
+  ],
+  "tools_called": false,
+  "results": [
+    {
+      "name": "context7",
+      "sandbox": "/var/folders/7b/ydmc_b0n251bc4hss4tz8y880000gn/T/uap-mcp-candidate-5SHKsY",
+      "status": "passed",
+      "serverInfo": {
+        "name": "Context7",
+        "version": "4.1.1",
+        "websiteUrl": "https://context7.com",
+        "description": "Context7 provides up-to-date documentation and code examples for libraries and frameworks.",
+        "icons": [
+          {
+            "src": "https://context7.com/context7-icon-green.png",
+            "mimeType": "image/png"
+          }
+        ]
+      },
+      "toolCount": 2,
+      "toolNames": [
+        "resolve-library-id",
+        "query-docs"
+      ]
+    },
+    {
+      "name": "firebase",
+      "sandbox": "/var/folders/7b/ydmc_b0n251bc4hss4tz8y880000gn/T/uap-mcp-candidate-03E9NW",
+      "status": "passed",
+      "serverInfo": {
+        "name": "firebase",
+        "version": "0.3.0"
+      },
+      "toolCount": 19,
+      "toolNames": [
+        "firebase_login",
+        "firebase_logout",
+        "firebase_get_project",
+        "firebase_list_apps",
+        "firebase_list_projects",
+        "firebase_get_sdk_config",
+        "firebase_create_project",
+        "firebase_create_app",
+        "firebase_create_android_sha",
+        "firebase_get_environment",
+        "firebase_update_environment",
+        "firebase_init",
+        "firebase_get_security_rules",
+        "firebase_read_resources",
+        "firebase_deploy",
+        "firebase_deploy_status",
+        "developerknowledge_search_documents",
+        "developerknowledge_answer_query",
+        "developerknowledge_get_documents"
+      ]
+    },
+    {
+      "name": "hubspot-developer",
+      "sandbox": "/var/folders/7b/ydmc_b0n251bc4hss4tz8y880000gn/T/uap-mcp-candidate-dULGCw",
+      "status": "passed",
+      "serverInfo": {
+        "name": "HubSpot CLI MCP Server",
+        "version": "0.0.1",
+        "description": "Helps perform tasks for local development of HubSpot projects."
+      },
+      "toolCount": 22,
+      "toolNames": [
+        "upload-project",
+        "create-project",
+        "guided-walkthrough-cli",
+        "create-test-account",
+        "deploy-project",
+        "add-feature-to-project",
+        "validate-project",
+        "get-feature-config-schema",
+        "search-docs",
+        "fetch-doc",
+        "get-api-usage-patterns-by-app-id",
+        "get-apps-info",
+        "get-build-logs",
+        "get-build-status",
+        "find-projects",
+        "auth-account",
+        "list-cms-remote-contents",
+        "create-cms-module",
+        "create-cms-template",
+        "create-cms-function",
+        "list-cms-serverless-functions",
+        "get-cms-serverless-function-logs"
+      ]
+    }
+  ]
+}

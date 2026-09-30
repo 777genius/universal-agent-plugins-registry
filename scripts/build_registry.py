@@ -87,7 +87,24 @@ LOCKED_NPM_RUNTIME_PATH = "io.github.777genius.agentplugins/runtime"
 LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.13"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
 LOCKED_NPM_LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
+LOCKED_NPM_REVIEWED_LAUNCHER_DIGESTS = frozenset({
+    LOCKED_NPM_LAUNCHER_DIGEST,
+    # Windows cmd.exe bootstrap; preserve the original published implementation.
+    "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b",
+})
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
+    ("@hubspot/cli", "8.15.0"): frozenset({
+        (
+            "node_modules/esbuild", "0.25.12",
+            "sha512-bbPBYYrtZbkt6Os6FiTLCTFxvq4tt3JKall1vRwshA3fdVztsLAatFaZobhkBC8/BrPetoa0oksYoKXoG4ryJg==",
+        ),
+    }),
+    ("firebase-tools", "15.32.0"): frozenset({
+        (
+            "node_modules/protobufjs", "7.6.6",
+            "sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg==",
+        ),
+    }),
     ("@hubspot/cli", "8.14.0-beta.1"): frozenset({
         (
             "node_modules/esbuild", "0.25.12",
@@ -114,6 +131,12 @@ LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
     }),
 }
 LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST = {
+    ("@hubspot/cli", "8.15.0"): frozenset({
+        (
+            "node_modules/fsevents", "2.3.3",
+            "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
+        ),
+    }),
     ("@hubspot/cli", "8.14.0-beta.1"): frozenset({
         (
             "node_modules/fsevents", "2.3.3",
@@ -128,6 +151,23 @@ LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST = {
     }),
 }
 LOCKED_NPM_SECURITY_OVERRIDES = {
+    ("@upstash/context7-mcp", "4.1.1"): {
+        "qs": "6.16.0",
+    },
+    ("firebase-tools", "15.32.0"): {
+        "@google-cloud/pubsub": "6.0.1",
+        "gaxios": "8.0.0",
+        "qs": "6.16.0",
+    },
+    # The stable 8.15.0 root still pins vulnerable js-yaml, moment, and axios versions.
+    # Keep their same-major patched versions exact throughout the closure.
+    ("@hubspot/cli", "8.15.0"): {
+        "@sentry/node": "10.71.0",
+        "qs": "6.16.0",
+        "js-yaml": "4.3.2",
+        "moment": "2.31.0",
+        "axios": "1.20.0",
+    },
     ("@hubspot/cli", "8.14.0-beta.1"): {
         "@sentry/node": "10.71.0",
     },
@@ -1253,7 +1293,7 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         all(path.is_file() and not path.is_symlink() for path in (launcher, package_path, lock_path, config_path)),
         f"{runtime_root}: launcher, package.json, package-lock.json, and runtime.json are required",
     )
-    require(digest_bytes(launcher.read_bytes()) == LOCKED_NPM_LAUNCHER_DIGEST, f"{launcher}: launcher is not the reviewed implementation")
+    require(digest_bytes(launcher.read_bytes()) in LOCKED_NPM_REVIEWED_LAUNCHER_DIGESTS, f"{launcher}: launcher is not the reviewed implementation")
     package = read_object(package_path)
     config = read_object(config_path)
     lock_body = lock_path.read_bytes()

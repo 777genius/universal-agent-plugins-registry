@@ -1,0 +1,28 @@
+{
+  "observed_on": "2026-09-30",
+  "command": "npm audit signatures",
+  "scope": "Installed candidate closures on darwin/arm64 after npm ci --ignore-scripts; Firebase omitted optional packages. Not a verification of uninstalled platform-specific optional packages or a complete upstream source-to-artifact binding.",
+  "results": [
+    {
+      "name": "context7",
+      "exit_code": 0,
+      "audited_packages": 107,
+      "verified_registry_signatures": 107,
+      "verified_attestations": 25
+    },
+    {
+      "name": "firebase",
+      "exit_code": 0,
+      "audited_packages": 646,
+      "verified_registry_signatures": 646,
+      "verified_attestations": 38
+    },
+    {
+      "name": "hubspot-developer",
+      "exit_code": 0,
+      "audited_packages": 592,
+      "verified_registry_signatures": 592,
+      "verified_attestations": 71
+    }
+  ]
+}

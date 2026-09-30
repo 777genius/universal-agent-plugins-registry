@@ -1,0 +1,137 @@
+{
+  "format_version": 1,
+  "prepared_at": "2026-09-30",
+  "status": "unpublished_source_candidates",
+  "base_commit": "ac6806deb2fa77c618770a44d634c1f54e21639f",
+  "publication_authorized": true,
+  "candidates": [
+    {
+      "product_id": "context7",
+      "distribution_id": "777genius/context7",
+      "published_sequence": 4,
+      "published_package_version": "0.2.2",
+      "published_tree_digest": "sha256:7efde1ee6ac005e6b4f7b205a72ace200005c3377a7e303b4c323872748f4cc5",
+      "proposed_release_sequence": 5,
+      "candidate_package_version": "0.2.3",
+      "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/context7",
+      "candidate_tree_digest": "sha256:c93ccad9f56c7dd53eb712ddee9252d9b4209fb298434b001a42489283748e2f",
+      "candidate_manifest_digest": "sha256:e2cdec52bf8949e49aa28b0772d44f0d53dc99f4cc24d86a16abcff5d523ab23",
+      "runtime": {
+        "schema_version": 1,
+        "package": "@upstash/context7-mcp",
+        "version": "4.1.1",
+        "entrypoint": "node_modules/@upstash/context7-mcp/dist/index.js",
+        "package_lock_sha256": "sha256:1966772c2c313b06c5a0a06f2d07446349eaa2f6a5180f9c36ddabbd7cd89951",
+        "omit_optional": false
+      },
+      "audited_spike_lock_sha256": "sha256:1f9d616503215f79fc9553f12bbc22c0c557a1035d6ad88821e62f735a7c466a",
+      "npm_root_integrity": "sha512-fUARTIZGVKzlzQKDhKUg4aIQ3yEU/12STdfxJDDnLMSN7yyHiPvNHI05iFwxkv3vC8G76Wp27MwK6Jucl/C5pA==",
+      "closure_comparison": "identical dependency entries; only lock name and root-package name changed to production runtime identity",
+      "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/context7/npm-metadata.json",
+      "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/context7/audit-result.json"
+    },
+    {
+      "product_id": "firebase",
+      "distribution_id": "777genius/firebase",
+      "published_sequence": 5,
+      "published_package_version": "0.2.3",
+      "published_tree_digest": "sha256:082c691d98c244861db7931b916336188a2ad87de75cd9d3e0d1042b1bad242b",
+      "proposed_release_sequence": 6,
+      "candidate_package_version": "0.2.4",
+      "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/firebase",
+      "candidate_tree_digest": "sha256:685949b123f14739cefee527a3db4723f7444407c4b718023513f25af03d7523",
+      "candidate_manifest_digest": "sha256:ddf8c3ef2689d58aa8f6b78fd36af1d8733d2a56a9bad8ee19b1a78c10ec01b4",
+      "runtime": {
+        "schema_version": 1,
+        "package": "firebase-tools",
+        "version": "15.32.0",
+        "entrypoint": "node_modules/firebase-tools/lib/bin/firebase.js",
+        "package_lock_sha256": "sha256:67dd4b27a4b50e81d28762ce66f9f518ed17bf3378d185ae7e16532e052fb583",
+        "omit_optional": true
+      },
+      "audited_spike_lock_sha256": "sha256:e8e60cd89d3d7f5233cba21bbd3fc9fd6a62e0db85c89859be6ea9c3780da4ca",
+      "npm_root_integrity": "sha512-yp0SOQFALo3q2K2/pBmWTrAM4C0503zK3UJ5IDQzr4o7i+5RKh3ZPX4RTkumCFt3STtI7EuR61M8tDJjNZmTYg==",
+      "closure_comparison": "identical dependency entries; only lock name and root-package name changed to production runtime identity",
+      "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/firebase/npm-metadata.json",
+      "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/firebase/audit-result.json"
+    },
+    {
+      "product_id": "hubspot-developer",
+      "distribution_id": "777genius/hubspot-developer",
+      "published_sequence": 5,
+      "published_package_version": "0.2.3",
+      "published_tree_digest": "sha256:adc16ff599904d52954321e6c9437a8f01949ee857a433d9e37ae97db4c407ff",
+      "proposed_release_sequence": 6,
+      "candidate_package_version": "0.2.4",
+      "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/hubspot-developer",
+      "candidate_tree_digest": "sha256:adce739e6b82b4f5af698fc5bc370c499e5c724a6c259795f0e35ecb79b2f30d",
+      "candidate_manifest_digest": "sha256:593ea107aebd40c7c0846b468b8c0e9006de627ed6c22905b3a33b75134e7ef1",
+      "runtime": {
+        "schema_version": 1,
+        "package": "@hubspot/cli",
+        "version": "8.15.0",
+        "entrypoint": "node_modules/@hubspot/cli/bin/hs.js",
+        "package_lock_sha256": "sha256:5e2a940bfb5024ba2f4fb59dd9a0d977bd58ea952f95260dd779aa30095f1b92",
+        "omit_optional": false
+      },
+      "audited_spike_lock_sha256": "sha256:c463c92656aaa98cfde18856980ad14291f3c88d26ea0b4a9f078e1bf5923ac1",
+      "npm_root_integrity": "sha512-NE6Xt+NBNb3yx7i1waFs7u4iZ6hF7uKLPUpSFDCjQjdmrHTJoHPwXFmHXA0I9QmJeulAOE1Es/cF5ftzjGil4g==",
+      "closure_comparison": "Historical spike closure retained except reviewed Axios1.20.0 override and deduplication of two old Axios/proxy subtrees; see source_followup.axios_remediation. Root package and other retained dependency entries are unchanged.",
+      "metadata_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/hubspot-developer/npm-metadata.json",
+      "audit_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/hubspot-developer/audit-result.json"
+    }
+  ],
+  "verification": {
+    "static_package_and_locked_runtime_validation": "passed",
+    "existing_focused_runtime_policy_tests": 9,
+    "published_package_tree_digests_preserved": true,
+    "npm_audit": {
+      "observed_at": "2026-09-30T14:25:01Z",
+      "command": "npm audit --omit=dev --json",
+      "known_vulnerabilities_each": 0,
+      "scope": "historical captured spike locks; precedes the HubSpot Axios1.20.0 follow-up. Context7/Firebase dependency entries remain identical; fresh exact-source qualification is required for the new HubSpot closure."
+    },
+    "stdio_smoke": {
+      "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/smoke-result.json",
+      "node_version": "24.19.0",
+      "checks": [
+        "initialize",
+        "tools/list"
+      ],
+      "tool_counts": {
+        "context7": 2,
+        "firebase": 19,
+        "hubspot-developer": 22
+      },
+      "scope": "direct installed npm entrypoints in fresh HOME/project, not the bridge launcher, client activation, authenticated tool calls or provider workflows",
+      "server_info_version_note": "Firebase 0.3.0 and HubSpot 0.0.1 are internal MCP versions, not root CLI package versions"
+    },
+    "launcher_stdio_smoke": {
+      "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/launcher-smoke-result.json",
+      "status": "passed_for_all_three",
+      "scope": "historical cold launcher/bootstrap record before current follow-ups on darwin/arm64 Node24.19.0 with fresh HOME/project/plugin data; not qualification of current candidate bytes or the new HubSpot Axios closure; no authenticated tool calls"
+    },
+    "npm_signatures": {
+      "evidence_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/npm-signatures-result.json",
+      "status": "all_installed_packages_verified",
+      "scope": "historical installed darwin/arm64 closures before the HubSpot Axios1.20.0 follow-up, not the new HubSpot closure, uninstalled optional platform packages or complete upstream source-to-artifact bindings"
+    }
+  },
+  "source_followup": {
+    "publication_approval": "Owner approved these three plugin updates on 2026-09-30; PR341 comment5916693004. This record remains unpublished source, not publication evidence.",
+    "readme_changes": "Removed temporary candidate wording, dated vulnerability audit statements, and clarified the explicit Context7 community selector.",
+    "hubspot_environment": "HUBSPOT_CLI_VERSION now matches locked root8.15.0 and HUBSPOT_MCP_STANDALONE=false prevents ambient standalone mode from selecting an npx subprocess outside the reviewed closure.",
+    "upstream_inspection": "Integrity-verified @hubspot/cli8.15.0 tarball mcp-server/utils/command.js49-52 chooses NpxHubSpotCommand only when HUBSPOT_MCP_STANDALONE is true. Reviewed launcher prepends the locked runtime node_modules/.bin to PATH.",
+    "windows_bootstrap": "Qualification run36757638737 demonstrated spawnSync npm.cmd EINVAL on Windows. Candidates now use cmd.exe /d /s /c with fixed npm ci flags only; paths remain separate cwd/env and user MCP arguments remain direct Node argv. Historical published launchers are unchanged. Fresh exact-source qualification is required.",
+    "axios_remediation": "Qualification36761118259 passed all three cold MCP startups/materialization on all three OS; Context7/Firebase audit/signatures passed. HubSpot audit failed on12newAxiosadvisories, published after the historical14:25audit (GHSA-m8m8-qj5v-23w3 published2026-09-30T15:32:51Z). Added exact same-major Axios1.20.0 override; official registry latest metadata/tarball integrity verified. Metadata-only regenerated lock audit reports zero advisories. Fresh installed closure/platform/signature qualification remains required.",
+    "historical_evidence_scope": "Existing smoke/signature records precede the README/environment and Windows launcher follow-ups. HubSpot's lock additionally changed for Axios1.20.0; its historical installed closure evidence does not qualify the new closure. Fresh exact-source platform evidence is required for all current candidates."
+  },
+  "release_prerequisites": [
+    "Independent technical review and required CI on the exact candidate source commit.",
+    "Verify npm provenance/signatures as required by release review. npm metadata Git heads are claims, not verified source-to-artifact bindings; Context7 metadata has no Git head.",
+    "Complete release-required platform qualification beyond the passed actual launcher bootstrap on darwin/arm64 Node 24.19.0; do not equate tools/list with authenticated provider operations.",
+    "Resolve any retained revision=null predecessor to the exact accepted immutable source SHA whose tree matches the recorded digest before replacing plugins/<id>. Preserve release identity and historical policy, then append the proposed sequence with the new manifest/tree digest.",
+    "Materialize and review compatibility outputs and a new Directory release through the established promotion/publication procedure. No published identity or feed is replaced by this record.",
+    "Obtain explicit owner approval before publication."
+  ]
+}
