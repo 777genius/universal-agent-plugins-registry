@@ -1752,6 +1752,7 @@ sys.modules['catalog_process_isolation']=module
             caller = load(path)["jobs"]["deploy"]
             self.assertEqual(caller["permissions"]["actions"], "read")
             self.assertEqual(caller["uses"], "./.github/workflows/pages-production-compositor.yml")
+            self.assertEqual(caller["secrets"], "inherit")
         steps = composer["steps"]
         def position(fragment: str) -> int:
             return next(index for index, step in enumerate(steps) if fragment in step.get("run", ""))
