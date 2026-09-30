@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -148,7 +149,13 @@ def git(directory: Path, *arguments: str) -> str:
         for identity in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
             if not git(directory, "var", identity).startswith("iliya <iliyazelenkog@gmail.com> "):
                 raise AssertionError(f"invalid fixture {identity}")
-    completed = subprocess.run(["git", *arguments], cwd=directory, check=True, text=True, stdout=subprocess.PIPE)
+    environment = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "iliya", "GIT_AUTHOR_EMAIL": "iliyazelenkog@gmail.com",
+        "GIT_COMMITTER_NAME": "iliya", "GIT_COMMITTER_EMAIL": "iliyazelenkog@gmail.com",
+    }
+    completed = subprocess.run(["git", *arguments], cwd=directory, check=True, text=True,
+                               stdout=subprocess.PIPE, env=environment)
     return completed.stdout.strip()
 
 
