@@ -5591,7 +5591,7 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
-            "revision": null,
+            "revision": "128b01ff2b4f7242ad061ad823d5e4018af6b2e4",
             "path": "plugins/playwright"
           },
           "build_provenance": {
@@ -5604,11 +5604,120 @@
           "components": [
             "mcp"
           ]
+        },
+        {
+          "sequence": 2,
+          "package_version": "0.0.80",
+          "manifest_name": "playwright",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/playwright"
+          },
+          "build_provenance": {
+            "upstream_repository": "microsoft/playwright-mcp",
+            "upstream_revision": "8a13ef8e9f7385a0f89477922127f31cbfde9761"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:c209d7ac28d788ff1b384f1ced99060e8f573462d7114fe5eb6aa65761843ee0",
+          "manifest_digest": "sha256:8419b5c9e67894c2312048c4fe30e3ea920d00101d02641230183dd7ab4d3b31",
+          "components": [
+            "mcp"
+          ]
         }
       ],
       "release_policies": [
         {
           "release_sequence": 1,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 2,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
