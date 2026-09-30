@@ -14,7 +14,7 @@
       "proposed_release_sequence": 5,
       "candidate_package_version": "0.2.3",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/context7",
-      "candidate_tree_digest": "sha256:6d9d98dbd1e2f3282b480a402a7f6499f6d21e2f9a92ff691c012ccd6e40a6ed",
+      "candidate_tree_digest": "sha256:726f568e135dcf8d8592de079a0707a0e1e9727b2859c0dbed3d0d330e32044e",
       "candidate_manifest_digest": "sha256:e2cdec52bf8949e49aa28b0772d44f0d53dc99f4cc24d86a16abcff5d523ab23",
       "runtime": {
         "schema_version": 1,
@@ -39,7 +39,7 @@
       "proposed_release_sequence": 6,
       "candidate_package_version": "0.2.4",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/firebase",
-      "candidate_tree_digest": "sha256:f7b2b41cae28833fa00ac2635b4680e11235933db307c8777677d4f01cbb7bd3",
+      "candidate_tree_digest": "sha256:448baec636dc40e952fcb718bfa32b28c222742a6e1b0c0131ca614d7bc671d3",
       "candidate_manifest_digest": "sha256:ddf8c3ef2689d58aa8f6b78fd36af1d8733d2a56a9bad8ee19b1a78c10ec01b4",
       "runtime": {
         "schema_version": 1,
@@ -64,7 +64,7 @@
       "proposed_release_sequence": 6,
       "candidate_package_version": "0.2.4",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/hubspot-developer",
-      "candidate_tree_digest": "sha256:fb9d9d975af9f422be3d585a742249141c2c5993eac6ba059a987dcf6790582b",
+      "candidate_tree_digest": "sha256:bebfdcba22400853b0d8738ef9b5ebbe0c68a0537cd61e9fc2f51d908e8a1cdc",
       "candidate_manifest_digest": "sha256:593ea107aebd40c7c0846b468b8c0e9006de627ed6c22905b3a33b75134e7ef1",
       "runtime": {
         "schema_version": 1,
@@ -116,6 +116,13 @@
       "status": "all_installed_packages_verified",
       "scope": "installed darwin/arm64 closures, not uninstalled optional platform packages or complete upstream source-to-artifact bindings"
     }
+  },
+  "source_followup": {
+    "publication_approval": "Owner approved these three plugin updates on 2026-09-30; PR341 comment5916693004. This record remains unpublished source, not publication evidence.",
+    "readme_changes": "Removed temporary candidate wording, dated vulnerability audit statements, and clarified the explicit Context7 community selector.",
+    "hubspot_environment": "HUBSPOT_CLI_VERSION now matches locked root8.15.0 and HUBSPOT_MCP_STANDALONE=false prevents ambient standalone mode from selecting an npx subprocess outside the reviewed closure.",
+    "upstream_inspection": "Integrity-verified @hubspot/cli8.15.0 tarball mcp-server/utils/command.js49-52 chooses NpxHubSpotCommand only when HUBSPOT_MCP_STANDALONE is true. Reviewed launcher prepends the locked runtime node_modules/.bin to PATH.",
+    "historical_evidence_scope": "Existing smoke and signature records precede this README/environment follow-up; unchanged lockfiles retain audit/signature scope, but cold-launch platform evidence must be collected again for the new candidate tree digests."
   },
   "release_prerequisites": [
     "Independent technical review and required CI on the exact candidate source commit.",

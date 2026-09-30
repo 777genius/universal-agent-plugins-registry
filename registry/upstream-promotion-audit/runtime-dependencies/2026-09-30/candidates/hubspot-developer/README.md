@@ -1,7 +1,5 @@
 # HubSpot Developer
 
-Unpublished dependency-remediation source candidate. The Directory still resolves the existing published release.
-
 HubSpot Developer MCP integration for project scaffolding, CMS, builds, logs, and app workflows via the HubSpot CLI.
 
 <!-- agentplugins-install:start -->
@@ -17,10 +15,11 @@ This is an independent community package for [Agent Plugins 1.0](https://agent-p
 - Component: MCP server
 - Transport: `stdio`
 - Runtime: integrity-locked `@hubspot/cli@8.15.0`; install scripts are disabled, and the platform-optional `fsevents` script is separately lock-accounted
+- CLI subprocesses use the locked local runtime; standalone `npx` fallback is disabled
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Upstream documentation: https://developers.hubspot.com/mcp
 - Privacy: HubSpot CLI usage tracking is disabled by default
 - Authentication: Uses the local HubSpot CLI session selected by the user.
-- Security audit: the candidate lockfile reports 0 known vulnerabilities with exact Sentry, qs, js-yaml, and moment overrides; npm signature verification for this candidate is pending
+- Security audit (2026-09-30): the exact lockfile reported 0 known vulnerabilities with reviewed Sentry, qs, js-yaml, and moment overrides
 
 Review the server's tools, scopes, and write capabilities before enabling it. Agent Plugins 1.0 standardizes packaging, not permissions or sandboxing.

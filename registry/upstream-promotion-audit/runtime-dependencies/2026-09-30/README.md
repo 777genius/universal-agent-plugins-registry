@@ -56,6 +56,18 @@ install-script accounting, and tampered integrity passed.
 
 ## Release boundary
 
+The owner approved publication of these three updates on 2026-09-30, recorded
+in PR #341. The candidate packages remain unpublished until the actual
+publication procedure succeeds; this approval does not authorize an installer
+release. A follow-up removed temporary candidate wording from package READMEs
+and dated audit claims. HubSpot's manifest now sets `HUBSPOT_CLI_VERSION=8.15.0`
+and `HUBSPOT_MCP_STANDALONE=false`: inspection of its integrity-verified npm
+tarball showed that ambient standalone mode otherwise selected an `npx`
+subprocess with the stale `8.14.0` version. The unchanged launcher puts the
+locked local CLI first on PATH. These follow-up tree digests are bound in
+`remediation-candidates.json`; prior smoke records remain historical evidence,
+not exact-tree platform qualification for the follow-up.
+
 These packages are community distributions without bridge recipes. The
 `upstream_bridge_promotion.py` path requires a watched, merged official upstream
 Agent Plugin and currently materializes a Chrome DevTools bridge. It cannot

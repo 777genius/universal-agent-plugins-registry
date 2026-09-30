@@ -1,0 +1,51 @@
+name: Runtime remediation platform qualification (no credentials)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/runtime-remediation-qualification.yml
+      - scripts/qualify_runtime_remediation.mjs
+      - registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/**
+      - scripts/build_registry.py
+      - tests/test_build_registry.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Cold launcher and npm verification / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - name: Preserve LF source bytes on every platform
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.20.0"
+          package-manager-cache: false
+      - name: Qualify all three exact candidates in disposable roots
+        shell: bash
+        env:
+          QUALIFICATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          QUALIFICATION_RUN_ID: ${{ github.run_id }}
+          QUALIFICATION_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: node scripts/qualify_runtime_remediation.mjs --output runtime-remediation-evidence.json
+      - name: Preserve partial evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-remediation-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runtime-remediation-evidence.json
+          if-no-files-found: error
+          retention-days: 30

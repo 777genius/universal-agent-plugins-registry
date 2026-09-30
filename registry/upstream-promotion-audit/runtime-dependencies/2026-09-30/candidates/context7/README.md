@@ -1,7 +1,5 @@
 # Context7
 
-Unpublished dependency-remediation source candidate. The Directory still resolves the existing published release.
-
 Portable Agent Plugins package for Context7. Pull up-to-date, version-specific documentation and code examples directly from source repositories into agent context.
 
 <!-- agentplugins-install:start -->
@@ -11,6 +9,8 @@ Portable Agent Plugins package for Context7. Pull up-to-date, version-specific d
 npx universal-agent-plugins add context7 --target codex
 ```
 <!-- agentplugins-install:end -->
+
+The short name selects the Directory's default distribution. To explicitly install this integrity-locked community distribution, use `npx universal-agent-plugins add 777genius/context7 --target codex`.
 
 This is an independent community package for [Agent Plugins 1.0](https://agent-plugins.org/specification). It is not an endorsement or an official package from Context7.
 
