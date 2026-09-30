@@ -305,6 +305,7 @@ jobs:
     if: needs.sign-and-publish.result == 'success'
     needs: sign-and-publish
     uses: ./.github/workflows/pages-production-compositor.yml
+    secrets: inherit
     permissions:
       actions: read
       contents: read
