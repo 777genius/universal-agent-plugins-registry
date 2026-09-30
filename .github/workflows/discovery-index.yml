@@ -71,7 +71,9 @@ jobs:
     name: Scan inert public packages
     needs: publisher-preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Full acquisition has already exceeded 167 minutes before validation.
+    # Leave 30 minutes beyond the build budget for setup and artifact upload.
+    timeout-minutes: 330
     environment: discovery-read
     permissions:
       contents: read
@@ -98,26 +100,6 @@ jobs:
           python-version: "3.13"
       - name: Install pinned validation dependencies
         run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
-      - name: Select deterministic schedule mode
-        id: mode
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
-          REQUESTED_MODE: ${{ inputs.mode }}
-        run: |
-          if test "${EVENT_NAME}" = workflow_dispatch; then
-            mode="${REQUESTED_MODE}"
-          elif test "${EVENT_NAME}" = schedule && test "${SCHEDULE}" = "11 3 * * 0"; then
-            mode=reconcile
-          elif test "${EVENT_NAME}" = schedule && test "${SCHEDULE}" = "43 2 * * *"; then
-            mode=discover
-          elif test "${EVENT_NAME}" = push; then
-            mode=discover
-          else
-            mode=refresh
-          fi
-          case "${mode}" in refresh|discover|reconcile) ;; *) exit 1 ;; esac
-          echo "value=${mode}" >> "$GITHUB_OUTPUT"
       - name: Authenticate previous last-known-good snapshot
         id: ledger
         working-directory: source
@@ -132,8 +114,39 @@ jobs:
           else
             echo "path=" >> "$GITHUB_OUTPUT"
           fi
+      - name: Select deterministic schedule mode and scan budget
+        id: mode
+        working-directory: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          REQUESTED_MODE: ${{ inputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+        run: |
+          if test "${EVENT_NAME}" = workflow_dispatch; then
+            mode="${REQUESTED_MODE}"
+          elif test "${EVENT_NAME}" = schedule && test "${SCHEDULE}" = "11 3 * * 0"; then
+            mode=reconcile
+          elif test "${EVENT_NAME}" = schedule && test "${SCHEDULE}" = "43 2 * * *"; then
+            mode=discover
+          elif test "${EVENT_NAME}" = push; then
+            mode=discover
+          else
+            mode=refresh
+          fi
+          case "${mode}" in refresh|discover|reconcile) ;; *) exit 1 ;; esac
+          echo "value=${mode}" >> "$GITHUB_OUTPUT"
+          # A fresh/empty authenticated refresh becomes discover in the builder.
+          # Only a nonempty authenticated LKG can use the measured refresh budget.
+          budget=300
+          if test "${mode}" = refresh && test -n "${PREVIOUS_SNAPSHOT}"; then
+            count="$(python3 -c 'import sys; from pathlib import Path; from scripts.build_discovery_index import load_previous; print(len(load_previous(Path(sys.argv[1]))))' "${PREVIOUS_SNAPSHOT}")"
+            if test "${count}" -gt 0; then budget=120; fi
+          fi
+          echo "timeout_minutes=${budget}" >> "$GITHUB_OUTPUT"
       - name: Build complete candidate without executing package content
         id: scan
+        timeout-minutes: ${{ fromJSON(steps.mode.outputs.timeout_minutes) }}
         working-directory: source
         env:
           GITHUB_TOKEN: ${{ github.token }}
