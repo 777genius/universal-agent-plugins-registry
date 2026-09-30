@@ -24,7 +24,8 @@ New validator policy keys are additive; historical keys remain unchanged.
 lock digest, the original audited spike lock digest, and the unchanged published
 tree digest. Candidate lock names were converted from temporary spike names to
 `agentplugins-runtime-<id>`; all dependency entries are identical. The reviewed
-launcher and MCP arguments are unchanged.
+launcher and MCP arguments in the historical smoke records were unchanged.
+The current candidate launcher includes the Windows bootstrap fix described below.
 
 Each product's `audit-result.json` records zero known npm advisories observed on
 2026-09-30. Audit results depend on the advisory database at that time and are
@@ -63,10 +64,18 @@ release. A follow-up removed temporary candidate wording from package READMEs
 and dated audit claims. HubSpot's manifest now sets `HUBSPOT_CLI_VERSION=8.15.0`
 and `HUBSPOT_MCP_STANDALONE=false`: inspection of its integrity-verified npm
 tarball showed that ambient standalone mode otherwise selected an `npx`
-subprocess with the stale `8.14.0` version. The unchanged launcher puts the
+subprocess with the stale `8.14.0` version. The launcher puts the
 locked local CLI first on PATH. These follow-up tree digests are bound in
 `remediation-candidates.json`; prior smoke records remain historical evidence,
 not exact-tree platform qualification for the follow-up.
+
+The first three-OS qualification (`36757638737`) exposed Windows
+`spawnSync("npm.cmd")` failing with `EINVAL`. The unpublished candidates now
+invoke `cmd.exe /d /s /c` with only fixed npm bootstrap tokens; plugin paths
+remain separate cwd/env values and user MCP arguments remain direct Node argv.
+The registry admits this exact reviewed launcher digest additively, preserving
+all historical published launcher bytes. Fresh exact-source platform evidence
+is required; the failed run is not qualification evidence for these new trees.
 
 These packages are community distributions without bridge recipes. The
 `upstream_bridge_promotion.py` path requires a watched, merged official upstream

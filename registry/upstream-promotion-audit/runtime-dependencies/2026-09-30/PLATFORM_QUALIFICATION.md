@@ -24,8 +24,16 @@ installed root version and unchanged lock/package bytes are checked afterward.
 The MCP boundary permits only `initialize`, `notifications/initialized`, and
 `tools/list`. Invalid/non-JSON stdout, errors, unexpected IDs, incomplete tool
 sets, output limits and timeouts fail the check. No `tools/call` is sent.
-EOF gets a bounded grace period; subsequent process-tree termination is
-explicitly recorded. HubSpot's manifest must bind `HUBSPOT_CLI_VERSION` to the
+After the complete tools/list response the harness explicitly terminates its
+owned process tree and records the requested signal before dispatch. It does
+not send EOF as a separate shutdown test: the upstream HubSpot CLI prints a
+human-readable lifecycle line on nested server exit. This qualification proves
+startup and tool discovery, not graceful EOF shutdown, and does not change that
+upstream behavior. Pre-proof stdout errors and unexpected deaths still fail.
+Cleanup errors are recorded, not thrown from event callbacks. An exact direct
+ChildProcess PID fallback cannot turn failed tree cleanup into success; pipe
+handles are released after a bounded five-second wait so failed cleanup cannot
+leave the evidence phase hanging. HubSpot's manifest must bind `HUBSPOT_CLI_VERSION` to the
 runtime version and disable standalone mode. This is a static check of the
 subprocess fallback configuration: tools/list does not execute `hs` commands.
 
@@ -34,8 +42,9 @@ The trusted npm CLI is pinned to `12.0.2` and registry tarball integrity
 Its published Node range includes `^24.15.0`. Installation uses setup-node's
 bundled npm with scripts disabled; the exact package-lock integrity is checked
 before executing the new CLI. A disposable PATH shim binds the launcher's npm
-to that CLI. Windows retains an npm.cmd shim and the existing launcher behavior;
-there is no shell workaround for a production `spawnSync("npm.cmd")` failure.
+to that CLI. Windows uses an npm.cmd shim with the candidate's reviewed
+`cmd.exe /d /s /c` fixed npm ci command; this harness does not rewrite the
+candidate launcher or interpolate user paths/arguments into that command.
 
 After cold materialization, `npm audit --omit=dev --json` must report zero
 known vulnerabilities; Firebase also uses `--omit=optional`. Then `npm audit

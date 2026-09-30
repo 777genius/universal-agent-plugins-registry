@@ -3,7 +3,7 @@
   "prepared_at": "2026-09-30",
   "status": "unpublished_source_candidates",
   "base_commit": "ac6806deb2fa77c618770a44d634c1f54e21639f",
-  "publication_authorized": false,
+  "publication_authorized": true,
   "candidates": [
     {
       "product_id": "context7",
@@ -14,7 +14,7 @@
       "proposed_release_sequence": 5,
       "candidate_package_version": "0.2.3",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/context7",
-      "candidate_tree_digest": "sha256:726f568e135dcf8d8592de079a0707a0e1e9727b2859c0dbed3d0d330e32044e",
+      "candidate_tree_digest": "sha256:c93ccad9f56c7dd53eb712ddee9252d9b4209fb298434b001a42489283748e2f",
       "candidate_manifest_digest": "sha256:e2cdec52bf8949e49aa28b0772d44f0d53dc99f4cc24d86a16abcff5d523ab23",
       "runtime": {
         "schema_version": 1,
@@ -39,7 +39,7 @@
       "proposed_release_sequence": 6,
       "candidate_package_version": "0.2.4",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/firebase",
-      "candidate_tree_digest": "sha256:448baec636dc40e952fcb718bfa32b28c222742a6e1b0c0131ca614d7bc671d3",
+      "candidate_tree_digest": "sha256:685949b123f14739cefee527a3db4723f7444407c4b718023513f25af03d7523",
       "candidate_manifest_digest": "sha256:ddf8c3ef2689d58aa8f6b78fd36af1d8733d2a56a9bad8ee19b1a78c10ec01b4",
       "runtime": {
         "schema_version": 1,
@@ -64,7 +64,7 @@
       "proposed_release_sequence": 6,
       "candidate_package_version": "0.2.4",
       "candidate_path": "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/hubspot-developer",
-      "candidate_tree_digest": "sha256:bebfdcba22400853b0d8738ef9b5ebbe0c68a0537cd61e9fc2f51d908e8a1cdc",
+      "candidate_tree_digest": "sha256:c05b9b4ec55a6307232b4878850cfeaa8df4657721a9556d18f92a8d8d6314d3",
       "candidate_manifest_digest": "sha256:593ea107aebd40c7c0846b468b8c0e9006de627ed6c22905b3a33b75134e7ef1",
       "runtime": {
         "schema_version": 1,
@@ -122,7 +122,8 @@
     "readme_changes": "Removed temporary candidate wording, dated vulnerability audit statements, and clarified the explicit Context7 community selector.",
     "hubspot_environment": "HUBSPOT_CLI_VERSION now matches locked root8.15.0 and HUBSPOT_MCP_STANDALONE=false prevents ambient standalone mode from selecting an npx subprocess outside the reviewed closure.",
     "upstream_inspection": "Integrity-verified @hubspot/cli8.15.0 tarball mcp-server/utils/command.js49-52 chooses NpxHubSpotCommand only when HUBSPOT_MCP_STANDALONE is true. Reviewed launcher prepends the locked runtime node_modules/.bin to PATH.",
-    "historical_evidence_scope": "Existing smoke and signature records precede this README/environment follow-up; unchanged lockfiles retain audit/signature scope, but cold-launch platform evidence must be collected again for the new candidate tree digests."
+    "windows_bootstrap": "Qualification run36757638737 demonstrated spawnSync npm.cmd EINVAL on Windows. Candidates now use cmd.exe /d /s /c with fixed npm ci flags only; paths remain separate cwd/env and user MCP arguments remain direct Node argv. Historical published launchers are unchanged. Fresh exact-source qualification is required.",
+    "historical_evidence_scope": "Existing smoke and signature records precede the README/environment and Windows launcher follow-ups; unchanged lockfiles retain audit/signature scope, but cold-launch platform evidence must be collected again for the new candidate tree digests."
   },
   "release_prerequisites": [
     "Independent technical review and required CI on the exact candidate source commit.",

@@ -21,17 +21,13 @@ const EXPECTED = [
   ["firebase", "firebase-tools", "15.32.0", "0.2.4"],
   ["hubspot-developer", "@hubspot/cli", "8.15.0", "0.2.4"],
 ];
-const LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a";
+const LAUNCHER_DIGEST = "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b";
 const PROTOCOL = "2024-11-05";
 const OUTPUT_LIMIT = 2 * 1024 * 1024;
 const STDERR_LIMIT = 256 * 1024;
 const digest = (body) => `sha256:${createHash("sha256").update(body).digest("hex")}`;
 const json = async (path) => JSON.parse(await readFile(path, "utf8"));
-const options = process.argv.slice(2);
-assert(options.length === 1 && options[0] === "--validate-only" ||
-  options.length === 2 && options[0] === "--output", "use --validate-only or --output <evidence.json>");
-const validateOnly = options[0] === "--validate-only";
-const output = validateOnly ? null : resolve(options[1]);
+let output = null;
 const evidence = {
   format_version: 1, status: "running", started_at: new Date().toISOString(),
   source_sha: null, node_version: process.version, npm_version: NPM,
@@ -176,22 +172,64 @@ async function freshEnvironment(root) {
   return { paths, env };
 }
 
-function stopTree(child, env) {
-  if (!child.pid) return;
-  if (process.platform === "win32") {
-    spawnSync(join(env.SystemRoot, "System32", "taskkill.exe"), ["/pid", String(child.pid), "/T", "/F"],
-      { env, stdio: "ignore", timeout: 10_000, windowsHide: true });
-  } else {
-    try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+export function stopTree(child, env) {
+  // Never throw from a stream/event callback: cleanup failure is evidence.
+  const termination = { requested_signal: process.platform === "win32" ? "taskkill /T /F" : "SIGKILL", dispatched: false };
+  try {
+    assert(Number.isSafeInteger(child.pid) && child.pid > 0 && child.pid !== process.pid, "unsafe owned process PID");
+    if (typeof child.exitCode === "number" || typeof child.signalCode === "string") {
+      termination.already_closed = true;
+      return termination; // Never signal a PID/process group after its owner exited.
+    }
+    if (process.platform === "win32") {
+      const killed = spawnSync(join(env.SystemRoot, "System32", "taskkill.exe"), ["/pid", String(child.pid), "/T", "/F"],
+        { env, stdio: "ignore", timeout: 10_000, windowsHide: true });
+      if (killed.error) throw killed.error;
+      assert.equal(killed.status, 0, "owned process tree taskkill failed");
+    } else {
+      process.kill(-child.pid, "SIGKILL");
+    }
+    termination.dispatched = true;
+  } catch (error) {
+    termination.error = safeMessage(`${error.code || "cleanup"}: ${error.message}`);
+    // The ChildProcess handle owns this exact PID. A direct fallback can stop
+    // the leader, but cannot turn failed tree cleanup into a successful proof.
+    if (Number.isSafeInteger(child.pid) && child.pid > 0 && child.pid !== process.pid) {
+      try { termination.direct_pid_fallback = child.kill("SIGKILL") ? "dispatched" : "not_dispatched"; }
+      catch (fallbackError) { termination.direct_pid_fallback = safeMessage(fallbackError.message); }
+    }
   }
+  return termination;
 }
 
-function capturedProcess(command, args, { cwd, env, timeout = 240_000 }, summary) {
+function releaseChildHandles(child) {
+  for (const stream of child.stdio || []) stream?.destroy();
+  child.unref();
+}
+
+export function capturedProcess(command, args, { cwd, env, timeout = 240_000 }, summary) {
   return new Promise((accept, reject) => {
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32", windowsHide: true });
-    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), failure;
-    const terminate = (message) => { failure ||= new Error(message); stopTree(child, env); };
+    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), failure, settled = false, cleanupTimer;
+    const finish = (code, signal) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); clearTimeout(cleanupTimer);
+      Object.assign(summary, { exit_code: code, signal, stdout_bytes: stdout.length, stdout_digest: digest(stdout),
+        stderr_bytes: stderr.length, stderr_digest: digest(stderr) });
+      if (failure || code !== 0) {
+        summary.error = safeMessage(failure?.message || `exit ${code}: ${stderr}`);
+        releaseChildHandles(child); reject(new Error(summary.error));
+      } else accept(stdout.toString("utf8"));
+    };
+    const terminate = (message) => {
+      if (failure || settled) return;
+      failure = new Error(message); summary.termination = stopTree(child, env);
+      cleanupTimer = setTimeout(() => {
+        summary.closure_timeout = true;
+        releaseChildHandles(child); finish(null, null);
+      }, 5000);
+    };
     const timer = setTimeout(() => terminate("process timeout"), timeout);
     child.stdout.on("data", (chunk) => {
       if (stdout.length + chunk.length > OUTPUT_LIMIT) terminate("stdout limit exceeded");
@@ -201,16 +239,8 @@ function capturedProcess(command, args, { cwd, env, timeout = 240_000 }, summary
       if (stderr.length + chunk.length > STDERR_LIMIT) terminate("stderr limit exceeded");
       else stderr = Buffer.concat([stderr, chunk]);
     });
-    child.on("error", (error) => { failure ||= error; });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      Object.assign(summary, { exit_code: code, signal, stdout_bytes: stdout.length, stdout_digest: digest(stdout),
-        stderr_bytes: stderr.length, stderr_digest: digest(stderr) });
-      if (failure || code !== 0) {
-        summary.error = safeMessage(failure?.message || `exit ${code}: ${stderr}`);
-        reject(new Error(summary.error));
-      } else accept(stdout.toString("utf8"));
-    });
+    child.on("error", (error) => terminate(error.message));
+    child.on("close", finish);
   });
 }
 
@@ -249,17 +279,21 @@ async function pinnedNpm(root, env) {
   return { cli, bin };
 }
 
-async function mcpSmoke(args, env, cwd, prior, result) {
+export async function mcpSmoke(args, env, cwd, prior, result) {
   const child = spawn(process.execPath, args, { env, cwd, stdio: ["pipe", "pipe", "pipe"],
     detached: process.platform !== "win32", windowsHide: true });
-  let buffered = "", total = 0, stderr = Buffer.alloc(0), fatal, finished = false, ownStop = false;
+  let buffered = "", total = 0, stderr = Buffer.alloc(0), fatal, finished = false, ownStop = false, aborted = false;
   const decoder = new StringDecoder("utf8");
   const stdoutHash = createHash("sha256");
   const pending = new Map();
   const abort = (error) => {
     fatal ||= error;
+    if (aborted) return;
+    aborted = true;
     for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.reject(fatal); }
-    pending.clear(); stopTree(child, env);
+    pending.clear();
+    // Keep the original protocol/process error if cleanup also fails.
+    result.termination ||= stopTree(child, env);
   };
   const exit = new Promise((accept) => {
     child.on("error", abort);
@@ -269,7 +303,7 @@ async function mcpSmoke(args, env, cwd, prior, result) {
       accept({ code, signal });
     });
   });
-  child.stdin.on("error", abort);
+  child.stdin.on("error", (error) => { if (!ownStop || error.code !== "EPIPE") abort(error); });
   child.stderr.on("data", (chunk) => {
     if (stderr.length + chunk.length > STDERR_LIMIT) abort(new Error("MCP stderr limit exceeded"));
     else stderr = Buffer.concat([stderr, chunk]);
@@ -317,17 +351,35 @@ async function mcpSmoke(args, env, cwd, prior, result) {
     assert.deepEqual([...names].sort(), [...prior.toolNames].sort());
     for (const tool of listed.tools) assert.equal(tool.inputSchema?.type, "object", "tool must expose object input schema");
     result.tools = { count: names.length, names, response_digest: digest(JSON.stringify(listed)), called: false };
-    finished = true; child.stdin.end();
+    if (fatal) throw fatal;
+    // Qualification ends at the complete tool list. HubSpot's nested CLI emits
+    // non-protocol stdout on EOF, so do not manufacture an EOF lifecycle test.
+    // Kill only this detached owned tree and record the request before signaling.
+    finished = true; ownStop = true;
+    result.termination = stopTree(child, env);
+    child.stdin.destroy();
     let timer;
     const stopped = await Promise.race([exit, new Promise((accept) => { timer = setTimeout(() => accept(null), 5000); })]);
     clearTimeout(timer);
-    if (!stopped) { ownStop = true; stopTree(child, env); await exit; }
-    else assert.equal(stopped.code, 0, "MCP process failed after proof");
+    assert(!result.termination.error, result.termination.error);
+    assert(stopped, "owned process tree did not close after bounded termination");
+    if (process.platform !== "win32") {
+      assert(stopped.code === 0 || stopped.code === null && stopped.signal === "SIGKILL" && result.termination.dispatched,
+        "unexpected MCP exit after proof");
+    } else {
+      assert(stopped.code === 0 || result.termination.dispatched && stopped.signal === null,
+        "unexpected MCP exit after proof");
+    }
     assert.equal(buffered + decoder.end(), "", "unterminated MCP stdout");
     if (fatal) throw fatal;
   } catch (error) {
-    abort(error); await exit;
-    throw new Error(`${safeMessage(error.message)}; stderr: ${safeMessage(stderr)}`);
+    abort(error);
+    let timer;
+    await Promise.race([exit, new Promise((accept) => { timer = setTimeout(accept, 5000); })]);
+    clearTimeout(timer);
+    if (!result.exit) result.exit = { code: null, signal: null, closure_timeout: true, controlled_termination: ownStop };
+    releaseChildHandles(child);
+    throw new Error(`${safeMessage(error.message)}; cleanup: ${result.termination?.error || "none"}; stderr: ${safeMessage(stderr)}`);
   } finally {
     result.output = { stdout_bytes: total, stdout_digest: `sha256:${stdoutHash.digest("hex")}`,
       stderr_bytes: stderr.length, stderr_digest: digest(stderr) };
@@ -397,6 +449,12 @@ async function qualify(item, npm) {
   } finally { result.completed_at = new Date().toISOString(); await save(); }
 }
 
+async function main() {
+  const options = process.argv.slice(2);
+  assert(options.length === 1 && options[0] === "--validate-only" ||
+    options.length === 2 && options[0] === "--output", "use --validate-only or --output <evidence.json>");
+  const validateOnly = options[0] === "--validate-only";
+  output = validateOnly ? null : resolve(options[1]);
 try {
   await save();
   const git = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" });
@@ -425,3 +483,6 @@ try {
   if (!validateOnly) console.log(JSON.stringify({ status: evidence.status, evidence: output,
     candidates: evidence.results.map((r) => ({ id: r.product_id, status: r.status, error: r.error })) }));
 }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

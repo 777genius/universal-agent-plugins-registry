@@ -87,6 +87,11 @@ LOCKED_NPM_RUNTIME_PATH = "io.github.777genius.agentplugins/runtime"
 LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION = "0.1.13"
 LOCKED_NPM_LAUNCHER_ARGUMENT = "${PLUGIN_ROOT}/" + LOCKED_NPM_RUNTIME_PATH + "/launcher.mjs"
 LOCKED_NPM_LAUNCHER_DIGEST = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
+LOCKED_NPM_REVIEWED_LAUNCHER_DIGESTS = frozenset({
+    LOCKED_NPM_LAUNCHER_DIGEST,
+    # Windows cmd.exe bootstrap; preserve the original published implementation.
+    "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b",
+})
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
     ("@hubspot/cli", "8.15.0"): frozenset({
         (
@@ -1287,7 +1292,7 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         all(path.is_file() and not path.is_symlink() for path in (launcher, package_path, lock_path, config_path)),
         f"{runtime_root}: launcher, package.json, package-lock.json, and runtime.json are required",
     )
-    require(digest_bytes(launcher.read_bytes()) == LOCKED_NPM_LAUNCHER_DIGEST, f"{launcher}: launcher is not the reviewed implementation")
+    require(digest_bytes(launcher.read_bytes()) in LOCKED_NPM_REVIEWED_LAUNCHER_DIGESTS, f"{launcher}: launcher is not the reviewed implementation")
     package = read_object(package_path)
     config = read_object(config_path)
     lock_body = lock_path.read_bytes()
