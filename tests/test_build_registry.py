@@ -1085,9 +1085,9 @@ class DirectoryDomainTests(unittest.TestCase):
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
-                expected_sequences = [1, 2, 3, 4, 5]
+                expected_sequences = [1, 2, 3, 4, 5, 6]
             elif distribution["id"] == "777genius/context7":
-                expected_sequences = [1, 2, 3, 4]
+                expected_sequences = [1, 2, 3, 4, 5]
             elif distribution["id"] in {
                 "777genius/cloudflare-docs-bridge", "777genius/github-bridge",
             }:
@@ -1219,13 +1219,13 @@ class DirectoryDomainTests(unittest.TestCase):
         all_clients = registry.resolve_directory(source, "context7", context7_clients)
         self.assertEqual((all_clients["distribution_id"], all_clients["release_sequence"]), ("upstash/context7", 1))
         bridge = registry.resolve_directory(source, "777genius/context7", context7_clients)
-        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 4))
+        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 5))
 
         context7 = next(
             product for product in registry.directory_preview(source)["products"]
             if product["id"] == "context7"
         )
-        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 4)
+        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 5)
         self.assertEqual(
             [item["client"] for item in local["eligible_targets"]],
             ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"],
@@ -1393,18 +1393,18 @@ class DirectoryDomainTests(unittest.TestCase):
                 f"historical runtime policy must remain available for {historical}",
             )
 
-    def test_firebase_locked_runtime_is_active_at_sequence_five(self) -> None:
+    def test_firebase_locked_runtime_is_active_at_sequence_six(self) -> None:
         package = registry.ROOT / "plugins" / "firebase"
         registry.validate_locked_npm_runtime(package)
         runtime_root = package / registry.LOCKED_NPM_RUNTIME_PATH
         runtime = json.loads((runtime_root / "runtime.json").read_text())
         package_json = json.loads((runtime_root / "package.json").read_text())
         package_lock = json.loads((runtime_root / "package-lock.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.29.0"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.32.0"))
         self.assertNotIn("stream-json", package_json["overrides"])
         self.assertEqual(
-            package_lock["packages"]["node_modules/firebase-tools/node_modules/stream-json"]["version"],
-            "1.9.1",
+            package_lock["packages"]["node_modules/stream-json"]["version"],
+            "3.7.0",
         )
         source = self.source()
         distribution = next(
@@ -1414,19 +1414,19 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(distribution["status"], "active")
         self.assertEqual(
             [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
-            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"), (5, "active")],
+            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"), (5, "active"), (6, "active")],
         )
         resolution = registry.resolve_directory(source, "firebase", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/firebase", 5),
+            ("777genius/firebase", 6),
         )
 
-    def test_hubspot_locked_runtime_is_active_at_sequence_five(self) -> None:
+    def test_hubspot_locked_runtime_is_active_at_sequence_six(self) -> None:
         package = registry.ROOT / "plugins" / "hubspot-developer"
         registry.validate_locked_npm_runtime(package)
         runtime = json.loads((package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.14.0"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.15.0"))
         self.assertFalse(runtime["omit_optional"])
         source = self.source()
         distribution = next(
@@ -1443,12 +1443,13 @@ class DirectoryDomainTests(unittest.TestCase):
                 (3, "superseded", "0.1.26"),
                 (4, "superseded", "0.1.26"),
                 (5, "active", "0.1.26"),
+                (6, "active", "0.1.26"),
             ],
         )
         resolution = registry.resolve_directory(source, "hubspot-developer", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/hubspot-developer", 5),
+            ("777genius/hubspot-developer", 6),
         )
 
     def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:

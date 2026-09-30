@@ -165,22 +165,32 @@ class LockedNpmLauncherTests(unittest.TestCase):
                 self.assertEqual(len(events.read_text().splitlines()), 1, "failed install must not start MCP")
                 self.assertEqual(list((data / "npm-runtime").iterdir()), [])
 
-    def test_reviewed_candidates_and_historical_packages_validate_but_modified_launcher_fails(self) -> None:
+    def test_reviewed_candidates_active_and_historical_packages_validate_but_modified_launcher_fails(self) -> None:
         # Validation must admit both exact reviewed implementations while failing
         # closed on an otherwise valid candidate with different launcher bytes.
         candidate_bodies = set()
+        current_digest = "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b"
         historical_digest = "sha256:043042ce8ec048010a2077c0d241ee43022d5c187bec062040ea186073ae0d2a"
         for plugin in PLUGIN_IDS:
             candidate = CANDIDATES / plugin
-            published = ROOT / "plugins" / plugin
+            active = ROOT / "plugins" / plugin
             with self.subTest(plugin=plugin):
                 registry.validate_locked_npm_runtime(candidate)
-                registry.validate_locked_npm_runtime(published)
+                registry.validate_locked_npm_runtime(active)
                 body = (candidate / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes()
                 candidate_bodies.add(body)
                 self.assertNotEqual(registry.digest_bytes(body), historical_digest)
+                self.assertEqual(registry.digest_bytes(body), current_digest)
+                self.assertEqual(
+                    (active / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes(),
+                    body,
+                )
+        for plugin in ("chrome-devtools", "playwright"):
+            historical = ROOT / "plugins" / plugin
+            with self.subTest(historical_plugin=plugin):
+                registry.validate_locked_npm_runtime(historical)
                 self.assertEqual(registry.digest_bytes(
-                    (published / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes(),
+                    (historical / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes(),
                 ), historical_digest)
         self.assertEqual(len(candidate_bodies), 1, "all candidates use the reviewed invocation")
         with tempfile.TemporaryDirectory() as temporary:

@@ -68,17 +68,25 @@ binding is required.
 
 ## Dependency pins
 
-Verified against registry releases on 2026-09-06. All listed npm pins are
-stable releases:
+Context7 community, Firebase, and HubSpot Developer pins were refreshed and
+qualified on 2026-09-30. The other pins retain their 2026-09-06 verification
+record. All listed npm pins are stable releases:
 
 | Runtime dependency | Pin |
 | --- | --- |
 | `chrome-devtools-mcp` | `1.8.0` |
 | `@playwright/mcp` | `0.0.80` |
-| `@upstash/context7-mcp` | `4.0.5` |
-| `firebase-tools` | `15.29.0` |
-| `@hubspot/cli` | `8.14.0` |
+| `@upstash/context7-mcp` | `4.1.1` |
+| `firebase-tools` | `15.32.0` |
+| `@hubspot/cli` | `8.15.0` |
 | `mcp/dockerhub` | OCI digest `sha256:76454af…d4248` |
+
+The three updated closures passed cold bootstrap, MCP `initialize` and
+`tools/list`, npm audits/signatures, and locked runtime materialization on Linux,
+macOS, and Windows. This does not prove client activation or authenticated
+provider operations; see the dated [verification record](VERIFICATION.md).
+The Context7 pin is for `777genius/context7`; the `upstash/context7` default
+distribution is unchanged.
 
 The code-intelligence skills document current optional versions of Semble
 `0.5.4`, CodeGraphContext `0.5.6`, and Serena `1.6.1`.
