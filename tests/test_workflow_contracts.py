@@ -1508,7 +1508,11 @@ sys.modules['catalog_process_isolation']=module
         publisher_preflight = workflow["jobs"]["publisher-preflight"]
         self.assertEqual(publisher_preflight["environment"], "discovery-publication")
         self.assertEqual(publisher_preflight["permissions"], {"contents": "read"})
-        self.assertEqual(scan["needs"], "publisher-preflight")
+        acquire = workflow["jobs"]["acquire"]
+        self.assertEqual(acquire["needs"], "publisher-preflight")
+        self.assertEqual(scan["needs"], "acquire")
+        self.assertEqual(acquire["permissions"], {"contents": "read", "actions": "read"})
+        self.assertEqual(scan["permissions"], {"contents": "read", "actions": "read"})
         preflight_body = yaml.safe_dump(publisher_preflight)
         self.assertIn("DISCOVERY_PUBLISHER_APP_PRIVATE_KEY", preflight_body)
         self.assertIn("permission-contents: write", preflight_body)
@@ -1569,9 +1573,12 @@ sys.modules['catalog_process_isolation']=module
             and step.get("uses", "").startswith(("actions/upload-artifact", "actions/download-artifact"))
         ]
         self.assertEqual(artifact_names, [
-            "discovery-candidate-${{ github.run_id }}",
-            "discovery-candidate-${{ github.run_id }}",
+            "discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}",
+            "discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}",
         ])
+        candidate_download = next(step for step in signer["steps"]
+                                  if step.get("uses", "").startswith("actions/download-artifact"))
+        self.assertEqual(candidate_download["with"]["artifact-ids"], "${{ needs.scan.outputs.artifact_id }}")
         incomplete = workflow["jobs"]["incomplete-scan"]
         self.assertIn("needs.scan.outputs.complete != 'true'", incomplete["if"])
         self.assertIn("exit 1", commands(incomplete))
@@ -1599,6 +1606,71 @@ sys.modules['catalog_process_isolation']=module
                 body = commands(workflow["jobs"][job_name])
                 self.assertIn("cryptography==46.0.3", pinned_requirements(body))
                 self.assertIn("jsonschema==4.26.0", pinned_requirements(body))
+
+    def test_discovery_checkpoints_survive_step_failure_without_reaching_signer(self) -> None:
+        workflow = load(DISCOVERY_INDEX)
+        for phase, filename in (("acquire", "acquisition.json"), ("scan", "validation.json")):
+            with self.subTest(phase=phase):
+                job = workflow["jobs"][phase]
+                self.assertEqual(job["environment"], "discovery-read")
+                self.assertNotIn("secrets.", yaml.safe_dump(job))
+                build = next(step for step in job["steps"] if step.get("id") == "scan")
+                upload = next(step for step in job["steps"]
+                              if step.get("with", {}).get("path") == "checkpoint/" + filename)
+                self.assertEqual(upload["if"], "always()")
+                self.assertEqual(upload["with"]["retention-days"], "7")
+                self.assertLess(job["steps"].index(build), job["steps"].index(upload))
+                self.assertIn("--checkpoint-dir ../checkpoint", build["run"])
+        acquire = workflow["jobs"]["acquire"]
+        validation = workflow["jobs"]["scan"]
+        self.assertIn("--phase acquire", commands(acquire))
+        self.assertIn("--phase validate", commands(validation))
+        # The successful acquisition artifact is pinned by its immutable ID.
+        # Restored validation artifacts contain only validation.json, not a
+        # replacement acquisition or a candidate which could bypass the builder.
+        download = next(step for step in validation["steps"]
+                        if step.get("with", {}).get("artifact-ids") == "${{ needs.acquire.outputs.artifact_id }}")
+        self.assertEqual(download["with"]["path"], "checkpoint")
+        candidate = next(step for step in validation["steps"] if step.get("id") == "candidate")
+        self.assertNotIn("if", candidate)
+        self.assertEqual(workflow["jobs"]["sign-and-publish"]["if"],
+                         "needs.scan.outputs.complete == 'true' && github.ref == 'refs/heads/main'")
+
+    def test_discovery_resume_selects_only_latest_unexpired_earlier_same_run_attempt(self) -> None:
+        workflow = load(DISCOVERY_INDEX)
+        for phase, kind in (("acquire", "acquisition"), ("scan", "validation")):
+            step = next(step for step in workflow["jobs"][phase]["steps"] if step.get("id") == "resume")
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                # Exercise the actual shell selector with an inert gh response,
+                # including paginated metadata and tempting wrong-scope artifacts.
+                fake_gh = root / "gh"
+                fake_gh.write_text('#!/bin/sh\nexec /bin/cat "$TEST_ARTIFACT_RESPONSE"\n')
+                fake_gh.chmod(0o755)
+                response = root / "response.json"
+                output = root / "output"
+                artifacts = [
+                    {"id": 10, "name": f"discovery-{kind}-42-1", "expired": False},
+                    {"id": 20, "name": f"discovery-{kind}-42-2", "expired": False},
+                    {"id": 30, "name": f"discovery-{kind}-42-3", "expired": True},
+                    {"id": 40, "name": f"discovery-{kind}-42-4", "expired": False},
+                    {"id": 50, "name": f"discovery-{kind}-99-2", "expired": False},
+                    {"id": 60, "name": "discovery-candidate-42-2", "expired": False},
+                ]
+                response.write_text(json.dumps([{"artifacts": artifacts[:2]}, {"artifacts": artifacts[2:]}]))
+                environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                               "RUN_ID": "42", "ATTEMPT": "4", "GH_REPO": "owner/repo",
+                               "GITHUB_OUTPUT": str(output), "TEST_ARTIFACT_RESPONSE": str(response)}
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), "artifact_id=20\n")
+                output.unlink()
+                environment["ATTEMPT"] = "1"
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), "artifact_id=\n")
 
     def test_directory_materialization_preserves_the_signed_auxiliary_feeds(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)

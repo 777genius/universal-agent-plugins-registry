@@ -67,21 +67,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  scan:
-    name: Scan inert public packages
+  acquire:
+    name: Acquire and retain discovery paths
     needs: publisher-preflight
     runs-on: ubuntu-latest
-    # Full acquisition has already exceeded 167 minutes before validation.
-    # Leave 30 minutes beyond the build budget for setup and artifact upload.
+    # Acquisition and validation have independent budgets. A step timeout
+    # leaves room for always-uploaded checkpoints before the job limit.
     timeout-minutes: 330
     environment: discovery-read
     permissions:
       contents: read
+      actions: read
     outputs:
-      complete: ${{ steps.scan.outputs.complete }}
-      candidate_digest: ${{ steps.scan.outputs.candidate_digest }}
       ledger_head: ${{ steps.ledger.outputs.head }}
+      previous_snapshot: ${{ steps.ledger.outputs.path }}
       mode: ${{ steps.mode.outputs.value }}
+      timeout_minutes: ${{ steps.mode.outputs.timeout_minutes }}
+      artifact_id: ${{ steps.checkpoint.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,7 +146,22 @@ jobs:
             if test "${count}" -gt 0; then budget=120; fi
           fi
           echo "timeout_minutes=${budget}" >> "$GITHUB_OUTPUT"
-      - name: Build complete candidate without executing package content
+      - name: Select prior same-run acquisition checkpoint
+        id: resume
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          id="$(gh api --paginate --slurp "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" | jq -r --arg prefix "discovery-acquisition-${RUN_ID}-" --argjson attempt "${ATTEMPT}" '[.[].artifacts[] | select(.expired == false) | select(.name | startswith($prefix)) | . + {attempt: (.name | ltrimstr($prefix) | tonumber)} | select(.attempt < $attempt)] | sort_by(.attempt) | last | .id // empty')"
+          echo "artifact_id=${id}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.resume.outputs.artifact_id != ''
+        with:
+          artifact-ids: ${{ steps.resume.outputs.artifact_id }}
+          path: checkpoint
+      - name: Acquire paths without executing package content
         id: scan
         timeout-minutes: ${{ fromJSON(steps.mode.outputs.timeout_minutes) }}
         working-directory: source
@@ -152,9 +169,94 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           MODE: ${{ steps.mode.outputs.value }}
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+        run: |
+          args=(--mode "${MODE}" --phase acquire --checkpoint-dir ../checkpoint --output ../acquisition.json --diagnostics-output ../acquisition-diagnostics.json)
+          if test -n "${PREVIOUS_SNAPSHOT}"; then
+            args+=(--previous-snapshot "${PREVIOUS_SNAPSHOT}")
+          fi
+          python3 scripts/build_discovery_index.py "${args[@]}"
+          test -f ../acquisition.json
+          test "$(wc -c < ../acquisition.json)" -le 16777216
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint
+        if: always()
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  scan:
+    name: Validate retained inert public packages
+    needs: acquire
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    environment: discovery-read
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      complete: ${{ steps.scan.outputs.complete }}
+      candidate_digest: ${{ steps.scan.outputs.candidate_digest }}
+      artifact_id: ${{ steps.candidate.outputs.artifact-id }}
+      ledger_head: ${{ needs.acquire.outputs.ledger_head }}
+      mode: ${{ needs.acquire.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.acquire.outputs.ledger_head }}
+          path: ledger
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned validation dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Reauthenticate exact acquisition last-known-good snapshot
+        working-directory: source
+        run: |
+          if test -f "../ledger/${FEED_PATH}/latest.json"; then
+            python3 scripts/verify_discovery_index.py \
+              --feed "../ledger/${FEED_PATH}" \
+              --trusted-keys registry/discovery/trusted-keys.json
+          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.acquire.outputs.artifact_id }}
+          path: checkpoint
+      - name: Select prior same-run validation checkpoint
+        id: resume
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          id="$(gh api --paginate --slurp "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" | jq -r --arg prefix "discovery-validation-${RUN_ID}-" --argjson attempt "${ATTEMPT}" '[.[].artifacts[] | select(.expired == false) | select(.name | startswith($prefix)) | . + {attempt: (.name | ltrimstr($prefix) | tonumber)} | select(.attempt < $attempt)] | sort_by(.attempt) | last | .id // empty')"
+          echo "artifact_id=${id}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.resume.outputs.artifact_id != ''
+        with:
+          artifact-ids: ${{ steps.resume.outputs.artifact_id }}
+          path: checkpoint
+      - name: Build complete candidate from retained paths
+        id: scan
+        timeout-minutes: ${{ fromJSON(needs.acquire.outputs.timeout_minutes) }}
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           DISCOVERY_REPOSITORY_WORKERS: "8"
         run: |
-          args=(--mode "${MODE}" --repository-workers "${DISCOVERY_REPOSITORY_WORKERS}" --output ../candidate.json --diagnostics-output ../diagnostics.json)
+          args=(--mode "${MODE}" --phase validate --checkpoint-dir ../checkpoint --repository-workers "${DISCOVERY_REPOSITORY_WORKERS}" --output ../candidate.json --diagnostics-output ../diagnostics.json)
           if test -n "${PREVIOUS_SNAPSHOT}"; then
             args+=(--previous-snapshot "${PREVIOUS_SNAPSHOT}")
           fi
@@ -176,8 +278,16 @@ jobs:
           echo "complete=${complete}" >> "$GITHUB_OUTPUT"
           echo "candidate_digest=sha256:$(sha256sum ../candidate.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
         with:
-          name: discovery-candidate-${{ github.run_id }}
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: candidate
+        with:
+          name: discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             candidate.json
             diagnostics.json
@@ -212,7 +322,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: discovery-candidate-${{ github.run_id }}
+          artifact-ids: ${{ needs.scan.outputs.artifact_id }}
           path: candidate
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

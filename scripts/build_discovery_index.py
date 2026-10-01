@@ -29,6 +29,7 @@ import jsonschema
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER, PinnedRepository, git, portable_path
 from scripts.build_registry import directory_tree_digest, digest_bytes, read_json
+from scripts.discovery_checkpoint import DiscoveryCheckpoint, atomic_json
 from scripts.directory_publication import (
     PublicationError,
     canonical_json,
@@ -299,13 +300,29 @@ def search_code_page(api: GitHubAPI, query: str, page: int) -> dict[str, Any]:
 
 
 def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
-                          progress: ProgressReporter | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                          progress: ProgressReporter | None = None,
+                          checkpoint: DiscoveryCheckpoint | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     report = progress or (lambda *args, **kwargs: None)
     queue = [(0, maximum_size)]
     partitions: list[dict[str, Any]] = []
     items: dict[tuple[str, str], dict[str, Any]] = {}
+    stage = None
+    if checkpoint:
+        stage = checkpoint.payload["stages"].setdefault(base_query, {
+            "queue": [[0, maximum_size]], "partitions": [], "items": [], "diagnostics": [],
+        })
+        queue = [tuple(interval) for interval in stage["queue"]]
+        partitions = list(stage["partitions"])
+        items = {(item["repository"].casefold(), item["manifest_path"].casefold()): item for item in stage["items"]}
+
+    def save_progress():
+        if stage is not None:
+            stage.update({"queue": [list(interval) for interval in queue], "partitions": partitions,
+                          "items": [items[key] for key in sorted(items)]})
+            checkpoint.save_acquisition()
+
     while queue:
-        minimum, maximum = queue.pop(0)
+        minimum, maximum = queue[0]
         report("partition_start", size_min=minimum, size_max=maximum, pending=len(queue),
                completed=len(partitions))
         query = partition_query(base_query, minimum, maximum)
@@ -318,7 +335,8 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
         if total > SEARCH_PARTITION_MAX or len(first_items) >= 100:
             require(minimum < maximum, f"exact-size search partition {query!r} still exceeds {SEARCH_PARTITION_MAX} results")
             midpoint = (minimum + maximum) // 2
-            queue[0:0] = [(minimum, midpoint), (midpoint + 1, maximum)]
+            queue[0:1] = [(minimum, midpoint), (midpoint + 1, maximum)]
+            save_progress()
             report("partition_split", size_min=minimum, size_max=maximum, total_count=total,
                    pending=len(queue))
             continue
@@ -375,10 +393,12 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
         for item in stable_items:
             key = (item["repository"].casefold(), item["manifest_path"].casefold())
             items[key] = item
+        queue.pop(0)
+        save_progress()
         report("partition_end", size_min=minimum, size_max=maximum, total_count=stable_total,
                completed=len(partitions), pending=len(queue), candidates=len(items))
     partitions.sort(key=lambda item: (item["size_min"], item["size_max"]))
-    return [items[key] for key in sorted(items)], partitions
+    return [items[key] for key in sorted(items)], list(partitions)
 
 
 def repository_states(api: GitHubAPI, repositories: list[str],
@@ -735,24 +755,9 @@ def scan_repository(repository_name: str, state: dict[str, Any],
     return records, diagnostics
 
 
-def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, generated_at: str,
-                    previous_records: list[dict[str, Any]], mirror_root: Path | None = None,
-                    repository_workers: int = DEFAULT_REPOSITORY_WORKERS,
-                    progress: ProgressReporter | None = None,
-                    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    parse_timestamp(generated_at, "generated_at")
-    require(type(repository_workers) is int and 1 <= repository_workers <= MAX_REPOSITORY_WORKERS,
-            f"repository workers must be between 1 and {MAX_REPOSITORY_WORKERS}")
-    validate_previous_records(previous_records)
-    # A refresh is intentionally metadata-only once records exist. On a fresh
-    # ledger (or after an authenticated empty snapshot), however, there is
-    # nothing to refresh; continue as a discover scan so the signed index does
-    # not remain permanently empty while accurately recording the scan mode.
+def acquire_candidate(*, api, config, mode, previous_records, progress=None, checkpoint=None):
     effective_mode = "discover" if mode == "refresh" and not previous_records else mode
     report = progress or (lambda *args, **kwargs: None)
-    report("phase_start", phase="candidate", mode=effective_mode, requested_mode=mode,
-           previous_records=len(previous_records))
-    previous = {record_identity(item["repository"], item["package_path"]): item for item in previous_records}
     partitions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []
     if effective_mode == "refresh":
@@ -761,7 +766,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             paths.setdefault(record["repository"], set()).add(record["package_path"])
     else:
         report("phase_start", phase="global_search")
-        items, partitions = discover_search_items(api, config["query"], config["maximum_file_size"], progress)
+        items, partitions = discover_search_items(api, config["query"], config["maximum_file_size"], progress, checkpoint)
         report("phase_end", phase="global_search", candidates=len(items), partitions=len(partitions))
         by_identity = {(item["repository"].casefold(), item["manifest_path"].casefold()): item for item in items}
         for seed in config["seeds"]:
@@ -769,7 +774,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             for prefix in seed["paths"] or [""]:
                 scoped_query = seed_query + (" path:" + prefix if prefix else "")
                 report("phase_start", phase="seed_search", repository=seed["repository"])
-                seed_items, seed_partitions = discover_search_items(api, scoped_query, config["maximum_file_size"], progress)
+                seed_items, seed_partitions = discover_search_items(api, scoped_query, config["maximum_file_size"], progress, checkpoint)
                 report("phase_end", phase="seed_search", repository=seed["repository"],
                        candidates=len(seed_items), partitions=len(seed_partitions))
                 partitions.extend(seed_partitions)
@@ -778,8 +783,41 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
         items = [by_identity[key] for key in sorted(by_identity)]
         partitions.sort(key=lambda item: (item["query"], item["size_min"], item["size_max"]))
         paths, diagnostics = candidate_paths(items)
+    if checkpoint:
+        for stage in checkpoint.payload["stages"].values():
+            diagnostics.extend(stage["diagnostics"])
+        checkpoint.payload["refresh_paths"] = {repository: sorted(package_paths) for repository, package_paths in paths.items()} if effective_mode == "refresh" else {}
+        checkpoint.payload["complete"] = True
+        checkpoint.save_acquisition()
+    return paths, partitions, diagnostics
+
+
+def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, generated_at: str,
+                    previous_records: list[dict[str, Any]], mirror_root: Path | None = None,
+                    repository_workers: int = DEFAULT_REPOSITORY_WORKERS,
+                    progress: ProgressReporter | None = None,
+                    checkpoint: DiscoveryCheckpoint | None = None, validation_only: bool = False,
+                    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    parse_timestamp(generated_at, "generated_at")
+    require(type(repository_workers) is int and 1 <= repository_workers <= MAX_REPOSITORY_WORKERS,
+            f"repository workers must be between 1 and {MAX_REPOSITORY_WORKERS}")
+    validate_previous_records(previous_records)
+    effective_mode = "discover" if mode == "refresh" and not previous_records else mode
+    report = progress or (lambda *args, **kwargs: None)
+    report("phase_start", phase="candidate", mode=effective_mode, requested_mode=mode,
+           previous_records=len(previous_records))
+    previous = {record_identity(item["repository"], item["package_path"]): item for item in previous_records}
+    if validation_only:
+        require(checkpoint is not None and checkpoint.payload["complete"], "validation requires a complete acquisition checkpoint")
+    paths, partitions, diagnostics = acquire_candidate(api=api, config=config, mode=mode,
+        previous_records=previous_records, progress=progress, checkpoint=checkpoint)
     records: dict[str, dict[str, Any]] = dict(previous)
     reviewed = reviewed_release_map(DIRECTORY_SOURCE)
+    if checkpoint:
+        checkpoint.start_validation({"previous": previous_records, "reviewed": sorted([list(key), value] for key, value in reviewed.items()),
+            "source_context": {"github_sha": os.environ.get("GITHUB_SHA"), "mirror_root": str(mirror_root.resolve()) if mirror_root else None}},
+            lambda cached_records: validate_document({"search_schema_version": 1, "sequence": 1,
+                "generated_at": generated_at, "records": cached_records}, SEARCH_SCHEMA, "checkpoint records"))
     discovered = {record_identity(repository, path) for repository, package_paths in paths.items() for path in package_paths}
     report("phase_start", phase="repository_states", repositories=len(paths))
     states = repository_states(api, list(paths), progress)
@@ -824,6 +862,36 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             continue
         repository_jobs[repository_name] = (state, pending)
     completed: dict[str, tuple[dict[str, dict[str, Any]], list[dict[str, str]]]] = {}
+    job_digests = {name: sha256_digest(canonical_json({"source": {key: state[key] for key in ("repository", "revision", "available")},
+                                                   "pending": [list(item) for item in pending]}))
+                   for name, (state, pending) in repository_jobs.items()} if checkpoint else {}
+    if checkpoint:
+        for name in list(repository_jobs):
+            cached = checkpoint.result(name, job_digests[name])
+            if cached is not None:
+                state, pending = repository_jobs[name]
+                cached_records = dict(cached[0])
+                allowed = {identity: prior for _, identity, prior in pending}
+                accounted = set(cached_records)
+                pending_paths = {path: identity for path, identity, _ in pending}
+                for diagnostic in cached[1]:
+                    require(diagnostic["kind"] == "invalid" and diagnostic["repository"] == state["repository"]
+                            and diagnostic["path"] in pending_paths, "checkpoint diagnostic is outside immutable package inputs")
+                    accounted.add(pending_paths[diagnostic["path"]])
+                require(accounted == set(allowed), "checkpoint result is missing package outcomes")
+                for identity, record in cached_records.items():
+                    require(identity in allowed, "checkpoint result is outside immutable package inputs")
+                    if record["availability"] == "available":
+                        require(record["repository"] == state["repository"] and record["revision"] == state["revision"]
+                                and record_identity(record["repository"], record["package_path"]) == identity
+                                and record["last_seen"] == generated_at, "checkpoint result source is invalid")
+                        cached_records[identity] = {**record, "stars": state["stars"], "repository_updated_at": state["updated_at"]}
+                    else:
+                        require(allowed[identity] is not None and record == {**allowed[identity], "availability": "unavailable"},
+                                "checkpoint unavailable result differs from previous input")
+                completed[name] = (cached_records, cached[1])
+                del repository_jobs[name]
+                report("repository_resumed", repository=name, records=len(cached[0]))
 
     def run_repository(repository_name, state, pending):  # noqa: ANN001
         report("repository_start", repository=repository_name, packages=len(pending))
@@ -846,15 +914,26 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                 ): repository_name
                 for repository_name, (state, pending) in repository_jobs.items()
             }
-            for future in as_completed(futures):
-                repository_name = futures[future]
-                try:
-                    completed[repository_name] = future.result()
-                except Exception as error:
-                    completed[repository_name] = ({}, [{
-                        "kind": "scan_error", "repository": repository_name, "path": "",
-                        "error": f"repository scan failed: {error}",
-                    }])
+            try:
+                for future in as_completed(futures):
+                    repository_name = futures[future]
+                    try:
+                        completed[repository_name] = future.result()
+                    except Exception as error:
+                        completed[repository_name] = ({}, [{
+                            "kind": "scan_error", "repository": repository_name, "path": "",
+                            "error": f"repository scan failed: {error}",
+                        }])
+                    if checkpoint:
+                        repository_records, repository_diagnostics = completed[repository_name]
+                        checkpoint.save_result(repository_name, job_digests[repository_name],
+                            [[identity, record] for identity, record in sorted(repository_records.items())], repository_diagnostics)
+            except BaseException:
+                # A disk/checkpoint failure is fatal. Do not let queued source
+                # fetches continue after we can no longer preserve their work.
+                for future in futures:
+                    future.cancel()
+                raise
     report("phase_end", phase="repository_validation", repositories=len(completed))
     # Futures may complete in any order. Merge only by source order so records
     # and diagnostics remain byte-for-byte deterministic.
@@ -940,23 +1019,46 @@ def load_config(path: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("refresh", "discover", "reconcile"), required=True)
+    parser.add_argument("--phase", choices=("acquire", "validate", "all"), default="all")
+    parser.add_argument("--checkpoint-dir", type=Path)
     parser.add_argument("--config", type=Path, default=ROOT / "registry" / "discovery" / "config.json")
     parser.add_argument("--previous-snapshot", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--diagnostics-output", type=Path, required=True)
-    parser.add_argument("--generated-at", default=format_timestamp(datetime.now(timezone.utc)))
+    parser.add_argument("--generated-at")
     parser.add_argument("--mirror-root", type=Path)
     parser.add_argument("--repository-workers", type=int, default=DEFAULT_REPOSITORY_WORKERS)
     args = parser.parse_args()
     progress = ProgressReporter()
     try:
+        require(args.phase == "all" or args.checkpoint_dir is not None, "--checkpoint-dir is required for split phases")
+        config = load_config(args.config)
+        previous = load_previous(args.previous_snapshot)
+        checkpoint = DiscoveryCheckpoint(args.checkpoint_dir, root=ROOT, config=config, mode=args.mode,
+            generated_at=args.generated_at, previous_records=previous) if args.checkpoint_dir else None
+        generated_at = checkpoint.generated_at if checkpoint else args.generated_at or format_timestamp(datetime.now(timezone.utc))
+        if args.phase == "validate":
+            require(checkpoint.path.exists() and checkpoint.payload["complete"], "complete acquisition checkpoint is required")
         api = GitHubAPI(os.environ.get("GITHUB_TOKEN", ""), progress=progress)
+        if args.phase == "acquire":
+            _, _, diagnostics = acquire_candidate(api=api, config=config, mode=args.mode,
+                previous_records=previous, progress=progress, checkpoint=checkpoint)
+            checkpoint.now = datetime.now(timezone.utc)
+            checkpoint.fresh(generated_at)
+            atomic_json(args.output, checkpoint.envelope("acquisition", checkpoint.binding, checkpoint.payload))
+            atomic_json(args.diagnostics_output, {"schema_version": 1, "diagnostics": diagnostics})
+            progress("completion", complete=True, phase="acquire")
+            return 0
         candidate, diagnostics = build_candidate(
-            api=api, config=load_config(args.config), mode=args.mode, generated_at=args.generated_at,
-            previous_records=load_previous(args.previous_snapshot), mirror_root=args.mirror_root,
+            api=api, config=config, mode=args.mode, generated_at=generated_at,
+            previous_records=previous, mirror_root=args.mirror_root,
             repository_workers=args.repository_workers,
             progress=progress,
+            checkpoint=checkpoint, validation_only=args.phase == "validate",
         )
+        if checkpoint:
+            checkpoint.now = datetime.now(timezone.utc)
+            checkpoint.fresh(generated_at)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.diagnostics_output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(canonical_json(candidate))
@@ -968,7 +1070,7 @@ def main() -> int:
             return 3
         print(f"Discovery scan complete: {len(candidate['records'])} records")
         return 0
-    except (DiscoveryError, OSError, ValueError, jsonschema.SchemaError) as error:
+    except (DiscoveryError, PublicationError, OSError, ValueError, jsonschema.SchemaError) as error:
         progress("completion", complete=False, error_type=type(error).__name__)
         print(f"Discovery build failed: {error}", file=sys.stderr)
         return 1

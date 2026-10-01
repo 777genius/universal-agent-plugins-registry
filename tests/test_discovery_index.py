@@ -357,7 +357,7 @@ class DiscoveryIndexTests(unittest.TestCase):
         # Execute the workflow selector: a requested refresh must not receive
         # the short budget when the builder would promote it to discover.
         workflow = yaml.load((ROOT / ".github/workflows/discovery-index.yml").read_text(), Loader=yaml.BaseLoader)
-        scan = workflow["jobs"]["scan"]
+        scan = workflow["jobs"]["acquire"]
         steps = scan["steps"]
         selector = next(step for step in steps if step.get("id") == "mode")
         ledger = next(step for step in steps if step.get("id") == "ledger")
@@ -366,6 +366,10 @@ class DiscoveryIndexTests(unittest.TestCase):
         self.assertEqual(selector["env"]["PREVIOUS_SNAPSHOT"], "${{ steps.ledger.outputs.path }}")
         self.assertEqual(build["timeout-minutes"], "${{ fromJSON(steps.mode.outputs.timeout_minutes) }}")
         self.assertGreaterEqual(int(scan["timeout-minutes"]), 330)
+        validation = workflow["jobs"]["scan"]
+        validate_step = next(step for step in validation["steps"] if step.get("id") == "scan")
+        self.assertEqual(validate_step["timeout-minutes"], "${{ fromJSON(needs.acquire.outputs.timeout_minutes) }}")
+        self.assertGreaterEqual(int(validation["timeout-minutes"]), 330)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             populated, empty = root / "populated.json", root / "empty.json"
