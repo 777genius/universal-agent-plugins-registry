@@ -655,6 +655,13 @@ def candidate_paths(items: list[dict[str, Any]]) -> tuple[dict[str, set[str]], l
     for item in items:
         repository = item["repository"]
         manifest_path = item["manifest_path"]
+        if REPOSITORY_RE.fullmatch(repository) is None:
+            diagnostics.append({
+                "kind": "unsupported_source", "repository": repository,
+                "path": manifest_path,
+                "error": "repository identity is outside the supported Discovery format",
+            })
+            continue
         try:
             # Validate the original hit before pathlib can normalize unsafe paths.
             manifest = portable_path(manifest_path, "manifest path")
