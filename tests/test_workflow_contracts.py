@@ -1531,11 +1531,11 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(scan["environment"], "discovery-read")
         self.assertEqual(signer["environment"], "discovery-publication")
         scan_body = yaml.safe_dump(scan)
-        self.assertIn("build_discovery_index.py", scan_body)
-        self.assertIn("previous-snapshot", scan_body)
-        self.assertIn("--repository-workers", scan_body)
-        scan_step = next(step for step in scan["steps"] if step.get("id") == "scan")
-        self.assertEqual(scan_step["env"]["DISCOVERY_REPOSITORY_WORKERS"], "8")
+        self.assertIn("run_discovery_slice.sh validate", scan_body)
+        slice_script = (ROOT / "scripts/run_discovery_slice.sh").read_text()
+        self.assertIn("build_discovery_index.py", slice_script)
+        self.assertIn("previous-snapshot", slice_script)
+        self.assertIn("--repository-workers 8", slice_script)
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", scan_body)
         self.assertNotIn("secrets.", scan_body)
         self.assertNotIn("DISCOVERY_ED25519_PRIVATE_KEY", scan_body)
@@ -1573,9 +1573,9 @@ sys.modules['catalog_process_isolation']=module
             and step.get("uses", "").startswith(("actions/upload-artifact", "actions/download-artifact"))
         ]
         self.assertEqual(artifact_names, [
-            "discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}",
-            "discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}",
-        ])
+            "discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-" + f"{number:02}"
+            for number in range(1, 11)
+        ] + ["discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}"])
         candidate_download = next(step for step in signer["steps"]
                                   if step.get("uses", "").startswith("actions/download-artifact"))
         self.assertEqual(candidate_download["with"]["artifact-ids"], "${{ needs.scan.outputs.artifact_id }}")
@@ -1614,17 +1614,23 @@ sys.modules['catalog_process_isolation']=module
                 job = workflow["jobs"][phase]
                 self.assertEqual(job["environment"], "discovery-read")
                 self.assertNotIn("secrets.", yaml.safe_dump(job))
-                build = next(step for step in job["steps"] if step.get("id") == "scan")
-                upload = next(step for step in job["steps"]
-                              if step.get("with", {}).get("path") == "checkpoint/" + filename)
-                self.assertEqual(upload["if"], "always()")
-                self.assertEqual(upload["with"]["retention-days"], "7")
-                self.assertLess(job["steps"].index(build), job["steps"].index(upload))
-                self.assertIn("--checkpoint-dir ../checkpoint", build["run"])
+                for number in range(1, 11):
+                    suffix = f"{number:02}"
+                    build = next(step for step in job["steps"] if step.get("id") == "slice" + suffix)
+                    upload = next(step for step in job["steps"] if step.get("id") == "checkpoint" + suffix)
+                    self.assertEqual(build["timeout-minutes"], "35")
+                    self.assertEqual(build["if"], "env.DISCOVERY_PHASE_FINISHED != 'true'")
+                    self.assertEqual(upload["if"], f"always() && steps.slice{suffix}.outcome != 'skipped'")
+                    self.assertEqual(upload["with"]["retention-days"], "7")
+                    self.assertEqual(upload["with"]["path"], "checkpoint/" + filename)
+                    self.assertEqual(job["steps"].index(upload), job["steps"].index(build) + 1)
+                    if number < 10:
+                        next_build = next(step for step in job["steps"] if step.get("id") == f"slice{number + 1:02}")
+                        self.assertLess(job["steps"].index(upload), job["steps"].index(next_build))
         acquire = workflow["jobs"]["acquire"]
         validation = workflow["jobs"]["scan"]
-        self.assertIn("--phase acquire", commands(acquire))
-        self.assertIn("--phase validate", commands(validation))
+        self.assertIn("run_discovery_slice.sh acquire", commands(acquire))
+        self.assertIn("run_discovery_slice.sh validate", commands(validation))
         # The successful acquisition artifact is pinned by its immutable ID.
         # Restored validation artifacts contain only validation.json, not a
         # replacement acquisition or a candidate which could bypass the builder.
@@ -1640,6 +1646,9 @@ sys.modules['catalog_process_isolation']=module
         workflow = load(DISCOVERY_INDEX)
         for phase, kind in (("acquire", "acquisition"), ("scan", "validation")):
             step = next(step for step in workflow["jobs"][phase]["steps"] if step.get("id") == "resume")
+            # Explicit bash makes GitHub use -eo pipefail; default bash only
+            # enables -e and could silently turn a failed lookup into no resume.
+            self.assertEqual(step["shell"], "bash")
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 # Exercise the actual shell selector with an inert gh response,
@@ -1650,11 +1659,15 @@ sys.modules['catalog_process_isolation']=module
                 response = root / "response.json"
                 output = root / "output"
                 artifacts = [
-                    {"id": 10, "name": f"discovery-{kind}-42-1", "expired": False},
-                    {"id": 20, "name": f"discovery-{kind}-42-2", "expired": False},
-                    {"id": 30, "name": f"discovery-{kind}-42-3", "expired": True},
-                    {"id": 40, "name": f"discovery-{kind}-42-4", "expired": False},
-                    {"id": 50, "name": f"discovery-{kind}-99-2", "expired": False},
+                    {"id": 10, "name": f"discovery-{kind}-42-1-10", "expired": False},
+                    {"id": 20, "name": f"discovery-{kind}-42-2-02", "expired": False},
+                    {"id": 21, "name": f"discovery-{kind}-42-2-10", "expired": False},
+                    {"id": 22, "name": f"discovery-{kind}-42-2-11", "expired": False},
+                    {"id": 23, "name": f"discovery-{kind}-42-0-10", "expired": False},
+                    {"id": 24, "name": f"discovery-{kind}-42-2-garbage", "expired": False},
+                    {"id": 30, "name": f"discovery-{kind}-42-3-10", "expired": True},
+                    {"id": 40, "name": f"discovery-{kind}-42-4-01", "expired": False},
+                    {"id": 50, "name": f"discovery-{kind}-99-2-10", "expired": False},
                     {"id": 60, "name": "discovery-candidate-42-2", "expired": False},
                 ]
                 response.write_text(json.dumps([{"artifacts": artifacts[:2]}, {"artifacts": artifacts[2:]}]))
@@ -1664,13 +1677,19 @@ sys.modules['catalog_process_isolation']=module
                 result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
                                         env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(output.read_text(), "artifact_id=20\n")
+                self.assertEqual(output.read_text(), "artifact_id=21\n")
                 output.unlink()
                 environment["ATTEMPT"] = "1"
                 result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
                                         env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output.read_text(), "artifact_id=\n")
+                output.unlink()
+                fake_gh.write_text('#!/bin/sh\nexit 7\n')
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(output.exists(), "failed lookup must not discard the resume input")
 
     def test_directory_materialization_preserves_the_signed_auxiliary_feeds(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)

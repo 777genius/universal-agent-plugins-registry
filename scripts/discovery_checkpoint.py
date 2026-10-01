@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +17,29 @@ MAX_ENTRIES = 10_000
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 MANIFEST = re.compile(r"^(?:[A-Za-z0-9._-]+/)*plugin\.json$")
+
+
+class CheckpointYield(Exception):
+    """A cooperative slice boundary, neither a scan error nor completeness."""
+
+
+class WorkBudget:
+    def __init__(self, seconds, *, monotonic=None):
+        check(type(seconds) in {int, float} and math.isfinite(seconds) and 0 < seconds <= 86400,
+              "work budget must be finite, positive and at most 86400 seconds")
+        self.monotonic = monotonic or time.monotonic
+        self.deadline = self.monotonic() + seconds
+
+    def check(self):
+        if self.monotonic() >= self.deadline:
+            raise CheckpointYield("work budget exhausted; checkpoint preserved")
+
+    def wait(self, seconds, sleep):
+        # Honor an already-received retry/pacing delay even across the slice
+        # boundary. Yielding before it would let the next process immediately
+        # retry and bypass the server's backoff. Production waits are bounded.
+        sleep(seconds)
+        self.check()
 
 
 def check(condition, message):
@@ -232,7 +257,12 @@ class DiscoveryCheckpoint:
         return None
 
     def save_result(self, repository, input_digest, records, result_diagnostics):
+        diagnostics(result_diagnostics)
         if any(item["kind"] == "scan_error" for item in result_diagnostics):
             return
         self.results[repository] = {"input_digest": input_digest, "records": records, "diagnostics": result_diagnostics}
+        self.save_validation()
+
+    def save_validation(self):
+        check(self.validation_binding is not None, "validation has not started")
         atomic_json(self.directory / "validation.json", self.envelope("validation", self.validation_binding, {"results": self.results}))

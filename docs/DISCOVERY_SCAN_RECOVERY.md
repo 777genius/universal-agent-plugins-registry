@@ -12,12 +12,14 @@ only a complete, schema-checked candidate. No package code is executed.
 - Validation writes `validation.json` atomically after completed repositories.
   Only results bound to the same immutable source and package inputs can be
   reused. A repository scan error must be retried, not cached as success.
-- Both jobs upload their checkpoint with `always()` after the bounded build
-  step, including after a step timeout. The job budget reserves additional time
-  for this upload. Runner loss, cancellation or the overall job timeout can
-  still prevent upload; only an artifact confirmed in GitHub is durable.
+- Both jobs upload their checkpoint with `always()` after each cooperative
+  30-minute slice, including after a slice failure or process timeout. New work
+  cannot start until the preceding upload succeeds. The 120/300-minute phase
+  wall budget includes uploads; a process guard bounds in-flight work and the
+  330-minute job budget reserves upload time. Runner loss or cancellation can
+  still lose the current slice, but not an earlier confirmed artifact.
 
-Artifacts are immutable, attempt-specific and retained for seven days.
+Artifacts are immutable, attempt-and-slice-specific and retained for seven days.
 Checkpoints may be resumed for at most 24 hours; retention is not a freshness
 extension. Original observation time is preserved, not rewritten to look new.
 They contain scan metadata and validated records, not tokens or package trees.
@@ -29,7 +31,7 @@ Use `gh run rerun RUN_ID --failed` for a failed acquisition or validation job.
 Do not dispatch a new full scan or rerun all successful jobs.
 
 A rerun uses only unexpired checkpoint artifacts from an earlier attempt of
-that same run. It selects the highest earlier attempt by name and immutable
+that same run. It selects the highest earlier `(attempt, slice)` by name and immutable
 artifact ID. There is no cross-run checkpoint import. The builder rejects
 incompatible, corrupt, partial-for-validation or stale inputs.
 
@@ -51,8 +53,15 @@ completeness, drop-guard and append-only rules are unchanged.
 
 The production run `36844656131` predates checkpoint support. It timed out after
 five hours and retained only publisher identity, not its 6350 candidate paths.
-Those search results cannot be recovered from the aggregate progress logs.
+The complete search results cannot be recovered from the aggregate progress logs.
 The published last-known-good feed was not replaced by that failed scan.
+
+The log does retain 491 repository names, 489 validation starts and 481 validation
+ends, reporting 591 records in aggregate. These observations are archived in
+`evidence/discovery-recovery/36844656131.json` with the source log digest. They
+are useful discovery hints, not recovered manifests, immutable revisions,
+validated records, a trusted checkpoint or evidence of a complete scan. Any
+package found using those names still requires fresh immutable-source validation.
 
 Related: registry issue #328 remains open. Resumable scan recovery does not prove
 the separate integrated approval-wait longer than 72 hours acceptance scenario.

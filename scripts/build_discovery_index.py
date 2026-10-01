@@ -29,7 +29,7 @@ import jsonschema
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER, PinnedRepository, git, portable_path
 from scripts.build_registry import directory_tree_digest, digest_bytes, read_json
-from scripts.discovery_checkpoint import DiscoveryCheckpoint, atomic_json
+from scripts.discovery_checkpoint import CheckpointYield, DiscoveryCheckpoint, WorkBudget, atomic_json
 from scripts.directory_publication import (
     PublicationError,
     canonical_json,
@@ -84,6 +84,7 @@ SEARCH_STABILITY_ATTEMPTS = 3
 SEARCH_PARTITION_MAX = 90
 DEFAULT_REPOSITORY_WORKERS = 8
 MAX_REPOSITORY_WORKERS = 16
+MAX_DIAGNOSTIC_ERROR_CHARS = 4096
 
 
 class DiscoveryError(Exception):
@@ -169,7 +170,7 @@ class SameOriginRedirect(urllib.request.HTTPRedirectHandler):
 
 class GitHubAPI:
     def __init__(self, token: str, *, search_monotonic=None, search_sleep=None,
-                 progress: ProgressReporter | None = None):  # noqa: ANN001
+                 progress: ProgressReporter | None = None, work_budget: WorkBudget | None = None):  # noqa: ANN001
         require(bool(token), "GITHUB_TOKEN is required")
         self.token = token
         self.origin = "https://api.github.com"
@@ -179,13 +180,24 @@ class GitHubAPI:
         self._search_lock = threading.Lock()
         self._last_search_request_at: float | None = None
         self.progress = progress or (lambda *args, **kwargs: None)
+        self.work_budget = work_budget
+
+    def _check_budget(self):
+        if self.work_budget:
+            self.work_budget.check()
+
+    def _wait(self, seconds, sleep):
+        if self.work_budget:
+            self.work_budget.wait(seconds, sleep)
+        else:
+            sleep(seconds)
 
     def _pace_code_search(self) -> None:
         if self._last_search_request_at is not None:
             deadline = self._last_search_request_at + CODE_SEARCH_REQUEST_INTERVAL_SECONDS
             delay = deadline - self._search_monotonic()
             if delay > 0:
-                self._search_sleep(delay)
+                self._wait(delay, self._search_sleep)
         self._last_search_request_at = self._search_monotonic()
 
     def _request(self, path: str, parameters: dict[str, object] | None = None,
@@ -197,6 +209,7 @@ class GitHubAPI:
         endpoint = "code_search" if code_search else "graphql" if path == "graphql" else "other"
         max_attempts = MAX_CODE_SEARCH_REQUEST_ATTEMPTS if code_search else MAX_GITHUB_REQUEST_ATTEMPTS
         for attempt in range(max_attempts):
+            self._check_budget()
             request = urllib.request.Request(url, headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": "Bearer " + self.token,
@@ -208,9 +221,11 @@ class GitHubAPI:
                 if code_search:
                     with self._search_lock:
                         self._pace_code_search()
+                        self._check_budget()
                         with self.opener.open(request, timeout=30) as response:
                             body = response.read(MAX_API_BYTES + 1)
                 else:
+                    self._check_budget()
                     with self.opener.open(request, timeout=30) as response:
                         body = response.read(MAX_API_BYTES + 1)
                 require(len(body) <= MAX_API_BYTES, f"GitHub response exceeds {MAX_API_BYTES} bytes")
@@ -255,14 +270,14 @@ class GitHubAPI:
                 delay = max(1, min(delay, delay_cap))
                 self.progress("http_retry", endpoint=endpoint, attempt=attempt + 1,
                               status=error.code, delay_seconds=delay)
-                time.sleep(delay)
+                self._wait(delay, time.sleep)
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
                 if attempt + 1 == max_attempts:
                     raise DiscoveryError(f"GitHub API {path} failed: {error}") from error
                 delay = min(attempt + 1, 5)
                 self.progress("transport_retry", endpoint=endpoint, attempt=attempt + 1,
                               error_type=type(error).__name__, delay_seconds=delay)
-                time.sleep(delay)
+                self._wait(delay, time.sleep)
         raise DiscoveryError(f"GitHub API {path} exhausted retries")
 
     def get(self, path: str, parameters: dict[str, object] | None = None) -> dict[str, Any]:
@@ -293,7 +308,9 @@ def partition_query(base: str, minimum: int, maximum: int) -> str:
     return f"{base} size:{minimum}..{maximum}"
 
 
-def search_code_page(api: GitHubAPI, query: str, page: int) -> dict[str, Any]:
+def search_code_page(api: GitHubAPI, query: str, page: int, work_budget=None) -> dict[str, Any]:
+    if work_budget:
+        work_budget.check()
     return api.get("search/code", {
         "q": query, "per_page": 100, "page": page, "sort": "indexed", "order": "asc",
     })
@@ -301,7 +318,8 @@ def search_code_page(api: GitHubAPI, query: str, page: int) -> dict[str, Any]:
 
 def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
                           progress: ProgressReporter | None = None,
-                          checkpoint: DiscoveryCheckpoint | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                          checkpoint: DiscoveryCheckpoint | None = None,
+                          work_budget: WorkBudget | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     report = progress or (lambda *args, **kwargs: None)
     queue = [(0, maximum_size)]
     partitions: list[dict[str, Any]] = []
@@ -322,11 +340,13 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
             checkpoint.save_acquisition()
 
     while queue:
+        if work_budget:
+            work_budget.check()
         minimum, maximum = queue[0]
         report("partition_start", size_min=minimum, size_max=maximum, pending=len(queue),
                completed=len(partitions))
         query = partition_query(base_query, minimum, maximum)
-        first = search_code_page(api, query, 1)
+        first = search_code_page(api, query, 1, work_budget)
         total = first.get("total_count")
         require(type(total) is int and total >= 0, "GitHub code search returned an invalid total_count")
         require(first.get("incomplete_results") is False, f"GitHub code search is incomplete for {query!r}")
@@ -346,7 +366,7 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
         instability = "not observed"
         for stability_attempt in range(SEARCH_STABILITY_ATTEMPTS):
             if stability_attempt:
-                first = search_code_page(api, query, 1)
+                first = search_code_page(api, query, 1, work_budget)
                 total = first.get("total_count")
                 first_items = first.get("items")
                 require(type(total) is int and 0 <= total <= SEARCH_PARTITION_MAX and isinstance(first_items, list) and len(first_items) < 100,
@@ -387,7 +407,10 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
                 f"page_totals={[response.get('total_count') for response in responses]}"
             )
             if stability_attempt + 1 < SEARCH_STABILITY_ATTEMPTS:
-                time.sleep(stability_attempt + 1)
+                if work_budget:
+                    work_budget.wait(stability_attempt + 1, time.sleep)
+                else:
+                    time.sleep(stability_attempt + 1)
         require(stable_items is not None, f"search partition {query!r} changed while pages were acquired ({instability})")
         partitions.append({"query": query, "size_min": minimum, "size_max": maximum, "total_count": stable_total})
         for item in stable_items:
@@ -402,7 +425,8 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
 
 
 def repository_states(api: GitHubAPI, repositories: list[str],
-                      progress: ProgressReporter | None = None) -> dict[str, dict[str, Any]]:
+                      progress: ProgressReporter | None = None,
+                      work_budget: WorkBudget | None = None) -> dict[str, dict[str, Any]]:
     """Resolve immutable default heads in bounded GraphQL batches.
 
     A per-repository REST metadata + commit flow exceeds the 1,000 requests/hour
@@ -417,6 +441,8 @@ def repository_states(api: GitHubAPI, repositories: list[str],
     identities = sorted(original_by_identity)
     states: dict[str, dict[str, Any]] = {}
     for offset in range(0, len(identities), REPOSITORY_GRAPHQL_BATCH):
+        if work_budget:
+            work_budget.check()
         batch = identities[offset:offset + REPOSITORY_GRAPHQL_BATCH]
         report("graphql_batch_start", offset=offset, count=len(batch), total=len(identities))
         declarations: list[str] = []
@@ -743,6 +769,8 @@ def scan_repository(repository_name: str, state: dict[str, Any],
                     "kind": "scan_error", "repository": state["repository"],
                     "path": package_path, "error": str(error),
                 })
+            except CheckpointYield:
+                raise
             except Exception as error:
                 diagnostics.append({
                     "kind": "invalid", "repository": state["repository"],
@@ -755,7 +783,7 @@ def scan_repository(repository_name: str, state: dict[str, Any],
     return records, diagnostics
 
 
-def acquire_candidate(*, api, config, mode, previous_records, progress=None, checkpoint=None):
+def acquire_candidate(*, api, config, mode, previous_records, progress=None, checkpoint=None, work_budget=None):
     effective_mode = "discover" if mode == "refresh" and not previous_records else mode
     report = progress or (lambda *args, **kwargs: None)
     partitions: list[dict[str, Any]] = []
@@ -766,7 +794,7 @@ def acquire_candidate(*, api, config, mode, previous_records, progress=None, che
             paths.setdefault(record["repository"], set()).add(record["package_path"])
     else:
         report("phase_start", phase="global_search")
-        items, partitions = discover_search_items(api, config["query"], config["maximum_file_size"], progress, checkpoint)
+        items, partitions = discover_search_items(api, config["query"], config["maximum_file_size"], progress, checkpoint, work_budget)
         report("phase_end", phase="global_search", candidates=len(items), partitions=len(partitions))
         by_identity = {(item["repository"].casefold(), item["manifest_path"].casefold()): item for item in items}
         for seed in config["seeds"]:
@@ -774,7 +802,7 @@ def acquire_candidate(*, api, config, mode, previous_records, progress=None, che
             for prefix in seed["paths"] or [""]:
                 scoped_query = seed_query + (" path:" + prefix if prefix else "")
                 report("phase_start", phase="seed_search", repository=seed["repository"])
-                seed_items, seed_partitions = discover_search_items(api, scoped_query, config["maximum_file_size"], progress, checkpoint)
+                seed_items, seed_partitions = discover_search_items(api, scoped_query, config["maximum_file_size"], progress, checkpoint, work_budget)
                 report("phase_end", phase="seed_search", repository=seed["repository"],
                        candidates=len(seed_items), partitions=len(seed_partitions))
                 partitions.extend(seed_partitions)
@@ -797,6 +825,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                     repository_workers: int = DEFAULT_REPOSITORY_WORKERS,
                     progress: ProgressReporter | None = None,
                     checkpoint: DiscoveryCheckpoint | None = None, validation_only: bool = False,
+                    work_budget: WorkBudget | None = None,
                     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     parse_timestamp(generated_at, "generated_at")
     require(type(repository_workers) is int and 1 <= repository_workers <= MAX_REPOSITORY_WORKERS,
@@ -810,7 +839,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     if validation_only:
         require(checkpoint is not None and checkpoint.payload["complete"], "validation requires a complete acquisition checkpoint")
     paths, partitions, diagnostics = acquire_candidate(api=api, config=config, mode=mode,
-        previous_records=previous_records, progress=progress, checkpoint=checkpoint)
+        previous_records=previous_records, progress=progress, checkpoint=checkpoint, work_budget=work_budget)
     records: dict[str, dict[str, Any]] = dict(previous)
     reviewed = reviewed_release_map(DIRECTORY_SOURCE)
     if checkpoint:
@@ -820,7 +849,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                 "generated_at": generated_at, "records": cached_records}, SEARCH_SCHEMA, "checkpoint records"))
     discovered = {record_identity(repository, path) for repository, package_paths in paths.items() for path in package_paths}
     report("phase_start", phase="repository_states", repositories=len(paths))
-    states = repository_states(api, list(paths), progress)
+    states = repository_states(api, list(paths), progress, **({"work_budget": work_budget} if work_budget else {}))
     report("phase_end", phase="repository_states", repositories=len(states))
     repository_jobs: dict[str, tuple[dict[str, Any], list[tuple[str, str, dict[str, Any] | None]]]] = {}
     for repository_name in sorted(paths):
@@ -894,10 +923,14 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                 report("repository_resumed", repository=name, records=len(cached[0]))
 
     def run_repository(repository_name, state, pending):  # noqa: ANN001
+        if work_budget:
+            work_budget.check()
         report("repository_start", repository=repository_name, packages=len(pending))
         try:
             result = scan_repository(repository_name, state, pending, generated_at, reviewed, mirror_root,
                                      getattr(api, "token", None))
+        except CheckpointYield:
+            raise
         except Exception as error:
             report("repository_end", repository=repository_name, result="failed", error_type=type(error).__name__)
             raise
@@ -908,26 +941,64 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     if repository_jobs:
         worker_count = min(repository_workers, len(repository_jobs))
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="discovery-repository") as executor:
-            futures = {
-                executor.submit(
-                    run_repository, repository_name, state, pending,
-                ): repository_name
-                for repository_name, (state, pending) in repository_jobs.items()
-            }
+            jobs = iter(repository_jobs.items())
+            futures = {}
+
+            def submit_next():
+                job = next(jobs, None)
+                if job is None:
+                    return
+                if work_budget:
+                    work_budget.check()
+                name, (state, pending) = job
+                futures[executor.submit(run_repository, name, state, pending)] = name
+
+            def collect(future, repository_name):
+                try:
+                    repository_records, repository_diagnostics = future.result()
+                    # Schema errors can echo large untrusted manifest values.
+                    # Bound them for every candidate, not just checkpointed
+                    # scans, so uninterrupted and resumed bytes stay identical.
+                    completed[repository_name] = (repository_records, [
+                        {**diagnostic, "error": diagnostic["error"][:MAX_DIAGNOSTIC_ERROR_CHARS]}
+                        for diagnostic in repository_diagnostics
+                    ])
+                except CheckpointYield:
+                    raise
+                except Exception as error:
+                    completed[repository_name] = ({}, [{
+                        "kind": "scan_error", "repository": repository_name, "path": "",
+                        "error": f"repository scan failed: {error}"[:MAX_DIAGNOSTIC_ERROR_CHARS],
+                    }])
+                if checkpoint:
+                    repository_records, repository_diagnostics = completed[repository_name]
+                    checkpoint.save_result(repository_name, job_digests[repository_name],
+                        [[identity, record] for identity, record in sorted(repository_records.items())], repository_diagnostics)
+
             try:
-                for future in as_completed(futures):
-                    repository_name = futures[future]
+                for _ in range(worker_count):
+                    submit_next()
+                while futures:
+                    future = next(as_completed(futures))
+                    repository_name = futures.pop(future)
+                    collect(future, repository_name)
+                    if work_budget:
+                        work_budget.check()
+                    submit_next()
+            except CheckpointYield:
+                # Stop admission, then preserve the bounded in-flight work.
+                # Source operations use their existing timeouts; no packages
+                # are killed midway through a read just to enforce this slice.
+                for future in futures:
+                    future.cancel()
+                for future, repository_name in futures.items():
+                    if future.cancelled():
+                        continue
                     try:
-                        completed[repository_name] = future.result()
-                    except Exception as error:
-                        completed[repository_name] = ({}, [{
-                            "kind": "scan_error", "repository": repository_name, "path": "",
-                            "error": f"repository scan failed: {error}",
-                        }])
-                    if checkpoint:
-                        repository_records, repository_diagnostics = completed[repository_name]
-                        checkpoint.save_result(repository_name, job_digests[repository_name],
-                            [[identity, record] for identity, record in sorted(repository_records.items())], repository_diagnostics)
+                        collect(future, repository_name)
+                    except CheckpointYield:
+                        pass
+                raise
             except BaseException:
                 # A disk/checkpoint failure is fatal. Do not let queued source
                 # fetches continue after we can no longer preserve their work.
@@ -1021,6 +1092,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=("refresh", "discover", "reconcile"), required=True)
     parser.add_argument("--phase", choices=("acquire", "validate", "all"), default="all")
     parser.add_argument("--checkpoint-dir", type=Path)
+    parser.add_argument("--work-budget-seconds", type=float)
     parser.add_argument("--config", type=Path, default=ROOT / "registry" / "discovery" / "config.json")
     parser.add_argument("--previous-snapshot", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -1030,8 +1102,12 @@ def main() -> int:
     parser.add_argument("--repository-workers", type=int, default=DEFAULT_REPOSITORY_WORKERS)
     args = parser.parse_args()
     progress = ProgressReporter()
+    checkpoint = None
     try:
         require(args.phase == "all" or args.checkpoint_dir is not None, "--checkpoint-dir is required for split phases")
+        require(args.work_budget_seconds is None or (args.checkpoint_dir is not None and args.phase != "all"),
+                "--work-budget-seconds requires a split phase and --checkpoint-dir")
+        work_budget = WorkBudget(args.work_budget_seconds) if args.work_budget_seconds is not None else None
         config = load_config(args.config)
         previous = load_previous(args.previous_snapshot)
         checkpoint = DiscoveryCheckpoint(args.checkpoint_dir, root=ROOT, config=config, mode=args.mode,
@@ -1039,10 +1115,10 @@ def main() -> int:
         generated_at = checkpoint.generated_at if checkpoint else args.generated_at or format_timestamp(datetime.now(timezone.utc))
         if args.phase == "validate":
             require(checkpoint.path.exists() and checkpoint.payload["complete"], "complete acquisition checkpoint is required")
-        api = GitHubAPI(os.environ.get("GITHUB_TOKEN", ""), progress=progress)
+        api = GitHubAPI(os.environ.get("GITHUB_TOKEN", ""), progress=progress, work_budget=work_budget)
         if args.phase == "acquire":
             _, _, diagnostics = acquire_candidate(api=api, config=config, mode=args.mode,
-                previous_records=previous, progress=progress, checkpoint=checkpoint)
+                previous_records=previous, progress=progress, checkpoint=checkpoint, work_budget=work_budget)
             checkpoint.now = datetime.now(timezone.utc)
             checkpoint.fresh(generated_at)
             atomic_json(args.output, checkpoint.envelope("acquisition", checkpoint.binding, checkpoint.payload))
@@ -1054,7 +1130,7 @@ def main() -> int:
             previous_records=previous, mirror_root=args.mirror_root,
             repository_workers=args.repository_workers,
             progress=progress,
-            checkpoint=checkpoint, validation_only=args.phase == "validate",
+            checkpoint=checkpoint, validation_only=args.phase == "validate", work_budget=work_budget,
         )
         if checkpoint:
             checkpoint.now = datetime.now(timezone.utc)
@@ -1070,6 +1146,21 @@ def main() -> int:
             return 3
         print(f"Discovery scan complete: {len(candidate['records'])} records")
         return 0
+    except CheckpointYield as error:
+        try:
+            # Even a first-request rate limit must retain its observation time
+            # and pending queue for the next slice's immutable upload.
+            checkpoint.now = datetime.now(timezone.utc)
+            checkpoint.fresh(checkpoint.generated_at)
+            checkpoint.save_acquisition()
+            if checkpoint.validation_binding is not None:
+                checkpoint.save_validation()
+        except (DiscoveryError, PublicationError, OSError, ValueError) as checkpoint_error:
+            progress("completion", complete=False, error_type=type(checkpoint_error).__name__)
+            print(f"Discovery checkpoint save failed: {checkpoint_error}", file=sys.stderr)
+            return 1
+        progress("checkpoint_yield", phase=args.phase, reason=str(error))
+        return 4
     except (DiscoveryError, PublicationError, OSError, ValueError, jsonschema.SchemaError) as error:
         progress("completion", complete=False, error_type=type(error).__name__)
         print(f"Discovery build failed: {error}", file=sys.stderr)

@@ -361,14 +361,16 @@ class DiscoveryIndexTests(unittest.TestCase):
         steps = scan["steps"]
         selector = next(step for step in steps if step.get("id") == "mode")
         ledger = next(step for step in steps if step.get("id") == "ledger")
-        build = next(step for step in steps if step.get("id") == "scan")
+        build = next(step for step in steps if step.get("id") == "slice01")
         self.assertLess(steps.index(ledger), steps.index(selector))
         self.assertEqual(selector["env"]["PREVIOUS_SNAPSHOT"], "${{ steps.ledger.outputs.path }}")
-        self.assertEqual(build["timeout-minutes"], "${{ fromJSON(steps.mode.outputs.timeout_minutes) }}")
+        self.assertEqual(build["env"]["PHASE_BUDGET_MINUTES"], "${{ steps.mode.outputs.timeout_minutes }}")
+        self.assertEqual(build["timeout-minutes"], "35")
         self.assertGreaterEqual(int(scan["timeout-minutes"]), 330)
         validation = workflow["jobs"]["scan"]
-        validate_step = next(step for step in validation["steps"] if step.get("id") == "scan")
-        self.assertEqual(validate_step["timeout-minutes"], "${{ fromJSON(needs.acquire.outputs.timeout_minutes) }}")
+        validate_step = next(step for step in validation["steps"] if step.get("id") == "slice01")
+        self.assertEqual(validate_step["env"]["PHASE_BUDGET_MINUTES"], "${{ needs.acquire.outputs.timeout_minutes }}")
+        self.assertEqual(validate_step["timeout-minutes"], "35")
         self.assertGreaterEqual(int(validation["timeout-minutes"]), 330)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

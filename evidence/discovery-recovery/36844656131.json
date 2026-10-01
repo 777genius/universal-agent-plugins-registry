@@ -1,0 +1,3930 @@
+{
+  "schema_version": 1,
+  "kind": "unverified-repository-observations",
+  "source": {
+    "repository": "777genius/universal-agent-plugins-registry",
+    "run_id": "36844656131",
+    "job_id": "110312203691",
+    "source_commit": "1e2132e586aeb8bfdd040f2eac7dc71dcaa29230",
+    "log_sha256": "sha256:6a418d9972c15f6a89465382739358e7e42e89da437a8b7178ba7cffc8b3926f",
+    "log_bytes": 505462
+  },
+  "limitations": [
+    "Repository names and aggregate counts only; no manifest paths, revisions, package bytes or validation records survived.",
+    "These observations are discovery hints, not a complete candidate, trusted checkpoint or publication evidence. Fresh immutable-source validation is required."
+  ],
+  "summary": {
+    "repositories": 491,
+    "validation_started": 489,
+    "validation_ended": 481,
+    "observed_record_count": 591
+  },
+  "repositories": [
+    {
+      "repository": "0x7067/claude-jev",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "0x7067/jev-browse",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "0xA3B/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 6,
+      "observed_record_count": 6,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "0xA9UA/AERO_WebScraper",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "0xinsider/agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "1337Xcode/wassist-mcp-server",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "1vmgm/viewprinter-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "20Youssef10/NovelForge",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "2718labs/2718lab-devkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "2dubu/liquid-glass",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "777genius/agent-notifications",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "777genius/universal-agent-plugins",
+      "validation_started": false,
+      "validation_ended": false
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 46,
+      "observed_record_count": 46,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "78tacos/open-meteo-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "9529360-cpu/veteran-engineer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "a-church-ai/church",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "a-l-e-x-k/sorted-travel-sdk",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "a-magdy/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "a91453/mml-tools",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aAAaqwq/AGI-Super-Team",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aaif/community-events",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "aaronjmars/aeon-agent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aaronjmars/miroshark-aeon",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aaronkendell/skills-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aaronpowell/github-copilot-dependabot-canvas",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ab300819/keel-workflow",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "abc354402600/JD-Shopping-MCP",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "abhikakroda/kiro-university-form-validation",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AbleTime/codex-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "abostwick12/lead-emergence-bundles",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 7,
+      "observed_record_count": 7,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aboudykeddeh276-stack/BRAINK",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "About-Intelligence/soku-cli",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "absgrafx/morpheus-grok-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "abyssbugg-labs/sourcery-agent-bundle",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Accoil/product-tracking-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "actions-marketplace-validations/oxsecurity_megalinter",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "activeing123/mcptoon",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "actuallyitsnathaniel/actuallyitsnathaniel-dev",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "adalloul0928/agent-tooling",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 7,
+      "observed_record_count": 7,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "adelpro/dz-generics",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "adib-11/GuardRail-Finance",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AdityaVG13/ast-sgrep",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Adspirer/adspirer-hermes-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aeonfun/aeon",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "aeschli/agent-testing",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Agenta-AI/agenta",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 6,
+      "observed_record_count": 6,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AgentCorp-Inc/AgentCorp-Integrations-Skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "agenticair/flow-state",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "AgenticBooks/agenticbooks-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "agentlas-ai/Agentlas-OS",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "agentplugins/agent-plugins-spec",
+      "validation_started": false,
+      "validation_ended": false
+    },
+    {
+      "repository": "AI-Unified-Process/marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 5,
+      "observed_record_count": 5,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AI4Outcomes/thinqos-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AIAI-Laboratory/aiai-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AishwaryShrivastav/vibe-testing",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AkaraChen/agent-plugin-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AkaraChen/agent-plugin-resume",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AkaraChen/eric-design-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AkaraChen/eric-way",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 11,
+      "observed_record_count": 9,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "AkaraChen/long-running-agent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Akurganow/ai-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 12,
+      "observed_record_count": 12,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AKzar1el/god-prompt-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AKzar1el/mcp-geo",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AKzar1el/mcp-trendpulse",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AlastairZeved/Editorial-Recension",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AMFahim/ghost-committer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AnansiDataAnalytics/anansidata-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Andes-Software-Solutions/awesome-claude-copilot",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 7,
+      "observed_record_count": 7,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AndreaGriffiths11/agents-md-benchmark-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AndrewNgo-ini/memoose",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Annnnntoney/taipei-day-trip",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Anymfah/stellary-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AOFNH/kits-jenkins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Aptymok/system-friction",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AranKomat/untitled-openwork-demo",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AratKruglik/codex-sdlc",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "ArcadeAI/arcade-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Arcadesys/bunch",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ArchAstro/intern",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Areo-RGB/devrig-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ArjunVijayan/code-review-agent-experiment",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Arkane-o7/Sentinel",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ArndtGold/ai-native-governance-delivery-framework",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ArneFfm/shared-forest-agents",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AShapira/worldmonitor",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Asherlc/dofek-mcp-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AshtonLG3/repo-context-verifier",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Ashwin-Abraham/AIQ-Studio",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Askpilot-AI-Number/askpilot-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AswaniSahoo/splitsmart",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Asymptote-Labs/agent-beacon",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AudiopodAI/audiopod-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AutoRFP/bid-manager-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "AvdLee/Swift-Concurrency-Agent-Skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AvdLee/SwiftUI-Agent-Skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "AxaFrance/webengine-dotnet",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 3,
+      "observed_record_count": 3,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Azure/azure-dev-tools",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BANG404/message-board",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BANG404/openagent-chat-groups",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BANG404/openagent-cua-driver",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BANG404/openagent-goal",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BANG404/openagent-graph",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BANG404/openagent-plugin-kit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 9,
+      "observed_record_count": 9,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BarakChamo/boxer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BeatMagic/acestudio_agent_plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BenqsXd/wc3-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Berkay2002/babysit-pr",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BetterNeighborsAI/pd-intelligence-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BigCactusLabs/blotter",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "BitzLabs/BitzSkills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BLCNYY/minecraft-skin-maker",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BloomLabsInc/bloom-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Blubadin/Sports-cout-",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Bluesoul-Technology/justonce-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "BoozeLee/elohim",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Brevilabs/miyo-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BrewtaniusAI/collectiveos-isomorphic-core",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BrianDai22/chess-review",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BrianLiDesign/blidesign-ai-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 3,
+      "observed_record_count": 3,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Briefcase-AI/briefcase-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BrightWayAI/cortex",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BryanHarrisScripts/PlotPickle",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "BuilderIO/agent-native",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 4,
+      "observed_record_count": 4,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Calvin-Xia/EvoFence",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Candide-AI/kalent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "CandleKeepAgents/trove-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CASTHighlight/askcast-kiropower",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "CesarBenavides777/cesar-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Changroro/find-me",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ChatPRD/cursor-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Chisiki1/objective-integrity-framework",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Chocksy/tapselo.com",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Christian-Katzmann/app-it",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Christopher-Sch-dev/showcase-all-demos",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "ChromeDevTools/chrome-devtools-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Cloud-Peek/agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "Clovhis/sucuplecuc",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CodeByNikolas/agent-capital-tree",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CodSpeedHQ/codspeed",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Cognigy/cognigy-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CometWeb-io/agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Community-Access/accessibility-agents",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "CompendiumLabs/gum-jsx",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Copiapoa-Inc/palate-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CoreyKatzburg/agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Cotal-AI/Cotal",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "CrackingShells/colgrep-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CrackingShells/cracking-shells-playbook",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 5,
+      "observed_record_count": 5,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CryptVenture/Jevris",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CureWise/curewise-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "CurieSocial/curie-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "CynaCons/PowerFlow",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "D4umak/linkedin-outreach-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Dancan254/spring-boot-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DanielJamesTronca/apple-iphone-duo-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Data-Wise/craft",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DataDog/pup",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "David-Sat/lux-edit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Dayananda-D/DevCDP",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DDNA-Engineering/ddna-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Design-Machines-Studio/depot",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DevDizzle/gammarips-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DevilsNerve/codex-modernize",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Digitizers/agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Ditto190/Aeon-automaton-codeyourself-mm",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DMARU9/copilot-plugins-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Doodooms/plugin-factory",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Drix10/agent-flow",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Dsssyc/hey-my-buddy",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DwDestiny/my_skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "DXHeroes/mozecek",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Edison-Watch/sealgate-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "EdmundLimBoEn/lazy-mans-reminders",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "EficodeDemoOrg/demo-agent-plugin-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "ELab-AI-Tech/xero-mcp-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Electivus/Apex-Log-Viewer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "EmadBeltaje/flutter-animator",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "EmadMokhtar/skill-evaluator",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "EntitySystems/DysonHarness",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Equinoxe-Grammer/minimalist-agile-engineering",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Eriyc/agents",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "ErmesDiPrisco/angular-bootstrap-italia-copilot",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ETroll/tmp-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 3,
+      "observed_record_count": 3,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "EveryInc/monologue-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "EvotecIT/OfficeIMO",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "FABIOEVERTON/BRACHAT-MAIN",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "FavioVazquez/showtime",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "FirstClassTree/shapelessai",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "FishCodeTech/muteki",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "FlightSeatmap/mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Folken2/nuvel",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Fr4nZ82/mwe-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Frankenstein-Labs/cortex-ai-sdk-software",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 8,
+      "observed_record_count": 5,
+      "observed_diagnostic_count": 3
+    },
+    {
+      "repository": "FRIBND/ENSDF-Agent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "FuRongJun-1999/dsh-memory",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Gabriel-Operator/gabriel-operator-coding-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GabrielBarros00/ControleFinanceiro",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GAIK-project/gaik-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Gaurav890/everything-agentic-engineering",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GDS-G/VoxxBridge",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GetSHIM/shim-cli",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GetZell/zell",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GitGuardian/agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GoatInAHat/PaperVizAgent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GoatInAHat/toolfactory",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GoatInAHat/vutoolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Golenspade/BliSolver",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GoogleCloudPlatform/cloud-bigtable-ecosystem",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "GoogleCloudPlatform/db-context-enrichment",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Gpanazio/balangandan-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GrillerGeek/guildhall",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GrillerGeek/idd-framework",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Gsyltc/homelab-portfolio",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 6,
+      "observed_record_count": 6,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GuionAI/flicknote-cli",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "GunjanGrunge/SIA_package",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 3,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HarleyBartles/agent-asset-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 20,
+      "observed_record_count": 13,
+      "observed_diagnostic_count": 7
+    },
+    {
+      "repository": "HarleyBartles/sheg",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HarnessRouter/harnessrouter",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HarnessRouter/starter-kit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 6,
+      "observed_record_count": 6,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HarperZ9/crucible",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HarperZ9/gather",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HarperZ9/index",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HarshithNayakaL/My-Portfolio",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HasData/zillow-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "He0xD4C0/quick-pcb",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Hei-Chuan/daymix",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HernanJiang/CraftStation",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 6,
+      "observed_record_count": 6,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HERRY423/BioNexus",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "Heyra-Global/demo-plugin-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HKTITAN/duolingo",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HosungYou/taejeon-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "HotariTobu/expunge",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HotariTobu/terminal-viewport",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HotariTobu/torisugari-gyaru",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Hrida-AI/zlabs-coding-guidelines",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "HuakunShen/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 5,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 5
+    },
+    {
+      "repository": "Hugo0/swarmmemo",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "IAPro-Community/Orquestrador-Maestro",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Ibrahim-3d/orchestrator-supaconductor",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "IchenDEV/agent-plugin-mkt",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "ImWenyaoT/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "IndelibleVivi/servotab",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "IsseiMatsuzoe/agent-skill-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ITSalt/PepperSkills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 4,
+      "observed_record_count": 4,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JacksonMaroon/thinkcell-codex",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JackyCufe/ChatToCodex",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JacobiusMakes/parlay-api-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "JiaWeiXie/jev-enhanced-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JlikSenior/sbpa",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JonasWooh/codex-thread-reader",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JoshCCorby/Dialext",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "JovieInc/Jovie",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JUNQINGV587/mattpocock-skills-dsh",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "JustinDFuller/ban-fixed-width-prose",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "JustineDevs/meta-architect",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "K-Dense-AI/science-superpowers",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "K-Dense-AI/scientific-agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "K-Dense-AI/scientific-agents",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 503
+    },
+    {
+      "repository": "K4F7/icourse163-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Kaddo-kdd/kaddo",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "KalarisLabs/research-agent-skills",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "Kayus24/kgg",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "KittyChiu/harvest",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 4,
+      "observed_record_count": 4,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Kotodama-Project/Kotodama-project",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Kozmosa/present2me",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "KubeRocketCI/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Kuliko-Inc/kuliko-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "KumarNavish/navish-commander",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Lagnajit09/sgrep",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LargeModGames/spotatui",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LaunchPlatform/beanhub-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Laylo/node",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Lee-W/ras",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LeeorNahum/RemoteSkill-Plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "LeeorNahum/Serverwright-Plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Leona-Quantum/leona",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LeonMelamud/AI-Knowledge",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "LeonStadler/obsidian-vault-assistant",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LetsFG/LetsFG",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LiamVisionary/aeon-template",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Life-With-Data/mark-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LiquidMax-dev/liquid-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LittleJakub/PraxIS",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "LLM-Pulse/llmpulse-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LMTYdotcom/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Looted/kibi",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Luca-Blight/thin-grok-bot-deep-work-on-cli",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Lucky9-Labs/poppy-shorts",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Luke883i/iKant_LE",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LumioGames/Lumio-DevKit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "LurigeLars/firecrawl-local-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "M1KUAPP/Layerhand",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "M954/AgentContextAcrossPlatform",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MagicalLiHua/resume-companion",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MagicPathAI/magicpath-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Majenayu/MAJEN",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MarceloClaro/opencode-ecosystem-core",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Markgatcha/memos",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Markgatcha/universal-mcp-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MashiroKai/Nebflow",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 15,
+      "observed_record_count": 15,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Mastercard/developers-agent-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Mathewcraig1/agentic-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "MaxFreedomPollard/Compartment",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "MELDYNAMICS/lt-text-normalizer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MerlinAGI/cursor-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MetaMask/agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MetaMask/agent-wallet-codex-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Metimer/autoresearch-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Mickleburg/tfl-solver",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "MiguelElGallo/st",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MiguelEnriquePortilla/chickenia",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MindsEyeProducts/OpenRouter-Free-Agents-SKILL",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MiniMax-AI/MiniMax-Code-Plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 4,
+      "observed_record_count": 4,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Minitour/office-kit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MiuDog/agentic-workflow-setup",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MoeenNehzati/famulus",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "MomentumAnalyzer/ai_momentum_analyzer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "MonaDevAI/FixLab",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MoomooOpen/moomoo-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Moto1231/AICognitiveMind",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MrE84/Paul-Running-v1",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Mrlyk/codex-plugin-local-grep",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "MuraraAllan/codebridge-harness",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Muratovnik/assay",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "MushroomStew01/chatgpt-calorie-bridge",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Nafjan/summon",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "NebuSec/nebu-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NeerajCodz/ml-stack",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 5,
+      "observed_record_count": 3,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "Neha/rn-developer-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NeoFlux-AI/corvio-agent-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NextFormAI/oceantoken-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NguyenDuyHieu49/Hotelia",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NiazMorshed2007/jev-review",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NINAnor/litterature_agent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Nitmi/embedded-agent-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Nitmi/embedded-debugger",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Normalight/terminal-workspace-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "NotHassan/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NousResearch/hermes-nvidia",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NousResearch/hermes-plugin-blender",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NousResearch/hermes-plugin-snyk",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NousResearch/hermes-plugin-touchdesigner",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NovaAI-innovation/qdrant-kuzu-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NRCan/gcds-ext-map",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Nudgen-Marketing/mermail-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "NuevoFoundation/copilot-cli-skills-reference",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Number531/Codex-Orchestration",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Offline-Protocol/offline-protocol-agent-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "OilpriceAPI/mcp-server",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "OnArrival/agent-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ONLYHUMN/memlane-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Open-Document-Alliance/pdf-tools-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "OpenHands/software-agent-sdk",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 8,
+      "observed_record_count": 5,
+      "observed_diagnostic_count": 3
+    },
+    {
+      "repository": "OpenThrottle/monorepo",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "OpnForm/OpnForm",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "OreStocks/miningdataapi-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "OutSystems/outsystems-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "OximyHQ/oximy-reality-checks",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PandaDoc/mcp-server-guide",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PaoloLupo/gaanim",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PassingByPixels/Origami-Coder",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PedroAVJ/near-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PedroHRFerreira/rods-sdk",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PersonalJarvis/PersonalJarvis",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 24,
+      "observed_record_count": 24,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Peter537/peter537-agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "PlusDocs/plus-ai-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Praket7/Comptrol",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "PseudoGoN/hexis",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "PSModule/Process-PSModule",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "PublicData-stream/openlegal4everyoneMCP",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Qervas/remote-grok-build",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "QianQIUlp/handoffcheck-kiro-2026",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "QIU-Guanzong/CoProgrammer",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "QuestPortal/plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "QuinntyneBrown/photoshoot-map",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "RachidChabane/shallnot",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Rajaniraiyn/rstack",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Ray0907/arXiv-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "RendraSuproboAji/Intersign",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "RICK-ORPHEN/squareone-cockpit-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Roarpeng/GraphFlow",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "RoyAzran/mcp-ads",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Rughalt/melfina-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Rycen7822/subagent-pi",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "RyoOuchi/Presmith",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Ryze-AI-Adgent/cursor-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SalehB1/shunt-anywhere",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SalesforceCommerceCloud/b2c-developer-tooling",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SamKuler/live-smith",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Sandyzzx/codex-zcode-bridge",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SavenkovIgor/railing",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ScriptedAlchemy/cargo-hauler",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ScriptedAlchemy/grok-bot-cli",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ScriptedAlchemy/plugin-library",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SgtPooki/showdown",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ShadowWalker2014/accountable-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ShanireZ/Aptinery",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 20,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 20
+    },
+    {
+      "repository": "ShaunPrice/mechatronics-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ShaunPrice/robot-builder-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Shawn5cents/link2machine-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ShawnPana/studio-use",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Shree-git/sendit-openai-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Signalsurf-ai/signalsurf-agent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Simone-Andreotti/UltronAgent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 3,
+      "observed_record_count": 3,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SiTaggart/design-guide",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Skharbi/anti-vibecoding-ui",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Skharbi/Clinical-workflow-analysis",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SkylineCommunications/agent-marketplace",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SLtowl/sl-ui-library",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SocialKit-API/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Sofiia7/ARC",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "SovaraLabs/sovara-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SpillwaveSolutions/architect-agent",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SpillwaveSolutions/automating-mac-apps-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "SpillwaveSolutions/codebase-mentor",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "SpillwaveSolutions/creating-zola-static-sites-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "SpillwaveSolutions/developing-with-docker-agentic-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SpillwaveSolutions/document-specialist-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SpillwaveSolutions/mastering-aws-cdk-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SpillwaveSolutions/mastering-python-skill-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SpillwaveSolutions/orca-ager",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "SpillwaveSolutions/using-localstack-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "SpillwaveSolutions/wiki_ticket_sdd",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Spooky-Labs/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Spytrend/spytrend-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Ssojux2/high-agency-codex",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "St0nefish/agent-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Stele-Dev/stele-mcp-connector",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Substrate-memory/Substrate-memory-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Sugra-Systems/sugra-api-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Sugra-Systems/sugra-api-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SumoLogic/sumologic-ai-plugins",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Supademo/supademo-grok-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Supercompress/Supercompress",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Swastik023/ai-marketing-operations-platform",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Swastik023/marketing-api-automation-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SYMBaiEX/usagemax",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Synorb/synorb-cli",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "SYSTEMshiftAI/genealogy-evidence",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Taruvi-ai/taruvi-agents-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Tatendaz/QuotaSignal",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "TechsioCZ/new-engine",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "TencentCloudBase/CloudBase-AI-Toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 2
+    },
+    {
+      "repository": "TencentCloudBase/cloudbase-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "TencentCloudBase/cloudbase-sites-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "TheBestCo/bestprice-mcp",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "TheBous/jev-flash-review",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ThePlenkov/bro",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ThomasMarcelin754/wannalead-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "TideSurf/core",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Tl3-90/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "TLOGBen/baransu",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Toasterson/agent-plugin-rs",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 8,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 8
+    },
+    {
+      "repository": "Toasterson/agent-plugin-ts",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 8,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 8
+    },
+    {
+      "repository": "TobeALeg/llm-wiki-online",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Tohskcid/invisible-hands-for-economists",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "TommyBez/skillsboard",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ToolJet/tooljet-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "TopTechPhoto/picsio-mcp-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Trulioo/trulioo-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "TryVeto/veto-codex",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Unfairly-AI/unfairly-intelligence",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "UniteAndCreateForLife/HAL_SUPREME",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Unity-Billal-mesloub/editor-architectural",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Unternehmengruppe-SecureCare/coding-hub",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 4,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 4
+    },
+    {
+      "repository": "Uraxii/dotai",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 14,
+      "observed_record_count": 14,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Uulenu/uulenu-web-toolkit",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "V-harshith/kiro-university-2026",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ValueSignal/valuesignal-cursor-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Vertex-Systems-Network/ai-native-project-operating-system",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Virlo-AI/Virlo-Agent-Plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "VisiGrid/visigrid-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Wayfinity/affiliatespy-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Wayfinity/spicyapi-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Wayfinity/spicygen-skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Wefunder/agent-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "WolfMarkTools/WolfMarkDown",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Wulfgardr/mediflow",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "WuZiyong/wechat-macos-send-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Xilinx/ross-ai-assistant",
+      "validation_started": true,
+      "validation_ended": false,
+      "observed_package_count": 1
+    },
+    {
+      "repository": "XxYouDeaDPunKxX/canon-boundary-guard-for-gpt-project",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Xzelsius/skills",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Y-B-1/orchestra-plugin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Yomiamy/jev-mobile-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "Yongli-Netizen/project-workflow-suite",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "YuanyuanMa03/research-figure-skill",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "Zane-0x5a/remotion-director",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ZeroPointRepo/youtube-mcp",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 1,
+      "observed_record_count": 0,
+      "observed_diagnostic_count": 1
+    },
+    {
+      "repository": "ZhiyinAgent/Zhiyin",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 4,
+      "observed_record_count": 1,
+      "observed_diagnostic_count": 3
+    },
+    {
+      "repository": "ZJU-REAL/HugAgentOS",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 11,
+      "observed_record_count": 11,
+      "observed_diagnostic_count": 0
+    },
+    {
+      "repository": "ZMKC808/flexfox-wechat-writing-system",
+      "validation_started": true,
+      "validation_ended": true,
+      "observed_package_count": 2,
+      "observed_record_count": 2,
+      "observed_diagnostic_count": 0
+    }
+  ]
+}
