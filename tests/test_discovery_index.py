@@ -700,7 +700,7 @@ class DiscoveryIndexTests(unittest.TestCase):
     def test_github_api_can_recover_after_more_than_eleven_rate_limit_retries(self):
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true}'
-        api = GitHubAPI("test-token")
+        api = GitHubAPI("test-token", search_sleep=lambda _delay: None)
         api.opener = mock.Mock()
         api.opener.open.side_effect = [
             urllib.error.HTTPError(
@@ -710,7 +710,7 @@ class DiscoveryIndexTests(unittest.TestCase):
             for _ in range(16)
         ] + [response]
         with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
-            self.assertEqual(api.get("test"), {"ok": True})
+            self.assertEqual(api.get("search/code"), {"ok": True})
         self.assertEqual(api.opener.open.call_count, 17)
         self.assertEqual(sleep.call_args_list, [mock.call(1)] * 16)
 

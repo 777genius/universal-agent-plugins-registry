@@ -70,10 +70,13 @@ MAX_PREVIOUS_SNAPSHOT_BYTES = 16 << 20
 # windows such as the 75-second delay observed in production.
 MAX_GITHUB_RETRY_DELAY_SECONDS = 120
 MAX_GITHUB_SERVER_RETRY_DELAY_SECONDS = 30
+# Keep the established retry budget for ordinary API and GraphQL requests.
+MAX_GITHUB_REQUEST_ATTEMPTS = 12
 # A production code-search partition remained rate-limited through eleven
-# retries despite honoring bounded 60-120 second hints. Allow one more bounded
-# retry window while keeping the scan finite under a persistent outage.
-MAX_GITHUB_REQUEST_ATTEMPTS = 24
+# retries despite honoring bounded 60-120 second hints. Give code search one
+# larger but still finite retry window; the overall scan deadline remains the
+# upper bound on how long the job can wait.
+MAX_CODE_SEARCH_REQUEST_ATTEMPTS = 24
 CODE_SEARCH_REQUEST_INTERVAL_SECONDS = 6.5
 REPOSITORY_GRAPHQL_BATCH = 50
 SEARCH_STABILITY_ATTEMPTS = 3
@@ -191,7 +194,8 @@ class GitHubAPI:
         encoded = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         code_search = path.lstrip("/") == "search/code"
         endpoint = "code_search" if code_search else "graphql" if path == "graphql" else "other"
-        for attempt in range(MAX_GITHUB_REQUEST_ATTEMPTS):
+        max_attempts = MAX_CODE_SEARCH_REQUEST_ATTEMPTS if code_search else MAX_GITHUB_REQUEST_ATTEMPTS
+        for attempt in range(max_attempts):
             request = urllib.request.Request(url, headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": "Bearer " + self.token,
@@ -219,7 +223,7 @@ class GitHubAPI:
                     detail = f"<unable to read response body: {type(body_error).__name__}>"
                 if (
                     error.code not in {403, 429, 500, 502, 503, 504}
-                    or attempt + 1 == MAX_GITHUB_REQUEST_ATTEMPTS
+                    or attempt + 1 == max_attempts
                 ):
                     raise GitHubHTTPError(error.code, path, detail) from error
                 secondary_limit = error.code in {403, 429}
@@ -252,7 +256,7 @@ class GitHubAPI:
                               status=error.code, delay_seconds=delay)
                 time.sleep(delay)
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
-                if attempt + 1 == MAX_GITHUB_REQUEST_ATTEMPTS:
+                if attempt + 1 == max_attempts:
                     raise DiscoveryError(f"GitHub API {path} failed: {error}") from error
                 delay = min(attempt + 1, 5)
                 self.progress("transport_retry", endpoint=endpoint, attempt=attempt + 1,
