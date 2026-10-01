@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from scripts.build_bridges import BridgeError, PinnedRepository
 from scripts.build_discovery_index import (
     CODE_SEARCH_REQUEST_INTERVAL_SECONDS,
+    DISCOVERY_PACKAGE_PATH_RE,
     DiscoveryError,
     GitHubAPI,
     GitHubHTTPError,
@@ -903,6 +904,8 @@ class DiscoveryIndexTests(unittest.TestCase):
             "packages//demo/plugin.json": "path must be normalized and relative",
             "packages/./demo/plugin.json": "path must be normalized and relative",
             "packages/demo/plugin.json/": "path must be normalized and relative",
+            "tools/KFB-ToolBox/_inbox/KFB Style References/ClayBound Cozy Platformer + Editor/KFB Clay Asset Studio v1 plugin/plugin.json":
+                "package path is outside the Discovery schema",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -957,6 +960,13 @@ class DiscoveryIndexTests(unittest.TestCase):
                 self.assertTrue(candidate["complete"])
                 self.assertEqual(diagnostics, [])
                 self.assertEqual([item["package_path"] for item in candidate["records"]], [package_path])
+
+    def test_discovery_path_prefilter_matches_public_schema(self):
+        schema = json.loads((Path(__file__).parents[1] / "schemas/discovery-search.schema.json").read_text())
+        self.assertEqual(
+            DISCOVERY_PACKAGE_PATH_RE.pattern,
+            schema["$defs"]["record"]["properties"]["package_path"]["pattern"],
+        )
 
     def test_unsupported_source_diagnostic_does_not_hide_real_scan_error(self):
         previous = candidate_record("a" * 40)
