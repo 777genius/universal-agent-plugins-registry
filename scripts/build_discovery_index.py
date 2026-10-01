@@ -53,6 +53,11 @@ SCHEMA_URI = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 PORTABLE_CLIENTS = ["codex", "cursor", "copilot", "vscode", "kiro"]
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+# Keep package-path filtering in lockstep with discovery-search.schema.json.
+# Generic portable paths may contain characters which the public Discovery
+# contract intentionally excludes; reject those hits individually before the
+# final candidate schema check can fail the whole scan.
+DISCOVERY_PACKAGE_PATH_RE = re.compile(r"^(?:|[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)$")
 MIN_AVAILABLE_RECORDS_FOR_DROP_GUARD = 20
 MAX_FILES = 5_000
 MAX_FILE_BYTES = 16 << 20
@@ -678,6 +683,12 @@ def candidate_paths(items: list[dict[str, Any]]) -> tuple[dict[str, set[str]], l
             })
             continue
         package_path = "" if str(manifest.parent) == "." else normalized_path(str(manifest.parent))
+        if DISCOVERY_PACKAGE_PATH_RE.fullmatch(package_path) is None:
+            diagnostics.append({
+                "kind": "unsupported_source", "repository": repository,
+                "path": manifest_path, "error": "package path is outside the Discovery schema",
+            })
+            continue
         key = canonical_keys.setdefault(repository.casefold(), repository)
         result.setdefault(key, set()).add(package_path)
     return result, diagnostics
