@@ -697,7 +697,7 @@ class DiscoveryIndexTests(unittest.TestCase):
         for body in bodies:
             body.read.assert_called_once_with(4096)
 
-    def test_github_api_can_recover_after_the_observed_eight_attempt_window(self):
+    def test_github_api_can_recover_after_more_than_eleven_rate_limit_retries(self):
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true}'
         api = GitHubAPI("test-token")
@@ -707,12 +707,12 @@ class DiscoveryIndexTests(unittest.TestCase):
                 "https://api.github.com/test", 429, "Too Many Requests", {},
                 io.BytesIO(b'{"message":"try again in 1s"}'),
             )
-            for _ in range(8)
+            for _ in range(16)
         ] + [response]
         with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
             self.assertEqual(api.get("test"), {"ok": True})
-        self.assertEqual(api.opener.open.call_count, 9)
-        self.assertEqual(sleep.call_args_list, [mock.call(1)] * 8)
+        self.assertEqual(api.opener.open.call_count, 17)
+        self.assertEqual(sleep.call_args_list, [mock.call(1)] * 16)
 
     def test_github_api_non_retryable_error_does_not_sleep(self):
         api = GitHubAPI("test-token")
