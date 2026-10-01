@@ -916,6 +916,10 @@ class DiscoveryIndexTests(unittest.TestCase):
             hits = [("owner/repo", "packages/demo/plugin.json")]
             hits.extend(("owner/repo", path) for path in invalid_paths)
             hits.append(("foreign/repo", "packages/\u00e9/plugin.json"))
+            # GitHub allows leading dots in repository names, but the Discovery
+            # record contract does not. Such a search hit must be isolated as
+            # unsupported instead of aborting the complete scan later.
+            hits.append(("austenstone/.copilot", "packages/demo/plugin.json"))
             arguments = {
                 "config": {"schema_version": 1, "query": "schema filename:plugin.json", "maximum_file_size": 10,
                            "maximum_records": 100, "seeds": []},
@@ -934,7 +938,11 @@ class DiscoveryIndexTests(unittest.TestCase):
         for item in diagnostics:
             with self.subTest(path=item["path"]):
                 self.assertEqual(item["kind"], "unsupported_source")
-                self.assertIn(invalid_paths[item["path"]], item["error"])
+                if item["repository"] == "austenstone/.copilot":
+                    self.assertEqual(item["path"], "packages/demo/plugin.json")
+                    self.assertIn("repository identity is outside the supported Discovery format", item["error"])
+                else:
+                    self.assertIn(invalid_paths[item["path"]], item["error"])
 
     def test_build_candidate_supports_safe_ascii_root_and_nested_paths(self):
         for package_path in ("", "packages/demo", "Packages/Safe_1.2-3"):
