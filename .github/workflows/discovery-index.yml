@@ -10,6 +10,8 @@ on:
       - "registry/discovery/trusted-keys.json"
       - "schemas/discovery-*.schema.json"
       - "scripts/build_discovery_index.py"
+      - "scripts/discovery_checkpoint.py"
+      - "scripts/run_discovery_slice.sh"
       - "scripts/discovery_publication.py"
       - "scripts/feed_append_cas.py"
       - "scripts/sign_discovery_index.py"
@@ -67,21 +69,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  scan:
-    name: Scan inert public packages
+  acquire:
+    name: Acquire and retain discovery paths
     needs: publisher-preflight
     runs-on: ubuntu-latest
-    # Full acquisition has already exceeded 167 minutes before validation.
-    # Leave 30 minutes beyond the build budget for setup and artifact upload.
+    # Acquisition and validation have independent budgets. A step timeout
+    # leaves room for always-uploaded checkpoints before the job limit.
     timeout-minutes: 330
     environment: discovery-read
     permissions:
       contents: read
+      actions: read
     outputs:
-      complete: ${{ steps.scan.outputs.complete }}
-      candidate_digest: ${{ steps.scan.outputs.candidate_digest }}
       ledger_head: ${{ steps.ledger.outputs.head }}
+      previous_snapshot: ${{ steps.ledger.outputs.path }}
       mode: ${{ steps.mode.outputs.value }}
+      timeout_minutes: ${{ steps.mode.outputs.timeout_minutes }}
+      artifact_id: ${{ steps.scan.outputs.artifact_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,40 +148,488 @@ jobs:
             if test "${count}" -gt 0; then budget=120; fi
           fi
           echo "timeout_minutes=${budget}" >> "$GITHUB_OUTPUT"
-      - name: Build complete candidate without executing package content
-        id: scan
-        timeout-minutes: ${{ fromJSON(steps.mode.outputs.timeout_minutes) }}
+      - name: Select prior same-run acquisition checkpoint
+        id: resume
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          id="$(gh api --paginate --slurp "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" | jq -r --arg prefix "discovery-acquisition-${RUN_ID}-" --argjson attempt "${ATTEMPT}" '[.[].artifacts[] | select(.expired == false) | select(.name | startswith($prefix)) | . + {suffix: (.name | ltrimstr($prefix))} | select(.suffix | test("^[0-9]+-[0-9]+$")) | . + (.suffix | capture("^(?<attempt>[0-9]+)-(?<slice>[0-9]+)$") | with_entries(.value |= tonumber)) | select(.attempt > 0 and .attempt < $attempt and .slice >= 1 and .slice <= 10)] | sort_by(.attempt, .slice) | last | .id // empty')"
+          echo "artifact_id=${id}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.resume.outputs.artifact_id != ''
+        with:
+          artifact-ids: ${{ steps.resume.outputs.artifact_id }}
+          path: checkpoint
+      - name: Set bounded acquisition slice context
+        run: echo "DISCOVERY_PHASE_FINISHED=false" >> "$GITHUB_ENV"
+      - name: acquisition slice 01
+        id: slice01
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
         working-directory: source
         env:
           GITHUB_TOKEN: ${{ github.token }}
           MODE: ${{ steps.mode.outputs.value }}
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
-          DISCOVERY_REPOSITORY_WORKERS: "8"
-        run: |
-          args=(--mode "${MODE}" --repository-workers "${DISCOVERY_REPOSITORY_WORKERS}" --output ../candidate.json --diagnostics-output ../diagnostics.json)
-          if test -n "${PREVIOUS_SNAPSHOT}"; then
-            args+=(--previous-snapshot "${PREVIOUS_SNAPSHOT}")
-          fi
-          set +e
-          python3 scripts/build_discovery_index.py "${args[@]}"
-          status=$?
-          set -e
-          test -f ../candidate.json
-          test -f ../diagnostics.json
-          test "$(wc -c < ../candidate.json)" -le 16777216
-          if test "${status}" -eq 0; then
-            complete=true
-          elif test "${status}" -eq 3; then
-            complete=false
-            echo "::warning::Discovery scan was incomplete. The published last-known-good index remains active."
-          else
-            exit "${status}"
-          fi
-          echo "complete=${complete}" >> "$GITHUB_OUTPUT"
-          echo "candidate_digest=sha256:$(sha256sum ../candidate.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint01
+        if: always() && steps.slice01.outcome != 'skipped'
         with:
-          name: discovery-candidate-${{ github.run_id }}
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-01
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 02
+        id: slice02
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint02
+        if: always() && steps.slice02.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-02
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 03
+        id: slice03
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint03
+        if: always() && steps.slice03.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-03
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 04
+        id: slice04
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint04
+        if: always() && steps.slice04.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-04
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 05
+        id: slice05
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint05
+        if: always() && steps.slice05.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-05
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 06
+        id: slice06
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint06
+        if: always() && steps.slice06.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-06
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 07
+        id: slice07
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint07
+        if: always() && steps.slice07.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-07
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 08
+        id: slice08
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint08
+        if: always() && steps.slice08.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-08
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 09
+        id: slice09
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint09
+        if: always() && steps.slice09.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-09
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: acquisition slice 10
+        id: slice10
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.value }}
+          PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
+          PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh acquire
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint10
+        if: always() && steps.slice10.outcome != 'skipped'
+        with:
+          name: discovery-acquisition-${{ github.run_id }}-${{ github.run_attempt }}-10
+          path: checkpoint/acquisition.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require finished acquisition phase
+        id: scan
+        env:
+          CHECKPOINT_ARTIFACT_ID: ${{ steps.checkpoint10.outputs.artifact-id || steps.checkpoint09.outputs.artifact-id || steps.checkpoint08.outputs.artifact-id || steps.checkpoint07.outputs.artifact-id || steps.checkpoint06.outputs.artifact-id || steps.checkpoint05.outputs.artifact-id || steps.checkpoint04.outputs.artifact-id || steps.checkpoint03.outputs.artifact-id || steps.checkpoint02.outputs.artifact-id || steps.checkpoint01.outputs.artifact-id }}
+        run: |
+          test "${DISCOVERY_PHASE_FINISHED}" = true
+          test -n "${CHECKPOINT_ARTIFACT_ID}"
+          echo "artifact_id=${CHECKPOINT_ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+
+  scan:
+    name: Validate retained inert public packages
+    needs: acquire
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    environment: discovery-read
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      complete: ${{ steps.scan.outputs.complete }}
+      candidate_digest: ${{ steps.scan.outputs.candidate_digest }}
+      artifact_id: ${{ steps.candidate.outputs.artifact-id }}
+      ledger_head: ${{ needs.acquire.outputs.ledger_head }}
+      mode: ${{ needs.acquire.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.acquire.outputs.ledger_head }}
+          path: ledger
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned validation dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Reauthenticate exact acquisition last-known-good snapshot
+        working-directory: source
+        run: |
+          if test -f "../ledger/${FEED_PATH}/latest.json"; then
+            python3 scripts/verify_discovery_index.py \
+              --feed "../ledger/${FEED_PATH}" \
+              --trusted-keys registry/discovery/trusted-keys.json
+          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.acquire.outputs.artifact_id }}
+          path: checkpoint
+      - name: Select prior same-run validation checkpoint
+        id: resume
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          id="$(gh api --paginate --slurp "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" | jq -r --arg prefix "discovery-validation-${RUN_ID}-" --argjson attempt "${ATTEMPT}" '[.[].artifacts[] | select(.expired == false) | select(.name | startswith($prefix)) | . + {suffix: (.name | ltrimstr($prefix))} | select(.suffix | test("^[0-9]+-[0-9]+$")) | . + (.suffix | capture("^(?<attempt>[0-9]+)-(?<slice>[0-9]+)$") | with_entries(.value |= tonumber)) | select(.attempt > 0 and .attempt < $attempt and .slice >= 1 and .slice <= 10)] | sort_by(.attempt, .slice) | last | .id // empty')"
+          echo "artifact_id=${id}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.resume.outputs.artifact_id != ''
+        with:
+          artifact-ids: ${{ steps.resume.outputs.artifact_id }}
+          path: checkpoint
+      - name: Set bounded validation slice context
+        run: echo "DISCOVERY_PHASE_FINISHED=false" >> "$GITHUB_ENV"
+      - name: validation slice 01
+        id: slice01
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint01
+        if: always() && steps.slice01.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-01
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 02
+        id: slice02
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint02
+        if: always() && steps.slice02.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-02
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 03
+        id: slice03
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint03
+        if: always() && steps.slice03.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-03
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 04
+        id: slice04
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint04
+        if: always() && steps.slice04.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-04
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 05
+        id: slice05
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint05
+        if: always() && steps.slice05.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-05
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 06
+        id: slice06
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint06
+        if: always() && steps.slice06.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-06
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 07
+        id: slice07
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint07
+        if: always() && steps.slice07.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-07
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 08
+        id: slice08
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint08
+        if: always() && steps.slice08.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-08
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 09
+        id: slice09
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint09
+        if: always() && steps.slice09.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-09
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: validation slice 10
+        id: slice10
+        if: env.DISCOVERY_PHASE_FINISHED != 'true'
+        timeout-minutes: 35
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.acquire.outputs.mode }}
+          PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
+          PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
+        run: bash scripts/run_discovery_slice.sh validate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: checkpoint10
+        if: always() && steps.slice10.outcome != 'skipped'
+        with:
+          name: discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-10
+          path: checkpoint/validation.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require finished validation phase
+        id: scan
+        env:
+          CHECKPOINT_ARTIFACT_ID: ${{ steps.checkpoint10.outputs.artifact-id || steps.checkpoint09.outputs.artifact-id || steps.checkpoint08.outputs.artifact-id || steps.checkpoint07.outputs.artifact-id || steps.checkpoint06.outputs.artifact-id || steps.checkpoint05.outputs.artifact-id || steps.checkpoint04.outputs.artifact-id || steps.checkpoint03.outputs.artifact-id || steps.checkpoint02.outputs.artifact-id || steps.checkpoint01.outputs.artifact-id }}
+        run: |
+          test "${DISCOVERY_PHASE_FINISHED}" = true
+          echo "complete=${DISCOVERY_CANDIDATE_COMPLETE}" >> "$GITHUB_OUTPUT"
+          echo "candidate_digest=${DISCOVERY_CANDIDATE_DIGEST}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: candidate
+        with:
+          name: discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             candidate.json
             diagnostics.json
@@ -212,7 +664,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: discovery-candidate-${{ github.run_id }}
+          artifact-ids: ${{ needs.scan.outputs.artifact_id }}
           path: candidate
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
