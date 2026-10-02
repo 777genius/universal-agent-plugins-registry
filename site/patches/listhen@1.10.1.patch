@@ -1,0 +1,665 @@
+diff --git a/dist/certificate.cjs b/dist/certificate.cjs
+new file mode 100644
+index 0000000..4eaf358
+--- /dev/null
++++ b/dist/certificate.cjs
+@@ -0,0 +1,100 @@
++'use strict';
++
++// Repo-local listhen TLS adapter. Cryptographic operations stay in maintained
++// selfsigned/X509 and Node crypto/TLS; no forge algorithms are retained.
++const { promises: fs } = require('node:fs');
++const { createPrivateKey } = require('node:crypto');
++const { createSecureContext } = require('node:tls');
++const { isIP } = require('node:net');
++const { generate } = require('selfsigned');
++const { Name } = require('@peculiar/x509');
++
++async function readPem(value) {
++  return value.startsWith('--') ? value : fs.readFile(value, 'utf8');
++}
++
++function attributes(options) {
++  return [
++    ['CN', options.commonName], ['C', options.countryCode],
++    ['ST', options.state], ['L', options.locality],
++    ['O', options.organization], ['OU', options.organizationalUnit],
++    ['1.2.840.113549.1.9.1', options.emailAddress],
++  ].filter(([, value]) => value).map(([shortName, value]) => {
++    const encoded = new Name([{ [shortName]: [{ utf8String: value }] }]).toString();
++    return { shortName, value: encoded.slice(encoded.indexOf('=') + 1) };
++  });
++}
++
++async function generateCertificate(options, extensions, ca) {
++  const notBeforeDate = new Date();
++  const notAfterDate = new Date(notBeforeDate);
++  notAfterDate.setDate(notAfterDate.getDate() + (options.validityDays || 1));
++  const result = await generate(attributes(options), {
++    algorithm: 'sha256', keySize: options.bits || 2048,
++    notBeforeDate, notAfterDate, extensions, ca,
++  });
++  if (typeof options.passphrase === 'string' && options.passphrase.length < 2000) {
++    return {
++      key: createPrivateKey(result.private).export({
++        format: 'pem', type: 'pkcs8', cipher: 'aes-256-cbc',
++        passphrase: options.passphrase,
++      }),
++      cert: result.cert, passphrase: options.passphrase,
++    };
++  }
++  return { key: result.private, cert: result.cert };
++}
++
++exports.resolveCertificate = async function resolveCertificate(input) {
++  const options = typeof input === 'object' && input !== null ? input : {};
++  if (options.key && options.cert) {
++    const resolved = { key: await readPem(options.key), cert: await readPem(options.cert) };
++    if (options.passphrase) resolved.passphrase = options.passphrase;
++    return resolved;
++  }
++  if (options.pfx) {
++    const resolved = { pfx: await fs.readFile(options.pfx), passphrase: options.passphrase || '' };
++    try {
++      createSecureContext(resolved);
++    } catch (cause) {
++      throw new Error(
++        'Node TLS could not load the PFX: ' + cause.message +
++        '. Check the passphrase; re-export legacy RC2 PFX with modern AES encryption.',
++        { cause },
++      );
++    }
++    return resolved;
++  }
++  const defaults = {
++    commonName: 'localhost', countryCode: 'US', state: 'Michigan',
++    locality: 'Berkley', organization: 'Testing Corp', organizationalUnit: 'IT department',
++    validityDays: 1, bits: 2048,
++  };
++  const configured = { ...defaults };
++  for (const [name, value] of Object.entries(options)) {
++    if (value !== undefined && value !== null) configured[name] = value;
++  }
++  let issuer;
++  if (configured.signingKey && configured.signingKeyCert) {
++    issuer = {
++      key: createPrivateKey({
++        key: configured.signingKey, passphrase: configured.signingKeyPassphrase,
++      }).export({ format: 'pem', type: 'pkcs8' }),
++      cert: configured.signingKeyCert,
++    };
++  }
++  const ca = await generateCertificate({ ...configured, commonName: configured.commonName + ' development CA', passphrase: undefined }, [
++    { name: 'basicConstraints', cA: true, critical: true },
++    { name: 'keyUsage', keyCertSign: true, critical: true },
++  ], issuer);
++  const domains = Array.isArray(options.domains) ? options.domains : ['localhost', '127.0.0.1', '::1'];
++  const leaf = await generateCertificate(configured, [
++    { name: 'basicConstraints', cA: false, critical: true },
++    { name: 'keyUsage', digitalSignature: true, keyEncipherment: true, critical: true },
++    { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
++    { name: 'subjectAltName', altNames: domains.map(value => isIP(value)
++      ? { type: 7, ip: value } : { type: 2, value }) },
++  ], { key: ca.key, cert: ca.cert });
++  leaf.cert += '\n' + ca.cert + (issuer ? '\n' + issuer.cert : '');
++  return leaf;
++};
+diff --git a/dist/cli.cjs b/dist/cli.cjs
+index 0dfdec3..e8f3b97 100644
+--- a/dist/cli.cjs
++++ b/dist/cli.cjs
+@@ -17,7 +17,6 @@ require('node:child_process');
+ require('node:fs');
+ require('node:os');
+ require('std-env');
+-require('node-forge');
+ require('node:fs/promises');
+ require('node:url');
+ 
+diff --git a/dist/cli.mjs b/dist/cli.mjs
+index 225e481..d29cf22 100644
+--- a/dist/cli.mjs
++++ b/dist/cli.mjs
+@@ -15,7 +15,6 @@ import 'node:child_process';
+ import 'node:fs';
+ import 'node:os';
+ import 'std-env';
+-import 'node-forge';
+ import 'node:fs/promises';
+ import 'node:url';
+ 
+diff --git a/dist/index.cjs b/dist/index.cjs
+index f94a607..0972f92 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -16,7 +16,6 @@ require('node:fs');
+ require('node:os');
+ require('pathe');
+ require('std-env');
+-require('node-forge');
+ require('node:fs/promises');
+ require('node:url');
+ 
+diff --git a/dist/index.mjs b/dist/index.mjs
+index e9f8221..f62e17f 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -14,6 +14,5 @@ import 'node:fs';
+ import 'node:os';
+ import 'pathe';
+ import 'std-env';
+-import 'node-forge';
+ import 'node:fs/promises';
+ import 'node:url';
+diff --git a/dist/shared/listhen.DAqrw83w.cjs b/dist/shared/listhen.DAqrw83w.cjs
+index 0930a15..e02a388 100644
+--- a/dist/shared/listhen.DAqrw83w.cjs
++++ b/dist/shared/listhen.DAqrw83w.cjs
+@@ -15,7 +15,7 @@ const fs = require('node:fs');
+ const os = require('node:os');
+ const pathe = require('pathe');
+ const stdEnv = require('std-env');
+-const forge = require('node-forge');
++const { resolveCertificate } = require('../certificate.cjs');
+ const promises = require('node:fs/promises');
+ const node_url = require('node:url');
+ 
+@@ -27,7 +27,6 @@ const addShutdown__default = /*#__PURE__*/_interopDefaultCompat(addShutdown);
+ const childProcess__default = /*#__PURE__*/_interopDefaultCompat(childProcess);
+ const fs__default = /*#__PURE__*/_interopDefaultCompat(fs);
+ const os__default = /*#__PURE__*/_interopDefaultCompat(os);
+-const forge__default = /*#__PURE__*/_interopDefaultCompat(forge);
+ 
+ let isDockerCached;
+ function isDocker() {
+@@ -303,238 +302,6 @@ const ipRegex = options => options && options.exact
+ ipRegex.v4 = options => options && options.exact ? v4exact : new RegExp(`${boundry(options)}${v4}${boundry(options)}`, 'g');
+ ipRegex.v6 = options => options && options.exact ? v6exact : new RegExp(`${boundry(options)}${v6}${boundry(options)}`, 'g');
+ 
+-async function resolveCertificate(options) {
+-  let https;
+-  if (typeof options === "object" && options.key && options.cert) {
+-    https = await resolveCert(options);
+-    if (options.passphrase) {
+-      https.passphrase = options.passphrase;
+-    }
+-  } else if (typeof options === "object" && options.pfx) {
+-    const pfx = await resolvePfx(options);
+-    if (!pfx.safeContents || pfx.safeContents.length < 2 || pfx.safeContents[0].safeBags.length === 0 || pfx.safeContents[1].safeBags.length === 0) {
+-      throw new Error("keystore not containing a cert AND a key");
+-    }
+-    const _cert = pfx.safeContents[0].safeBags[0].cert;
+-    const _key = pfx.safeContents[1].safeBags[0].key;
+-    https = {
+-      key: forge__default.pki.privateKeyToPem(_key),
+-      cert: forge__default.pki.certificateToPem(_cert)
+-    };
+-  } else {
+-    const { cert } = await generateCertificates(options);
+-    https = cert;
+-  }
+-  return https;
+-}
+-async function generateCertificates(options) {
+-  const defaults = {
+-    commonName: "localhost",
+-    countryCode: "US",
+-    state: "Michigan",
+-    locality: "Berkley",
+-    organization: "Testing Corp",
+-    organizationalUnit: "IT department",
+-    domains: ["localhost", "127.0.0.1", "::1"],
+-    validityDays: 1,
+-    bits: 2048
+-  };
+-  const caOptions = defu.defu(options, defaults);
+-  caOptions.passphrase = options.signingKeyPassphrase;
+-  const ca = await generateCACert(caOptions);
+-  const domains = Array.isArray(options.domains) ? options.domains : ["localhost", "127.0.0.1", "::1"];
+-  const certOptions = defu.defu(options, defaults);
+-  const cert = await generateTLSCert({
+-    ...certOptions,
+-    signingKeyCert: ca.cert,
+-    signingKey: ca.key,
+-    domains
+-  });
+-  return { ca, cert };
+-}
+-async function resolveCert(options) {
+-  if (options && options.key && options.cert) {
+-    const isInline = (s = "") => s.startsWith("--");
+-    const r = (s) => isInline(s) ? s : fs.promises.readFile(s, "utf8");
+-    return {
+-      key: await r(options.key),
+-      cert: await r(options.cert)
+-    };
+-  }
+-  throw new Error("Certificate or Private Key not present");
+-}
+-async function resolvePfx(options) {
+-  if (options && options.pfx) {
+-    const pfx = await fs.promises.readFile(options.pfx, "binary");
+-    const p12Asn1 = forge__default.asn1.fromDer(pfx);
+-    if (options.passphrase) {
+-      return forge__default.pkcs12.pkcs12FromAsn1(p12Asn1, options.passphrase);
+-    }
+-    return forge__default.pkcs12.pkcs12FromAsn1(p12Asn1, "");
+-  }
+-  throw new Error("Error resolving the pfx store");
+-}
+-function createAttributes(options) {
+-  return [
+-    options.commonName && { name: "commonName", value: options.commonName },
+-    options.countryCode && { name: "countryName", value: options.countryCode },
+-    options.state && { name: "stateOrProvinceName", value: options.state },
+-    options.locality && { name: "localityName", value: options.locality },
+-    options.organization && {
+-      name: "organizationName",
+-      value: options.organization
+-    },
+-    options.organizationalUnit && {
+-      name: "organizationalUnitName",
+-      value: options.organizationalUnit
+-    },
+-    options.emailAddress && {
+-      name: "emailAddress",
+-      value: options.emailAddress
+-    }
+-  ].filter(Boolean);
+-}
+-function createCertificateInfo(options) {
+-  if (!options.domains || options.domains && options.domains.length === 0) {
+-    options.domains = ["localhost.local"];
+-  }
+-  options.commonName = options.commonName || options.domains[0];
+-  const attributes = createAttributes(options);
+-  const extensions = [
+-    { name: "basicConstraints", cA: false, critical: true },
+-    {
+-      name: "keyUsage",
+-      digitalSignature: true,
+-      keyEncipherment: true,
+-      critical: true
+-    },
+-    { name: "extKeyUsage", serverAuth: true, clientAuth: true },
+-    {
+-      name: "subjectAltName",
+-      altNames: options.domains.map((domain) => {
+-        const types = { domain: 2, ip: 7 };
+-        const isIp = ipRegex({ exact: true }).test(domain);
+-        if (isIp) {
+-          return { type: types.ip, ip: domain };
+-        }
+-        return { type: types.domain, value: domain };
+-      })
+-    }
+-  ];
+-  return { attributes, extensions };
+-}
+-function createCaInfo(options) {
+-  const attributes = createAttributes(options);
+-  const extensions = [
+-    { name: "basicConstraints", cA: true, critical: true },
+-    { name: "keyUsage", keyCertSign: true, critical: true }
+-  ];
+-  return { attributes, extensions };
+-}
+-async function generateTLSCert(options) {
+-  const { attributes, extensions } = createCertificateInfo(options);
+-  const ca = forge__default.pki.certificateFromPem(options.signingKeyCert);
+-  return await generateCert({
+-    bits: options.bits,
+-    subject: attributes,
+-    issuer: ca.subject.attributes,
+-    extensions,
+-    validityDays: options.validityDays || 1,
+-    signingKey: options.signingKey,
+-    signingKeyPassphrase: options.signingKeyPassphrase,
+-    passphrase: options.passphrase
+-  });
+-}
+-async function generateCACert(options = {}) {
+-  const { attributes, extensions } = createCaInfo(options);
+-  return await generateCert({
+-    ...options,
+-    bits: options.bits || 2048,
+-    subject: attributes,
+-    issuer: attributes,
+-    extensions,
+-    validityDays: options.validityDays || 1
+-  });
+-}
+-function signCertificate(options, cert) {
+-  if (options.signingKey) {
+-    if (isValidPassphrase(options.signingKeyPassphrase)) {
+-      const encryptedPrivateKey = forge__default.pki.encryptedPrivateKeyFromPem(options.signingKey);
+-      const decryptedPrivateKey = forge__default.pki.decryptPrivateKeyInfo(
+-        encryptedPrivateKey,
+-        options.signingKeyPassphrase
+-      );
+-      cert.sign(forge__default.pki.privateKeyFromAsn1(decryptedPrivateKey), forge__default.md.sha256.create());
+-    } else {
+-      cert.sign(forge__default.pki.privateKeyFromPem(options.signingKey), forge__default.md.sha256.create());
+-    }
+-  } else {
+-    cert.sign(cert.privateKey, forge__default.md.sha256.create());
+-  }
+-}
+-function createCertificateFromKeyPair(keyPair, options) {
+-  const serial = Math.floor(Math.random() * 95e3 + 5e4).toString();
+-  const cert = forge__default.pki.createCertificate();
+-  cert.publicKey = keyPair.publicKey;
+-  cert.privateKey = keyPair.privateKey;
+-  cert.serialNumber = Buffer.from(serial).toString("hex");
+-  cert.validity.notBefore = /* @__PURE__ */ new Date();
+-  cert.validity.notAfter = /* @__PURE__ */ new Date();
+-  cert.validity.notAfter.setDate(cert.validity.notAfter.getDate() + options.validityDays);
+-  cert.setSubject(options.subject);
+-  cert.setIssuer(options.issuer);
+-  cert.setExtensions(options.extensions);
+-  return cert;
+-}
+-async function generateKeyPair(bits = 2048) {
+-  const _generateKeyPair = node_util.promisify(forge__default.pki.rsa.generateKeyPair.bind(forge__default.pki.rsa));
+-  return await _generateKeyPair({
+-    bits,
+-    workers: os__default.availableParallelism ? os__default.availableParallelism() : os__default.cpus().length
+-  });
+-}
+-function isValidPassphrase(passphrase) {
+-  return typeof passphrase === "string" && passphrase.length < 2e3;
+-}
+-async function generateCert(options) {
+-  const keyPair = await generateKeyPair(options.bits);
+-  const cert = createCertificateFromKeyPair(keyPair, options);
+-  if (isValidPassphrase(options.passphrase)) {
+-    const asn1PrivateKey = forge__default.pki.privateKeyToAsn1(keyPair.privateKey);
+-    const privateKeyInfo = forge__default.pki.wrapRsaPrivateKey(asn1PrivateKey);
+-    const encryptedPrivateKeyInfo = forge__default.pki.encryptPrivateKeyInfo(
+-      privateKeyInfo,
+-      options.passphrase,
+-      {
+-        algorithm: "aes256"
+-      }
+-    );
+-    signCertificate(
+-      {
+-        signingKey: options.signingKey,
+-        signingKeyPassphrase: options.signingKeyPassphrase
+-      },
+-      cert
+-    );
+-    return {
+-      key: forge__default.pki.encryptedPrivateKeyToPem(encryptedPrivateKeyInfo),
+-      cert: forge__default.pki.certificateToPem(cert),
+-      passphrase: options.passphrase
+-    };
+-  } else {
+-    signCertificate(
+-      {
+-        signingKey: options.signingKey,
+-        signingKeyPassphrase: options.signingKeyPassphrase
+-      },
+-      cert
+-    );
+-    return {
+-      key: forge__default.pki.privateKeyToPem(keyPair.privateKey),
+-      cert: forge__default.pki.certificateToPem(cert)
+-    };
+-  }
+-}
+ 
+ async function listen(handle, _options = {}) {
+   const _isProd = _options.isProd ?? process.env.NODE_ENV === "production";
+diff --git a/dist/shared/listhen.tqe5I1Rl.mjs b/dist/shared/listhen.tqe5I1Rl.mjs
+index fddc8e7..80b5abb 100644
+--- a/dist/shared/listhen.tqe5I1Rl.mjs
++++ b/dist/shared/listhen.tqe5I1Rl.mjs
+@@ -13,7 +13,7 @@ import fs, { statSync, readFileSync, accessSync, constants, promises, existsSync
+ import os, { networkInterfaces } from 'node:os';
+ import { relative, join as join$1, dirname, resolve } from 'pathe';
+ import { provider } from 'std-env';
+-import forge from 'node-forge';
++import { resolveCertificate } from '../certificate.cjs';
+ import { stat, readFile } from 'node:fs/promises';
+ import { fileURLToPath } from 'node:url';
+ 
+@@ -291,238 +291,6 @@ const ipRegex = options => options && options.exact
+ ipRegex.v4 = options => options && options.exact ? v4exact : new RegExp(`${boundry(options)}${v4}${boundry(options)}`, 'g');
+ ipRegex.v6 = options => options && options.exact ? v6exact : new RegExp(`${boundry(options)}${v6}${boundry(options)}`, 'g');
+ 
+-async function resolveCertificate(options) {
+-  let https;
+-  if (typeof options === "object" && options.key && options.cert) {
+-    https = await resolveCert(options);
+-    if (options.passphrase) {
+-      https.passphrase = options.passphrase;
+-    }
+-  } else if (typeof options === "object" && options.pfx) {
+-    const pfx = await resolvePfx(options);
+-    if (!pfx.safeContents || pfx.safeContents.length < 2 || pfx.safeContents[0].safeBags.length === 0 || pfx.safeContents[1].safeBags.length === 0) {
+-      throw new Error("keystore not containing a cert AND a key");
+-    }
+-    const _cert = pfx.safeContents[0].safeBags[0].cert;
+-    const _key = pfx.safeContents[1].safeBags[0].key;
+-    https = {
+-      key: forge.pki.privateKeyToPem(_key),
+-      cert: forge.pki.certificateToPem(_cert)
+-    };
+-  } else {
+-    const { cert } = await generateCertificates(options);
+-    https = cert;
+-  }
+-  return https;
+-}
+-async function generateCertificates(options) {
+-  const defaults = {
+-    commonName: "localhost",
+-    countryCode: "US",
+-    state: "Michigan",
+-    locality: "Berkley",
+-    organization: "Testing Corp",
+-    organizationalUnit: "IT department",
+-    domains: ["localhost", "127.0.0.1", "::1"],
+-    validityDays: 1,
+-    bits: 2048
+-  };
+-  const caOptions = defu(options, defaults);
+-  caOptions.passphrase = options.signingKeyPassphrase;
+-  const ca = await generateCACert(caOptions);
+-  const domains = Array.isArray(options.domains) ? options.domains : ["localhost", "127.0.0.1", "::1"];
+-  const certOptions = defu(options, defaults);
+-  const cert = await generateTLSCert({
+-    ...certOptions,
+-    signingKeyCert: ca.cert,
+-    signingKey: ca.key,
+-    domains
+-  });
+-  return { ca, cert };
+-}
+-async function resolveCert(options) {
+-  if (options && options.key && options.cert) {
+-    const isInline = (s = "") => s.startsWith("--");
+-    const r = (s) => isInline(s) ? s : promises.readFile(s, "utf8");
+-    return {
+-      key: await r(options.key),
+-      cert: await r(options.cert)
+-    };
+-  }
+-  throw new Error("Certificate or Private Key not present");
+-}
+-async function resolvePfx(options) {
+-  if (options && options.pfx) {
+-    const pfx = await promises.readFile(options.pfx, "binary");
+-    const p12Asn1 = forge.asn1.fromDer(pfx);
+-    if (options.passphrase) {
+-      return forge.pkcs12.pkcs12FromAsn1(p12Asn1, options.passphrase);
+-    }
+-    return forge.pkcs12.pkcs12FromAsn1(p12Asn1, "");
+-  }
+-  throw new Error("Error resolving the pfx store");
+-}
+-function createAttributes(options) {
+-  return [
+-    options.commonName && { name: "commonName", value: options.commonName },
+-    options.countryCode && { name: "countryName", value: options.countryCode },
+-    options.state && { name: "stateOrProvinceName", value: options.state },
+-    options.locality && { name: "localityName", value: options.locality },
+-    options.organization && {
+-      name: "organizationName",
+-      value: options.organization
+-    },
+-    options.organizationalUnit && {
+-      name: "organizationalUnitName",
+-      value: options.organizationalUnit
+-    },
+-    options.emailAddress && {
+-      name: "emailAddress",
+-      value: options.emailAddress
+-    }
+-  ].filter(Boolean);
+-}
+-function createCertificateInfo(options) {
+-  if (!options.domains || options.domains && options.domains.length === 0) {
+-    options.domains = ["localhost.local"];
+-  }
+-  options.commonName = options.commonName || options.domains[0];
+-  const attributes = createAttributes(options);
+-  const extensions = [
+-    { name: "basicConstraints", cA: false, critical: true },
+-    {
+-      name: "keyUsage",
+-      digitalSignature: true,
+-      keyEncipherment: true,
+-      critical: true
+-    },
+-    { name: "extKeyUsage", serverAuth: true, clientAuth: true },
+-    {
+-      name: "subjectAltName",
+-      altNames: options.domains.map((domain) => {
+-        const types = { domain: 2, ip: 7 };
+-        const isIp = ipRegex({ exact: true }).test(domain);
+-        if (isIp) {
+-          return { type: types.ip, ip: domain };
+-        }
+-        return { type: types.domain, value: domain };
+-      })
+-    }
+-  ];
+-  return { attributes, extensions };
+-}
+-function createCaInfo(options) {
+-  const attributes = createAttributes(options);
+-  const extensions = [
+-    { name: "basicConstraints", cA: true, critical: true },
+-    { name: "keyUsage", keyCertSign: true, critical: true }
+-  ];
+-  return { attributes, extensions };
+-}
+-async function generateTLSCert(options) {
+-  const { attributes, extensions } = createCertificateInfo(options);
+-  const ca = forge.pki.certificateFromPem(options.signingKeyCert);
+-  return await generateCert({
+-    bits: options.bits,
+-    subject: attributes,
+-    issuer: ca.subject.attributes,
+-    extensions,
+-    validityDays: options.validityDays || 1,
+-    signingKey: options.signingKey,
+-    signingKeyPassphrase: options.signingKeyPassphrase,
+-    passphrase: options.passphrase
+-  });
+-}
+-async function generateCACert(options = {}) {
+-  const { attributes, extensions } = createCaInfo(options);
+-  return await generateCert({
+-    ...options,
+-    bits: options.bits || 2048,
+-    subject: attributes,
+-    issuer: attributes,
+-    extensions,
+-    validityDays: options.validityDays || 1
+-  });
+-}
+-function signCertificate(options, cert) {
+-  if (options.signingKey) {
+-    if (isValidPassphrase(options.signingKeyPassphrase)) {
+-      const encryptedPrivateKey = forge.pki.encryptedPrivateKeyFromPem(options.signingKey);
+-      const decryptedPrivateKey = forge.pki.decryptPrivateKeyInfo(
+-        encryptedPrivateKey,
+-        options.signingKeyPassphrase
+-      );
+-      cert.sign(forge.pki.privateKeyFromAsn1(decryptedPrivateKey), forge.md.sha256.create());
+-    } else {
+-      cert.sign(forge.pki.privateKeyFromPem(options.signingKey), forge.md.sha256.create());
+-    }
+-  } else {
+-    cert.sign(cert.privateKey, forge.md.sha256.create());
+-  }
+-}
+-function createCertificateFromKeyPair(keyPair, options) {
+-  const serial = Math.floor(Math.random() * 95e3 + 5e4).toString();
+-  const cert = forge.pki.createCertificate();
+-  cert.publicKey = keyPair.publicKey;
+-  cert.privateKey = keyPair.privateKey;
+-  cert.serialNumber = Buffer.from(serial).toString("hex");
+-  cert.validity.notBefore = /* @__PURE__ */ new Date();
+-  cert.validity.notAfter = /* @__PURE__ */ new Date();
+-  cert.validity.notAfter.setDate(cert.validity.notAfter.getDate() + options.validityDays);
+-  cert.setSubject(options.subject);
+-  cert.setIssuer(options.issuer);
+-  cert.setExtensions(options.extensions);
+-  return cert;
+-}
+-async function generateKeyPair(bits = 2048) {
+-  const _generateKeyPair = promisify(forge.pki.rsa.generateKeyPair.bind(forge.pki.rsa));
+-  return await _generateKeyPair({
+-    bits,
+-    workers: os.availableParallelism ? os.availableParallelism() : os.cpus().length
+-  });
+-}
+-function isValidPassphrase(passphrase) {
+-  return typeof passphrase === "string" && passphrase.length < 2e3;
+-}
+-async function generateCert(options) {
+-  const keyPair = await generateKeyPair(options.bits);
+-  const cert = createCertificateFromKeyPair(keyPair, options);
+-  if (isValidPassphrase(options.passphrase)) {
+-    const asn1PrivateKey = forge.pki.privateKeyToAsn1(keyPair.privateKey);
+-    const privateKeyInfo = forge.pki.wrapRsaPrivateKey(asn1PrivateKey);
+-    const encryptedPrivateKeyInfo = forge.pki.encryptPrivateKeyInfo(
+-      privateKeyInfo,
+-      options.passphrase,
+-      {
+-        algorithm: "aes256"
+-      }
+-    );
+-    signCertificate(
+-      {
+-        signingKey: options.signingKey,
+-        signingKeyPassphrase: options.signingKeyPassphrase
+-      },
+-      cert
+-    );
+-    return {
+-      key: forge.pki.encryptedPrivateKeyToPem(encryptedPrivateKeyInfo),
+-      cert: forge.pki.certificateToPem(cert),
+-      passphrase: options.passphrase
+-    };
+-  } else {
+-    signCertificate(
+-      {
+-        signingKey: options.signingKey,
+-        signingKeyPassphrase: options.signingKeyPassphrase
+-      },
+-      cert
+-    );
+-    return {
+-      key: forge.pki.privateKeyToPem(keyPair.privateKey),
+-      cert: forge.pki.certificateToPem(cert)
+-    };
+-  }
+-}
+ 
+ async function listen(handle, _options = {}) {
+   const _isProd = _options.isProd ?? process.env.NODE_ENV === "production";

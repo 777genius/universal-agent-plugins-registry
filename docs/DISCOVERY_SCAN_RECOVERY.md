@@ -9,7 +9,8 @@ only a complete, schema-checked candidate. No package code is executed.
 - Acquisition writes `acquisition.json` atomically after completed search
   partitions and partition splits. A partial checkpoint retains the remaining
   queue, but cannot be used as a complete search result.
-- Validation writes `validation.json` atomically after completed repositories.
+- Validation writes `validation.json` atomically after completed repositories
+  and preserves completed package outcomes when a repository yields.
   Only results bound to the same immutable source and package inputs can be
   reused. A repository scan error must be retried, not cached as success.
 - Both jobs upload their checkpoint with `always()` after each cooperative
@@ -18,6 +19,27 @@ only a complete, schema-checked candidate. No package code is executed.
   wall budget includes uploads; a process guard bounds in-flight work and the
   330-minute job budget reserves upload time. Runner loss or cancellation can
   still lose the current slice, but not an earlier confirmed artifact.
+
+The phase start clock is included alongside its checkpoint in every uploaded
+artifact. A fresh runner restores it, so a failed-job retry does not reset the
+120/300-minute wall budget. Queue time between retries counts toward that
+budget. Exhaustion stops the phase; it does not authorize an unlimited retry.
+Artifacts created before this clock contract have no persisted clock.
+
+Pinned Git reads use the remaining cooperative slice time, including their fetch
+helpers. Deadline interruption is a yield, not an invalid package or a cached
+scan error. Fully completed repositories remain durable and subsequent slices
+continue automatically after successful upload. The process timeout remains a
+fallback for non-cooperative local parsing or cleanup.
+
+On cooperative interruption, completed valid and deterministic-invalid package
+outcomes survive inside a partial repository result. The original full input
+digest is retained; a resume verifies those outcomes and submits only unfinished
+or transient-error packages. A partial result cannot satisfy completeness.
+Checkpoint writes stay in the coordinator, not parallel repository workers.
+An individual package that exceeds every slice can still starve. Abrupt runner
+loss can still lose work since the last uploaded artifact; neither limitation
+should be described as complete resumability.
 
 Artifacts are immutable, attempt-and-slice-specific and retained for seven days.
 Checkpoints may be resumed for at most 24 hours; retention is not a freshness

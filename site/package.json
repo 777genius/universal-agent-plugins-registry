@@ -29,7 +29,27 @@
     "@nuxt/eslint": "1.15.2",
     "@playwright/test": "1.62.1",
     "eslint": "9.39.4",
+    "listhen": "1.10.1",
+    "selfsigned": "5.5.0",
     "typescript": "5.9.3",
     "vue-tsc": "3.3.9"
+  },
+  "pnpm": {
+    "overrides": {
+      "listhen": "1.10.1",
+      "esbuild": "0.28.2",
+      "listhen>node-forge": "-"
+    },
+    "packageExtensions": {
+      "listhen@1.10.1": {
+        "dependencies": {
+          "selfsigned": "5.5.0",
+          "@peculiar/x509": "1.14.3"
+        }
+      }
+    },
+    "patchedDependencies": {
+      "listhen@1.10.1": "patches/listhen@1.10.1.patch"
+    }
   }
 }

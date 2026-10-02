@@ -66,12 +66,39 @@ class DiscoverySliceTests(unittest.TestCase):
         # Red if each new slice resets the overall phase's bounded budget.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / ".discovery-validate-started").write_text("1\n")
+            (root / "checkpoint").mkdir()
+            (root / "checkpoint/phase-validate-started").write_text("1\n")
             result, environment = self.run_slice(root, 0)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("wall budget exhausted", result.stdout)
             self.assertFalse((root / "invoked").exists())
             self.assertEqual(environment, "")
+
+    def test_restored_checkpoint_clock_survives_a_fresh_workspace(self):
+        # Red if a failed-job retry receives a new full phase budget.
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            old, fresh = Path(first), Path(second)
+            result, _ = self.run_slice(old, 4)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            clock = old / "checkpoint/phase-validate-started"
+            self.assertTrue(clock.exists())
+            (fresh / "checkpoint").mkdir()
+            restored = fresh / "checkpoint/phase-validate-started"
+            restored.write_bytes(clock.read_bytes())
+            result, _ = self.run_slice(fresh, 4)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(restored.read_bytes(), clock.read_bytes())
+
+    def test_invalid_restored_clock_cannot_reset_budget(self):
+        for value in ("invalid\n", "9999999999\n", "18446744073709551617\n", "0008\n"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "checkpoint").mkdir()
+                (root / "checkpoint/phase-validate-started").write_text(value)
+                result, environment = self.run_slice(root, 0)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "invoked").exists())
+                self.assertEqual(environment, "")
 
     def test_yield_refuses_stale_candidate_file(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -6,11 +6,20 @@ phase="${1:?acquire or validate required}"
 case "$phase" in acquire|validate) ;; *) exit 2 ;; esac
 case "${PHASE_BUDGET_MINUTES:?phase budget required}" in 120|300) ;; *) exit 2 ;; esac
 test "${DISCOVERY_PHASE_FINISHED:-false}" != true
-start_file="../.discovery-${phase}-started"
+# Retain the phase clock with the checkpoint, not in the ephemeral workspace.
+# A failed-job retry downloads this file before starting another slice.
+start_file="../checkpoint/phase-${phase}-started"
 now="$(date +%s)"
-if ! test -f "$start_file"; then printf '%s\n' "$now" > "$start_file"; fi
+test ! -L ../checkpoint
+mkdir -p ../checkpoint
+test ! -L "$start_file"
+if ! test -f "$start_file"; then
+  temporary_clock="$(mktemp ../checkpoint/.phase-clock.XXXXXX)"
+  printf '%s\n' "$now" > "$temporary_clock"
+  mv "$temporary_clock" "$start_file"
+fi
 started="$(< "$start_file")"
-[[ "$started" =~ ^[0-9]+$ ]]
+[[ "$started" =~ ^[1-9][0-9]{0,9}$ ]]
 elapsed=$((now - started))
 test "$elapsed" -ge 0
 remaining=$((PHASE_BUDGET_MINUTES * 60 - elapsed))
