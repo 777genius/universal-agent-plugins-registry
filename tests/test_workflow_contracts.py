@@ -1622,7 +1622,11 @@ sys.modules['catalog_process_isolation']=module
                     self.assertEqual(build["if"], "env.DISCOVERY_PHASE_FINISHED != 'true'")
                     self.assertEqual(upload["if"], f"always() && steps.slice{suffix}.outcome != 'skipped'")
                     self.assertEqual(upload["with"]["retention-days"], "7")
-                    self.assertEqual(upload["with"]["path"], "checkpoint/" + filename)
+                    budget_phase = "acquire" if phase == "acquire" else "validate"
+                    self.assertEqual(upload["with"]["path"].splitlines(), [
+                        "checkpoint/" + filename,
+                        "checkpoint/phase-" + budget_phase + "-started",
+                    ])
                     self.assertEqual(job["steps"].index(upload), job["steps"].index(build) + 1)
                     if number < 10:
                         next_build = next(step for step in job["steps"] if step.get("id") == f"slice{number + 1:02}")
@@ -1632,7 +1636,7 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn("run_discovery_slice.sh acquire", commands(acquire))
         self.assertIn("run_discovery_slice.sh validate", commands(validation))
         # The successful acquisition artifact is pinned by its immutable ID.
-        # Restored validation artifacts contain only validation.json, not a
+        # Restored validation artifacts contain validation and its phase clock, not a
         # replacement acquisition or a candidate which could bypass the builder.
         download = next(step for step in validation["steps"]
                         if step.get("with", {}).get("artifact-ids") == "${{ needs.acquire.outputs.artifact_id }}")

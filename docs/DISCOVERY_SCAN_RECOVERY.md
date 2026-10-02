@@ -19,6 +19,23 @@ only a complete, schema-checked candidate. No package code is executed.
   330-minute job budget reserves upload time. Runner loss or cancellation can
   still lose the current slice, but not an earlier confirmed artifact.
 
+The phase start clock is included alongside its checkpoint in every uploaded
+artifact. A fresh runner restores it, so a failed-job retry does not reset the
+120/300-minute wall budget. Queue time between retries counts toward that
+budget. Exhaustion stops the phase; it does not authorize an unlimited retry.
+Artifacts created before this clock contract have no persisted clock.
+
+Pinned Git reads use the remaining cooperative slice time, including their fetch
+helpers. Deadline interruption is a yield, not an invalid package or a cached
+scan error. Fully completed repositories remain durable and subsequent slices
+continue automatically after successful upload. The process timeout remains a
+fallback for non-cooperative local parsing or cleanup.
+
+Checkpoint granularity is currently a whole repository. Completed packages in
+an interrupted repository may be re-read; a repository needing more than one
+slice cannot yet make durable package-level progress. This limitation is not
+proof of data corruption, but must not be described as complete resumability.
+
 Artifacts are immutable, attempt-and-slice-specific and retained for seven days.
 Checkpoints may be resumed for at most 24 hours; retention is not a freshness
 extension. Original observation time is preserved, not rewritten to look new.

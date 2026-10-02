@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import io
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from scripts import build_discovery_index as builder
+from scripts import build_bridges, build_discovery_index as builder
 from scripts.discovery_checkpoint import CheckpointYield, DiscoveryCheckpoint, WorkBudget, atomic_json
 from scripts.directory_publication import canonical_json, sha256_digest
 from tests.test_discovery_index import FixtureAPI, PartitionAPI, SearchFixtureAPI, create_mirror, git
@@ -397,6 +400,85 @@ class DiscoveryCheckpointTests(unittest.TestCase):
                 builder.scan_repository("owner/repo", {"repository": "owner/repo", "revision": "a" * 40},
                     [("packages/demo", "owner/repo\x00packages/demo", None)], STAMP, {}, Path("/inert-mirror"))
         pinned.close.assert_called_once()
+
+    def test_validation_deadline_interrupts_blob_read_preserves_completed_and_resumes(self):
+        # Red if an active blob read drains beyond the slice, caches its partial
+        # repository, or writes a candidate on yield instead of exit 4.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirror, revision = create_mirror(root, repository="first/repo")
+            (mirror / "second").mkdir()
+            git(root, "clone", "--quiet", "--bare", str(mirror / "first/repo.git"), str(mirror / "second/repo.git"))
+            names = ["first/repo", "second/repo"]
+            config = {**CONFIG, "query": '"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" filename:plugin.json'}
+            api = SearchFixtureAPI(revision, [(name, "packages/demo/plugin.json") for name in names])
+            states = {name: {"repository": name, "revision": revision, "available": True,
+                "stars": 1, "updated_at": STAMP} for name in names}
+            checkpoint_dir = root / "checkpoint"
+            builder.acquire_candidate(api=api, config=config, mode="discover", previous_records=[],
+                checkpoint=self.checkpoint(checkpoint_dir, config=config))
+            acquisition_bytes = (checkpoint_dir / "acquisition.json").read_bytes()
+            atomic_json(root / "config.json", config)
+            command = ["build_discovery_index.py", "--mode", "discover", "--phase", "validate",
+                "--config", str(root / "config.json"), "--checkpoint-dir", str(checkpoint_dir),
+                "--mirror-root", str(mirror), "--repository-workers", "1", "--work-budget-seconds", "30",
+                "--output", str(root / "candidate.json"), "--diagnostics-output", str(root / "diagnostics.json")]
+            original_scan, original_popen, original_git = builder.scan_repository, subprocess.Popen, builder.git
+            budget = WorkBudget(30)
+            current = []
+            stalled = []
+            stalled_started = []
+            def scan(name, *args):
+                current[:] = [name]
+                return original_scan(name, *args)
+            def bounded_git(directory, *args, **kwargs):
+                if current == ["second/repo"] and args[0] == "show":
+                    # Reserve the short deadline for the stalled boundary,
+                    # independent of fixture Git speed on an overloaded CI VM.
+                    stalled_started.append(time.monotonic())
+                    budget.deadline = stalled_started[-1] + 0.2
+                return original_git(directory, *args, **kwargs)
+            def popen(arguments, **kwargs):
+                if current == ["second/repo"] and arguments[:2] == ["git", "show"]:
+                    # Inert test-only process and child retain both output pipes.
+                    # The actual Git runner must kill the group before draining.
+                    arguments = [sys.executable, "-c", "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(3)']); time.sleep(3)"]
+                    process = original_popen(arguments, **kwargs)
+                    stalled.append(process)
+                    return process
+                return original_popen(arguments, **kwargs)
+            with mock.patch.object(builder, "WorkBudget", return_value=budget), mock.patch.object(builder, "GitHubAPI", return_value=api), mock.patch.object(builder, "repository_states", return_value=states), mock.patch.object(builder, "scan_repository", side_effect=scan), mock.patch.object(builder, "git", side_effect=bounded_git), mock.patch.object(build_bridges.subprocess, "Popen", side_effect=popen), mock.patch("sys.argv", command):
+                self.assertEqual(builder.main(), 4)
+            self.assertEqual(len(stalled), 1)
+            self.assertLess(time.monotonic() - stalled_started[0], 2)
+            self.assertIsNotNone(stalled[0].returncode)
+            self.assertFalse((root / "candidate.json").exists())
+            self.assertFalse((root / "diagnostics.json").exists())
+            self.assertEqual((checkpoint_dir / "acquisition.json").read_bytes(), acquisition_bytes)
+            saved = json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"]
+            self.assertEqual(set(saved), {"first/repo"})
+            self.assertEqual(saved["first/repo"]["diagnostics"], [])
+            arguments = dict(api=api, config=config, mode="discover", generated_at=STAMP,
+                previous_records=[], mirror_root=mirror, repository_workers=1)
+            with mock.patch.object(builder, "repository_states", return_value=states), mock.patch.object(builder, "scan_repository", wraps=original_scan) as resumed_scan:
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=config), validation_only=True)
+                self.assertEqual([call.args[0] for call in resumed_scan.call_args_list], ["second/repo"])
+                expected = builder.build_candidate(**arguments)
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+
+    def test_constructor_deadline_cleans_temporary_repository(self):
+        # Red if acquisition timeout becomes scan_error or leaks a bare repo.
+        original_popen, original_temporary = subprocess.Popen, tempfile.TemporaryDirectory
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def popen(arguments, **kwargs):
+                return original_popen([sys.executable, "-c", "import time; time.sleep(3)"], **kwargs)
+            def temporary_repository(**kwargs):
+                return original_temporary(dir=root, **kwargs)
+            with mock.patch.object(build_bridges.subprocess, "Popen", side_effect=popen), mock.patch.object(build_bridges.tempfile, "TemporaryDirectory", side_effect=temporary_repository):
+                with self.assertRaises(CheckpointYield):
+                    build_bridges.PinnedRepository("owner/repo", "a" * 40, None, work_budget=WorkBudget(0.1))
+            self.assertEqual(list(root.iterdir()), [])
 
     def test_overlong_manifest_error_remains_resumable_and_byte_identical(self):
         # A real schema error echoes its invalid 70k value. Red if the writer

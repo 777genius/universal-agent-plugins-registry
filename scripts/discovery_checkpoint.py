@@ -34,6 +34,12 @@ class WorkBudget:
         if self.monotonic() >= self.deadline:
             raise CheckpointYield("work budget exhausted; checkpoint preserved")
 
+    def remaining(self):
+        seconds = self.deadline - self.monotonic()
+        if seconds <= 0:
+            raise CheckpointYield("work budget exhausted; checkpoint preserved")
+        return seconds
+
     def wait(self, seconds, sleep):
         # Honor an already-received retry/pacing delay even across the slice
         # boundary. Yielding before it would let the next process immediately

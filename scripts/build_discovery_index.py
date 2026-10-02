@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -493,13 +493,17 @@ def repository_states(api: GitHubAPI, repositories: list[str],
 
 
 def bounded_package_files(repository: PinnedRepository, package_path: str) -> list[tuple[str, int, bytes]]:
+    budget = getattr(repository, "work_budget", None)
+    git_options = {"work_budget": budget} if budget else {}
     prefix = normalized_path(package_path)
     pathspec = prefix or "."
-    raw = git(repository.root, "ls-tree", "-rz", "-r", repository.revision, "--", pathspec)
+    raw = git(repository.root, "ls-tree", "-rz", "-r", repository.revision, "--", pathspec, **git_options)
     records: list[tuple[str, str, str]] = []
     seen: set[str] = set()
     total = 0
     for row in raw.split(b"\0"):
+        if budget:
+            budget.check()
         if not row:
             continue
         try:
@@ -519,7 +523,7 @@ def bounded_package_files(repository: PinnedRepository, package_path: str) -> li
         folded = full_path.casefold()
         require(folded not in seen, f"package tree contains a case-colliding path: {full_path}")
         seen.add(folded)
-        size_body = git(repository.root, "cat-file", "-s", object_id)
+        size_body = git(repository.root, "cat-file", "-s", object_id, **git_options)
         try:
             size = int(size_body.strip())
         except ValueError as error:
@@ -536,14 +540,16 @@ def bounded_package_files(repository: PinnedRepository, package_path: str) -> li
         require(not prefix_with_slash or full_path.startswith(prefix_with_slash), f"package tree escaped {prefix!r}")
         relative = full_path[len(prefix_with_slash):]
         require(relative and relative != full_path or not prefix, "package tree path normalization failed")
-        body = git(repository.root, "show", f"{repository.revision}:{full_path}")
+        body = git(repository.root, "show", f"{repository.revision}:{full_path}", **git_options)
         require(not body.startswith(LFS_HEADER), f"Git LFS pointer is forbidden: {full_path}")
         result.append((relative, GIT_MODES[mode], body))
     return result
 
 
-def materialize_package(files: list[tuple[str, int, bytes]], root: Path) -> None:
+def materialize_package(files: list[tuple[str, int, bytes]], root: Path, work_budget=None) -> None:
     for relative, mode, body in files:
+        if work_budget:
+            work_budget.check()
         try:
             path = portable_path(relative, "package file")
         except BridgeError as error:
@@ -620,11 +626,16 @@ def reviewed_release_map(path: Path) -> dict[tuple[str, str, str], str]:
 
 def make_record(repository: PinnedRepository, state: dict[str, Any], package_path: str, generated_at: str,
                 previous: dict[str, Any] | None, reviewed: dict[tuple[str, str, str], str]) -> dict[str, Any]:
+    budget = getattr(repository, "work_budget", None)
     files = bounded_package_files(repository, package_path)
     with tempfile.TemporaryDirectory(prefix="uap-discovery-package-") as temporary:
         root = Path(temporary)
-        materialize_package(files, root)
+        materialize_package(files, root, budget)
+        if budget:
+            budget.check()
         facts = package_facts(root)
+        if budget:
+            budget.check()
     canonical_repository = state["repository"]
     identity = (canonical_repository, state["revision"], package_path.casefold())
     return {
@@ -746,6 +757,7 @@ def scan_repository(repository_name: str, state: dict[str, Any],
                     pending: list[tuple[str, str, dict[str, Any] | None]], generated_at: str,
                     reviewed: dict[tuple[str, str, str], str], mirror_root: Path | None,
                     github_token: str | None = None,
+                    work_budget: WorkBudget | None = None,
                     ) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
     """Materialize one pinned repository once and validate all of its packages."""
     records: dict[str, dict[str, Any]] = {}
@@ -754,6 +766,7 @@ def scan_repository(repository_name: str, state: dict[str, Any],
         pinned = PinnedRepository(
             state["repository"], state["revision"], mirror_root,
             github_token=github_token if mirror_root is None else None,
+            **({"work_budget": work_budget} if work_budget else {}),
         )
     except BridgeError as error:
         diagnostics.append({
@@ -762,6 +775,8 @@ def scan_repository(repository_name: str, state: dict[str, Any],
         return records, diagnostics
     try:
         for package_path, identity, prior in pending:
+            if work_budget:
+                work_budget.check()
             try:
                 records[identity] = make_record(pinned, state, package_path, generated_at, prior, reviewed)
             except BridgeError as error:
@@ -928,7 +943,7 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
         report("repository_start", repository=repository_name, packages=len(pending))
         try:
             result = scan_repository(repository_name, state, pending, generated_at, reviewed, mirror_root,
-                                     getattr(api, "token", None))
+                                     getattr(api, "token", None), *([work_budget] if work_budget else []))
         except CheckpointYield:
             raise
         except Exception as error:
@@ -979,16 +994,21 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                 for _ in range(worker_count):
                     submit_next()
                 while futures:
-                    future = next(as_completed(futures))
+                    ready, _ = wait(futures, timeout=work_budget.remaining() if work_budget else None,
+                                    return_when=FIRST_COMPLETED)
+                    if not ready:
+                        work_budget.check()
+                        continue
+                    future = next(iter(ready))
                     repository_name = futures.pop(future)
                     collect(future, repository_name)
                     if work_budget:
                         work_budget.check()
                     submit_next()
             except CheckpointYield:
-                # Stop admission, then preserve the bounded in-flight work.
-                # Source operations use their existing timeouts; no packages
-                # are killed midway through a read just to enforce this slice.
+                # Stop admission, then drain reads bounded by the same slice
+                # deadline. Interrupted repositories yield without a cache
+                # entry; fully completed repository results remain durable.
                 for future in futures:
                     future.cancel()
                 for future, repository_name in futures.items():
