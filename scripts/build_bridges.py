@@ -166,7 +166,9 @@ class PinnedRepository:
             raise
 
     def git(self, *args, **kwargs):
-        return git(self.root, *args, work_budget=self.work_budget, **kwargs)
+        if self.work_budget:
+            kwargs["work_budget"] = self.work_budget
+        return git(self.root, *args, **kwargs)
 
     def _acquire(self, mirror_root, github_token):
         self.git("init", "--quiet", "--bare")
