@@ -20,19 +20,19 @@
     "check:links": "node scripts/check-generated.mjs"
   },
   "dependencies": {
-    "nuxt": "3.21.11",
-    "reka-ui": "2.10.3",
-    "vue": "3.5.41",
-    "vue-router": "4.6.4"
+    "nuxt": "4.5.2",
+    "reka-ui": "2.10.5",
+    "vue": "3.5.43",
+    "vue-router": "5.3.1"
   },
   "devDependencies": {
-    "@nuxt/eslint": "1.15.2",
-    "@playwright/test": "1.62.1",
-    "eslint": "9.39.4",
+    "@nuxt/eslint": "1.17.0",
+    "@playwright/test": "1.63.0",
+    "eslint": "10.11.0",
     "listhen": "1.10.1",
     "selfsigned": "5.5.0",
-    "typescript": "5.9.3",
-    "vue-tsc": "3.3.9"
+    "typescript": "7.0.2",
+    "vue-tsc": "3.3.11"
   },
   "pnpm": {
     "overrides": {
