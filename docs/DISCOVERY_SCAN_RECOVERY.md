@@ -9,7 +9,8 @@ only a complete, schema-checked candidate. No package code is executed.
 - Acquisition writes `acquisition.json` atomically after completed search
   partitions and partition splits. A partial checkpoint retains the remaining
   queue, but cannot be used as a complete search result.
-- Validation writes `validation.json` atomically after completed repositories.
+- Validation writes `validation.json` atomically after completed repositories
+  and preserves completed package outcomes when a repository yields.
   Only results bound to the same immutable source and package inputs can be
   reused. A repository scan error must be retried, not cached as success.
 - Both jobs upload their checkpoint with `always()` after each cooperative
@@ -31,10 +32,14 @@ scan error. Fully completed repositories remain durable and subsequent slices
 continue automatically after successful upload. The process timeout remains a
 fallback for non-cooperative local parsing or cleanup.
 
-Checkpoint granularity is currently a whole repository. Completed packages in
-an interrupted repository may be re-read; a repository needing more than one
-slice cannot yet make durable package-level progress. This limitation is not
-proof of data corruption, but must not be described as complete resumability.
+On cooperative interruption, completed valid and deterministic-invalid package
+outcomes survive inside a partial repository result. The original full input
+digest is retained; a resume verifies those outcomes and submits only unfinished
+or transient-error packages. A partial result cannot satisfy completeness.
+Checkpoint writes stay in the coordinator, not parallel repository workers.
+An individual package that exceeds every slice can still starve. Abrupt runner
+loss can still lose work since the last uploaded artifact; neither limitation
+should be described as complete resumability.
 
 Artifacts are immutable, attempt-and-slice-specific and retained for seven days.
 Checkpoints may be resumed for at most 24 hours; retention is not a freshness

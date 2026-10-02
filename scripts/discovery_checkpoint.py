@@ -23,6 +23,15 @@ class CheckpointYield(Exception):
     """A cooperative slice boundary, neither a scan error nor completeness."""
 
 
+class PackageCheckpointYield(CheckpointYield):
+    """Completed package outcomes from an interrupted pinned repository read."""
+
+    def __init__(self, error, records, result_diagnostics):
+        super().__init__(str(error))
+        self.records = records
+        self.diagnostics = result_diagnostics
+
+
 class WorkBudget:
     def __init__(self, seconds, *, monotonic=None):
         check(type(seconds) in {int, float} and math.isfinite(seconds) and 0 < seconds <= 86400,
@@ -234,7 +243,8 @@ class DiscoveryCheckpoint:
         all_records = []
         for repository, result in payload["results"].items():
             check(REPOSITORY.fullmatch(repository) is not None, "invalid result repository")
-            keys(result, {"input_digest", "records", "diagnostics"})
+            keys(result, {"input_digest", "records", "diagnostics", "complete"})
+            check(type(result["complete"]) is bool, "invalid repository completion")
             check(type(result["input_digest"]) is str and DIGEST.fullmatch(result["input_digest"]) is not None, "invalid input digest")
             bounded_list(result["records"])
             identities = set()
@@ -259,14 +269,16 @@ class DiscoveryCheckpoint:
     def result(self, repository, input_digest):
         result = self.results.get(repository)
         if result and result["input_digest"] == input_digest:
-            return result["records"], result["diagnostics"]
+            return result["records"], result["diagnostics"], result["complete"]
         return None
 
-    def save_result(self, repository, input_digest, records, result_diagnostics):
+    def save_result(self, repository, input_digest, records, result_diagnostics, complete=True):
+        check(type(complete) is bool, "invalid repository completion")
         diagnostics(result_diagnostics)
         if any(item["kind"] == "scan_error" for item in result_diagnostics):
             return
-        self.results[repository] = {"input_digest": input_digest, "records": records, "diagnostics": result_diagnostics}
+        self.results[repository] = {"input_digest": input_digest, "records": records,
+                                    "diagnostics": result_diagnostics, "complete": complete}
         self.save_validation()
 
     def save_validation(self):

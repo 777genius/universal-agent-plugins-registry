@@ -29,7 +29,7 @@ import jsonschema
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER, PinnedRepository, git, portable_path
 from scripts.build_registry import directory_tree_digest, digest_bytes, read_json
-from scripts.discovery_checkpoint import CheckpointYield, DiscoveryCheckpoint, WorkBudget, atomic_json
+from scripts.discovery_checkpoint import CheckpointYield, DiscoveryCheckpoint, PackageCheckpointYield, WorkBudget, atomic_json
 from scripts.directory_publication import (
     PublicationError,
     canonical_json,
@@ -793,6 +793,10 @@ def scan_repository(repository_name: str, state: dict[str, Any],
                 })
                 if prior:
                     records[identity] = {**prior, "availability": "unavailable"}
+    except CheckpointYield as error:
+        # Only the coordinator writes checkpoints. An interrupted package has
+        # no outcome; earlier valid/invalid packages can survive the slice.
+        raise PackageCheckpointYield(error, records, [item for item in diagnostics if item["kind"] == "invalid"]) from error
     finally:
         pinned.close()
     return records, diagnostics
@@ -833,6 +837,43 @@ def acquire_candidate(*, api, config, mode, previous_records, progress=None, che
         checkpoint.payload["complete"] = True
         checkpoint.save_acquisition()
     return paths, partitions, diagnostics
+
+
+def validate_repository_outcomes(state, pending, records, result_diagnostics, generated_at, *, complete=None):
+    """Bind reusable outcomes to the full immutable inputs, not a resume subset."""
+    allowed = {identity: prior for _, identity, prior in pending}
+    package_paths = {identity: path for path, identity, _ in pending}
+    pending_paths = {path: identity for path, identity, _ in pending}
+    invalid = set()
+    for diagnostic in result_diagnostics:
+        require(diagnostic["kind"] == "invalid" and diagnostic["repository"] == state["repository"]
+                and diagnostic["path"] in pending_paths, "checkpoint diagnostic is outside immutable package inputs")
+        identity = pending_paths[diagnostic["path"]]
+        require(identity not in invalid, "checkpoint has duplicate package diagnostics")
+        invalid.add(identity)
+    for identity, record in records.items():
+        require(identity in allowed, "checkpoint result is outside immutable package inputs")
+        if record["availability"] == "available":
+            require(identity not in invalid, "checkpoint has conflicting package outcomes")
+            require(record["repository"] == state["repository"] and record["revision"] == state["revision"]
+                    and record_identity(record["repository"], record["package_path"]) == identity
+                    and record["package_path"] == package_paths[identity]
+                    and record["slug"] == discovery_slug(state["repository"], package_paths[identity])
+                    and record["last_seen"] == generated_at, "checkpoint result source is invalid")
+        else:
+            require(identity in invalid, "checkpoint unavailable result has no invalid outcome")
+            require(allowed[identity] is not None and record == {**allowed[identity], "availability": "unavailable"},
+                    "checkpoint unavailable result differs from previous input")
+    for identity in invalid:
+        require(allowed[identity] is None or identity in records,
+                "checkpoint invalid outcome is missing unavailable previous record")
+    accounted = set(records) | invalid
+    require(accounted.issubset(allowed), "checkpoint result is outside immutable package inputs")
+    if complete is True:
+        require(accounted == set(allowed), "checkpoint result is missing package outcomes")
+    elif complete is False:
+        require(accounted != set(allowed), "partial checkpoint has no unfinished packages")
+    return accounted
 
 
 def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, generated_at: str,
@@ -906,6 +947,9 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             continue
         repository_jobs[repository_name] = (state, pending)
     completed: dict[str, tuple[dict[str, dict[str, Any]], list[dict[str, str]]]] = {}
+    # Retain the complete input set for digests, merge validation and ordering.
+    # Filtering already-completed packages must never narrow source bindings.
+    full_jobs = dict(repository_jobs)
     job_digests = {name: sha256_digest(canonical_json({"source": {key: state[key] for key in ("repository", "revision", "available")},
                                                    "pending": [list(item) for item in pending]}))
                    for name, (state, pending) in repository_jobs.items()} if checkpoint else {}
@@ -915,26 +959,16 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
             if cached is not None:
                 state, pending = repository_jobs[name]
                 cached_records = dict(cached[0])
-                allowed = {identity: prior for _, identity, prior in pending}
-                accounted = set(cached_records)
-                pending_paths = {path: identity for path, identity, _ in pending}
-                for diagnostic in cached[1]:
-                    require(diagnostic["kind"] == "invalid" and diagnostic["repository"] == state["repository"]
-                            and diagnostic["path"] in pending_paths, "checkpoint diagnostic is outside immutable package inputs")
-                    accounted.add(pending_paths[diagnostic["path"]])
-                require(accounted == set(allowed), "checkpoint result is missing package outcomes")
+                accounted = validate_repository_outcomes(state, pending, cached_records, cached[1], generated_at,
+                                                          complete=cached[2])
                 for identity, record in cached_records.items():
-                    require(identity in allowed, "checkpoint result is outside immutable package inputs")
                     if record["availability"] == "available":
-                        require(record["repository"] == state["repository"] and record["revision"] == state["revision"]
-                                and record_identity(record["repository"], record["package_path"]) == identity
-                                and record["last_seen"] == generated_at, "checkpoint result source is invalid")
                         cached_records[identity] = {**record, "stars": state["stars"], "repository_updated_at": state["updated_at"]}
-                    else:
-                        require(allowed[identity] is not None and record == {**allowed[identity], "availability": "unavailable"},
-                                "checkpoint unavailable result differs from previous input")
                 completed[name] = (cached_records, cached[1])
-                del repository_jobs[name]
+                if cached[2]:
+                    del repository_jobs[name]
+                else:
+                    repository_jobs[name] = (state, [item for item in pending if item[1] not in accounted])
                 report("repository_resumed", repository=name, records=len(cached[0]))
 
     def run_repository(repository_name, state, pending):  # noqa: ANN001
@@ -969,26 +1003,55 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                 futures[executor.submit(run_repository, name, state, pending)] = name
 
             def collect(future, repository_name):
+                package_yield = None
                 try:
                     repository_records, repository_diagnostics = future.result()
-                    # Schema errors can echo large untrusted manifest values.
-                    # Bound them for every candidate, not just checkpointed
-                    # scans, so uninterrupted and resumed bytes stay identical.
-                    completed[repository_name] = (repository_records, [
-                        {**diagnostic, "error": diagnostic["error"][:MAX_DIAGNOSTIC_ERROR_CHARS]}
-                        for diagnostic in repository_diagnostics
-                    ])
+                except PackageCheckpointYield as error:
+                    repository_records, repository_diagnostics = error.records, error.diagnostics
+                    package_yield = error
                 except CheckpointYield:
                     raise
                 except Exception as error:
-                    completed[repository_name] = ({}, [{
+                    repository_records, repository_diagnostics = {}, [{
                         "kind": "scan_error", "repository": repository_name, "path": "",
                         "error": f"repository scan failed: {error}"[:MAX_DIAGNOSTIC_ERROR_CHARS],
-                    }])
-                if checkpoint:
-                    repository_records, repository_diagnostics = completed[repository_name]
+                    }]
+                state, pending = full_jobs[repository_name]
+                prior_records, prior_diagnostics = completed.get(repository_name, ({}, []))
+                require(not set(prior_records).intersection(repository_records), "duplicate resumed package records")
+                merged_records = {**prior_records, **repository_records}
+                # Schema errors can echo large untrusted values. Clamp before
+                # persisting so resumed and uninterrupted diagnostics agree.
+                merged_diagnostics = prior_diagnostics + [
+                    {**diagnostic, "error": diagnostic["error"][:MAX_DIAGNOSTIC_ERROR_CHARS]}
+                    for diagnostic in repository_diagnostics
+                ]
+                order = {path: offset for offset, (path, _, _) in enumerate(pending)}
+                merged_diagnostics.sort(key=lambda diagnostic: order.get(diagnostic["path"], -1))
+                completed[repository_name] = (merged_records, merged_diagnostics)
+                # A transient source error cannot become a reusable package
+                # outcome, even if a worker returned a record for that path.
+                error_paths = {item["path"] for item in merged_diagnostics if item["kind"] == "scan_error"}
+                error_identities = {identity for path, identity, _ in pending if path in error_paths}
+                safe_records = {**prior_records, **{identity: record for identity, record in repository_records.items()
+                                                   if identity not in error_identities}}
+                safe_diagnostics = prior_diagnostics + [
+                    {**item, "error": item["error"][:MAX_DIAGNOSTIC_ERROR_CHARS]}
+                    for item in repository_diagnostics if item["kind"] == "invalid" and item["path"] not in error_paths
+                ]
+                safe_diagnostics.sort(key=lambda diagnostic: order[diagnostic["path"]])
+                accounted = validate_repository_outcomes(state, pending, safe_records, safe_diagnostics, generated_at)
+                all_accounted = accounted == {identity for _, identity, _ in pending}
+                result_complete = all_accounted and not error_paths
+                require(package_yield is None or not result_complete, "package yield contains a complete repository")
+                require(package_yield is not None or error_paths or all_accounted,
+                        "repository result is missing package outcomes")
+                require(not all_accounted or result_complete, "failed repository has no unfinished packages")
+                if checkpoint and accounted:
                     checkpoint.save_result(repository_name, job_digests[repository_name],
-                        [[identity, record] for identity, record in sorted(repository_records.items())], repository_diagnostics)
+                        [[identity, record] for identity, record in sorted(safe_records.items())], safe_diagnostics, result_complete)
+                if package_yield:
+                    raise package_yield
 
             try:
                 for _ in range(worker_count):
@@ -1007,8 +1070,8 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
                     submit_next()
             except CheckpointYield:
                 # Stop admission, then drain reads bounded by the same slice
-                # deadline. Interrupted repositories yield without a cache
-                # entry; fully completed repository results remain durable.
+                # deadline. Completed package outcomes from interrupted reads
+                # remain durable; unfinished/error packages stay retryable.
                 for future in futures:
                     future.cancel()
                 for future, repository_name in futures.items():

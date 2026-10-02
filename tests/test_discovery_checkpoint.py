@@ -32,6 +32,25 @@ class FakeClock:
         return self.seconds
 
 
+def package_fixture(root, paths, invalid=()):
+    """Real inert Git packages; every new commit uses the owner's identity."""
+    mirror, _ = create_mirror(root, package_path=paths[0])
+    source = root / "source"
+    manifest = json.loads((source / paths[0] / "plugin.json").read_bytes())
+    mcp = json.loads((source / paths[0] / "mcp.json").read_bytes())
+    for path in paths:
+        atomic_json(source / path / "plugin.json", {**manifest, "description": 42 if path in invalid else path})
+        atomic_json(source / path / "mcp.json", mcp)
+    git(source, "add", ".")
+    git(source, "commit", "--quiet", "-m", "test: add resumable package fixtures")
+    revision = git(source, "rev-parse", "HEAD")
+    git(mirror / "owner/repo.git", "fetch", "--quiet", str(source), "main")
+    config = {**CONFIG, "query": '"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" filename:plugin.json'}
+    return dict(api=SearchFixtureAPI(revision, [("owner/repo", path + "/plugin.json" if path else "plugin.json") for path in paths]),
+                config=config, mode="discover", generated_at=STAMP, previous_records=[],
+                mirror_root=mirror, repository_workers=1)
+
+
 class DiscoveryCheckpointTests(unittest.TestCase):
     def checkpoint(self, directory, **kwargs):
         return DiscoveryCheckpoint(directory, root=ROOT, config=kwargs.pop("config", CONFIG),
@@ -479,6 +498,222 @@ class DiscoveryCheckpointTests(unittest.TestCase):
                 with self.assertRaises(CheckpointYield):
                     build_bridges.PinnedRepository("owner/repo", "a" * 40, None, work_budget=WorkBudget(0.1))
             self.assertEqual(list(root.iterdir()), [])
+
+    def test_package_yield_preserves_first_package_and_resume_only_missing_with_same_bytes(self):
+        # Red when repository interruption repeats its already validated package
+        # or publishes a candidate with only a prefix of its immutable inputs.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = ["packages/a", "packages/b"]
+            arguments = package_fixture(root, paths)
+            expected = builder.build_candidate(**arguments)
+            checkpoint_dir = root / "checkpoint"
+            builder.acquire_candidate(api=arguments["api"], config=arguments["config"], mode="discover", previous_records=[],
+                checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]))
+            acquisition_bytes = (checkpoint_dir / "acquisition.json").read_bytes()
+            atomic_json(root / "config.json", arguments["config"])
+            command = ["build_discovery_index.py", "--mode", "discover", "--phase", "validate",
+                "--config", str(root / "config.json"), "--checkpoint-dir", str(checkpoint_dir),
+                "--mirror-root", str(arguments["mirror_root"]), "--repository-workers", "1", "--work-budget-seconds", "1",
+                "--output", str(root / "candidate.json"), "--diagnostics-output", str(root / "diagnostics.json")]
+            clock, make_record = FakeClock(), builder.make_record
+            calls = []
+            def interrupted(repository, state, path, *args):
+                calls.append(path)
+                if path == paths[1]:
+                    clock.seconds = 2
+                    repository.work_budget.check()
+                return make_record(repository, state, path, *args)
+            checkpoint_writer = threading.get_ident()
+            original_save = DiscoveryCheckpoint.save_result
+            def save(checkpoint, *args):
+                self.assertEqual(threading.get_ident(), checkpoint_writer)
+                return original_save(checkpoint, *args)
+            with mock.patch.object(builder, "GitHubAPI", return_value=arguments["api"]), mock.patch.object(builder, "WorkBudget", return_value=WorkBudget(1, monotonic=clock)), mock.patch.object(builder, "make_record", side_effect=interrupted), mock.patch.object(DiscoveryCheckpoint, "save_result", new=save), mock.patch("sys.argv", command):
+                self.assertEqual(builder.main(), 4)
+            self.assertEqual(calls, paths)
+            self.assertFalse((root / "candidate.json").exists())
+            self.assertFalse((root / "diagnostics.json").exists())
+            self.assertEqual((checkpoint_dir / "acquisition.json").read_bytes(), acquisition_bytes)
+            partial = json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"]["owner/repo"]
+            self.assertFalse(partial["complete"])
+            self.assertEqual([identity for identity, _ in partial["records"]], ["owner/repo\x00" + paths[0]])
+            with mock.patch.object(builder, "make_record", wraps=make_record) as resumed:
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertEqual([call.args[2] for call in resumed.call_args_list], [paths[1]])
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+            finished = json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"]["owner/repo"]
+            self.assertEqual(finished["input_digest"], partial["input_digest"])
+            self.assertTrue(finished["complete"])
+
+    def test_partial_keeps_valid_invalid_and_prior_outcomes_retries_error_and_tail_in_original_order(self):
+        # Red if a transient error discards unrelated completed outcomes, an
+        # unavailable prior loses its invalid diagnostic, or resume reorders errors.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = ["packages/a-invalid", "packages/b-valid", "packages/c-error", "packages/d-invalid", "packages/e-tail"]
+            arguments = package_fixture(root, paths, invalid=(paths[0], paths[3]))
+            sample = builder.build_candidate(**arguments)[0]["records"][0]
+            prior = {**sample, "slug": "discovery:owner/repo//" + paths[3], "package_path": paths[3], "revision": "e" * 40}
+            arguments["previous_records"] = [prior]
+            expected = builder.build_candidate(**arguments)
+            checkpoint_dir = root / "checkpoint"
+            make_record = builder.make_record
+            def interrupted(repository, state, path, *args):
+                if path == paths[2]:
+                    raise build_bridges.BridgeError("transient inert source failure")
+                if path == paths[4]:
+                    raise CheckpointYield("fixture slice boundary")
+                return make_record(repository, state, path, *args)
+            with mock.patch.object(builder, "make_record", side_effect=interrupted), self.assertRaises(CheckpointYield):
+                builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]))
+            partial = json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"]["owner/repo"]
+            self.assertFalse(partial["complete"])
+            self.assertEqual([item["path"] for item in partial["diagnostics"]], [paths[0], paths[3]])
+            self.assertEqual(set(dict(partial["records"])), {"owner/repo\x00" + paths[1], "owner/repo\x00" + paths[3]})
+            self.assertEqual(dict(partial["records"])["owner/repo\x00" + paths[3]], {**prior, "availability": "unavailable"})
+            # A digest-correct cache must not drop the unavailable fallback:
+            # otherwise the previous available record silently survives.
+            validation_path = checkpoint_dir / "validation.json"
+            envelope = json.loads(validation_path.read_bytes())
+            broken = json.loads(canonical_json(envelope))
+            broken["payload"]["results"]["owner/repo"]["records"] = [
+                entry for entry in partial["records"] if entry[0] != "owner/repo\x00" + paths[3]
+            ]
+            broken["payload_digest"] = sha256_digest(canonical_json(broken["payload"]))
+            atomic_json(validation_path, broken)
+            with mock.patch.object(builder, "scan_repository") as scanner, self.assertRaisesRegex(builder.DiscoveryError, "missing unavailable"):
+                builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            scanner.assert_not_called()
+            atomic_json(validation_path, envelope)
+            # Another transient failure with no yield must keep the prior safe
+            # prefix and still leave only that failing package retryable.
+            def transient(repository, state, path, *args):
+                if path == paths[2]:
+                    raise build_bridges.BridgeError("retry source failure")
+                return make_record(repository, state, path, *args)
+            with mock.patch.object(builder, "make_record", side_effect=transient) as retried:
+                incomplete = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertFalse(incomplete[0]["complete"])
+            self.assertEqual([call.args[2] for call in retried.call_args_list], [paths[2], paths[4]])
+            with mock.patch.object(builder, "make_record", wraps=make_record) as resumed:
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertEqual([call.args[2] for call in resumed.call_args_list], [paths[2]])
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+
+    def test_transient_repository_acquisition_preserves_completed_root_package(self):
+        # A repository-level fetch error uses path=''. It must not discard an
+        # earlier completed root package which has the same empty package path.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = ["", "packages/tail"]
+            arguments = package_fixture(root, paths)
+            expected = builder.build_candidate(**arguments)
+            checkpoint_dir = root / "checkpoint"
+            make_record = builder.make_record
+            def interrupted(repository, state, path, *args):
+                if path == paths[1]:
+                    raise CheckpointYield("fixture slice boundary")
+                return make_record(repository, state, path, *args)
+            with mock.patch.object(builder, "make_record", side_effect=interrupted), self.assertRaises(CheckpointYield):
+                builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]))
+            with mock.patch.object(builder, "PinnedRepository", side_effect=build_bridges.BridgeError("transient fixture fetch")):
+                failed = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertFalse(failed[0]["complete"])
+            saved = json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"]["owner/repo"]
+            self.assertEqual(set(dict(saved["records"])), {"owner/repo\x00"})
+            with mock.patch.object(builder, "make_record", wraps=make_record) as resumed:
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertEqual([call.args[2] for call in resumed.call_args_list], [paths[1]])
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+
+    def test_record_associated_with_scan_error_is_not_cached_as_success(self):
+        # Even a returned record cannot prove completion of a failed package.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = ["packages/a", "packages/b"]
+            arguments = package_fixture(root, paths)
+            expected = builder.build_candidate(**arguments)
+            records = {builder.record_identity(record["repository"], record["package_path"]): record for record in expected[0]["records"]}
+            checkpoint_dir = root / "checkpoint"
+            with mock.patch.object(builder, "scan_repository", return_value=(records, [{
+                "kind": "scan_error", "repository": "owner/repo", "path": paths[1], "error": "transient fixture source failure",
+            }])):
+                failed = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]))
+            self.assertFalse(failed[0]["complete"])
+            saved = json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"]["owner/repo"]
+            self.assertEqual(set(dict(saved["records"])), {"owner/repo\x00" + paths[0]})
+            self.assertFalse(saved["complete"])
+            with mock.patch.object(builder, "make_record", wraps=builder.make_record) as resumed:
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertEqual([call.args[2] for call in resumed.call_args_list], [paths[1]])
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+
+    def test_hostile_partial_package_outcomes_fail_closed_before_any_read(self):
+        # Every mutation remains digest-correct and schema-valid where possible;
+        # it must fail at the immutable package outcome boundary, not be reused.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = ["packages/a", "packages/b"]
+            arguments = package_fixture(root, paths)
+            checkpoint_dir = root / "checkpoint"
+            expected = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]))
+            path = checkpoint_dir / "validation.json"
+            complete = json.loads(path.read_bytes())
+            partial = json.loads(path.read_bytes())
+            result = partial["payload"]["results"]["owner/repo"]
+            result["complete"] = False
+            result["records"] = result["records"][:1]
+            def invalid(package_path):
+                return {"kind": "invalid", "repository": "owner/repo", "path": package_path, "error": "fixture invalid"}
+            mutations = ("unknown", "wrong_revision", "wrong_path", "duplicate_records", "duplicate_diagnostics",
+                         "conflicting_outcomes", "false_complete", "partial_all", "unavailable_no_invalid", "unavailable_not_prior",
+                         "unknown_diagnostic", "wrong_diagnostic_repository", "scan_error", "missing_complete", "complete_type")
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    value = json.loads(canonical_json(partial))
+                    result = value["payload"]["results"]["owner/repo"]
+                    identity, record = result["records"][0]
+                    if mutation == "unknown":
+                        result["records"][0][0] = "unknown/repo\x00packages/a"
+                    elif mutation == "wrong_revision":
+                        record["revision"] = "f" * 40
+                    elif mutation == "wrong_path":
+                        record.update(package_path=paths[1], slug="discovery:owner/repo//" + paths[1])
+                    elif mutation == "duplicate_records":
+                        result["records"].append([identity, record])
+                    elif mutation == "duplicate_diagnostics":
+                        result["records"] = []
+                        result["diagnostics"] = [invalid(paths[0]), invalid(paths[0])]
+                    elif mutation == "conflicting_outcomes":
+                        result["diagnostics"] = [invalid(paths[0])]
+                    elif mutation == "false_complete":
+                        result["complete"] = True
+                    elif mutation == "partial_all":
+                        result["records"] = complete["payload"]["results"]["owner/repo"]["records"]
+                    elif mutation.startswith("unavailable_"):
+                        record["availability"] = "unavailable"
+                        if mutation == "unavailable_not_prior":
+                            result["diagnostics"] = [invalid(paths[0])]
+                    elif mutation == "unknown_diagnostic":
+                        result["diagnostics"] = [invalid("packages/unknown")]
+                    elif mutation == "wrong_diagnostic_repository":
+                        result["diagnostics"] = [{**invalid(paths[1]), "repository": "unknown/repo"}]
+                    elif mutation == "scan_error":
+                        result["diagnostics"] = [{**invalid(paths[1]), "kind": "scan_error"}]
+                    elif mutation == "missing_complete":
+                        del result["complete"]
+                    elif mutation == "complete_type":
+                        result["complete"] = 1
+                    value["payload_digest"] = sha256_digest(canonical_json(value["payload"]))
+                    atomic_json(path, value)
+                    with mock.patch.object(builder, "scan_repository", side_effect=AssertionError("hostile cache admitted")) as scanner:
+                        with self.assertRaises((ValueError, builder.DiscoveryError)):
+                            builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+                    scanner.assert_not_called()
+            atomic_json(path, complete)
+            actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir, config=arguments["config"]), validation_only=True)
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
 
     def test_overlong_manifest_error_remains_resumable_and_byte_identical(self):
         # A real schema error echoes its invalid 70k value. Red if the writer
