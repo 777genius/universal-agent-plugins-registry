@@ -57,7 +57,7 @@ async function start(options: Record<string, unknown> = {}, implementation = lis
 async function response(listener: Listener, ca?: string) {
   const client = listener.https ? https : http
   return new Promise<string>((resolve, reject) => {
-    client.get(listener.url, ca ? { ca } : { rejectUnauthorized: false }, incoming => {
+    client.get(listener.url, ca ? { ca } : {}, incoming => {
       let body = ''
       incoming.setEncoding('utf8')
       incoming.on('data', chunk => { body += chunk })
