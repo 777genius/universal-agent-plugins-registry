@@ -16,7 +16,7 @@ from unittest import mock
 from scripts import build_bridges, build_discovery_index as builder
 from scripts.discovery_checkpoint import CheckpointYield, DiscoveryCheckpoint, WorkBudget, atomic_json
 from scripts.directory_publication import canonical_json, sha256_digest
-from tests.test_discovery_index import FixtureAPI, PartitionAPI, SearchFixtureAPI, create_mirror, git
+from tests.test_discovery_index import FixtureAPI, PartitionAPI, SearchFixtureAPI, candidate_record, create_mirror, git
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
@@ -55,6 +55,155 @@ class DiscoveryCheckpointTests(unittest.TestCase):
     def checkpoint(self, directory, **kwargs):
         return DiscoveryCheckpoint(directory, root=ROOT, config=kwargs.pop("config", CONFIG),
             mode=kwargs.pop("mode", "discover"), generated_at=kwargs.pop("generated_at", STAMP), now=kwargs.pop("now", NOW), **kwargs)
+
+    def test_head_metadata_and_unavailability_are_frozen_across_validation_yield(self):
+        # Red if resumed slices re-resolve heads or repeat completed validation.
+        names = ["first/repo", "second/repo", "third/repo"]
+        class DriftingAPI(SearchFixtureAPI):
+            calls = []
+            def graphql(self, query, variables):
+                names = [variables[f"owner{i}"] + "/" + variables[f"name{i}"] for i in range(len(variables) // 2)]
+                self.calls.extend(names)
+                return {f"r{i}": None if name == "third/repo" else {
+                    **FixtureAPI(self.revision).graphql(query, variables)["r0"],
+                    "nameWithOwner": name, "stargazerCount": 42 if self.revision == "a" * 40 else 900,
+                } for i, name in enumerate(names)}
+        clock = FakeClock()
+        scans = []
+        def scan(name, state, pending, *args):
+            scans.append((name, state["revision"]))
+            clock.seconds = 2
+            sample = {**candidate_record(state["revision"]), "repository": name, "owner": name.split("/")[0],
+                      "slug": "discovery:" + name + "//packages/demo", "stars": state["stars"],
+                      "first_seen": STAMP, "last_seen": STAMP}
+            return {pending[0][1]: sample}, []
+        api = DriftingAPI("a" * 40, [(name, "packages/demo/plugin.json") for name in names])
+        arguments = dict(api=api, config=CONFIG, mode="discover", generated_at=STAMP, previous_records=[], repository_workers=1)
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(builder, "scan_repository", side_effect=scan):
+            expected = builder.build_candidate(**arguments)
+            scans.clear()
+            api.calls.clear()
+            clock.seconds = 0
+            with self.assertRaises(CheckpointYield):
+                builder.build_candidate(**arguments, checkpoint=self.checkpoint(temporary), work_budget=WorkBudget(1, monotonic=clock))
+            self.assertEqual(scans, [("first/repo", "a" * 40)])
+            self.assertEqual(api.calls, names)
+            api.revision = "b" * 40
+            with mock.patch.object(api, "graphql", side_effect=AssertionError("frozen repository re-resolved")):
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(temporary), validation_only=True)
+            self.assertEqual(scans, [("first/repo", "a" * 40), ("second/repo", "a" * 40)])
+            self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+
+    def test_each_resolved_batch_is_durable_before_state_resolution_yield(self):
+        # Red if the first GraphQL batch is lost when the next batch yields.
+        names = ["first/repo", "second/repo"]
+        clock = FakeClock()
+        class BatchAPI(SearchFixtureAPI):
+            calls = []
+            expiring = True
+            def graphql(self, query, variables):
+                name = variables["owner0"] + "/" + variables["name0"]
+                self.calls.append(name)
+                if self.expiring:
+                    clock.seconds = 2
+                return {"r0": {**super().graphql(query, variables)["r0"], "nameWithOwner": name}}
+        api = BatchAPI("a" * 40, [(name, "packages/demo/plugin.json") for name in names])
+        arguments = dict(api=api, config=CONFIG, mode="discover", generated_at=STAMP, previous_records=[])
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(builder, "REPOSITORY_GRAPHQL_BATCH", 1):
+            with mock.patch.object(builder, "scan_repository", side_effect=AssertionError("validation before all states frozen")):
+                with self.assertRaises(CheckpointYield):
+                    builder.build_candidate(**arguments, checkpoint=self.checkpoint(temporary), work_budget=WorkBudget(1, monotonic=clock))
+            payload = json.loads((Path(temporary) / "validation.json").read_bytes())["payload"]
+            self.assertEqual(set(payload["states"]), {"first/repo"})
+            self.assertEqual(payload["results"], {})
+            api.expiring = False
+            api.revision = "b" * 40
+            seen = []
+            def scan(name, state, pending, *args):
+                seen.append((name, state["revision"]))
+                return {}, [{"kind": "invalid", "repository": name, "path": "packages/demo", "error": "fixture"}]
+            with mock.patch.object(builder, "scan_repository", side_effect=scan):
+                actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(temporary), validation_only=True)
+            self.assertEqual(api.calls, names)
+            self.assertEqual(sorted(seen), [("first/repo", "a" * 40), ("second/repo", "b" * 40)])
+            self.assertTrue(actual[0]["complete"])
+
+    def test_hostile_frozen_states_fail_closed_before_resolution_or_checkpoint_write(self):
+        # Digest-correct edits must not become source inputs or discard/rewrite
+        # existing checkpoints before the malformed state is rejected.
+        arguments = dict(api=FixtureAPI("a" * 40), config=CONFIG, mode="discover", generated_at=STAMP,
+                         previous_records=[])
+        outcome = [{"kind": "invalid", "repository": "owner/repo", "path": "packages/demo", "error": "fixture"}]
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(builder, "scan_repository", return_value=({}, outcome)):
+                builder.build_candidate(**arguments, checkpoint=self.checkpoint(temporary))
+            path = Path(temporary) / "validation.json"
+            pristine = json.loads(path.read_bytes())
+            for mutation in ("unknown", "key_case", "missing_state", "available_type", "canonical", "canonical_case",
+                             "revision", "stars", "timestamp", "extra", "unavailable_fields", "unavailable_identity",
+                             "unavailable_result", "input_digest", "legacy_payload"):
+                with self.subTest(mutation=mutation):
+                    value = json.loads(canonical_json(pristine))
+                    states = value["payload"]["states"]
+                    state = states["owner/repo"]
+                    if mutation == "unknown":
+                        states["unknown/repo"] = dict(state)
+                    elif mutation == "key_case":
+                        states["Owner/repo"] = states.pop("owner/repo")
+                    elif mutation == "missing_state":
+                        states.clear()
+                    elif mutation == "available_type":
+                        state["available"] = 1
+                    elif mutation.startswith("canonical"):
+                        state["repository"] = "Owner/Repo" if mutation == "canonical_case" else "owner/repo/extra"
+                    elif mutation == "revision":
+                        state["revision"] = "a" * 39
+                    elif mutation == "stars":
+                        state["stars"] = True
+                    elif mutation == "timestamp":
+                        state["updated_at"] = "not-a-timestamp"
+                    elif mutation == "extra":
+                        state["untrusted"] = True
+                    elif mutation.startswith("unavailable"):
+                        state["available"] = False
+                        if mutation != "unavailable_fields":
+                            states["owner/repo"] = {"repository": "unknown/repo" if mutation == "unavailable_identity" else "owner/repo", "available": False}
+                    elif mutation == "input_digest":
+                        value["payload"]["results"]["owner/repo"]["input_digest"] = "sha256:" + "f" * 64
+                    elif mutation == "legacy_payload":
+                        del value["payload"]["states"]
+                    value["payload_digest"] = sha256_digest(canonical_json(value["payload"]))
+                    atomic_json(path, value)
+                    before = {item.name: item.read_bytes() for item in Path(temporary).iterdir()}
+                    with mock.patch.object(arguments["api"], "graphql", side_effect=AssertionError("hostile state resolved")) as resolver, \
+                         mock.patch.object(builder, "scan_repository", side_effect=AssertionError("hostile state validated")) as scanner:
+                        with self.assertRaises((ValueError, builder.DiscoveryError)):
+                            builder.build_candidate(**arguments, checkpoint=self.checkpoint(temporary), validation_only=True)
+                    resolver.assert_not_called()
+                    scanner.assert_not_called()
+                    self.assertEqual(before, {item.name: item.read_bytes() for item in Path(temporary).iterdir()})
+
+    def test_failed_state_batch_write_preserves_durable_and_in_memory_inputs(self):
+        # Red if failed atomic persistence mutates in-memory frozen inputs or
+        # admits a result whose state was never committed.
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = self.checkpoint(temporary)
+            builder.acquire_candidate(api=FixtureAPI("a" * 40), config=CONFIG, mode="discover", previous_records=[], checkpoint=checkpoint)
+            checkpoint.start_validation({}, lambda records: None, ["owner/repo", "other/repo"])
+            state = {"repository": "owner/repo", "revision": "a" * 40, "available": True, "stars": 1, "updated_at": STAMP}
+            checkpoint.save_states({"owner/repo": state})
+            before = (Path(temporary) / "validation.json").read_bytes()
+            with mock.patch("scripts.discovery_checkpoint.atomic_json", side_effect=OSError("disk failure")):
+                with self.assertRaisesRegex(OSError, "disk failure"):
+                    checkpoint.save_states({"other/repo": {**state, "repository": "other/repo"}})
+            self.assertEqual(checkpoint.states, {"owner/repo": state})
+            self.assertEqual((Path(temporary) / "validation.json").read_bytes(), before)
+            with self.assertRaisesRegex(ValueError, "lacks available frozen state"):
+                checkpoint.save_result("other/repo", "sha256:" + "a" * 64, [], [])
+            self.assertEqual(checkpoint.results, {})
+            with self.assertRaisesRegex(ValueError, "cannot be replaced"):
+                checkpoint.save_states({"owner/repo": {**state, "revision": "b" * 40}})
+            self.assertEqual((Path(temporary) / "validation.json").read_bytes(), before)
 
     def test_interrupted_partition_resumes_only_pending_with_identical_bytes(self):
         # Red if a finished partition is re-requested or its coverage/items disappear.
@@ -114,7 +263,7 @@ class DiscoveryCheckpointTests(unittest.TestCase):
             failed_args = {**arguments, "mirror_root": root / "absent"}
             incomplete = builder.build_candidate(**failed_args, checkpoint=self.checkpoint(checkpoint_dir))
             self.assertFalse(incomplete[0]["complete"])
-            self.assertFalse((checkpoint_dir / "validation.json").exists())
+            self.assertEqual(json.loads((checkpoint_dir / "validation.json").read_bytes())["payload"]["results"], {})
             actual = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir))
             self.assertEqual(canonical_json(actual[0]), canonical_json(expected[0]))
 
@@ -123,7 +272,7 @@ class DiscoveryCheckpointTests(unittest.TestCase):
             self.assertEqual(canonical_json(resumed[0]), canonical_json(expected[0]))
             self.assertEqual(actual[1], resumed[1])
 
-    def test_changed_revision_previous_reviewed_and_source_invalidate_validation(self):
+    def test_changed_head_is_frozen_but_previous_reviewed_and_source_invalidate_validation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             mirror, revision = create_mirror(root)
@@ -133,7 +282,7 @@ class DiscoveryCheckpointTests(unittest.TestCase):
             candidate, _ = builder.build_candidate(**arguments, checkpoint=self.checkpoint(checkpoint_dir))
             with mock.patch.object(builder, "scan_repository", wraps=builder.scan_repository) as scan:
                 builder.build_candidate(**{**arguments, "api": FixtureAPI("f" * 40)}, checkpoint=self.checkpoint(checkpoint_dir))
-                self.assertEqual(scan.call_count, 1)
+                self.assertEqual(scan.call_count, 0)
             prior = {**candidate["records"][0], "revision": "e" * 40}
             for change in ("previous", "reviewed", "source"):
                 with self.subTest(change=change):
@@ -148,7 +297,7 @@ class DiscoveryCheckpointTests(unittest.TestCase):
                         builder.build_candidate(**{**arguments, **extra}, checkpoint=self.checkpoint(checkpoint_dir))
                         self.assertEqual(scan.call_count, 1)
 
-    def test_metadata_change_reuses_validation_and_matches_uninterrupted_bytes(self):
+    def test_metadata_change_remains_frozen_and_matches_original_bytes(self):
         class MetadataAPI(FixtureAPI):
             def graphql(self, query, variables):
                 result = super().graphql(query, variables)
@@ -158,12 +307,11 @@ class DiscoveryCheckpointTests(unittest.TestCase):
             root = Path(temporary)
             mirror, revision = create_mirror(root)
             arguments = dict(config=CONFIG, mode="discover", generated_at=STAMP, previous_records=[], mirror_root=mirror)
-            builder.build_candidate(api=FixtureAPI(revision), **arguments, checkpoint=self.checkpoint(root / "checkpoint"))
-            expected = builder.build_candidate(api=MetadataAPI(revision), **arguments)
+            expected = builder.build_candidate(api=FixtureAPI(revision), **arguments, checkpoint=self.checkpoint(root / "checkpoint"))
             with mock.patch.object(builder, "scan_repository", side_effect=AssertionError("immutable validation repeated")):
                 actual = builder.build_candidate(api=MetadataAPI(revision), **arguments, checkpoint=self.checkpoint(root / "checkpoint"))
             self.assertEqual(canonical_json(expected[0]), canonical_json(actual[0]))
-            self.assertEqual(actual[0]["records"][0]["stars"], 900)
+            self.assertEqual(actual[0]["records"][0]["stars"], 42)
 
     def test_interrupted_validation_restores_first_repository_only(self):
         # Red if successful work disappears when the second repository errors.
@@ -753,7 +901,9 @@ class DiscoveryCheckpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = self.checkpoint(temporary)
             builder.acquire_candidate(api=FixtureAPI("a" * 40), config=CONFIG, mode="discover", previous_records=[], checkpoint=checkpoint)
-            checkpoint.start_validation({}, lambda records: None)
+            checkpoint.start_validation({}, lambda records: None, ["owner/repo", "other/repo"])
+            checkpoint.save_states({"owner/repo": {"repository": "owner/repo", "revision": "a" * 40,
+                "available": True, "stars": 0, "updated_at": STAMP}})
             checkpoint.save_result("owner/repo", "sha256:" + "a" * 64, [], [
                 {"kind": "invalid", "repository": "owner/repo", "path": "packages/demo", "error": "valid bounded diagnostic"}])
             before_bytes = (checkpoint.directory / "validation.json").read_bytes()
@@ -764,7 +914,7 @@ class DiscoveryCheckpointTests(unittest.TestCase):
             self.assertEqual((checkpoint.directory / "validation.json").read_bytes(), before_bytes)
             self.assertEqual(canonical_json(checkpoint.results), before_results)
             restored = self.checkpoint(temporary)
-            restored.start_validation({}, lambda records: None)
+            restored.start_validation({}, lambda records: None, ["owner/repo", "other/repo"])
             self.assertEqual(canonical_json(restored.results), before_results)
 
     def test_slice_budget_rejects_unbounded_invalid_or_unsplit_requests(self):
