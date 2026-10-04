@@ -15,6 +15,6 @@ export function discoveryScanManifestUrl(record: Pick<DiscoveryScanRecord, 'repo
   if (repository.length !== 2 || repository.some(segment => !/^[A-Za-z0-9_.-]+$/.test(segment) || segment === '.' || segment === '..')) return null
   if (!/^[a-f0-9]{40}$/i.test(record.revision)) return null
   const path = record.package_path ? record.package_path.split('/') : []
-  if (path.some(segment => !segment || segment === '.' || segment === '..' || /[\\\u0000-\u001f\u007f]/.test(segment))) return null
+  if (path.some(segment => !segment || segment === '.' || segment === '..' || segment.includes('\\') || [...segment].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))) return null
   return `https://github.com/${repository.map(encodeURIComponent).join('/')}/blob/${record.revision}/${[...path, 'plugin.json'].map(encodeURIComponent).join('/')}`
 }
