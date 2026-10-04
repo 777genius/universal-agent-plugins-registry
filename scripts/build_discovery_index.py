@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -426,7 +427,8 @@ def discover_search_items(api: GitHubAPI, base_query: str, maximum_size: int,
 
 def repository_states(api: GitHubAPI, repositories: list[str],
                       progress: ProgressReporter | None = None,
-                      work_budget: WorkBudget | None = None) -> dict[str, dict[str, Any]]:
+                      work_budget: WorkBudget | None = None, *,
+                      on_batch: Callable[[dict[str, dict[str, Any]]], None] | None = None) -> dict[str, dict[str, Any]]:
     """Resolve immutable default heads in bounded GraphQL batches.
 
     A per-repository REST metadata + commit flow exceeds the 1,000 requests/hour
@@ -462,15 +464,16 @@ def repository_states(api: GitHubAPI, repositories: list[str],
         query = "query(" + ", ".join(declarations) + ") { " + " ".join(selections) + " }"
         data = api.graphql(query, variables)
         require(set(data) == {f"r{index}" for index in range(len(batch))}, "GitHub GraphQL repository batch is incomplete")
+        batch_states = {}
         for index, repository_identity in enumerate(batch):
             repository = original_by_identity[repository_identity]
             metadata = data[f"r{index}"]
             if metadata is None:
-                states[repository] = {"repository": repository, "available": False}
+                batch_states[repository] = {"repository": repository, "available": False}
                 continue
             require(isinstance(metadata, dict), f"{repository}: repository metadata is invalid")
             if metadata.get("isPrivate") is not False or metadata.get("isArchived") is True:
-                states[repository] = {"repository": repository, "available": False}
+                batch_states[repository] = {"repository": repository, "available": False}
                 continue
             full_name = metadata.get("nameWithOwner")
             default_ref = metadata.get("defaultBranchRef")
@@ -484,10 +487,15 @@ def repository_states(api: GitHubAPI, repositories: list[str],
             parse_timestamp(updated, f"{repository}.updated_at")
             stars = metadata.get("stargazerCount")
             require(type(stars) is int and stars >= 0, f"{repository}: invalid star count")
-            states[repository] = {
+            batch_states[repository] = {
                 "repository": full_name.casefold(), "revision": revision, "stars": stars,
                 "updated_at": updated, "available": True,
             }
+        # The coordinator commits each fully checked batch before another API
+        # request can yield. Workers never own repository-state persistence.
+        if on_batch:
+            on_batch(batch_states)
+        states.update(batch_states)
         report("graphql_batch_end", completed=offset + len(batch), total=len(identities))
     return states
 
@@ -500,7 +508,7 @@ def bounded_package_files(repository: PinnedRepository, package_path: str) -> li
     raw = git(repository.root, "ls-tree", "-rz", "-r", repository.revision, "--", pathspec, **git_options)
     records: list[tuple[str, str, str]] = []
     seen: set[str] = set()
-    total = 0
+    prefix_with_slash = prefix + "/" if prefix else ""
     for row in raw.split(b"\0"):
         if budget:
             budget.check()
@@ -523,6 +531,19 @@ def bounded_package_files(repository: PinnedRepository, package_path: str) -> li
         folded = full_path.casefold()
         require(folded not in seen, f"package tree contains a case-colliding path: {full_path}")
         seen.add(folded)
+        require(not prefix_with_slash or full_path.startswith(prefix_with_slash), f"package tree escaped {prefix!r}")
+        relative = full_path[len(prefix_with_slash):]
+        require(relative and relative != full_path or not prefix, "package tree path normalization failed")
+        records.append((full_path, mode, object_id))
+        require(len(records) <= MAX_FILES, f"package tree exceeds {MAX_FILES} files")
+    require(bool(records), f"package path {pathspec!r} is empty")
+    # Reject deterministic structural failures before cat-file can lazily fetch
+    # any remote blob. Otherwise every resumed slice repeats the same reads
+    # without ever reaching the known file-count or path failure.
+    total = 0
+    for full_path, mode, object_id in records:
+        if budget:
+            budget.check()
         size_body = git(repository.root, "cat-file", "-s", object_id, **git_options)
         try:
             size = int(size_body.strip())
@@ -531,15 +552,9 @@ def bounded_package_files(repository: PinnedRepository, package_path: str) -> li
         require(0 <= size <= MAX_FILE_BYTES, f"package file exceeds {MAX_FILE_BYTES} bytes: {full_path}")
         total += size
         require(total <= MAX_TREE_BYTES, f"package tree exceeds {MAX_TREE_BYTES} bytes")
-        records.append((full_path, mode, object_id))
-        require(len(records) <= MAX_FILES, f"package tree exceeds {MAX_FILES} files")
-    require(bool(records), f"package path {pathspec!r} is empty")
     result: list[tuple[str, int, bytes]] = []
-    prefix_with_slash = prefix + "/" if prefix else ""
     for full_path, mode, object_id in records:
-        require(not prefix_with_slash or full_path.startswith(prefix_with_slash), f"package tree escaped {prefix!r}")
         relative = full_path[len(prefix_with_slash):]
-        require(relative and relative != full_path or not prefix, "package tree path normalization failed")
         body = git(repository.root, "show", f"{repository.revision}:{full_path}", **git_options)
         require(not body.startswith(LFS_HEADER), f"Git LFS pointer is forbidden: {full_path}")
         result.append((relative, GIT_MODES[mode], body))
@@ -902,10 +917,24 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
         checkpoint.start_validation({"previous": previous_records, "reviewed": sorted([list(key), value] for key, value in reviewed.items()),
             "source_context": {"github_sha": os.environ.get("GITHUB_SHA"), "mirror_root": str(mirror_root.resolve()) if mirror_root else None}},
             lambda cached_records: validate_document({"search_schema_version": 1, "sequence": 1,
-                "generated_at": generated_at, "records": cached_records}, SEARCH_SCHEMA, "checkpoint records"))
+                "generated_at": generated_at, "records": cached_records}, SEARCH_SCHEMA, "checkpoint records"), list(paths))
     discovered = {record_identity(repository, path) for repository, package_paths in paths.items() for path in package_paths}
     report("phase_start", phase="repository_states", repositories=len(paths))
-    states = repository_states(api, list(paths), progress, **({"work_budget": work_budget} if work_budget else {}))
+    states = dict(checkpoint.states) if checkpoint else {}
+    missing_states = [name for name in paths if name not in states]
+    if missing_states:
+        resolved = repository_states(api, missing_states, progress, **({"work_budget": work_budget} if work_budget else {}),
+                                     **({"on_batch": checkpoint.save_states} if checkpoint else {}))
+        # Also commit resolver returns from injected implementations that do not
+        # use the per-batch callback. No validation starts before this succeeds.
+        if checkpoint:
+            unsaved = {name: state for name, state in resolved.items() if name not in checkpoint.states}
+            if unsaved:
+                checkpoint.save_states(unsaved)
+            states = dict(checkpoint.states)
+        else:
+            states.update(resolved)
+    require(set(states) == set(paths), "repository states are incomplete")
     report("phase_end", phase="repository_states", repositories=len(states))
     repository_jobs: dict[str, tuple[dict[str, Any], list[tuple[str, str, dict[str, Any] | None]]]] = {}
     for repository_name in sorted(paths):
@@ -950,10 +979,13 @@ def build_candidate(*, api: GitHubAPI, config: dict[str, Any], mode: str, genera
     # Retain the complete input set for digests, merge validation and ordering.
     # Filtering already-completed packages must never narrow source bindings.
     full_jobs = dict(repository_jobs)
-    job_digests = {name: sha256_digest(canonical_json({"source": {key: state[key] for key in ("repository", "revision", "available")},
+    job_digests = {name: sha256_digest(canonical_json({"source": state,
                                                    "pending": [list(item) for item in pending]}))
                    for name, (state, pending) in repository_jobs.items()} if checkpoint else {}
     if checkpoint:
+        require(set(checkpoint.results).issubset(repository_jobs), "checkpoint result has no immutable package inputs")
+        require(all(result["input_digest"] == job_digests[name] for name, result in checkpoint.results.items()),
+                "checkpoint result input digest differs from frozen inputs")
         for name in list(repository_jobs):
             cached = checkpoint.result(name, job_digests[name])
             if cached is not None:

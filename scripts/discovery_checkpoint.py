@@ -17,6 +17,7 @@ MAX_ENTRIES = 10_000
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 MANIFEST = re.compile(r"^(?:[A-Za-z0-9._-]+/)*plugin\.json$")
+SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 class CheckpointYield(Exception):
@@ -81,6 +82,29 @@ def diagnostics(value):
         for field in item.values():
             text(field, 65536)
         check(item["kind"] in {"unsupported_source", "unavailable", "invalid", "scan_error"}, "invalid diagnostic")
+
+
+def repository_states_payload(value, repositories):
+    check(type(value) is dict and len(value) <= MAX_ENTRIES, "invalid frozen state count")
+    check(set(value).issubset(repositories), "unknown frozen repository")
+    for repository, state in value.items():
+        check(REPOSITORY.fullmatch(repository) is not None, "invalid frozen repository")
+        check(type(state) is dict and type(state.get("available")) is bool, "invalid frozen availability")
+        if not state["available"]:
+            keys(state, {"repository", "available"})
+            check(state["repository"] == repository, "invalid unavailable repository identity")
+            continue
+        keys(state, {"repository", "available", "revision", "stars", "updated_at"})
+        canonical = state["repository"]
+        check(type(canonical) is str and REPOSITORY.fullmatch(canonical) is not None
+              and canonical == canonical.casefold(), "invalid canonical repository identity")
+        check(type(state["revision"]) is str and SHA.fullmatch(state["revision"]) is not None, "invalid frozen revision")
+        check(type(state["stars"]) is int and state["stars"] >= 0, "invalid frozen stars")
+        text(state["updated_at"], 32)
+        try:
+            parse_timestamp(state["updated_at"], "checkpoint.state.updated_at")
+        except PublicationError as error:
+            raise ValueError("Discovery checkpoint: invalid frozen timestamp") from error
 
 
 def implementation_digest(root):
@@ -186,6 +210,8 @@ class DiscoveryCheckpoint:
             self.payload = {"complete": False, "refresh_paths": {}, "stages": {}}
         self.fresh(self.generated_at)
         self.results = {}
+        self.states = {}
+        self.repositories = set()
         self.validation_binding = None
 
     def fresh(self, timestamp):
@@ -229,20 +255,26 @@ class DiscoveryCheckpoint:
         acquisition_payload(self.payload, self.queries, self.maximum_size)
         atomic_json(self.path, self.envelope("acquisition", self.binding, self.payload))
 
-    def start_validation(self, context, validate_records):
+    def start_validation(self, context, validate_records, repositories):
         check(self.payload["complete"], "acquisition is incomplete")
+        check(len(repositories) <= MAX_ENTRIES and all(type(name) is str and REPOSITORY.fullmatch(name) is not None for name in repositories), "invalid validation repositories")
+        check(len({name.casefold() for name in repositories}) == len(repositories), "duplicate validation repository")
+        self.repositories = set(repositories)
         self.validation_binding = sha256_digest(canonical_json({"acquisition": self.envelope("acquisition", self.binding, self.payload), "context": context}))
+        self.states, self.results = {}, {}
         path = self.directory / "validation.json"
         if not path.exists():
             return
         envelope = self.read(path, "validation")
         check(envelope["generated_at"] == self.generated_at and type(envelope["binding"]) is str and DIGEST.fullmatch(envelope["binding"]) is not None, "invalid validation binding")
         payload = envelope["payload"]
-        keys(payload, {"results"})
+        keys(payload, {"states", "results"})
+        repository_states_payload(payload["states"], self.repositories)
         check(type(payload["results"]) is dict and len(payload["results"]) <= MAX_ENTRIES, "invalid repository result count")
         all_records = []
         for repository, result in payload["results"].items():
             check(REPOSITORY.fullmatch(repository) is not None, "invalid result repository")
+            check(repository in payload["states"] and payload["states"][repository]["available"], "result lacks available frozen state")
             keys(result, {"input_digest", "records", "diagnostics", "complete"})
             check(type(result["complete"]) is bool, "invalid repository completion")
             check(type(result["input_digest"]) is str and DIGEST.fullmatch(result["input_digest"]) is not None, "invalid input digest")
@@ -264,7 +296,15 @@ class DiscoveryCheckpoint:
             check(not any(item["kind"] == "scan_error" for item in result["diagnostics"]), "cached scan error")
         validate_records(all_records)
         if envelope["binding"] == self.validation_binding:
+            self.states = payload["states"]
             self.results = payload["results"]
+
+    def save_states(self, states):
+        check(type(states) is dict and not set(states).intersection(self.states), "frozen state cannot be replaced")
+        merged = {**self.states, **states}
+        repository_states_payload(merged, self.repositories)
+        self.save_validation(states=merged)
+        self.states = merged
 
     def result(self, repository, input_digest):
         result = self.results.get(repository)
@@ -277,10 +317,13 @@ class DiscoveryCheckpoint:
         diagnostics(result_diagnostics)
         if any(item["kind"] == "scan_error" for item in result_diagnostics):
             return
-        self.results[repository] = {"input_digest": input_digest, "records": records,
-                                    "diagnostics": result_diagnostics, "complete": complete}
-        self.save_validation()
+        check(repository in self.states and self.states[repository]["available"], "result lacks available frozen state")
+        results = {**self.results, repository: {"input_digest": input_digest, "records": records,
+                                              "diagnostics": result_diagnostics, "complete": complete}}
+        self.save_validation(results=results)
+        self.results = results
 
-    def save_validation(self):
+    def save_validation(self, *, states=None, results=None):
         check(self.validation_binding is not None, "validation has not started")
-        atomic_json(self.directory / "validation.json", self.envelope("validation", self.validation_binding, {"results": self.results}))
+        atomic_json(self.directory / "validation.json", self.envelope("validation", self.validation_binding,
+            {"states": self.states if states is None else states, "results": self.results if results is None else results}))

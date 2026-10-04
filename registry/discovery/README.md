@@ -22,6 +22,20 @@ failed production observation leaves the last-known-good pointer unchanged.
 The website reads that pointer at runtime, so a fresh index does not require a
 frontend rebuild.
 
+Validation uses a frozen source set for each scan. Repository identity, exact
+commit SHA, availability and display metadata are resolved once and saved
+atomically after each successful metadata batch. A resumed slice resolves only
+missing repositories and validates only unfinished packages. Upstream pushes
+are observed by the next scan, not by replacing inputs underneath this scan.
+Unavailable repositories are also frozen for that observation.
+
+The checkpoint remains bound to the original acquisition, implementation,
+configuration and validation context. It expires 24 hours after the original
+observation; neither a slice nor a retry renews that timestamp or the phase
+wall budget. Completed package outcomes survive a yield, but an unfinished
+individual blob read is not a durable result. A failed or budget-exhausted scan
+must not be described as a completed or published index.
+
 The reproducible 2026-08-27 scale spike is recorded in
 `spike-2026-08-27.json`: 2,659 exact manifest paths across 967 repositories,
 with no duplicate repository/path identities. Candidate validity is deliberately
