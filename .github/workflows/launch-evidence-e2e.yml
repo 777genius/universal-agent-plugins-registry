@@ -230,7 +230,7 @@ jobs:
             --schema-version 2 \
             --output native-observation.json
           sha256sum native-observation.json > native-observation.SHA256SUMS
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ matrix.os }}-${{ matrix.architecture }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -270,7 +270,7 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.13"}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22"}
       - run: python -m pip install cryptography==46.0.3 jsonschema==4.26.0 tzdata==2026.3
       - name: Resolve and install the exact registry-authenticated npm facade
@@ -313,7 +313,7 @@ jobs:
           cp "$run_root/context.json" prepared-producer-inputs/context.json
           cp -R "$run_root/release" "$run_root/directory" prepared-producer-inputs/
           cp "$run_root/release/release-manifest.json" "$run_root/release/checksums.txt" prepared-policy-inputs/
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-node22-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -322,7 +322,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: false
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prepared-launch-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: prepared-observer-context
@@ -331,14 +331,14 @@ jobs:
           overwrite: false
       - id: identity
         run: echo "run_attempt=${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prepared-producer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: prepared-producer-inputs
           if-no-files-found: error
           retention-days: 1
           overwrite: false
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prepared-policy-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -373,12 +373,12 @@ jobs:
           test "${#value}" -lt "${#maximum}" || { test "${#value}" -eq "${#maximum}" && test "$value" \< "$maximum" -o "$value" = "$maximum"; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: "native-*-${{ github.run_id }}-${{ needs.native-release.outputs.evidence_run_attempt }}"
           path: native
           merge-multiple: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-node22-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
           path: npm
@@ -468,12 +468,12 @@ jobs:
           path: _plugin-kit-source
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version: '1.25.13', cache: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.13"}
       - run: python -m pip install check-jsonschema==0.37.4
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: prepared-policy-inputs-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
           path: prepared
@@ -495,7 +495,7 @@ jobs:
           evidence_digest="sha256:$(sha256sum source-policy-evidence/source-policy-conformance.json | cut -d' ' -f1)"
           echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
           echo "evidence_digest=${evidence_digest}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.policy.outputs.artifact_name }}
           path: source-policy-evidence/source-policy-conformance.json
@@ -535,7 +535,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.13"}
       - run: python -m pip install cryptography==46.0.3 jsonschema==4.26.0 check-jsonschema==0.37.4
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: prepared-launch-context-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
           path: prepared-context
@@ -712,7 +712,7 @@ jobs:
           check-jsonschema --schemafile tests/e2e/schemas/observer-bundle.schema.json live-inputs/observer-bundle.json
           printf 'public_key=%s\n' "$OBSERVER_ED25519_PUBLIC_KEY" >> "$GITHUB_OUTPUT"
           printf 'key_id=%s\n' "$OBSERVER_KEY_ID" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: protected-observer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: live-inputs
@@ -754,14 +754,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.13"}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22"}
       - run: python -m pip install cryptography==46.0.3 jsonschema==4.26.0 check-jsonschema==0.37.4
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: "native-*-${{ github.run_id }}-${{ needs.native-release.outputs.evidence_run_attempt }}"
           path: native-observations
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-node22-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
           path: native-observations/npm
@@ -770,11 +770,11 @@ jobs:
           find native-observations -name native-observation.SHA256SUMS -execdir sha256sum --check native-observation.SHA256SUMS \;
           (cd native-observations/npm && sha256sum --check npm-observation.SHA256SUMS)
           find native-observations -name '*observation.json' -print0 | xargs -0 check-jsonschema --schemafile tests/e2e/schemas/native-release-observation-v2.schema.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: prepared-producer-inputs-${{ github.run_id }}-${{ needs.node22-npm-facade.outputs.evidence_run_attempt }}
           path: prepared-context
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: protected-observer-inputs-${{ github.run_id }}-${{ needs.protected-observer-inputs.outputs.evidence_run_attempt }}
           path: protected-observer-inputs
@@ -869,7 +869,7 @@ jobs:
           echo "digest=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["launch_evidence_digest"])' "$RUN_ROOT/materialized-evidence.json")" >> "$GITHUB_OUTPUT"
           echo "source_digest=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "run_attempt=${EVIDENCE_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.bundle.outputs.artifact_name }}
           path: ${{ env.RUN_ROOT }}/evidence
@@ -912,7 +912,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.13"}
       - run: python -m pip install cryptography==46.0.3 jsonschema==4.26.0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.enforced-stable-gate.outputs.evidence_artifact_name }}
           path: evidence
@@ -954,7 +954,7 @@ jobs:
           test -s attestation/github-attestation.jsonl
           artifact_name="stable-launch-attestation-${GITHUB_SHA}-${GITHUB_RUN_ID}-${EVIDENCE_RUN_ATTEMPT}-${GITHUB_RUN_ATTEMPT}"
           echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.attestation-identity.outputs.artifact_name }}
           path: attestation/github-attestation.jsonl
@@ -991,11 +991,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.13"}
       - run: python -m pip install check-jsonschema==0.37.4
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.attest-stable-evidence.outputs.evidence_artifact_name }}
           path: released-runtime
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.source-policy-conformance.outputs.artifact_name }}
           path: source-policy
@@ -1019,7 +1019,7 @@ jobs:
           evidence_digest="sha256:$(sha256sum two-lane-readiness/two-lane-readiness.json | cut -d' ' -f1)"
           echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
           echo "evidence_digest=${evidence_digest}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.readiness.outputs.artifact_name }}
           path: two-lane-readiness/two-lane-readiness.json
