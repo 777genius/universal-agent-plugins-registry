@@ -22,7 +22,7 @@ const REVISION = /^[a-f0-9]{40}$/
 const DIGEST = /^sha256:[a-f0-9]{64}$/
 const PLUGIN_NAME = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/
 const COMPONENTS = new Set<ComponentID>(['extensions', 'mcp', 'skills'])
-const CLIENTS = new Set<ClientID>(['codex', 'chatgpt', 'cursor', 'copilot', 'vscode', 'kiro', 'claude', 'gemini', 'opencode', 'cline', 'windsurf'])
+const CLIENTS = new Set<ClientID>(['codex', 'chatgpt', 'cursor', 'copilot', 'vscode', 'kiro', 'claude', 'gemini', 'opencode', 'cline', 'windsurf', 'grok', 'kimi', 'qoder'])
 const KINDS = new Set<DistributionKind>(['upstream', 'community_bridge', 'community'])
 const RFC3339_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/
 const EVIDENCE_WORKFLOW = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*\/\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/
@@ -150,6 +150,9 @@ const legacyDelivery: RegistryPlugin['client_support']['delivery'] = {
   opencode: 'managed',
   cline: 'managed',
   windsurf: 'prepared',
+  grok: 'managed',
+  kimi: 'managed',
+  qoder: 'managed',
 }
 
 function legacyAuthentication(name: string): RegistryPlugin['authentication'] {
