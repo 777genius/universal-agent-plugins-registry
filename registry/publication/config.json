@@ -1,7 +1,7 @@
 {
   "repository": "777genius/universal-agent-plugins-registry",
   "schema_version": 1,
-  "local_evidence_main_anchor": "5e8919f91416030e8ae09f250b13a9122dcb18c2",
+  "local_evidence_main_anchor": "c2cff59da193a28b811c77d1db684699fc31a71c",
   "snapshot_lifetime_days": 30,
   "trusted_external_evidence": [
     {
@@ -99,6 +99,84 @@
       "revision": "8d5dc4581d1e74adb8b7d3dd94d853bdae219e8d",
       "path": "evidence/upstream-promotions/github/59847fb6204b276dcdbe10eaf14ebe3a73176948/clients/kiro.json",
       "digest": "sha256:2d5863c401ddd4b57d364068e2e6290d855c0a4b88f7cd5b6551dd326824cd20"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/claude.json",
+      "digest": "sha256:f52fa21c33b9d5c106c18bf892ed29da00af894c1e93f498c01ea854add9ee88"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/cline.json",
+      "digest": "sha256:e5ff0d30ef9caecb9ac88f9e766ddfb7ff28891a849ae1588e524d143be1cfa1"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/codex.json",
+      "digest": "sha256:15c45873a7eb9b79661daf4c9cb49c40b5f03bebf7aaa6c20fb1aa787d4db824"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/copilot.json",
+      "digest": "sha256:183106dc4930a01acd51553134c5d9867ac440d1bdfd81136eda1a5e78f167c9"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/cursor.json",
+      "digest": "sha256:35dc65abe5632233cc62e1b50e68ef83568508dcefe065e147355b1485e01aae"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/gemini.json",
+      "digest": "sha256:34f26b604767c828dc424ee10f367a73191415bf4dec37785770e10b3ef15ae6"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/grok.json",
+      "digest": "sha256:136cc7934e48c07ce37423b487ecfc66913ce67ae31cb23da1a292dbda4ef972"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/kimi.json",
+      "digest": "sha256:9fb0cdaea51a80dd1be05b4874b0406feb842222659b77612a145b71fc38e807"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/kiro.json",
+      "digest": "sha256:fb3d0996afbe09a69c6868c633cfd69fa6c9cc8b75c186d7037f7238634aa88c"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/opencode.json",
+      "digest": "sha256:a83f9e37e2731267ccac12e80222627372c6a6236e5e7ab85f10d71f6b0a90a2"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/qoder.json",
+      "digest": "sha256:cb2e73649b9ccfb45c19a1bc0c5eea3332888bd0bcdd50f7f706818e856ba367"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/vscode.json",
+      "digest": "sha256:a631f613aab5e52977055ceda361fa8f56577461b531c2a806ae0daf02988580"
+    },
+    {
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+      "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/windsurf.json",
+      "digest": "sha256:5f17ad69c376020b5d6b92c05e4649002c8ebbe60fbdfd445f118686ede66a4d"
     }
   ],
   "trusted_evidence_workflows": [

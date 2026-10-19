@@ -1053,6 +1053,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -1171,6 +1195,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -1550,6 +1598,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -1907,6 +1979,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -2029,6 +2125,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -2377,6 +2497,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -2616,6 +2760,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -2734,6 +2902,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -2789,10 +2981,10 @@
           "package_version": "0.2.1",
           "manifest_name": "context7",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "package_source": {
-        "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
-        "path": "plugins/context7"
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
+            "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:9220051c7d8423acc8a9b41c016ba60552ef2637a483bb7db60064942b00116a",
@@ -3128,6 +3320,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -3246,6 +3462,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -3364,6 +3604,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -3437,10 +3701,10 @@
           "package_version": "0.2.2",
           "manifest_name": "firebase",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "package_source": {
-        "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
-        "path": "plugins/firebase"
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
+            "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:330c919a37accbfa408c8a19459bbd19ac5ac51c93a51acf03abd26a96f7cded",
@@ -3824,6 +4088,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -3945,6 +4233,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4254,6 +4566,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4372,6 +4708,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4490,6 +4850,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4608,6 +4992,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4726,6 +5134,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4799,10 +5231,10 @@
           "package_version": "0.2.2",
           "manifest_name": "hubspot-developer",
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-      "package_source": {
-        "repository": "777genius/universal-agent-plugins-registry",
-        "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
-        "path": "plugins/hubspot-developer"
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "ae72693705e9567d43dca63351fcf63147884f4a",
+            "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:467da672168c6d69e4df178ada4f0f606c9f7ec7bfa11744eece7e6c9ef275ba",
@@ -5186,6 +5618,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5304,6 +5760,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5422,6 +5902,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5540,6 +6044,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5661,6 +6189,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5779,6 +6331,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5897,6 +6473,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -6015,6 +6615,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -6133,6 +6757,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -6251,6 +6899,30 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -6354,7 +7026,7 @@
         {
           "release_sequence": 1,
           "status": "active",
-          "minimum_installer_version": "0.1.51",
+          "minimum_installer_version": "0.1.87",
           "targets": [
             {
               "client": "codex",
@@ -6435,19 +7107,46 @@
                 "user"
               ],
               "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
             }
           ],
           "current_evidence": [
-            "promotion/context7/769c6cd22c3d/claude",
-            "promotion/context7/769c6cd22c3d/cline",
-            "promotion/context7/769c6cd22c3d/codex",
-            "promotion/context7/769c6cd22c3d/copilot",
-            "promotion/context7/769c6cd22c3d/cursor",
-            "promotion/context7/769c6cd22c3d/gemini",
-            "promotion/context7/769c6cd22c3d/kiro",
-            "promotion/context7/769c6cd22c3d/opencode",
-            "promotion/context7/769c6cd22c3d/vscode",
-            "promotion/context7/769c6cd22c3d/windsurf"
+            "promotion/context7/769c6cd22c3d-0.1.87/claude",
+            "promotion/context7/769c6cd22c3d-0.1.87/cline",
+            "promotion/context7/769c6cd22c3d-0.1.87/codex",
+            "promotion/context7/769c6cd22c3d-0.1.87/copilot",
+            "promotion/context7/769c6cd22c3d-0.1.87/cursor",
+            "promotion/context7/769c6cd22c3d-0.1.87/gemini",
+            "promotion/context7/769c6cd22c3d-0.1.87/grok",
+            "promotion/context7/769c6cd22c3d-0.1.87/kimi",
+            "promotion/context7/769c6cd22c3d-0.1.87/kiro",
+            "promotion/context7/769c6cd22c3d-0.1.87/opencode",
+            "promotion/context7/769c6cd22c3d-0.1.87/qoder",
+            "promotion/context7/769c6cd22c3d-0.1.87/vscode",
+            "promotion/context7/769c6cd22c3d-0.1.87/windsurf"
           ]
         }
       ]
@@ -6542,6 +7241,409 @@
         "revision": "358ba031677f0969a2a3fc844686813dadae065b",
         "path": "registry/evidence/context7-upstream/cli-0.1.13/kiro.json",
         "digest": "sha256:980a6b184fa1e70e409529b29d323f68dd6e296d703fcca45888c49c7bbe08f6"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/claude",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "claude",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/claude.json",
+        "digest": "sha256:f52fa21c33b9d5c106c18bf892ed29da00af894c1e93f498c01ea854add9ee88"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/cline",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "cline",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/cline.json",
+        "digest": "sha256:e5ff0d30ef9caecb9ac88f9e766ddfb7ff28891a849ae1588e524d143be1cfa1"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/codex",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "codex",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/codex.json",
+        "digest": "sha256:15c45873a7eb9b79661daf4c9cb49c40b5f03bebf7aaa6c20fb1aa787d4db824"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/copilot",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "copilot",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/copilot.json",
+        "digest": "sha256:183106dc4930a01acd51553134c5d9867ac440d1bdfd81136eda1a5e78f167c9"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/cursor",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "cursor",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/cursor.json",
+        "digest": "sha256:35dc65abe5632233cc62e1b50e68ef83568508dcefe065e147355b1485e01aae"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/gemini",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "gemini",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/gemini.json",
+        "digest": "sha256:34f26b604767c828dc424ee10f367a73191415bf4dec37785770e10b3ef15ae6"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/grok",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "grok",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/grok.json",
+        "digest": "sha256:136cc7934e48c07ce37423b487ecfc66913ce67ae31cb23da1a292dbda4ef972"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/kimi",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "kimi",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/kimi.json",
+        "digest": "sha256:9fb0cdaea51a80dd1be05b4874b0406feb842222659b77612a145b71fc38e807"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/kiro",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "kiro",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/kiro.json",
+        "digest": "sha256:fb3d0996afbe09a69c6868c633cfd69fa6c9cc8b75c186d7037f7238634aa88c"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/opencode",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "opencode",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/opencode.json",
+        "digest": "sha256:a83f9e37e2731267ccac12e80222627372c6a6236e5e7ab85f10d71f6b0a90a2"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/qoder",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "qoder",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/qoder.json",
+        "digest": "sha256:cb2e73649b9ccfb45c19a1bc0c5eea3332888bd0bcdd50f7f706818e856ba367"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/vscode",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "vscode",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/vscode.json",
+        "digest": "sha256:a631f613aab5e52977055ceda361fa8f56577461b531c2a806ae0daf02988580"
+      },
+      "trust": {
+        "kind": "reviewed_external"
+      }
+    },
+    {
+      "schema_version": 1,
+      "id": "promotion/context7/769c6cd22c3d-0.1.87/windsurf",
+      "product_id": "context7",
+      "distribution_id": "upstash/context7",
+      "release_sequence": 1,
+      "package_tree_digest": "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8",
+      "manifest_digest": "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236",
+      "source_repository": "upstash/context7",
+      "source_revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "source_path": "plugins/agent-plugins/context7",
+      "level": "materialization",
+      "outcome": "passed",
+      "client": "windsurf",
+      "client_version": "isolated-configuration-fixture",
+      "installer_version": "0.1.87",
+      "adapter_version": "agentplugins-0.1.87",
+      "os": "linux",
+      "architecture": "amd64",
+      "dependency_identity": "agentplugins@0.1.87",
+      "observed_at": "2026-10-19T20:29:14Z",
+      "artifact": {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "c2cff59da193a28b811c77d1db684699fc31a71c",
+        "path": "evidence/upstream-promotions/context7/769c6cd22c3d95462d1f55d789e9532cabefa5a9-0.1.87/clients/windsurf.json",
+        "digest": "sha256:5f17ad69c376020b5d6b92c05e4649002c8ebbe60fbdfd445f118686ede66a4d"
       },
       "trust": {
         "kind": "reviewed_external"

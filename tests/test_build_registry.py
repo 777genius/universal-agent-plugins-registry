@@ -1142,7 +1142,7 @@ class DirectoryDomainTests(unittest.TestCase):
                 if distribution["id"] == "777genius/context7" and policy["release_sequence"] >= 2:
                     expected_minimum = "0.1.26"
                 if distribution["id"] == "upstash/context7":
-                    expected_minimum = "0.1.51"
+                    expected_minimum = "0.1.87"
                 if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] >= 2:
                     expected_minimum = "0.1.26"
                 if (

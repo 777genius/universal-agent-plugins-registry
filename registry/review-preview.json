@@ -85,6 +85,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/agent-code-navigator",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/agent-code-navigator",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "not_required"
             }
@@ -96,6 +116,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/agent-code-navigator",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -162,6 +192,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -218,6 +260,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -320,6 +374,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/atlassian",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/atlassian",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -331,6 +405,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/atlassian",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -397,6 +481,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -453,6 +549,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -559,6 +667,28 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 3,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 3,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "not_required"
             }
@@ -571,6 +701,17 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 3,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -667,6 +808,65 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/chrome-devtools-bridge",
+          "release_sequence": 3,
+          "fallback_reason": "declared default 777genius/chrome-devtools was ineligible: distribution is suspended"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -744,6 +944,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -846,6 +1058,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -857,6 +1089,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -923,6 +1165,64 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -1042,6 +1342,18 @@
             {
               "client": "windsurf",
               "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required"
             }
           ],
           "current_evidence": [],
@@ -1141,6 +1453,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -1152,6 +1484,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -1218,6 +1560,64 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-bindings-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -1336,6 +1736,18 @@
             {
               "client": "windsurf",
               "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required"
             }
           ],
           "current_evidence": [],
@@ -1446,6 +1858,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-docs-bridge",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-docs-bridge",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "not_required"
             }
@@ -1457,6 +1889,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-docs-bridge",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -1557,6 +1999,68 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-docs-bridge",
+          "release_sequence": 2
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required"
+            },
+            {
+              "client": "chatgpt",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -1663,6 +2167,18 @@
             {
               "client": "windsurf",
               "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required"
             }
           ],
           "current_evidence": [],
@@ -1765,6 +2281,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-observability-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-observability-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -1776,6 +2312,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-observability-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -1842,6 +2388,64 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-observability-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -1960,6 +2564,18 @@
             {
               "client": "windsurf",
               "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required"
             }
           ],
           "current_evidence": [],
@@ -2059,6 +2675,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-radar",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-radar",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -2070,6 +2706,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/cloudflare-radar",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2136,6 +2782,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2192,6 +2850,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2291,6 +2961,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -2302,6 +2992,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2394,6 +3094,64 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "upstash/context7",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2450,6 +3208,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -2513,19 +3283,34 @@
             {
               "client": "windsurf",
               "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required"
             }
           ],
           "current_evidence": [
-            "promotion/context7/769c6cd22c3d/claude",
-            "promotion/context7/769c6cd22c3d/cline",
-            "promotion/context7/769c6cd22c3d/codex",
-            "promotion/context7/769c6cd22c3d/copilot",
-            "promotion/context7/769c6cd22c3d/cursor",
-            "promotion/context7/769c6cd22c3d/gemini",
-            "promotion/context7/769c6cd22c3d/kiro",
-            "promotion/context7/769c6cd22c3d/opencode",
-            "promotion/context7/769c6cd22c3d/vscode",
-            "promotion/context7/769c6cd22c3d/windsurf"
+            "promotion/context7/769c6cd22c3d-0.1.87/claude",
+            "promotion/context7/769c6cd22c3d-0.1.87/cline",
+            "promotion/context7/769c6cd22c3d-0.1.87/codex",
+            "promotion/context7/769c6cd22c3d-0.1.87/copilot",
+            "promotion/context7/769c6cd22c3d-0.1.87/cursor",
+            "promotion/context7/769c6cd22c3d-0.1.87/gemini",
+            "promotion/context7/769c6cd22c3d-0.1.87/grok",
+            "promotion/context7/769c6cd22c3d-0.1.87/kimi",
+            "promotion/context7/769c6cd22c3d-0.1.87/kiro",
+            "promotion/context7/769c6cd22c3d-0.1.87/opencode",
+            "promotion/context7/769c6cd22c3d-0.1.87/qoder",
+            "promotion/context7/769c6cd22c3d-0.1.87/vscode",
+            "promotion/context7/769c6cd22c3d-0.1.87/windsurf"
           ],
           "source": {
             "repository": "upstash/context7",
@@ -2622,6 +3407,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/docker-hub",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/docker-hub",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "not_required"
             }
@@ -2633,6 +3438,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/docker-hub",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -2699,6 +3514,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -2755,6 +3582,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -2854,6 +3693,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/figma",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/figma",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -2865,6 +3724,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/figma",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2931,6 +3800,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -2987,6 +3868,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -3085,6 +3978,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -3096,6 +4009,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -3188,6 +4111,64 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/firebase",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -3244,6 +4225,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -3342,6 +4335,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "not_required"
             }
@@ -3353,6 +4366,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/firecrawl-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -3419,6 +4442,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -3475,6 +4510,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -3579,6 +4626,28 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/github-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support grok"
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/github-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support kimi"
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -3596,6 +4665,17 @@
           "distribution_id": "777genius/github-bridge",
           "release_sequence": 2,
           "fallback_reason": "declared default github/github was ineligible: release 1 does not support opencode"
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/github-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support qoder"
         },
         {
           "targets": [
@@ -3710,6 +4790,65 @@
           "distribution_id": "777genius/github-bridge",
           "release_sequence": 2,
           "fallback_reason": "declared default github/github was ineligible: release 1 does not support claude,cline,copilot,gemini,opencode,vscode,windsurf"
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/github-bridge",
+          "release_sequence": 2,
+          "fallback_reason": "declared default github/github was ineligible: release 1 does not support claude,cline,copilot,gemini,grok,kimi,opencode,qoder,vscode,windsurf"
         }
       ],
       "distributions": [
@@ -3802,6 +4941,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -3937,6 +5088,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/gitlab",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/gitlab",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -3948,6 +5119,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/gitlab",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4014,6 +5195,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4070,6 +5263,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4169,6 +5374,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/greptile",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/greptile",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -4180,6 +5405,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/greptile",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4246,6 +5481,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4302,6 +5549,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4403,6 +5662,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/heroku",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/heroku",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -4414,6 +5693,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/heroku",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4480,6 +5769,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4536,6 +5837,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4635,6 +5948,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-crm",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-crm",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -4646,6 +5979,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-crm",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4712,6 +6055,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4768,6 +6123,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4867,6 +6234,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -4878,6 +6265,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -4970,6 +6367,64 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/hubspot-developer",
+          "release_sequence": 5
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            },
+            {
+              "client": "cline",
+              "authentication": "required"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5026,6 +6481,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5125,6 +6592,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/linear",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/linear",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -5136,6 +6623,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/linear",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5202,6 +6699,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5258,6 +6767,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5357,6 +6878,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/neon",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/neon",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -5368,6 +6909,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/neon",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5434,6 +6985,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5490,6 +7053,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5590,6 +7165,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/notion",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/notion",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -5601,6 +7196,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/notion",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5667,6 +7272,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5723,6 +7340,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -5821,6 +7450,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "not_required"
             }
@@ -5832,6 +7481,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "not_required"
+            }
+          ],
+          "distribution_id": "777genius/playwright-bridge",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -5898,6 +7557,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -5954,6 +7625,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "not_required"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required"
+            },
+            {
+              "client": "qoder",
               "authentication": "not_required"
             }
           ],
@@ -6053,6 +7736,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/sentry",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/sentry",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -6064,6 +7767,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/sentry",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6130,6 +7843,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6186,6 +7911,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6285,6 +8022,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/statsig",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/statsig",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -6296,6 +8053,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/statsig",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6362,6 +8129,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6418,6 +8197,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6518,6 +8309,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/stripe",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/stripe",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -6529,6 +8340,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/stripe",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6595,6 +8416,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6651,6 +8484,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6750,6 +8595,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/supabase",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/supabase",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -6761,6 +8626,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/supabase",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6827,6 +8702,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6883,6 +8770,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -6981,6 +8880,26 @@
         {
           "targets": [
             {
+              "client": "grok",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/vercel",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "kimi",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/vercel",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "kiro",
               "authentication": "required"
             }
@@ -6992,6 +8911,16 @@
           "targets": [
             {
               "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/vercel",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -7058,6 +8987,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
@@ -7114,6 +9055,18 @@
             },
             {
               "client": "windsurf",
+              "authentication": "required"
+            },
+            {
+              "client": "grok",
+              "authentication": "required"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required"
+            },
+            {
+              "client": "qoder",
               "authentication": "required"
             }
           ],
