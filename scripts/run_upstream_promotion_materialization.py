@@ -134,6 +134,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for client in clients:
         root_name, relative = CLIENT_ROOTS[client]
         (roots[root_name] / relative).mkdir(parents=True, exist_ok=False)
+    if "cursor" in clients:
+        # Cursor's adapter gates detection on its selectable physical surfaces
+        # (editor binary or desktop entry), not on the .cursor config directory.
+        applications = roots["home"] / ".local" / "share" / "applications"
+        applications.mkdir(parents=True, exist_ok=True)
+        (applications / "cursor.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Cursor\nExec=cursor %U\n", encoding="utf-8"
+        )
     environment = {
         "PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
         "HOME": str(roots["home"]), "USERPROFILE": str(roots["home"]),

@@ -204,6 +204,10 @@ class UpstreamPromotionTests(unittest.TestCase):
             self.assertEqual(result["clients"], clients)
             for client, (root_name, relative) in lifecycle.CLIENT_ROOTS.items():
                 self.assertTrue((sandbox / root_name / relative).is_dir(), client)
+            self.assertTrue(
+                (sandbox / "home" / ".local" / "share" / "applications" / "cursor.desktop").is_file(),
+                "cursor desktop-entry fixture is required since adapter selection surfaces",
+            )
 
     def test_materialization_runner_rejects_noncanonical_or_unknown_targets(self) -> None:
         base = argparse.Namespace(

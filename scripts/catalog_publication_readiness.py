@@ -334,6 +334,13 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
     seed_clients(root)
     for path in (roots["home"] / ".codex", roots["home"] / ".cursor", roots["home"] / ".kiro", roots["home"] / ".copilot"):
         path.mkdir(exist_ok=True)
+    # Cursor's adapter gates detection on its selectable physical surfaces
+    # (editor binary or desktop entry), not on the .cursor config directory.
+    applications = roots["home"] / ".local" / "share" / "applications"
+    applications.mkdir(parents=True, exist_ok=True)
+    (applications / "cursor.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Cursor\nExec=cursor %U\n", encoding="utf-8"
+    )
     tool_bin = root / "bin"
     tool_bin.mkdir()
     for tool in tools:
