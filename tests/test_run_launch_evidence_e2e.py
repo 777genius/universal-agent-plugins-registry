@@ -2077,7 +2077,7 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertEqual(config["npm_facade_version"], "0.1.24")
         self.assertRegex(config["npm_facade_integrity"], r"^sha512-[A-Za-z0-9+/]+={0,2}$")
         self.assertEqual(config["npm_facade_integrity"], "sha512-hUMKvd2kAjTWA1obzAlXdbE3GxjRk8lhXRA9YuO2h2NINnYv/GQi2JwgkqWhOd95BpEKh5Do8vV1B4B/Unl+jw==")
-        expected_directory_digest = "sha256:c9a32ec5d6223036862ac9b26b53acf079e9a22b6d10b27ccc920e5cb7e0f97b"
+        expected_directory_digest = "sha256:53a57a4df585df3e8b1daf0ef5a448f7c259166b6c1af4709fab6c113bf37bb5"
         self.assertEqual(config["directory_source_digest"], expected_directory_digest)
         # The launch evidence is pinned to the historical 0.1.24 Directory
         # source. The current review source advances independently as upstream
