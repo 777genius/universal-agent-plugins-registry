@@ -35,7 +35,8 @@ ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloud
 # bridge in the fixed matrix as an explicit, independently installable fallback.
 QUALIFIED_FALLBACKS = {"fallback-context7": "777genius/context7"}
 CORE = ("codex", "cursor", "kiro")
-CATALOG_CLIENTS = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf")
+CATALOG_CLIENTS = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
+                   "grok", "kimi", "qoder")
 CHROME = CATALOG_CLIENTS
 STATIC = ("777genius/cloudflare-docs", "777genius/cloudflare-docs-bridge")
 CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha",
@@ -43,9 +44,9 @@ CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha
                   "run_id", "run_attempt", "directory_origin")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-CLI = {"version": "0.1.51", "tag": "agentplugins-v0.1.51",
-       "commit": "aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c",
-       "binary_digest": "sha256:bc2b5e546394eb176eebd97226972eec9c60f8f1518bc7981ead6ea752c57a53",
+CLI = {"version": "0.1.87", "tag": "agentplugins-v0.1.87",
+       "commit": "37682cfe042f27a0ecf9e1094168b61077918509",
+       "binary_digest": "sha256:6940f3fa1877e9b7327c3ed3a43dde92b2725c5ce6bd1a8c5216bf17bfa06e70",
        "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
@@ -333,6 +334,13 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
     seed_clients(root)
     for path in (roots["home"] / ".codex", roots["home"] / ".cursor", roots["home"] / ".kiro", roots["home"] / ".copilot"):
         path.mkdir(exist_ok=True)
+    # Cursor's adapter gates detection on its selectable physical surfaces
+    # (editor binary or desktop entry), not on the .cursor config directory.
+    applications = roots["home"] / ".local" / "share" / "applications"
+    applications.mkdir(parents=True, exist_ok=True)
+    (applications / "cursor.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Cursor\nExec=cursor %U\n", encoding="utf-8"
+    )
     tool_bin = root / "bin"
     tool_bin.mkdir()
     for tool in tools:

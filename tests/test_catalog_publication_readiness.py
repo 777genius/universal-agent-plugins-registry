@@ -56,7 +56,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 303)
+        self.assertEqual(len(artifact["rows"]), 393)
         self.assertEqual(len(artifact["static_metadata"]), 2)
         self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
@@ -216,7 +216,7 @@ class CatalogContractTests(unittest.TestCase):
         selected = gate.selected(self.snapshot, "chrome-devtools", gate.CHROME)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == selected["distribution_id"])
         for policy in distribution["release_policies"]:
-            policy["minimum_installer_version"] = "0.1.52"
+            policy["minimum_installer_version"] = "0.1.88"
         with self.assertRaisesRegex(ValueError, "newer CLI"):
             gate.plan(self.snapshot)
         self.snapshot = catalog()
@@ -369,7 +369,7 @@ class CatalogContractTests(unittest.TestCase):
         self.assertEqual(events[0], ("remove", "chrome-devtools", "--target", "copilot,vscode"))
         self.assertEqual(events[1], "native_absent")
         self.assertEqual(events[2], ("remove", "chrome-devtools", "--target",
-                                    "codex,cursor,kiro,claude,gemini,opencode,cline,windsurf",
+                                    "codex,cursor,kiro,claude,gemini,opencode,cline,windsurf,grok,kimi,qoder",
                                     "--external-uninstalled", "--purge-data"))
 
     def test_shared_native_failure_does_not_proceed_to_purge(self):
