@@ -29,6 +29,9 @@ REPORT_TOOL = {"name": SCANNER["id"], "version": SCANNER["version"]}
 POLICY_ID = "agent-plugin-install"
 POLICY_VERSION = 2
 MAX_REPORT_BYTES = 8 << 20
+# Discovery snapshot_max_bytes is 16 MiB. The Directory candidate default is 4 MiB
+# and must not bound this reader: live Discovery has already grown past 4 MiB.
+MAX_DISCOVERY_SNAPSHOT_BYTES = 16 << 20
 MAX_FINDINGS = 32
 MAX_WORKERS = 16
 
@@ -255,7 +258,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
     try:
-        discovery = read_json(args.discovery_snapshot)
+        discovery = read_json(args.discovery_snapshot, max_bytes=MAX_DISCOVERY_SNAPSHOT_BYTES)
         candidate = build_security_candidate(
             discovery, args.lintai, previous_records(args.previous_security_snapshot),
             generated_at=discovery["generated_at"], mirror_root=args.mirror_root,

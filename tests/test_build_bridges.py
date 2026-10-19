@@ -303,6 +303,7 @@ class RealBridgeCohortTests(unittest.TestCase):
             "firecrawl": ("777genius/firecrawl-bridge", "firecrawl/firecrawl-mcp-server", "518e9299817aca118f0b3f5dded4c5fe7889d24e", "MIT"),
             "playwright": ("777genius/playwright-bridge", "microsoft/playwright-mcp", "8a13ef8e9f7385a0f89477922127f31cbfde9761", "Apache-2.0"),
             "github": ("777genius/github-bridge", "github/github-mcp-server", "fcdd664099f957c4a7dc183d9381cef191e8c8a9", "MIT"),
+            "tinyfish": ("777genius/tinyfish-bridge", "tinyfish-io/tinyfish-cookbook", "8615317f6db58ae776dd53817ac30668c1db5ef8", "MIT"),
         }
         for bridge_id, values in expected.items():
             with self.subTest(bridge=bridge_id):
@@ -329,6 +330,7 @@ class RealBridgeCohortTests(unittest.TestCase):
         firecrawl = json.loads((ROOT / "plugins/firecrawl/mcp.json").read_text())["mcpServers"]["firecrawl"]
         playwright = json.loads((ROOT / "plugins/playwright/mcp.json").read_text())["mcpServers"]["playwright"]
         github = json.loads((ROOT / "plugins/github/mcp.json").read_text())["mcpServers"]["github"]
+        tinyfish = json.loads((ROOT / "plugins/tinyfish/mcp.json").read_text())["mcpServers"]["tinyfish"]
         self.assertEqual(chrome["command"], "node")
         self.assertEqual(chrome["args"], [
             "${PLUGIN_ROOT}/io.github.777genius.agentplugins/runtime/launcher.mjs",
@@ -360,6 +362,7 @@ class RealBridgeCohortTests(unittest.TestCase):
         playwright_runtime = json.loads((ROOT / "plugins/playwright/io.github.777genius.agentplugins/runtime/runtime.json").read_text())
         self.assertEqual((playwright_runtime["package"], playwright_runtime["version"]), ("@playwright/mcp", "0.0.80"))
         self.assertEqual(github["url"], "https://api.githubcopilot.com/mcp/")
+        self.assertEqual(tinyfish["url"], "https://agent.tinyfish.ai/mcp")
 
     def test_claimed_targets_materialize_complete_packages_in_disposable_roots(self) -> None:
         directory = json.loads((ROOT / "registry/directory.json").read_text())
@@ -370,6 +373,7 @@ class RealBridgeCohortTests(unittest.TestCase):
             "777genius/firecrawl-bridge",
             "777genius/playwright-bridge",
             "777genius/github-bridge",
+            "777genius/tinyfish-bridge",
         ]
         with tempfile.TemporaryDirectory(prefix="bridge-materialization-") as temporary:
             sandbox = Path(temporary)

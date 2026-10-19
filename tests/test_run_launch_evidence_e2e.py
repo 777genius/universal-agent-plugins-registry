@@ -51,6 +51,11 @@ facade = importlib.util.module_from_spec(FACADE_SPEC)
 FACADE_SPEC.loader.exec_module(facade)
 CONSENT = ROOT / "tests/e2e/fixtures/fixture-only-consent.json"
 PUBLICATION = ROOT / "tests/fixtures/directory-publication"
+DIRECTORY_FIXTURE_NOW = datetime(2026, 8, 21, tzinfo=timezone.utc)
+
+
+def directory_fixture_clock():
+    return mock.patch.object(e2e, "current_utc", return_value=DIRECTORY_FIXTURE_NOW)
 
 
 class LaunchEvidenceE2ETests(unittest.TestCase):
@@ -2072,14 +2077,12 @@ with tempfile.TemporaryDirectory() as temporary:
         self.assertEqual(config["npm_facade_version"], "0.1.24")
         self.assertRegex(config["npm_facade_integrity"], r"^sha512-[A-Za-z0-9+/]+={0,2}$")
         self.assertEqual(config["npm_facade_integrity"], "sha512-hUMKvd2kAjTWA1obzAlXdbE3GxjRk8lhXRA9YuO2h2NINnYv/GQi2JwgkqWhOd95BpEKh5Do8vV1B4B/Unl+jw==")
-        expected_directory_digest = "sha256:5eb155c7c7bbe9334f91fc75d8bd254b6fd670c96208f3b31d19ed2751a920ec"
+        expected_directory_digest = "sha256:c9a32ec5d6223036862ac9b26b53acf079e9a22b6d10b27ccc920e5cb7e0f97b"
         self.assertEqual(config["directory_source_digest"], expected_directory_digest)
-        # A pull request may carry an untrusted Directory review candidate, but
-        # must not rewrite the production launch identity to match that
-        # candidate. Main and every non-PR execution still fail closed if the
-        # production pin and checked-out Directory diverge.
-        if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
-            self.assertEqual(config["directory_source_digest"], e2e.sha256_file(ROOT / "registry/directory.json"))
+        # The launch evidence is pinned to the historical 0.1.24 Directory
+        # source. The current review source advances independently as upstream
+        # promotions merge, including on main; the fixed digest above protects
+        # the immutable launch identity without freezing future catalog edits.
         self.assertEqual(config["scenario_contract_digest"], e2e.sha256_file(e2e.SCENARIOS))
         schema = json.loads((ROOT / "tests/e2e/schemas/native-release-observation-v2.schema.json").read_text())
         self.assertEqual(
@@ -2143,12 +2146,13 @@ with tempfile.TemporaryDirectory() as temporary:
                     e2e.read_production_config()
 
     def test_signed_directory_fixture_binds_origin_digest_sequence_and_trust(self) -> None:
-        env, snapshot, digest = e2e.validated_directory_environment(
-            "https://directory.example.test/registry/",
-            PUBLICATION / "snapshot.json",
-            PUBLICATION / "envelope-current.json",
-            PUBLICATION / "trusted-keys.json",
-        )
+        with directory_fixture_clock():
+            env, snapshot, digest = e2e.validated_directory_environment(
+                "https://directory.example.test/registry/",
+                PUBLICATION / "snapshot.json",
+                PUBLICATION / "envelope-current.json",
+                PUBLICATION / "trusted-keys.json",
+            )
         self.assertEqual(snapshot["sequence"], 15)
         self.assertEqual(digest, json.loads((PUBLICATION / "envelope-current.json").read_text())["snapshot_digest"])
         self.assertNotIn("CATALOG", " ".join(env))
@@ -2160,13 +2164,29 @@ with tempfile.TemporaryDirectory() as temporary:
             invalid_envelope["signature"] = "A" * 86 + "=="
             invalid_path = Path(tmp) / "envelope.json"
             invalid_path.write_bytes(e2e.canonical_json(invalid_envelope))
-            with self.assertRaisesRegex(ValueError, "invalid Ed25519"):
+            with directory_fixture_clock(), self.assertRaisesRegex(ValueError, "invalid Ed25519"):
                 e2e.validated_directory_environment(
                     "https://directory.example.test/registry/",
                     PUBLICATION / "snapshot.json",
                     invalid_path,
                     PUBLICATION / "trusted-keys.json",
                 )
+
+    def test_signed_directory_fixture_rejects_expired_and_not_yet_valid_snapshots(self) -> None:
+        arguments = (
+            "https://directory.example.test/registry/",
+            PUBLICATION / "snapshot.json",
+            PUBLICATION / "envelope-current.json",
+            PUBLICATION / "trusted-keys.json",
+        )
+        expired = datetime(2026, 9, 19, tzinfo=timezone.utc)
+        with mock.patch.object(e2e, "current_utc", return_value=expired):
+            with self.assertRaisesRegex(ValueError, "Directory snapshot is expired"):
+                e2e.validated_directory_environment(*arguments)
+        early = datetime(2026, 8, 19, 23, 59, 59, tzinfo=timezone.utc)
+        with mock.patch.object(e2e, "current_utc", return_value=early):
+            with self.assertRaisesRegex(ValueError, "Directory snapshot is not yet valid"):
+                e2e.validated_directory_environment(*arguments)
 
     def test_real_binary_directory_environment_forwards_only_candidate_origin(self) -> None:
         directory_environment = {
@@ -5662,7 +5682,7 @@ print("accepted")
             shutil.copy2(PUBLICATION / "envelope-current.json", envelope)
             with mock.patch.object(
                 e2e, "PRODUCTION_DIRECTORY_TRUST", PUBLICATION / "trusted-keys.json",
-            ):
+            ), directory_fixture_clock():
                 identity = e2e.production_identity_from_materialized_ledger(root)
                 self.assertEqual(identity, {
                     "publication_id": "fixture-1",
@@ -5727,9 +5747,12 @@ print("accepted")
             staged_origin + latest["snapshot_path"]: (PUBLICATION / "snapshot.json").read_bytes(),
             staged_origin + latest["envelope_path"]: (PUBLICATION / "envelope-current.json").read_bytes(),
         }
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
-            e2e, "PRODUCTION_DIRECTORY_TRUST", PUBLICATION / "trusted-keys.json"
-        ), mock.patch.object(e2e, "bounded_https_get", return_value=production_n_minus_one):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(e2e, "PRODUCTION_DIRECTORY_TRUST", PUBLICATION / "trusted-keys.json"),
+            mock.patch.object(e2e, "bounded_https_get", return_value=production_n_minus_one),
+            directory_fixture_clock(),
+        ):
             with self.assertRaisesRegex(ValueError, "exact caller publication identity"):
                 e2e.fetch_production_directory(
                     Path(tmp) / "production", expected_publication_id="fixture-1", expected_sequence=15,

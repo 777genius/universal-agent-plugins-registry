@@ -45,6 +45,21 @@ the explicit preview exception and is not represented as stable:
 - `firebase-tools@15.29.0`
 - `@hubspot/cli@8.14.0`
 
+Current runtime remediation (2026-09-30):
+
+- Context7 community distribution: `@upstash/context7-mcp@4.1.1`
+- Firebase: `firebase-tools@15.32.0`
+- HubSpot Developer: `@hubspot/cli@8.15.0`, with the exact `axios@1.20.0` override
+
+[Qualification run 36763219238](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/36763219238)
+tested these exact source packages at revision
+`3ca4c30e656eef857898f0f3253342c689753bd2` on Linux, macOS, and Windows. It
+passed cold launcher bootstrap, credential-free MCP `initialize` and
+`tools/list`, npm audits/signatures, and locked runtime materialization.
+No provider tools were called; this does not prove client
+activation, authentication, or authenticated provider operations. The earlier
+dependency list above remains the historical 2026-09-05 observation.
+
 The Docker Hub package is pinned to the multi-architecture OCI digest recorded
 in `plugins/docker-hub/mcp.json`.
 

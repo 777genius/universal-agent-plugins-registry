@@ -650,7 +650,7 @@ def read_production_config() -> dict[str, Any]:
         or value.get("npm_facade_package") != "universal-agent-plugins"
         or value.get("npm_facade_version") != CURRENT_LAUNCH_VERSION
         or value.get("npm_facade_integrity") != "sha512-hUMKvd2kAjTWA1obzAlXdbE3GxjRk8lhXRA9YuO2h2NINnYv/GQi2JwgkqWhOd95BpEKh5Do8vV1B4B/Unl+jw=="
-        or value.get("directory_source_digest") != "sha256:5eb155c7c7bbe9334f91fc75d8bd254b6fd670c96208f3b31d19ed2751a920ec"
+        or value.get("directory_source_digest") != "sha256:c9a32ec5d6223036862ac9b26b53acf079e9a22b6d10b27ccc920e5cb7e0f97b"
         or value.get("scenario_contract_digest") != "sha256:30a5a44dd6a1a32957dcba1a6d96ccb7c64f4fc7ed042a29bec6108f30011c32"
         or value.get("copilot_cli_package") != "@github/copilot"
         or value.get("copilot_cli_version") != "1.0.80"
@@ -1150,6 +1150,10 @@ def resolve_npm_package(
     }
 
 
+def current_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -1300,7 +1304,7 @@ def validated_directory_environment(
         validate_snapshot_semantics(snapshot)
         if envelope["sequence"] != snapshot["sequence"] or envelope["snapshot_schema_version"] != snapshot["snapshot_schema_version"]:
             raise PublicationError("Directory envelope identity does not match snapshot")
-        now = datetime.now(timezone.utc)
+        now = current_utc()
         if now < parse_timestamp(snapshot["generated_at"], "generated_at"):
             raise PublicationError("Directory snapshot is not yet valid")
         if now >= parse_timestamp(snapshot["expires_at"], "expires_at"):

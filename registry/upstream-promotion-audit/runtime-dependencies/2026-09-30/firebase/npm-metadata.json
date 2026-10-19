@@ -1,0 +1,14 @@
+{
+  "name": "firebase-tools",
+  "version": "15.32.0",
+  "dist.integrity": "sha512-yp0SOQFALo3q2K2/pBmWTrAM4C0503zK3UJ5IDQzr4o7i+5RKh3ZPX4RTkumCFt3STtI7EuR61M8tDJjNZmTYg==",
+  "dist.tarball": "https://registry.npmjs.org/firebase-tools/-/firebase-tools-15.32.0.tgz",
+  "gitHead": "2b3a61f93d1273adf5874b10d71a8d51e4b3da23",
+  "repository": {
+    "url": "git+https://github.com/firebase/firebase-tools.git",
+    "type": "git"
+  },
+  "engines": {
+    "node": ">=20.0.0 || >=22.0.0 || >=24.0.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "tinyfish",
+  "version": "1.2.4",
+  "description": "Community package for TinyFish MCP. Search the live web, fetch clean page content, and run browser automations through TinyFish's hosted server.",
+  "author": {
+    "name": "777genius",
+    "url": "https://github.com/777genius"
+  },
+  "homepage": "https://docs.tinyfish.ai",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
+  "license": "MIT",
+  "keywords": [
+    "agent-plugins",
+    "ai-agents",
+    "browser-automation",
+    "fetch",
+    "mcp",
+    "search",
+    "tinyfish"
+  ]
+}

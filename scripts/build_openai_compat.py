@@ -105,6 +105,7 @@ SHORT_DESCRIPTIONS = {
     "statsig": "Statsig experiments MCP",
     "stripe": "Stripe billing MCP",
     "supabase": "Supabase backend MCP",
+    "tinyfish": "Live web search and fetch MCP",
     "vercel": "Vercel deployment MCP",
 }
 

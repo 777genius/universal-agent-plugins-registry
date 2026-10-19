@@ -157,12 +157,23 @@ class LaunchApprovalTransitionTests(unittest.TestCase):
         self.assertIn("directory_publication_cas.py evidence-publish", marker_commands)
         self.assertIn('--approval-tag "${marker_ref}"', marker_commands)
         self.assertIn('--ledger-old "${EXPECTED_LEDGER_COMMIT}"', marker_commands)
+        self.assertIn("required_stable_launch_evidence", jobs["record_launch_approval"]["needs"])
+        self.assertIn("record_launch_approval", jobs["gate_launch_approval"]["needs"])
+        self.assertIn("needs.record_launch_approval.result == 'success'", jobs["gate_launch_approval"]["if"])
+        intent = jobs["promotion_intent"]
         self.assertEqual(
-            set(jobs["deploy"]["needs"]),
+            set(intent["needs"]),
             {"sign", "materialize_site", "gate_exact_staged_publication", "required_catalog_readiness"},
         )
-        self.assertIn("needs.required_catalog_readiness.result == 'success'", jobs["deploy"]["if"])
-        self.assertNotIn("required_stable_launch_evidence", jobs["deploy"]["if"])
+        self.assertEqual(intent["environment"], "directory-publication")
+        self.assertIn("inputs.publication_mode != 'account-runtime-evidence'", intent["if"])
+        self.assertIn("needs.gate_exact_staged_publication.result == 'success'", intent["if"])
+        self.assertIn("needs.required_catalog_readiness.result == 'success'", intent["if"])
+        self.assertIn("needs.required_catalog_readiness.outputs.run_attempt == github.run_attempt", intent["if"])
+        self.assertNotIn("required_stable_launch_evidence", intent["if"])
+        self.assertEqual(jobs["deploy"]["needs"], ["promotion_intent"])
+        self.assertEqual(jobs["deploy"]["if"], "${{ needs.promotion_intent.result == 'success' }}")
+        self.assertEqual(jobs["deploy"]["uses"], "./.github/workflows/pages-production-compositor.yml")
 
 
 if __name__ == "__main__":

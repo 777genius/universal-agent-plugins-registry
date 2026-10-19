@@ -30,7 +30,7 @@ from repository_identity import active_registry_repository
 ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloudflare-bindings "
                 "cloudflare-docs cloudflare-observability cloudflare-radar context7 docker-hub "
                 "figma firebase firecrawl github gitlab greptile heroku hubspot-crm hubspot-developer "
-                "linear neon notion playwright sentry statsig stripe supabase vercel".split())
+                "linear neon notion playwright sentry statsig stripe supabase tinyfish vercel".split())
 # Context7's upstream package is the short-name default. Keep its community
 # bridge in the fixed matrix as an explicit, independently installable fallback.
 QUALIFIED_FALLBACKS = {"fallback-context7": "777genius/context7"}

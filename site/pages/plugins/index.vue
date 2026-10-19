@@ -13,6 +13,7 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
       <p class="eyebrow">{{ reviewedCount }} reviewed<template v-if="discoveryCount"> · {{ discoveryCount }} discovered</template> · Open submissions</p>
       <h1>Find the right ability for your agent.</h1>
       <p>Browse by capability, agent support, and validation status. Community packages stay linked to reviewable GitHub source.</p>
+      <p><NuxtLink to="/discovery-scan">Browse the saved scan preview</NuxtLink> · Incomplete scan, package validation evidence only.</p>
     </div>
     <PluginCatalog :plugins="registry.plugins" />
   </div>

@@ -75,6 +75,7 @@ export default defineNuxtConfig({
         '/',
         '/404.html',
         '/plugins',
+        '/discovery-scan',
         '/robots.txt',
         '/sitemap.xml',
         ...registryIndex.plugins.map(plugin => `/plugins/${plugin.name}`),

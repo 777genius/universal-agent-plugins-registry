@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -13,24 +15,28 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from scripts.build_bridges import BridgeError, PinnedRepository
 from scripts.build_discovery_index import (
     CODE_SEARCH_REQUEST_INTERVAL_SECONDS,
+    DISCOVERY_PACKAGE_PATH_RE,
     DiscoveryError,
     GitHubAPI,
     GitHubHTTPError,
     MAX_GITHUB_REQUEST_ATTEMPTS,
     MAX_GITHUB_RETRY_DELAY_SECONDS,
     MAX_PREVIOUS_SNAPSHOT_BYTES,
+    ProgressReporter,
     SameOriginRedirect,
     bounded_package_files,
     build_candidate,
     deduplicate_records,
     discover_search_items,
     load_previous,
+    main,
     make_record,
     package_facts,
     repository_states,
@@ -105,6 +111,19 @@ class FixtureAPI:
             raise AssertionError(query)
 
 
+class SearchFixtureAPI(FixtureAPI):
+    def __init__(self, revision: str, hits: list[tuple[str, str]]):
+        super().__init__(revision)
+        self.hits = hits
+
+    def get(self, path: str, parameters: dict[str, object] | None = None):
+        if path != "search/code":
+            raise AssertionError(path)
+        return {"total_count": len(self.hits), "incomplete_results": False, "items": [
+            {"path": path, "repository": {"full_name": repository}} for repository, path in self.hits
+        ]}
+
+
 class DiscoveryAcquisitionTests(unittest.TestCase):
     def test_nonportable_git_path_is_package_invalid_not_scan_incomplete(self) -> None:
         repository = mock.Mock(root=Path("/tmp/inert-mirror"), revision="a" * 40)
@@ -130,7 +149,17 @@ class DiscoveryAcquisitionTests(unittest.TestCase):
 
 
 def git(directory: Path, *arguments: str) -> str:
-    completed = subprocess.run(["git", *arguments], cwd=directory, check=True, text=True, stdout=subprocess.PIPE)
+    if arguments[0] == "commit":
+        for identity in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+            if not git(directory, "var", identity).startswith("iliya <iliyazelenkog@gmail.com> "):
+                raise AssertionError(f"invalid fixture {identity}")
+    environment = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "iliya", "GIT_AUTHOR_EMAIL": "iliyazelenkog@gmail.com",
+        "GIT_COMMITTER_NAME": "iliya", "GIT_COMMITTER_EMAIL": "iliyazelenkog@gmail.com",
+    }
+    completed = subprocess.run(["git", *arguments], cwd=directory, check=True, text=True,
+                               stdout=subprocess.PIPE, env=environment)
     return completed.stdout.strip()
 
 
@@ -138,8 +167,8 @@ def create_mirror(root: Path, package_path: str = "packages/demo", repository: s
     source = root / "source"
     source.mkdir()
     git(source, "init", "--quiet", "--initial-branch=main")
-    git(source, "config", "user.email", "fixture@example.test")
-    git(source, "config", "user.name", "Fixture")
+    git(source, "config", "user.email", "iliyazelenkog@gmail.com")
+    git(source, "config", "user.name", "iliya")
     package = source / package_path
     package.mkdir(parents=True, exist_ok=True)
     (package / "plugin.json").write_text(json.dumps({
@@ -157,7 +186,7 @@ def create_mirror(root: Path, package_path: str = "packages/demo", repository: s
     }), encoding="utf-8")
     git(source, "add", "plugin.json" if not package_path else package_path + "/plugin.json",
         "mcp.json" if not package_path else package_path + "/mcp.json")
-    git(source, "commit", "--quiet", "-m", "fixture")
+    git(source, "commit", "--quiet", "-m", "test: add package fixture")
     revision = git(source, "rev-parse", "HEAD")
     mirror_root = root / "mirrors"
     bare = mirror_root / (repository + ".git")
@@ -217,6 +246,155 @@ def previous_snapshot(records: list[dict[str, object]]) -> dict[str, object]:
 
 
 class DiscoveryIndexTests(unittest.TestCase):
+    def test_progress_is_flushed_before_acquisition_and_preserves_output_bytes(self):
+        # This fails if long acquisition starts silently, progress is buffered,
+        # or operational data changes the candidate/diagnostic artifacts.
+        class Stream(io.StringIO):
+            def flush(self):
+                self.flushed = self.getvalue()
+
+        stream = Stream()
+        reporter = ProgressReporter(stream=stream, monotonic=iter(range(100)).__next__)
+        test = self
+
+        class ObservedAPI(FixtureAPI):
+            def get(self, path, parameters=None):
+                events = [json.loads(line) for line in stream.flushed.splitlines()]
+                test.assertEqual(events[-1]["event"], "partition_start")
+                test.assertTrue(any(item["event"] == "phase_start" and
+                                    item.get("phase") in {"global_search", "seed_search"} for item in events))
+                return super().get(path, parameters)
+
+            def graphql(self, query, variables):
+                test.assertEqual(json.loads(stream.flushed.splitlines()[-1])["event"], "graphql_batch_start")
+                return super().graphql(query, variables)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirror, revision = create_mirror(root)
+            config = {"schema_version": 1, "query": '"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" filename:plugin.json',
+                      "maximum_file_size": 10, "maximum_records": 100,
+                      "seeds": [{"repository": "owner/repo", "paths": ["packages"]}]}
+            expected, diagnostics = build_candidate(api=FixtureAPI(revision), config=config, mode="discover",
+                generated_at="2026-08-27T00:00:00Z", previous_records=[], mirror_root=mirror)
+            config_path, output, diagnostic_output = root / "config.json", root / "candidate.json", root / "diagnostics.json"
+            config_path.write_text(json.dumps(config))
+            with (mock.patch("sys.argv", ["build_discovery_index.py", "--mode", "discover", "--config", str(config_path),
+                    "--output", str(output), "--diagnostics-output", str(diagnostic_output),
+                    "--generated-at", "2026-08-27T00:00:00Z", "--mirror-root", str(mirror)]),
+                  mock.patch("scripts.build_discovery_index.GitHubAPI", return_value=ObservedAPI(revision)),
+                  mock.patch("scripts.build_discovery_index.ProgressReporter", return_value=reporter)):
+                self.assertEqual(main(), 0)
+            self.assertEqual(output.read_bytes(), canonical_json(expected))
+            self.assertEqual(diagnostic_output.read_bytes(), canonical_json({"schema_version": 1, "diagnostics": diagnostics}))
+        events = [json.loads(line) for line in stream.flushed.splitlines()]
+        self.assertEqual(events[-1]["event"], "completion")
+        self.assertTrue(events[-1]["complete"])
+        self.assertIn("repository_start", [item["event"] for item in events])
+        self.assertIn("repository_end", [item["event"] for item in events])
+        elapsed = [item["elapsed_seconds"] for item in events]
+        self.assertEqual(elapsed, sorted(elapsed))
+        self.assertGreater(elapsed[-1], elapsed[0])
+
+    def test_broken_progress_stream_does_not_change_candidate_or_diagnostics(self):
+        # A write/flush failure must not make a successfully scanned repository
+        # incomplete or replace its records with scan_error diagnostics.
+        with tempfile.TemporaryDirectory() as temporary:
+            mirror, revision = create_mirror(Path(temporary))
+            arguments = dict(api=FixtureAPI(revision), mode="discover", generated_at="2026-08-27T00:00:00Z",
+                previous_records=[], mirror_root=mirror,
+                config={"schema_version": 1, "query": "filename:plugin.json", "maximum_file_size": 10,
+                        "maximum_records": 100, "seeds": []})
+            expected = build_candidate(**arguments)
+            self.assertTrue(expected[0]["complete"])
+            self.assertEqual(len(expected[0]["records"]), 1)
+            self.assertEqual(expected[1], [])
+            for operation in ("write", "flush"):
+                for error in (OSError("broken pipe"), ValueError("closed stream")):
+                    with self.subTest(operation=operation, error=type(error).__name__):
+                        stream = mock.Mock()
+                        getattr(stream, operation).side_effect = error
+                        actual = build_candidate(**arguments, progress=ProgressReporter(stream=stream))
+                        self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+                        self.assertTrue(getattr(stream, operation).called)
+
+    def test_retry_progress_redacts_request_and_response_secrets_without_changing_delay(self):
+        # A response body, header, URL or token copied into progress is a leak.
+        stream = io.StringIO()
+        secret = "fixture-secret-token"
+        api = GitHubAPI(secret, progress=ProgressReporter(stream=stream))
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok":true}'
+        api.opener = mock.Mock()
+        api.opener.open.side_effect = [urllib.error.HTTPError(
+            "https://api.github.com/" + secret, 429, secret,
+            {"Retry-After": "999", "Authorization": secret}, io.BytesIO(secret.encode())), response]
+        with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
+            self.assertEqual(api.get(secret, {"token": secret}), {"ok": True})
+        sleep.assert_called_once_with(MAX_GITHUB_RETRY_DELAY_SECONDS)
+        self.assertNotIn(secret, stream.getvalue())
+        event = json.loads(stream.getvalue())
+        self.assertEqual(event["status"], 429)
+        self.assertEqual(event["attempt"], 1)
+        self.assertEqual(event["delay_seconds"], MAX_GITHUB_RETRY_DELAY_SECONDS)
+
+    def test_progress_preserves_incomplete_missing_mirror_and_previous_record(self):
+        previous = candidate_record("a" * 40)
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            arguments = dict(api=FixtureAPI("b" * 40), mode="refresh", generated_at="2026-08-27T06:00:00Z",
+                previous_records=[previous], mirror_root=Path(temporary),
+                config={"schema_version": 1, "query": "schema", "maximum_file_size": 10, "maximum_records": 100, "seeds": []})
+            expected = build_candidate(**arguments)
+            actual = build_candidate(**arguments, progress=ProgressReporter(stream=stream))
+        self.assertEqual(canonical_json(list(actual)), canonical_json(list(expected)))
+        self.assertFalse(actual[0]["complete"])
+        self.assertEqual(actual[0]["records"], [previous])
+        self.assertIn("offline mirror does not exist", actual[1][0]["error"])
+        self.assertFalse(json.loads(stream.getvalue().splitlines()[-1])["complete"])
+
+    def test_workflow_budget_accounts_for_authenticated_empty_refresh(self):
+        # Execute the workflow selector: a requested refresh must not receive
+        # the short budget when the builder would promote it to discover.
+        workflow = yaml.load((ROOT / ".github/workflows/discovery-index.yml").read_text(), Loader=yaml.BaseLoader)
+        scan = workflow["jobs"]["acquire"]
+        steps = scan["steps"]
+        selector = next(step for step in steps if step.get("id") == "mode")
+        ledger = next(step for step in steps if step.get("id") == "ledger")
+        build = next(step for step in steps if step.get("id") == "slice01")
+        self.assertLess(steps.index(ledger), steps.index(selector))
+        self.assertEqual(selector["env"]["PREVIOUS_SNAPSHOT"], "${{ steps.ledger.outputs.path }}")
+        self.assertEqual(build["env"]["PHASE_BUDGET_MINUTES"], "${{ steps.mode.outputs.timeout_minutes }}")
+        self.assertEqual(build["timeout-minutes"], "35")
+        self.assertGreaterEqual(int(scan["timeout-minutes"]), 330)
+        validation = workflow["jobs"]["scan"]
+        validate_step = next(step for step in validation["steps"] if step.get("id") == "slice01")
+        self.assertEqual(validate_step["env"]["PHASE_BUDGET_MINUTES"], "${{ needs.acquire.outputs.timeout_minutes }}")
+        self.assertEqual(validate_step["timeout-minutes"], "35")
+        self.assertGreaterEqual(int(validation["timeout-minutes"]), 330)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            populated, empty = root / "populated.json", root / "empty.json"
+            populated.write_bytes(canonical_json(previous_snapshot([candidate_record("a" * 40)])))
+            empty.write_bytes(canonical_json(previous_snapshot([])))
+            cases = [("workflow_dispatch", "", "refresh", populated, "refresh", 120),
+                     ("workflow_dispatch", "", "refresh", empty, "refresh", 300),
+                     ("workflow_dispatch", "", "refresh", "", "refresh", 300),
+                     ("workflow_dispatch", "", "discover", populated, "discover", 300),
+                     ("schedule", "11 3 * * 0", "", populated, "reconcile", 300),
+                     ("schedule", "43 2 * * *", "", populated, "discover", 300),
+                     ("schedule", "17 */6 * * *", "", populated, "refresh", 120),
+                     ("push", "", "", populated, "discover", 300)]
+            for index, (event, schedule, requested, snapshot, mode, budget) in enumerate(cases):
+                with self.subTest(event=event, requested=requested, snapshot=snapshot):
+                    output = root / f"output-{index}"
+                    result = subprocess.run(["bash", "-e", "-c", selector["run"]], cwd=ROOT, capture_output=True, text=True,
+                        env={**os.environ, "EVENT_NAME": event, "SCHEDULE": schedule, "REQUESTED_MODE": requested,
+                             "PREVIOUS_SNAPSHOT": str(snapshot), "GITHUB_OUTPUT": str(output)})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(values, {"value": mode, "timeout_minutes": str(budget)})
+
     def test_package_facts_omits_author_without_required_name(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -525,22 +703,22 @@ class DiscoveryIndexTests(unittest.TestCase):
         for body in bodies:
             body.read.assert_called_once_with(4096)
 
-    def test_github_api_can_recover_after_the_observed_eight_attempt_window(self):
+    def test_github_api_can_recover_after_more_than_eleven_rate_limit_retries(self):
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true}'
-        api = GitHubAPI("test-token")
+        api = GitHubAPI("test-token", search_sleep=lambda _delay: None)
         api.opener = mock.Mock()
         api.opener.open.side_effect = [
             urllib.error.HTTPError(
                 "https://api.github.com/test", 429, "Too Many Requests", {},
                 io.BytesIO(b'{"message":"try again in 1s"}'),
             )
-            for _ in range(8)
+            for _ in range(16)
         ] + [response]
         with mock.patch("scripts.build_discovery_index.time.sleep") as sleep:
-            self.assertEqual(api.get("test"), {"ok": True})
-        self.assertEqual(api.opener.open.call_count, 9)
-        self.assertEqual(sleep.call_args_list, [mock.call(1)] * 8)
+            self.assertEqual(api.get("search/code"), {"ok": True})
+        self.assertEqual(api.opener.open.call_count, 17)
+        self.assertEqual(sleep.call_args_list, [mock.call(1)] * 16)
 
     def test_github_api_non_retryable_error_does_not_sleep(self):
         api = GitHubAPI("test-token")
@@ -716,6 +894,101 @@ class DiscoveryIndexTests(unittest.TestCase):
             self.assertEqual(diagnostics, [])
             self.assertEqual(len(candidate["records"]), 1)
             self.assertEqual(candidate["mode"], "discover")
+
+    def test_build_candidate_skips_unsupported_source_paths_deterministically(self):
+        # A single unsupported search hit must not prevent proven ASCII packages
+        # from being indexed, nor silently become a different normalized path.
+        invalid_paths = {
+            "packages/\u00e9/plugin.json": "path must be non-empty ASCII",
+            "../plugin.json": "invalid portable path segment",
+            "packages\\demo/plugin.json": "ambiguous separator or escape",
+            "packages/demo%2fother/plugin.json": "ambiguous separator or escape",
+            "packages/\x00/plugin.json": "Windows-incompatible path segment",
+            "CON/plugin.json": "Windows-reserved path segment",
+            "packages/.git/plugin.json": "Git metadata is forbidden",
+            "/packages/demo/plugin.json": "path must be normalized and relative",
+            "packages//demo/plugin.json": "path must be normalized and relative",
+            "packages/./demo/plugin.json": "path must be normalized and relative",
+            "packages/demo/plugin.json/": "path must be normalized and relative",
+            "tools/KFB-ToolBox/_inbox/KFB Style References/ClayBound Cozy Platformer + Editor/KFB Clay Asset Studio v1 plugin/plugin.json":
+                "package path is outside the Discovery schema",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirror, _ = create_mirror(root)
+            source = root / "source"
+            shutil.copytree(source / "packages/demo", source / "packages/\u00e9")
+            git(source, "add", "packages/\u00e9")
+            git(source, "commit", "--quiet", "-m", "test: add unsupported source fixture")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirror / "owner/repo.git", "fetch", "--quiet", str(source), "main")
+            hits = [("owner/repo", "packages/demo/plugin.json")]
+            hits.extend(("owner/repo", path) for path in invalid_paths)
+            hits.append(("foreign/repo", "packages/\u00e9/plugin.json"))
+            # GitHub allows leading dots in repository names, but the Discovery
+            # record contract does not. Such a search hit must be isolated as
+            # unsupported instead of aborting the complete scan later.
+            hits.append(("austenstone/.copilot", "packages/demo/plugin.json"))
+            arguments = {
+                "config": {"schema_version": 1, "query": "schema filename:plugin.json", "maximum_file_size": 10,
+                           "maximum_records": 100, "seeds": []},
+                "mode": "discover", "generated_at": "2026-08-27T00:00:00Z",
+                "previous_records": [], "mirror_root": mirror,
+            }
+            result = build_candidate(api=SearchFixtureAPI(revision, hits), **arguments)
+            reversed_result = build_candidate(api=SearchFixtureAPI(revision, list(reversed(hits))), **arguments)
+        self.assertEqual(canonical_json(list(result)), canonical_json(list(reversed_result)))
+        candidate, diagnostics = result
+        self.assertTrue(candidate["complete"])
+        self.assertEqual([(item["repository"], item["package_path"], item["revision"])
+                          for item in candidate["records"]], [("owner/repo", "packages/demo", revision)])
+        expected = sorted(hits[1:], key=lambda item: (item[0].casefold(), item[1].casefold()))
+        self.assertEqual([(item["repository"], item["path"]) for item in diagnostics], expected)
+        for item in diagnostics:
+            with self.subTest(path=item["path"]):
+                self.assertEqual(item["kind"], "unsupported_source")
+                if item["repository"] == "austenstone/.copilot":
+                    self.assertEqual(item["path"], "packages/demo/plugin.json")
+                    self.assertIn("repository identity is outside the supported Discovery format", item["error"])
+                else:
+                    self.assertIn(invalid_paths[item["path"]], item["error"])
+
+    def test_build_candidate_supports_safe_ascii_root_and_nested_paths(self):
+        for package_path in ("", "packages/demo", "Packages/Safe_1.2-3"):
+            with self.subTest(package_path=package_path), tempfile.TemporaryDirectory() as temporary:
+                mirror, revision = create_mirror(Path(temporary), package_path=package_path)
+                candidate, diagnostics = build_candidate(
+                    api=SearchFixtureAPI(revision, [("owner/repo", (package_path + "/" if package_path else "") + "plugin.json")]),
+                    config={"schema_version": 1, "query": "schema", "maximum_file_size": 10,
+                            "maximum_records": 100, "seeds": []},
+                    mode="discover", generated_at="2026-08-27T00:00:00Z", previous_records=[], mirror_root=mirror,
+                )
+                self.assertTrue(candidate["complete"])
+                self.assertEqual(diagnostics, [])
+                self.assertEqual([item["package_path"] for item in candidate["records"]], [package_path])
+
+    def test_discovery_path_prefilter_matches_public_schema(self):
+        schema = json.loads((Path(__file__).parents[1] / "schemas/discovery-search.schema.json").read_text())
+        self.assertEqual(
+            DISCOVERY_PACKAGE_PATH_RE.pattern,
+            schema["$defs"]["record"]["properties"]["package_path"]["pattern"],
+        )
+
+    def test_unsupported_source_diagnostic_does_not_hide_real_scan_error(self):
+        previous = candidate_record("a" * 40)
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate, diagnostics = build_candidate(
+                api=SearchFixtureAPI("b" * 40, [("owner/repo", "packages/demo/plugin.json"),
+                                              ("owner/repo", "packages/\u00e9/plugin.json")]),
+                config={"schema_version": 1, "query": "schema", "maximum_file_size": 10,
+                        "maximum_records": 100, "seeds": []},
+                mode="discover", generated_at="2026-08-27T00:00:00Z", previous_records=[previous],
+                mirror_root=Path(temporary),
+            )
+        self.assertFalse(candidate["complete"])
+        self.assertEqual(candidate["records"], [previous])
+        self.assertEqual([item["kind"] for item in diagnostics], ["unsupported_source", "scan_error"])
+        self.assertIn("offline mirror does not exist", diagnostics[1]["error"])
 
     def test_empty_refresh_continues_as_deterministic_discover(self):
         with tempfile.TemporaryDirectory() as temporary:

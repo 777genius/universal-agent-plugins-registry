@@ -1,0 +1,15 @@
+TinyFish community bridge
+
+This Agent Plugins package was independently assembled by 777genius. It is not
+authored, published, sponsored, or endorsed by TinyFish.
+
+Upstream project: tinyfish-io/tinyfish-cookbook
+Pinned revision: 8615317f6db58ae776dd53817ac30668c1db5ef8
+Upstream version: 1.2.4
+Upstream license: MIT
+License evidence: LICENSE (SHA-256 4d4da43c65dc3974303640a51c2217eaa12db4b81220074357bc6d4b7b13f87f)
+Endpoint evidence: plugins/tinyfish/.mcp.json (SHA-256 e06245ff3f4ae9319ed4899622303b02b86f1e2c10d84cbdf564292af0638668)
+Version evidence: plugins/tinyfish/.claude-plugin/plugin.json (SHA-256 4f4840be6e5c76beb70006687c60d5cdd5a6aa3fb7bb9199a0c1b29cfedf227c)
+
+No upstream source or executable bytes are copied into this package. The
+upstream files above are provenance evidence only.

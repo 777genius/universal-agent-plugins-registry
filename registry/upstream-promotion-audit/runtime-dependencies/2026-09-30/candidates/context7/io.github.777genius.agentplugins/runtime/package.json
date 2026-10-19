@@ -1,0 +1,11 @@
+{
+  "name": "agentplugins-runtime-context7",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@upstash/context7-mcp": "4.1.1"
+  },
+  "overrides": {
+    "qs": "6.16.0"
+  }
+}

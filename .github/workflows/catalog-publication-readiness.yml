@@ -15,6 +15,9 @@ on:
       run_attempt:
         description: Current attempt, emitted only after exact attestation verification
         value: ${{ jobs.verify.outputs.run_attempt }}
+      readiness_evidence_digest:
+        description: Digest of the exact current-run verified catalog readiness evidence
+        value: ${{ jobs.verify.outputs.readiness_evidence_digest }}
 
 permissions:
   contents: read
@@ -384,6 +387,7 @@ jobs:
       attestations: read
     outputs:
       run_attempt: ${{ steps.gate.outputs.run_attempt }}
+      readiness_evidence_digest: ${{ steps.gate.outputs.readiness_evidence_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -458,3 +462,4 @@ jobs:
               assert statement["predicate"]["runDetails"]["metadata"]["invocationId"] == invocation
           PY
           echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "readiness_evidence_digest=sha256:$(sha256sum evidence/catalog-readiness.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"

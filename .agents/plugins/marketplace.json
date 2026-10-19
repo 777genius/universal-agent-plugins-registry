@@ -329,6 +329,18 @@
       "category": "Developer Tools"
     },
     {
+      "name": "tinyfish",
+      "source": {
+        "source": "local",
+        "path": "./compat/openai/plugins/tinyfish"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "vercel",
       "source": {
         "source": "local",

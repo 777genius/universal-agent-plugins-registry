@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -25,6 +26,7 @@ DIRECTORY_PUBLICATION = ROOT / ".github/workflows/directory-publication.yml"
 CATALOG_READINESS = ROOT / ".github/workflows/catalog-publication-readiness.yml"
 DISCOVERY_INDEX = ROOT / ".github/workflows/discovery-index.yml"
 SECURITY_INDEX = ROOT / ".github/workflows/security-index.yml"
+PAGES_COMPOSITOR = ROOT / ".github/workflows/pages-production-compositor.yml"
 UPSTREAM_PROMOTION = ROOT / ".github/workflows/upstream-promotion-readiness.yml"
 OBSERVER_RUNBOOK = ROOT / "docs/OBSERVER_OPERATIONS.md"
 PUBLICATION_INPUTS = {
@@ -121,6 +123,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_catalog_gate_is_fresh_per_publication_and_has_no_skip_bypass(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
         gate = workflow["jobs"]["required_catalog_readiness"]
+        intent = workflow["jobs"]["promotion_intent"]
         deploy = workflow["jobs"]["deploy"]
         self.assertEqual(gate["uses"], "./.github/workflows/catalog-publication-readiness.yml")
         self.assertEqual(set(gate["needs"]), {"sign", "materialize_site", "gate_exact_staged_publication"})
@@ -130,17 +133,18 @@ class WorkflowContractTests(unittest.TestCase):
             "snapshot_digest": "${{ needs.sign.outputs.snapshot_digest }}",
             "source_sha": "${{ needs.sign.outputs.marker_commit }}",
             "workflow_sha": "${{ github.sha }}",
-            "signed_ledger_sha": "${{ needs.sign.outputs.ledger_commit }}",
+            "signed_ledger_sha": "${{ needs.materialize_site.outputs.signed_commit }}",
             "materialized_ledger_sha": "${{ needs.materialize_site.outputs.publication_commit }}",
             "baseline_ledger_sha": "${{ needs.gate_exact_staged_publication.outputs.baseline_ledger_commit }}",
         })
-        self.assertNotIn("launch_approved", gate["if"] + deploy["if"])
-        self.assertNotIn("gate_launch_approval", deploy["needs"])
-        self.assertNotIn("skipped", deploy["if"])
-        self.assertNotIn("||", deploy["if"])
-        self.assertIn("needs.required_catalog_readiness.outputs.run_attempt == github.run_attempt", deploy["if"])
+        self.assertNotIn("launch_approved", gate["if"] + intent["if"])
+        self.assertNotIn("gate_launch_approval", intent["needs"])
+        self.assertNotIn("skipped", intent["if"])
+        self.assertNotIn("||", intent["if"])
+        self.assertIn("needs.required_catalog_readiness.outputs.run_attempt == github.run_attempt", intent["if"])
         for job in ("sign", "materialize_site", "gate_exact_staged_publication", "required_catalog_readiness"):
-            self.assertIn(f"needs.{job}.result == 'success'", deploy["if"])
+            self.assertIn(f"needs.{job}.result == 'success'", intent["if"])
+        self.assertEqual(deploy["needs"], ["promotion_intent"])
         exact = workflow["jobs"]["gate_exact_staged_publication"]
         baseline = next(step for step in exact["steps"] if step.get("id") == "baseline")
         self.assertIn("production-marker.json", baseline["run"])
@@ -431,7 +435,7 @@ sys.modules['catalog_process_isolation']=module
         for name in ("required_stable_launch_evidence", "record_launch_approval", "gate_launch_approval"):
             self.assertIn("github.event_name == 'workflow_dispatch'", workflow["jobs"][name]["if"])
             self.assertIn("inputs.publication_mode == 'account-runtime-evidence'", workflow["jobs"][name]["if"])
-        self.assertIn("inputs.publication_mode != 'account-runtime-evidence'", workflow["jobs"]["deploy"]["if"])
+        self.assertIn("inputs.publication_mode != 'account-runtime-evidence'", workflow["jobs"]["promotion_intent"]["if"])
         validator = workflow["jobs"]["authenticate-completed-state"]["steps"][0]
         base_env = {
             "PATH": os.environ["PATH"], "PUBLICATION_MODE": "account-runtime-evidence", "EVENT_NAME": "workflow_dispatch",
@@ -1493,10 +1497,7 @@ sys.modules['catalog_process_isolation']=module
 
     def test_discovery_index_is_lkg_protected_and_preserves_promoted_directory(self) -> None:
         workflow = load(DISCOVERY_INDEX)
-        self.assertEqual(workflow["concurrency"], {
-            "group": "directory-publication-schema-1",
-            "cancel-in-progress": "false",
-        })
+        self.assertNotIn("concurrency", workflow)
         self.assertEqual(
             {entry["cron"] for entry in workflow["on"]["schedule"]},
             {"17 */6 * * *", "43 2 * * *", "11 3 * * 0"},
@@ -1507,7 +1508,11 @@ sys.modules['catalog_process_isolation']=module
         publisher_preflight = workflow["jobs"]["publisher-preflight"]
         self.assertEqual(publisher_preflight["environment"], "discovery-publication")
         self.assertEqual(publisher_preflight["permissions"], {"contents": "read"})
-        self.assertEqual(scan["needs"], "publisher-preflight")
+        acquire = workflow["jobs"]["acquire"]
+        self.assertEqual(acquire["needs"], "publisher-preflight")
+        self.assertEqual(scan["needs"], "acquire")
+        self.assertEqual(acquire["permissions"], {"contents": "read", "actions": "read"})
+        self.assertEqual(scan["permissions"], {"contents": "read", "actions": "read"})
         preflight_body = yaml.safe_dump(publisher_preflight)
         self.assertIn("DISCOVERY_PUBLISHER_APP_PRIVATE_KEY", preflight_body)
         self.assertIn("permission-contents: write", preflight_body)
@@ -1526,11 +1531,11 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(scan["environment"], "discovery-read")
         self.assertEqual(signer["environment"], "discovery-publication")
         scan_body = yaml.safe_dump(scan)
-        self.assertIn("build_discovery_index.py", scan_body)
-        self.assertIn("previous-snapshot", scan_body)
-        self.assertIn("--repository-workers", scan_body)
-        scan_step = next(step for step in scan["steps"] if step.get("id") == "scan")
-        self.assertEqual(scan_step["env"]["DISCOVERY_REPOSITORY_WORKERS"], "8")
+        self.assertIn("run_discovery_slice.sh validate", scan_body)
+        slice_script = (ROOT / "scripts/run_discovery_slice.sh").read_text()
+        self.assertIn("build_discovery_index.py", slice_script)
+        self.assertIn("previous-snapshot", slice_script)
+        self.assertIn("--repository-workers 8", slice_script)
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", scan_body)
         self.assertNotIn("secrets.", scan_body)
         self.assertNotIn("DISCOVERY_ED25519_PRIVATE_KEY", scan_body)
@@ -1543,16 +1548,12 @@ sys.modules['catalog_process_isolation']=module
         self.assertNotIn("${{ github.token }}", signer_body)
         self.assertIn("registry/discovery/trusted-keys.json", signer_body)
         self.assertIn("UAP-DISCOVERY", (ROOT / "scripts/discovery_publication.py").read_text())
-        self.assertIn("git push --atomic", commands(signer))
+        self.assertIn("feed_append_cas.py", commands(signer))
         self.assertIn("permission-contents: write", signer_body)
-        self.assertIn("for attempt in 1 2 3", commands(signer))
-        self.assertIn("HTTP (429|5[0-9]{2})", commands(signer))
-        self.assertIn("git ls-remote --refs origin", commands(signer))
-        self.assertIn('test "${branch_commit}" = "${local_commit}"', commands(signer))
-        self.assertIn('test "${tag_commit}" = "${local_commit}"', commands(signer))
-        self.assertIn('test "${branch_commit}" = "${base_commit}"', commands(signer))
-        self.assertIn('test -z "${tag_commit}"', commands(signer))
-        self.assertIn("refusing an uncertain retry", commands(signer))
+        self.assertIn("--feed discovery", commands(signer))
+        self.assertIn("--recovery-tag", commands(signer))
+        self.assertEqual(signer["outputs"]["ledger_commit"], "${{ steps.publish.outputs.ledger_commit }}")
+        self.assertIn('echo "ledger_commit=${result##* }"', commands(signer))
         self.assertIn("discovery-index-sequence-", commands(signer))
         self.assertIn('merge-base --is-ancestor "refs/tags/${tag}" HEAD', commands(signer))
         self.assertIn('ls-tree -r --name-only "refs/tags/${latest_sequence_tag}"', commands(signer))
@@ -1572,32 +1573,30 @@ sys.modules['catalog_process_isolation']=module
             and step.get("uses", "").startswith(("actions/upload-artifact", "actions/download-artifact"))
         ]
         self.assertEqual(artifact_names, [
-            "discovery-candidate-${{ github.run_id }}",
-            "discovery-candidate-${{ github.run_id }}",
-        ])
+            "discovery-validation-${{ github.run_id }}-${{ github.run_attempt }}-" + f"{number:02}"
+            for number in range(1, 11)
+        ] + ["discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}"])
+        candidate_download = next(step for step in signer["steps"]
+                                  if step.get("uses", "").startswith("actions/download-artifact"))
+        self.assertEqual(candidate_download["with"]["artifact-ids"], "${{ needs.scan.outputs.artifact_id }}")
         incomplete = workflow["jobs"]["incomplete-scan"]
         self.assertIn("needs.scan.outputs.complete != 'true'", incomplete["if"])
         self.assertIn("exit 1", commands(incomplete))
         deploy = workflow["jobs"]["deploy"]
-        checkouts = [step for step in deploy["steps"] if step.get("uses", "").startswith("actions/checkout")]
-        self.assertEqual(checkouts[0]["with"]["ref"], "${{ needs.sign-and-publish.outputs.ledger_commit }}")
-        self.assertEqual(checkouts[0]["with"]["fetch-depth"], "0")
-        self.assertEqual(checkouts[0]["with"]["fetch-tags"], "true")
-        self.assertEqual(checkouts[1]["with"]["ref"], "${{ github.sha }}")
-        deploy_body = commands(deploy)
-        self.assertIn("production-marker.json", deploy_body)
-        self.assertIn("bootstrap_materialized_commit", deploy_body)
-        self.assertIn("git -C exact-discovery-tree ls-remote --refs origin", deploy_body)
-        self.assertIn("merge-base --is-ancestor", deploy_body)
-        self.assertIn("sequence_boundaries.py validate", deploy_body)
-        self.assertIn("directory_publication_cas.py staged-lineage-verify", deploy_body)
-        self.assertIn('--signed "${production_signed}" --current "${production_commit}"', deploy_body)
-        self.assertIn("rsync -a --delete exact-discovery-tree/discovery/ production-pages-tree/discovery/", deploy_body)
-        self.assertIn("diff -qr exact-discovery-tree/discovery production-pages-tree/discovery", deploy_body)
-        self.assertIn("diff --name-only -- . ':!discovery' ':!security'", deploy_body)
-        self.assertIn("exact-discovery-tree/security/ production-pages-tree/security/", deploy_body)
+        self.assertEqual(deploy["uses"], "./.github/workflows/pages-production-compositor.yml")
+        self.assertEqual(deploy["needs"], "sign-and-publish")
+        self.assertIn("--minimum-sequence", commands(workflow["jobs"]["observe"]))
+        composer = load(PAGES_COMPOSITOR)["jobs"]["compose"]
+        self.assertEqual(load(PAGES_COMPOSITOR)["on"]["schedule"], [{"cron": "29 */6 * * *"}])
+        self.assertEqual(composer["concurrency"]["group"], "registry-production-pages")
+        self.assertEqual(composer["concurrency"]["queue"], "max")
+        deploy_body = commands(composer)
+        self.assertIn("pages_compositor.py plan", deploy_body)
+        self.assertIn("pages_compositor.py require-current", deploy_body)
+        self.assertIn("verify_discovery_index.py", deploy_body)
+        self.assertIn("verify_security_index.py", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
         self.assertIn("tar --directory production-pages-tree", deploy_body)
-        self.assertNotIn("tar --directory exact-discovery-tree", deploy_body)
         marker = json.loads((ROOT / "registry/publication/production-marker.json").read_text())
         self.assertRegex(marker["bootstrap_materialized_commit"], r"^[0-9a-f]{40}$")
         self.assertEqual(marker["bootstrap_sequence"], 13)
@@ -1607,6 +1606,94 @@ sys.modules['catalog_process_isolation']=module
                 body = commands(workflow["jobs"][job_name])
                 self.assertIn("cryptography==46.0.3", pinned_requirements(body))
                 self.assertIn("jsonschema==4.26.0", pinned_requirements(body))
+
+    def test_discovery_checkpoints_survive_step_failure_without_reaching_signer(self) -> None:
+        workflow = load(DISCOVERY_INDEX)
+        for phase, filename in (("acquire", "acquisition.json"), ("scan", "validation.json")):
+            with self.subTest(phase=phase):
+                job = workflow["jobs"][phase]
+                self.assertEqual(job["environment"], "discovery-read")
+                self.assertNotIn("secrets.", yaml.safe_dump(job))
+                for number in range(1, 11):
+                    suffix = f"{number:02}"
+                    build = next(step for step in job["steps"] if step.get("id") == "slice" + suffix)
+                    upload = next(step for step in job["steps"] if step.get("id") == "checkpoint" + suffix)
+                    self.assertEqual(build["timeout-minutes"], "35")
+                    self.assertEqual(build["if"], "env.DISCOVERY_PHASE_FINISHED != 'true'")
+                    self.assertEqual(upload["if"], f"always() && steps.slice{suffix}.outcome != 'skipped'")
+                    self.assertEqual(upload["with"]["retention-days"], "7")
+                    budget_phase = "acquire" if phase == "acquire" else "validate"
+                    self.assertEqual(upload["with"]["path"].splitlines(), [
+                        "checkpoint/" + filename,
+                        "checkpoint/phase-" + budget_phase + "-started",
+                    ])
+                    self.assertEqual(job["steps"].index(upload), job["steps"].index(build) + 1)
+                    if number < 10:
+                        next_build = next(step for step in job["steps"] if step.get("id") == f"slice{number + 1:02}")
+                        self.assertLess(job["steps"].index(upload), job["steps"].index(next_build))
+        acquire = workflow["jobs"]["acquire"]
+        validation = workflow["jobs"]["scan"]
+        self.assertIn("run_discovery_slice.sh acquire", commands(acquire))
+        self.assertIn("run_discovery_slice.sh validate", commands(validation))
+        # The successful acquisition artifact is pinned by its immutable ID.
+        # Restored validation artifacts contain validation and its phase clock, not a
+        # replacement acquisition or a candidate which could bypass the builder.
+        download = next(step for step in validation["steps"]
+                        if step.get("with", {}).get("artifact-ids") == "${{ needs.acquire.outputs.artifact_id }}")
+        self.assertEqual(download["with"]["path"], "checkpoint")
+        candidate = next(step for step in validation["steps"] if step.get("id") == "candidate")
+        self.assertNotIn("if", candidate)
+        self.assertEqual(workflow["jobs"]["sign-and-publish"]["if"],
+                         "needs.scan.outputs.complete == 'true' && github.ref == 'refs/heads/main'")
+
+    def test_discovery_resume_selects_only_latest_unexpired_earlier_same_run_attempt(self) -> None:
+        workflow = load(DISCOVERY_INDEX)
+        for phase, kind in (("acquire", "acquisition"), ("scan", "validation")):
+            step = next(step for step in workflow["jobs"][phase]["steps"] if step.get("id") == "resume")
+            # Explicit bash makes GitHub use -eo pipefail; default bash only
+            # enables -e and could silently turn a failed lookup into no resume.
+            self.assertEqual(step["shell"], "bash")
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                # Exercise the actual shell selector with an inert gh response,
+                # including paginated metadata and tempting wrong-scope artifacts.
+                fake_gh = root / "gh"
+                fake_gh.write_text('#!/bin/sh\nexec /bin/cat "$TEST_ARTIFACT_RESPONSE"\n')
+                fake_gh.chmod(0o755)
+                response = root / "response.json"
+                output = root / "output"
+                artifacts = [
+                    {"id": 10, "name": f"discovery-{kind}-42-1-10", "expired": False},
+                    {"id": 20, "name": f"discovery-{kind}-42-2-02", "expired": False},
+                    {"id": 21, "name": f"discovery-{kind}-42-2-10", "expired": False},
+                    {"id": 22, "name": f"discovery-{kind}-42-2-11", "expired": False},
+                    {"id": 23, "name": f"discovery-{kind}-42-0-10", "expired": False},
+                    {"id": 24, "name": f"discovery-{kind}-42-2-garbage", "expired": False},
+                    {"id": 30, "name": f"discovery-{kind}-42-3-10", "expired": True},
+                    {"id": 40, "name": f"discovery-{kind}-42-4-01", "expired": False},
+                    {"id": 50, "name": f"discovery-{kind}-99-2-10", "expired": False},
+                    {"id": 60, "name": "discovery-candidate-42-2", "expired": False},
+                ]
+                response.write_text(json.dumps([{"artifacts": artifacts[:2]}, {"artifacts": artifacts[2:]}]))
+                environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                               "RUN_ID": "42", "ATTEMPT": "4", "GH_REPO": "owner/repo",
+                               "GITHUB_OUTPUT": str(output), "TEST_ARTIFACT_RESPONSE": str(response)}
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), "artifact_id=21\n")
+                output.unlink()
+                environment["ATTEMPT"] = "1"
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), "artifact_id=\n")
+                output.unlink()
+                fake_gh.write_text('#!/bin/sh\nexit 7\n')
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(output.exists(), "failed lookup must not discard the resume input")
 
     def test_directory_materialization_preserves_the_signed_auxiliary_feeds(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
@@ -1621,15 +1708,42 @@ sys.modules['catalog_process_isolation']=module
         self.assertIn('"${EXISTING_MATERIALIZED_COMMIT}..${EXPECTED_LEDGER_HEAD}"', body)
         self.assertLess(
             body.index('if test -n "${EXISTING_MATERIALIZED_COMMIT}"'),
-            body.index("rsync -a --delete"),
+            body.index("rsync -a --checksum --delete"),
         )
         self.assertIn("commit --allow-empty", body)
         self.assertEqual(body.count("':!security'"), 1)
+
+    def test_directory_resume_preserves_feed_appends_and_reuses_signer_attempt_artifact(self) -> None:
+        workflow = load(DIRECTORY_PUBLICATION)
+        signer = workflow["jobs"]["sign"]
+        build = workflow["jobs"]["build_site"]
+        materialize = workflow["jobs"]["materialize_site"]
+        self.assertEqual(signer["outputs"]["signed_artifact_name"], "${{ steps.commit.outputs.signed_artifact_name }}")
+        upload = next(step for step in signer["steps"] if str(step.get("uses", "")).startswith("actions/upload-artifact"))
+        self.assertEqual(upload["with"]["name"], "${{ steps.commit.outputs.signed_artifact_name }}")
+        for job in (build, materialize):
+            download = next(
+                step for step in job["steps"]
+                if str(step.get("uses", "")).startswith("actions/download-artifact")
+                and step.get("with", {}).get("name") == "${{ needs.sign.outputs.signed_artifact_name }}"
+            )
+            self.assertEqual(download["if"], "inputs.resume_publication_id == ''")
+        push = next(
+            step["run"] for step in materialize["steps"]
+            if step.get("name") == "Publish the signed and materialized commits with exact CAS"
+        )
+        self.assertIn(
+            'if test -z "${EXISTING_MATERIALIZED_COMMIT}"; then\n'
+            '  git -C ledger diff --exit-code "${EXPECTED_LEDGER_COMMIT}" HEAD -- discovery security\n'
+            'fi', push,
+        )
+        self.assertIn("directory_publication_cas.py materialize-rebase-publish", push)
 
     def test_directory_materialization_delete_semantics_keep_signed_feeds(self) -> None:
         rsync = shutil.which("rsync")
         if rsync is None:
             self.skipTest("rsync is not installed")
+        body = commands(load(DIRECTORY_PUBLICATION)["jobs"]["materialize_site"])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             generated = root / "generated"
@@ -1638,28 +1752,54 @@ sys.modules['catalog_process_isolation']=module
             (ledger / "registry").mkdir(parents=True)
             (ledger / "discovery").mkdir()
             (ledger / "security").mkdir()
-            (generated / "index.html").write_text("new generated site\n")
-            (ledger / "index.html").write_text("old site\n")
+            (generated / "index.html").write_text("new page\n")
+            (ledger / "index.html").write_text("old page\n")
+            stamp = 1_700_000_000
+            os.utime(generated / "index.html", (stamp, stamp))
+            os.utime(ledger / "index.html", (stamp, stamp))
             (ledger / "stale.html").write_text("remove me\n")
             (ledger / "registry" / "latest.json").write_text("directory\n")
             (ledger / "discovery" / "latest.json").write_text("discovery\n")
             (ledger / "security" / "latest.json").write_text("security\n")
-            subprocess.run([
-                rsync, "-a", "--delete", "--exclude=.git", "--exclude=registry",
-                "--exclude=/discovery", "--exclude=/security", str(generated) + "/", str(ledger) + "/",
-            ], check=True)
-            self.assertEqual((ledger / "index.html").read_text(), "new generated site\n")
+            command = next(shlex.split(line.strip()) for line in body.splitlines()
+                           if line.strip().startswith("rsync "))
+            subprocess.run([rsync, *command[1:-2], str(generated) + "/", str(ledger) + "/"],
+                           check=True)
+            self.assertEqual((ledger / "index.html").read_text(), "new page\n")
             self.assertFalse((ledger / "stale.html").exists())
             self.assertEqual((ledger / "registry" / "latest.json").read_text(), "directory\n")
             self.assertEqual((ledger / "discovery" / "latest.json").read_text(), "discovery\n")
             self.assertEqual((ledger / "security" / "latest.json").read_text(), "security\n")
 
+    def test_pages_compositor_copies_changed_feed_with_same_size_and_mtime(self) -> None:
+        rsync = shutil.which("rsync")
+        if rsync is None:
+            self.skipTest("rsync is not installed")
+        compose = load(PAGES_COMPOSITOR)["jobs"]["compose"]
+        stage = next(step["run"] for step in compose["steps"]
+                     if "rsync -a" in step.get("run", ""))
+        lines = [shlex.split(line.strip()) for line in stage.splitlines()
+                 if line.strip().startswith("rsync ")]
+        self.assertEqual(len(lines), 2)
+        for command in lines:
+            with self.subTest(feed=command[-2]):
+                with tempfile.TemporaryDirectory() as temporary:
+                    source = Path(temporary) / "source"
+                    target = Path(temporary) / "target"
+                    source.mkdir()
+                    target.mkdir()
+                    (source / "latest.json").write_text("new!\n")
+                    (target / "latest.json").write_text("old!\n")
+                    stamp = 1_700_000_000
+                    os.utime(source / "latest.json", (stamp, stamp))
+                    os.utime(target / "latest.json", (stamp, stamp))
+                    subprocess.run([rsync, *command[1:-2], str(source) + "/", str(target) + "/"],
+                                   check=True, capture_output=True, text=True)
+                    self.assertEqual((target / "latest.json").read_text(), "new!\n")
+
     def test_security_index_binds_exact_discovery_subjects_and_preserves_directory(self) -> None:
         workflow = load(SECURITY_INDEX)
-        self.assertEqual(workflow["concurrency"], {
-            "group": "directory-publication-schema-1",
-            "cancel-in-progress": "false",
-        })
+        self.assertNotIn("concurrency", workflow)
         self.assertIn("Signed Discovery Index", workflow["on"]["workflow_run"]["workflows"])
         scan = workflow["jobs"]["scan"]
         signer = workflow["jobs"]["sign-and-publish"]
@@ -1678,26 +1818,70 @@ sys.modules['catalog_process_isolation']=module
         signer_body = yaml.safe_dump(signer)
         self.assertIn("DISCOVERY_ED25519_PRIVATE_KEY", signer_body)
         self.assertIn("security-index-sequence-", commands(signer))
-        self.assertIn("git push --atomic", commands(signer))
+        self.assertIn("feed_append_cas.py", commands(signer))
+        self.assertIn("--feed security --dependency-feed discovery", commands(signer))
+        self.assertEqual(signer["outputs"]["ledger_commit"], "${{ steps.publish.outputs.ledger_commit }}")
         self.assertIn("permission-contents: write", signer_body)
-        deploy_body = commands(workflow["jobs"]["deploy"])
-        self.assertIn("directory_publication_cas.py staged-lineage-verify", deploy_body)
-        self.assertIn("bootstrap_sequence", deploy_body)
-        self.assertIn("sequence_boundaries.py validate", deploy_body)
-        self.assertIn('if test -n "${bootstrap_sequence:-}"', deploy_body)
-        self.assertLess(
-            deploy_body.index('if test -n "${bootstrap_sequence:-}"'),
-            deploy_body.index('test "${materialized_commit}" = "${production_commit}"'),
-        )
-        self.assertIn("exact-security-tree/discovery/ production-pages-tree/discovery/", deploy_body)
-        self.assertIn("exact-security-tree/security/ production-pages-tree/security/", deploy_body)
-        self.assertIn("diff --name-only -- . ':!discovery' ':!security'", deploy_body)
+        deploy = workflow["jobs"]["deploy"]
+        self.assertEqual(deploy["uses"], "./.github/workflows/pages-production-compositor.yml")
+        self.assertEqual(deploy["needs"], "sign-and-publish")
+        deploy_body = commands(load(PAGES_COMPOSITOR)["jobs"]["compose"])
+        self.assertIn("pages_compositor.py plan", deploy_body)
+        self.assertIn("verify_discovery_index.py", deploy_body)
+        self.assertIn("verify_security_index.py", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/discovery/ production-pages-tree/discovery/", deploy_body)
+        self.assertIn("rsync -a --checksum --delete ledger/security/ production-pages-tree/security/", deploy_body)
         self.assertIn("observe_security_index.py", commands(workflow["jobs"]["observe"]))
 
     def test_pages_concurrency_isolates_prs_from_production(self) -> None:
         workflow = load(PAGES)
         self.assertEqual(workflow["concurrency"]["group"], "${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages-production' }}")
         self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "true")
+
+    def test_pages_compositor_has_current_run_receipt_permissions_and_rechecks_after_lock(self) -> None:
+        page_workflow = load(PAGES_COMPOSITOR)
+        composer = page_workflow["jobs"]["compose"]
+        self.assertEqual(composer["permissions"]["actions"], "read")
+        self.assertEqual(composer["concurrency"]["queue"], "max")
+        for path in (DIRECTORY_PUBLICATION, DISCOVERY_INDEX, SECURITY_INDEX):
+            caller = load(path)["jobs"]["deploy"]
+            self.assertEqual(caller["permissions"]["actions"], "read")
+            self.assertEqual(caller["uses"], "./.github/workflows/pages-production-compositor.yml")
+            self.assertEqual(caller["secrets"], "inherit")
+        steps = composer["steps"]
+        def position(fragment: str) -> int:
+            return next(index for index, step in enumerate(steps) if fragment in step.get("run", ""))
+        self.assertLess(position("pages_compositor.py plan"), position("verify_directory_publication.py"))
+        self.assertLess(position("verify_discovery_index.py"), position("pages_compositor.py require-current"))
+        self.assertLess(position("pages_compositor.py require-current"),
+                        next(index for index, step in enumerate(steps) if "actions/deploy-pages@" in step.get("uses", "")))
+        final_guard = next(step["run"] for step in steps if "pages_compositor.py require-current" in step.get("run", ""))
+        self.assertIn("verify_directory_publication.py", final_guard)
+        self.assertIn("date -u -d '+15 minutes'", final_guard)
+        self.assertIn("require-feed-freshness", final_guard)
+        self.assertIn("--minimum-validity-seconds 900", final_guard)
+        upload = next(step for step in steps if "actions/upload-artifact@" in step.get("uses", ""))
+        deployment = next(step for step in steps if "actions/deploy-pages@" in step.get("uses", ""))
+        self.assertEqual(upload["with"]["name"], "github-pages-${{ github.run_id }}-${{ github.run_attempt }}")
+        self.assertEqual(deployment["with"]["artifact_name"], upload["with"]["name"])
+        self.assertNotIn("overwrite", upload["with"])
+        marker = page_workflow["jobs"]["record_production_marker"]
+        self.assertEqual(marker["needs"], "compose")
+        self.assertIn("needs.compose.outputs.directory_commit != needs.compose.outputs.production_marker",
+                      marker["if"])
+        self.assertEqual(marker["environment"], "directory-publication")
+        self.assertEqual(marker["permissions"]["pages"], "read")
+        self.assertEqual(marker["concurrency"]["group"], "directory-production-marker")
+        self.assertEqual(marker["concurrency"]["queue"], "max")
+        marker_commands = commands(marker)
+        self.assertLess(marker_commands.index("pages_compositor.py require-successful-deployment"),
+                        marker_commands.index("directory_publication_cas.py production-publish"))
+        self.assertEqual(marker["outputs"]["status"],
+                         "${{ steps.marker.outputs.status || steps.receipt.outputs.status }}")
+        publisher = next(step for step in marker["steps"] if step.get("id") == "publisher")
+        self.assertEqual(publisher["if"], "steps.receipt.outputs.status == 'current'")
+        self.assertEqual(publisher["with"]["permission-contents"], "write")
+        self.assertIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", yaml.safe_dump(marker))
 
     def test_launch_pr_is_fixture_only_and_has_no_secrets_or_runtime_claim(self) -> None:
         workflow = load(LAUNCH)
@@ -2583,24 +2767,62 @@ console.log(JSON.stringify(files));
         self.assertIn("--product-id context7", compatibility["run"])
         self.assertNotIn('item["distribution_id"] == "777genius/context7"', compatibility["run"])
         self.assertNotIn('result["revision"] == expected_source["revision"]', compatibility["run"])
-        deploy_needs = workflow["jobs"]["deploy"]["needs"]
-        self.assertIn("sign", deploy_needs)
-        self.assertIn("gate_exact_staged_publication", deploy_needs)
-        self.assertIn("required_catalog_readiness", deploy_needs)
+        intent = workflow["jobs"]["promotion_intent"]
+        self.assertEqual(set(intent["needs"]), {
+            "sign", "materialize_site", "gate_exact_staged_publication", "required_catalog_readiness",
+        })
+        intent_body = commands(intent)
+        self.assertIn("source-policy-conformance.json", intent_body)
+        self.assertIn("readiness-evidence/catalog-readiness.json\\nreadiness-evidence/source-policy-conformance.json", intent_body)
+        self.assertNotIn("find readiness-evidence -type f | wc -l", intent_body)
+        self.assertEqual(workflow["jobs"]["deploy"]["needs"], ["promotion_intent"])
+        self.assertEqual(workflow["jobs"]["deploy"]["uses"], "./.github/workflows/pages-production-compositor.yml")
         production = workflow["jobs"]["observe_production_latest"]
         self.assertIn("deploy", production["needs"])
-        self.assertIn("record_production_marker", production["needs"])
+        self.assertNotIn("record_production_marker", workflow["jobs"])
         self.assertNotIn("observe_production_latest", required["needs"])
         self.assertIn("observe_production_latest.py", commands(production))
         self.assertEqual(production["permissions"], {"contents": "read"})
-        marker = workflow["jobs"]["record_production_marker"]
-        self.assertEqual(set(marker["needs"]), {"materialize_site", "deploy"})
-        self.assertIn("needs.deploy.result == 'success'", marker["if"])
+        self.assertIn(
+            "needs.deploy.outputs.directory_commit == needs.materialize_site.outputs.publication_commit",
+            production["if"],
+        )
+        self.assertIn("needs.deploy.outputs.marker_status != 'superseded'", production["if"])
+        superseded = workflow["jobs"]["report_superseded_directory"]
+        self.assertIn(
+            "needs.deploy.outputs.directory_commit != needs.materialize_site.outputs.publication_commit",
+            superseded["if"],
+        )
+        self.assertIn("needs.deploy.outputs.marker_status == 'superseded'", superseded["if"])
+        marker = load(PAGES_COMPOSITOR)["jobs"]["record_production_marker"]
+        self.assertEqual(marker["needs"], "compose")
         self.assertEqual(marker["environment"], "directory-publication")
         marker_body = commands(marker)
         self.assertIn("directory_publication_cas.py production-publish", marker_body)
         self.assertIn("production-marker.json", marker_body)
         self.assertIn('--production-new "${EXPECTED_PRODUCTION_COMMIT}"', marker_body)
+        self.assertEqual(marker["outputs"]["status"],
+                         "${{ steps.marker.outputs.status || steps.receipt.outputs.status }}")
+
+    def test_intent_rehash_accepts_exact_two_file_readiness_artifact_only(self) -> None:
+        intent = load(DIRECTORY_PUBLICATION)["jobs"]["promotion_intent"]
+        guard = next(line for line in commands(intent).splitlines()
+                     if "find readiness-evidence -mindepth 1" in line)
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "readiness-evidence"
+            artifact.mkdir()
+            (artifact / "catalog-readiness.json").write_text("{}\n")
+            (artifact / "source-policy-conformance.json").write_text("{}\n")
+            def accepted() -> bool:
+                result = subprocess.run(["bash", "-e", "-c", guard], cwd=directory,
+                                        capture_output=True, text=True, check=False)
+                return result.returncode == 0
+            self.assertTrue(accepted())
+            (artifact / "extra.json").write_text("{}\n")
+            self.assertFalse(accepted())
+            (artifact / "extra.json").unlink()
+            (artifact / "source-policy-conformance.json").unlink()
+            self.assertFalse(accepted())
 
     def test_account_runtime_ceremony_remains_separate_from_catalog_publication(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
@@ -2608,7 +2830,7 @@ console.log(JSON.stringify(files));
         launch_if = workflow["jobs"]["required_stable_launch_evidence"]["if"]
         record_if = workflow["jobs"]["record_launch_approval"]["if"]
         marker_if = workflow["jobs"]["gate_launch_approval"]["if"]
-        deploy_if = workflow["jobs"]["deploy"]["if"]
+        intent_if = workflow["jobs"]["promotion_intent"]["if"]
         self.assertEqual(prepare["outputs"]["launch_approved"], "${{ steps.launch.outputs.approved }}")
         launch_step = next(step for step in prepare["steps"] if step.get("id") == "launch")
         self.assertIn("git ls-remote --refs origin", launch_step["run"])
@@ -2618,8 +2840,8 @@ console.log(JSON.stringify(files));
         self.assertIn("needs.prepare.outputs.launch_approved == 'false'", marker_if)
         self.assertIn("needs.record_launch_approval.result == 'success'", marker_if)
         self.assertNotIn("needs.sign.outputs.sequence == '1'", launch_if + record_if + marker_if)
-        self.assertIn("needs.required_catalog_readiness.result == 'success'", deploy_if)
-        self.assertNotIn("gate_launch_approval", deploy_if)
+        self.assertIn("needs.required_catalog_readiness.result == 'success'", intent_if)
+        self.assertNotIn("gate_launch_approval", intent_if)
 
     def test_launch_evidence_is_attested_then_persisted_by_exact_two_ref_cas(self) -> None:
         launch = load(LAUNCH)
@@ -2756,9 +2978,10 @@ console.log(JSON.stringify(files));
         ):
             self.assertIn("needs.prepare.outputs.resume_", signer["outputs"][output])
         signing_step = next(step for step in signer["steps"] if step.get("id") == "signed")
-        publisher_step = next(step for step in signer["steps"] if step.get("id") == "publisher")
+        publisher_step = next(step for step in workflow["jobs"]["materialize_site"]["steps"] if step.get("id") == "publisher")
         self.assertEqual(signing_step["if"], "inputs.resume_publication_id == ''")
-        self.assertEqual(publisher_step["if"], "inputs.resume_publication_id == ''")
+        self.assertIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(publisher_step))
+        self.assertNotIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(signer))
 
         persist = workflow["jobs"]["record_launch_approval"]
         source_checkout = next(
@@ -2811,9 +3034,10 @@ console.log(JSON.stringify(files));
 
         signer = workflow["jobs"]["sign"]
         signing_step = next(step for step in signer["steps"] if step.get("id") == "signed")
-        publisher_step = next(step for step in signer["steps"] if step.get("id") == "publisher")
+        publisher_step = next(step for step in workflow["jobs"]["materialize_site"]["steps"] if step.get("id") == "publisher")
         self.assertEqual(signing_step["if"], "inputs.resume_publication_id == ''")
-        self.assertEqual(publisher_step["if"], "inputs.resume_publication_id == ''")
+        self.assertIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(publisher_step))
+        self.assertNotIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", str(signer))
 
     def test_protected_observer_preflights_oidc_claim_names_without_logging_token(self) -> None:
         workflow = load(LAUNCH)
@@ -2851,19 +3075,19 @@ console.log(JSON.stringify(files));
         workflow = load(DIRECTORY_PUBLICATION)
         launch_if = workflow["jobs"]["required_stable_launch_evidence"]["if"]
         marker_if = workflow["jobs"]["gate_launch_approval"]["if"]
-        deploy_if = workflow["jobs"]["deploy"]["if"]
+        intent_if = workflow["jobs"]["promotion_intent"]["if"]
         self.assertIn("needs.prepare.outputs.launch_approved == 'false'", launch_if)
         self.assertIn("needs.prepare.outputs.launch_approved == 'true'", marker_if)
         self.assertIn("needs.required_stable_launch_evidence.result == 'skipped'", marker_if)
         self.assertIn("needs.record_launch_approval.result == 'skipped'", marker_if)
-        self.assertIn("always()", deploy_if)
-        self.assertIn("needs.required_catalog_readiness.result == 'success'", deploy_if)
+        self.assertIn("always()", intent_if)
+        self.assertIn("needs.required_catalog_readiness.result == 'success'", intent_if)
         for required_result in (
             "needs.sign.result == 'success'",
             "needs.materialize_site.result == 'success'",
             "needs.gate_exact_staged_publication.result == 'success'",
         ):
-            self.assertIn(required_result, deploy_if)
+            self.assertIn(required_result, intent_if)
 
     def test_whole_run_retry_uses_exact_completed_state_noop(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
@@ -2881,7 +3105,8 @@ console.log(JSON.stringify(files));
         )
         self.assertIn('expected_main_parent="${EVENT_SOURCE_COMMIT}"', state["run"])
         self.assertNotIn("GH_TOKEN", yaml.safe_dump(replay))
-        self.assertNotIn("github.token", yaml.safe_dump(workflow))
+        self.assertNotIn("github.token", yaml.safe_dump(replay))
+        self.assertNotIn("github.token", yaml.safe_dump(workflow["jobs"]["sign"]))
         self.assertIn("needs.prepare.outputs.completed != 'true'", workflow["jobs"]["sign"]["if"])
         self.assertEqual(
             workflow["jobs"]["completed_rerun"]["if"],
@@ -2890,13 +3115,13 @@ console.log(JSON.stringify(files));
 
     def test_emergency_revocation_uses_the_same_higher_sequence_promotion_contract(self) -> None:
         workflow = load(DIRECTORY_PUBLICATION)
-        deploy = workflow["jobs"]["deploy"]
+        intent = workflow["jobs"]["promotion_intent"]
         self.assertEqual(
-            set(deploy["needs"]),
+            set(intent["needs"]),
             {"sign", "materialize_site", "gate_exact_staged_publication", "required_catalog_readiness"},
         )
-        self.assertIn("needs.required_catalog_readiness.result == 'success'", deploy["if"])
-        self.assertIn("gate_exact_staged_publication", deploy["needs"])
+        self.assertIn("needs.required_catalog_readiness.result == 'success'", intent["if"])
+        self.assertIn("gate_exact_staged_publication", intent["needs"])
 
     def test_untrusted_pull_request_bridge_reproduction_remains_secretless(self) -> None:
         workflow = load(VALIDATE)

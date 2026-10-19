@@ -30,7 +30,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 BRANCH_RE = re.compile(
     r"^automation/upstream-promotion-([a-z0-9]+(?:-[a-z0-9]+)*)-([0-9a-f]{12})-([0-9a-f]{12})$"
 )
-MAX_JSON_BYTES = 262_144
+MAX_JSON_BYTES = 524_288
 PRODUCTION_DIRECTORY_IDENTITY_PATHS = (
     Path("tests/e2e/production-launch.json"),
     Path("scripts/run_launch_evidence_e2e.py"),

@@ -45,4 +45,5 @@ from a pinned Codex commit with a recorded SHA-256 digest.
 | `statsig` | https://docs.statsig.com/integrations/mcp/overview | Community package for the official Statsig MCP plugin for experiments, feature flags, configs, metrics, and console workflows through Statsig's hosted MCP service. |
 | `stripe` | https://docs.stripe.com/mcp | Community package for the official Stripe hosted MCP plugin for payments, billing, customer, and documentation workflows through Stripe's remote MCP service. |
 | `supabase` | https://supabase.com/docs/guides/ai-tools/mcp | Community package for the official Supabase MCP integration for development and database operations from agent workflows. |
+| `tinyfish` | https://docs.tinyfish.ai | Community package for TinyFish MCP. Search the live web, fetch clean page content, and run browser automations through TinyFish's hosted server. |
 | `vercel` | https://vercel.com/docs/agent-resources/vercel-mcp | Community package for the official Vercel hosted MCP plugin for project, deployment, log, and documentation workflows through Vercel's remote MCP service. |
