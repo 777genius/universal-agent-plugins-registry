@@ -361,8 +361,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertNotIn("continue-on-error", policy)
         self.assertIn("--schema-version 2", policy["run"])
         self.assertIn("run_source_policy_conformance.py", policy["run"])
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.51")
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.87")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "37682cfe042f27a0ecf9e1094168b61077918509")
         readiness_tree = ast.parse((ROOT / "scripts/catalog_publication_readiness.py").read_text())
         readiness_cli = ast.literal_eval(next(
             node.value for node in readiness_tree.body

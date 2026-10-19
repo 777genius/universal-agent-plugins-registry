@@ -173,6 +173,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         # Positive dry-run planning therefore covers every non-native target and
         # the native refusal is proven as its own recorded operation.
         positive = [client for client in clients if client != "opencode"]
+        require(positive, "dry-run planning requires at least one non-native target")
         dry_run = invoke(args.cli, "add", [source, "--target", ",".join(positive), "--dry-run"], env=environment, cwd=roots["workspace"])
         dry_data = dry_run.get("data")
         require(isinstance(dry_data, dict), "dry-run data is absent")

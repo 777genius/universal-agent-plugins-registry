@@ -80,6 +80,7 @@ jobs:
           test "$(node -p "require('${tools}/node_modules/universal-agent-plugins/package.json').version")" = "$AGENTPLUGINS_VERSION"
           test "$(node -p "require('${tools}/node_modules/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION"
           test "$(node -p "require('${tools}/node_modules/@github/copilot/package.json').version")" = "$COPILOT_VERSION"
+          test "$(node -p "require('${tools}/node_modules/opencode-ai/package.json').version")" = "$OPENCODE_VERSION"
           test "$("$tools/node_modules/.bin/agentplugins" version)" = "agentplugins ${AGENTPLUGINS_VERSION}"
           node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"
           node "$tools/node_modules/opencode-ai/postinstall.mjs"

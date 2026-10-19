@@ -217,6 +217,22 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "cursor desktop-entry fixture is required since adapter selection surfaces",
             )
 
+    def test_native_refusal_helper_requires_the_exact_offline_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, script, expected in (
+                ("succeeds", "import json\nprint(json.dumps({'schema_version':1,'command':'add','result':'success','data':{}}))\n", "unexpectedly succeeded"),
+                ("wrong_marker", "import sys\nsys.stderr.write('other refusal\\n')\nsys.exit(1)\n", "refusal differs"),
+            ):
+                cli = root / name
+                cli.write_text("#!/usr/bin/env python3\n" + script)
+                cli.chmod(0o755)
+                with self.subTest(name=name), self.assertRaisesRegex(lifecycle.MaterializationError, expected):
+                    lifecycle.invoke_native_refusal(
+                        cli, ["ctx", "--target", "opencode", "--dry-run"],
+                        env=dict(os.environ), cwd=root,
+                    )
+
     def test_materialization_runner_rejects_noncanonical_or_unknown_targets(self) -> None:
         base = argparse.Namespace(
             cli=Path("/missing"), installer_version="0.1.51", product_id="context7",
