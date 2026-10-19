@@ -161,6 +161,7 @@ class UpstreamPromotionTests(unittest.TestCase):
             result = lifecycle.run(args)
             self.assertEqual(result["outcome"], "passed")
             self.assertEqual(result["clients"], ["codex", "cursor", "kiro"])
+            self.assertNotIn("dry_run_native_refusal", result["operations"])
             self.assertFalse(sandbox.exists())
 
     def test_materialization_runner_accepts_all_current_clients_in_canonical_order(self) -> None:
@@ -171,11 +172,16 @@ class UpstreamPromotionTests(unittest.TestCase):
             cli.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json,sys\n"
-                f"clients={clients!r}\n"
                 "cmd=sys.argv[1]; dry='--dry-run' in sys.argv\n"
+                f"clients={clients!r}\n"
                 "targets=[{'target':x,'status':'external_completed'} for x in clients]\n"
                 "data={}\n"
-                "if cmd=='add' and dry: data={'revision':'b'*40}\n"
+                "if cmd=='add' and dry:\n"
+                " target=sys.argv[sys.argv.index('--target')+1]\n"
+                " if 'opencode' in target.split(','):\n"
+                "  sys.stderr.write('OpenCode prepared profile is required for offline planning\\n')\n"
+                "  sys.exit(1)\n"
+                " data={'revision':'b'*40}\n"
                 "elif cmd=='add': data={'status':'completed','succeeded':len(clients),'failed':0,'targets':targets,'plugin':'context7','revision':'b'*40,'tree_digest':'sha256:'+'1'*64,'manifest_digest':'sha256:'+'2'*64,'version':'1.0.0','target_outcomes':{x:{'outcome':'passed'} for x in clients}}\n"
                 "elif cmd=='info':\n"
                 " infos=[]\n"
@@ -202,6 +208,8 @@ class UpstreamPromotionTests(unittest.TestCase):
             )
             result = lifecycle.run(args)
             self.assertEqual(result["clients"], clients)
+            self.assertIn("dry_run_native_refusal", result["operations"])
+            self.assertEqual(set(result["operations"].values()), {"passed"})
             for client, (root_name, relative) in lifecycle.CLIENT_ROOTS.items():
                 self.assertTrue((sandbox / root_name / relative).is_dir(), client)
             self.assertTrue(
@@ -241,6 +249,15 @@ class UpstreamPromotionTests(unittest.TestCase):
         self.assertIn('npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity', workflow)
         self.assertIn('"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"', workflow)
         self.assertIn('"@github/copilot@${COPILOT_VERSION}"', workflow)
+        self.assertIn('OPENCODE_VERSION: "1.18.34"', workflow)
+        self.assertIn(
+            "OPENCODE_NPM_INTEGRITY: "
+            "sha512-9WUS2T0t4HHDVzXvuwTHF0nvhXvZ9mQ0r+ozCvKdJu0LVoQpOzqAW4qWTC3ygNc5Oedcc7j+Oct24JYlQYnySA==",
+            workflow,
+        )
+        self.assertIn('npm view "opencode-ai@${OPENCODE_VERSION}" dist.integrity', workflow)
+        self.assertIn('"opencode-ai@${OPENCODE_VERSION}"', workflow)
+        self.assertIn('node "$tools/node_modules/opencode-ai/postinstall.mjs"', workflow)
         self.assertIn('node "$tools/node_modules/@anthropic-ai/claude-code/install.cjs"', workflow)
         self.assertIn('echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"', workflow)
 

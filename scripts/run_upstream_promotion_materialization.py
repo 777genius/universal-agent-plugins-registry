@@ -56,6 +56,18 @@ def invoke(cli: Path, command: str, arguments: list[str], *, env: dict[str, str]
     return value
 
 
+NATIVE_OFFLINE_REFUSAL = "OpenCode prepared profile is required for offline planning"
+
+
+def invoke_native_refusal(cli: Path, arguments: list[str], *, env: dict[str, str], cwd: Path) -> None:
+    completed = subprocess.run(
+        [str(cli), "add", *arguments, "--format", "json"], env=env, cwd=cwd,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, check=False,
+    )
+    require(completed.returncode != 0, "offline native dry-run unexpectedly succeeded")
+    require(NATIVE_OFFLINE_REFUSAL in completed.stderr, f"offline native dry-run refusal differs: {completed.stderr[:500]}")
+
+
 def batch(value: dict[str, Any], command: str, clients: list[str]) -> dict[str, Any]:
     data = value.get("data")
     require(isinstance(data, dict), f"{command} response data is absent")
@@ -156,11 +168,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         source += f"//{args.path}"
     common = ["--target", args.targets]
     try:
-        dry_run = invoke(args.cli, "add", [source, *common, "--dry-run"], env=environment, cwd=roots["workspace"])
+        # The released CLI plans --dry-run strictly offline and deliberately
+        # refuses native OpenCode effects without an explicitly qualified host.
+        # Positive dry-run planning therefore covers every non-native target and
+        # the native refusal is proven as its own recorded operation.
+        positive = [client for client in clients if client != "opencode"]
+        dry_run = invoke(args.cli, "add", [source, "--target", ",".join(positive), "--dry-run"], env=environment, cwd=roots["workspace"])
         dry_data = dry_run.get("data")
         require(isinstance(dry_data, dict), "dry-run data is absent")
         if local_path is None:
             require(dry_data.get("revision") == args.revision, "dry-run revision differs")
+        operations = {"dry_run": "passed", "add": "passed", "info": "passed", "doctor": "passed", "remove": "passed", "cleanup": "passed"}
+        if "opencode" in clients:
+            invoke_native_refusal(args.cli, [source, "--target", "opencode", "--dry-run"], env=environment, cwd=roots["workspace"])
+            operations["dry_run_native_refusal"] = "passed"
         add = invoke(args.cli, "add", [source, *common], env=environment, cwd=roots["workspace"])
         add_data = batch(add, "add", clients)
         identity = checked_identity(add_data, args)
@@ -191,7 +212,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             },
             "clients": clients, "installer_version": args.installer_version,
             "package": identity,
-            "operations": {"dry_run": "passed", "add": "passed", "info": "passed", "doctor": "passed", "remove": "passed", "cleanup": "passed"},
+            "operations": operations,
             "observed_at": observed_at,
             "run": {"repository": args.run_repository, "id": args.run_id, "attempt": args.run_attempt, "source_sha": args.source_sha},
             "sandbox": {"kind": "disposable", "real_user_project_used": False, "removed": not args.keep_sandbox},
