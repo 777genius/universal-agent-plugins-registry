@@ -173,13 +173,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         # Positive dry-run planning therefore covers every non-native target and
         # the native refusal is proven as its own recorded operation.
         positive = [client for client in clients if client != "opencode"]
-        require(positive, "dry-run planning requires at least one non-native target")
-        dry_run = invoke(args.cli, "add", [source, "--target", ",".join(positive), "--dry-run"], env=environment, cwd=roots["workspace"])
-        dry_data = dry_run.get("data")
-        require(isinstance(dry_data, dict), "dry-run data is absent")
-        if local_path is None:
-            require(dry_data.get("revision") == args.revision, "dry-run revision differs")
-        operations = {"dry_run": "passed", "add": "passed", "info": "passed", "doctor": "passed", "remove": "passed", "cleanup": "passed"}
+        operations = {"add": "passed", "info": "passed", "doctor": "passed", "remove": "passed", "cleanup": "passed"}
+        if positive:
+            dry_run = invoke(args.cli, "add", [source, "--target", ",".join(positive), "--dry-run"], env=environment, cwd=roots["workspace"])
+            dry_data = dry_run.get("data")
+            require(isinstance(dry_data, dict), "dry-run data is absent")
+            if local_path is None:
+                require(dry_data.get("revision") == args.revision, "dry-run revision differs")
+            operations["dry_run"] = "passed"
         if "opencode" in clients:
             invoke_native_refusal(args.cli, [source, "--target", "opencode", "--dry-run"], env=environment, cwd=roots["workspace"])
             operations["dry_run_native_refusal"] = "passed"

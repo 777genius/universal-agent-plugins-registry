@@ -217,6 +217,44 @@ class UpstreamPromotionTests(unittest.TestCase):
                 "cursor desktop-entry fixture is required since adapter selection surfaces",
             )
 
+    def test_materialization_runner_records_only_the_native_refusal_for_opencode_only_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cli = root / "agentplugins"
+            cli.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json,sys\n"
+                "cmd=sys.argv[1]; dry='--dry-run' in sys.argv\n"
+                "clients=['opencode']\n"
+                "targets=[{'target':x,'status':'external_completed'} for x in clients]\n"
+                "data={}\n"
+                "if cmd=='add' and dry:\n"
+                " sys.stderr.write('OpenCode prepared profile is required for offline planning\\n')\n"
+                " sys.exit(1)\n"
+                "elif cmd=='add': data={'status':'completed','succeeded':1,'failed':0,'targets':targets,'plugin':'context7','revision':'b'*40,'tree_digest':'sha256:'+'1'*64,'manifest_digest':'sha256:'+'2'*64,'version':'1.0.0','target_outcomes':{x:{'outcome':'passed'} for x in clients}}\n"
+                "elif cmd=='info': data={'name':'context7','clients':[{'client_id':'opencode','materialization':'materialized'}]}\n"
+                "elif cmd=='doctor': data={'healthy':True}\n"
+                "elif cmd=='remove': data={'status':'completed','succeeded':1,'failed':0,'targets':targets,'plugin_data_preserved':False,'data_retained':False}\n"
+                "elif cmd=='list': data={'installations':[]}\n"
+                "print(json.dumps({'schema_version':1,'command':cmd,'result':'success','data':data}))\n"
+            )
+            cli.chmod(0o755)
+            sandbox = root / "sandbox"
+            args = argparse.Namespace(
+                cli=cli, installer_version="0.1.87", product_id="context7",
+                repository="upstash/context7", revision=MERGE_SHA,
+                path="plugins/agent-plugins/context7", targets="opencode",
+                sandbox=sandbox, run_repository=CURRENT_REGISTRY_REPOSITORY,
+                run_id="1", run_attempt="1", source_sha="c" * 40,
+                keep_sandbox=False, local_source_kind="official_checkout",
+            )
+            result = lifecycle.run(args)
+            self.assertEqual(result["clients"], ["opencode"])
+            self.assertEqual(result["operations"].get("dry_run_native_refusal"), "passed")
+            self.assertNotIn("dry_run", result["operations"])
+            self.assertEqual(set(result["operations"].values()), {"passed"})
+            self.assertFalse(sandbox.exists())
+
     def test_native_refusal_helper_requires_the_exact_offline_refusal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
