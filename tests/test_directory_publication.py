@@ -110,7 +110,8 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         import jsonschema
         import build_registry
 
-        expected = ["codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
+        expected = ["codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
+                    "grok", "kimi", "qoder"]
         self.assertEqual(list(build_registry.CLIENT_IDS), expected)
         self.assertEqual(publication.CLIENTS, set(expected))
 
@@ -136,7 +137,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
                     self.assertFalse(validator.is_valid("unknown"))
 
     def test_publication_target_and_evidence_contracts_accept_new_clients(self) -> None:
-        for client in ("claude", "gemini", "opencode", "cline", "windsurf"):
+        for client in ("claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"):
             with self.subTest(client=client):
                 candidate = fixture_json("candidate.json")
                 policy = candidate["distributions"][0]["release_policies"][0]

@@ -56,7 +56,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 293)
+        self.assertEqual(len(artifact["rows"]), 380)
         self.assertEqual(len(artifact["static_metadata"]), 2)
         self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
@@ -369,7 +369,7 @@ class CatalogContractTests(unittest.TestCase):
         self.assertEqual(events[0], ("remove", "chrome-devtools", "--target", "copilot,vscode"))
         self.assertEqual(events[1], "native_absent")
         self.assertEqual(events[2], ("remove", "chrome-devtools", "--target",
-                                    "codex,cursor,kiro,claude,gemini,opencode,cline,windsurf",
+                                    "codex,cursor,kiro,claude,gemini,opencode,cline,windsurf,grok,kimi,qoder",
                                     "--external-uninstalled", "--purge-data"))
 
     def test_shared_native_failure_does_not_proceed_to_purge(self):

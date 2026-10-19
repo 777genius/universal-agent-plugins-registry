@@ -29,6 +29,9 @@ CLIENT_ROOTS = {
     "opencode": ("config", "opencode"),
     "cline": ("home", ".vscode/extensions/cline.cline"),
     "windsurf": ("home", ".codeium/windsurf"),
+    "grok": ("home", ".grok"),
+    "kimi": ("home", ".kimi-code"),
+    "qoder": ("home", ".qoder"),
 }
 CLIENT_ORDER = tuple(CLIENT_ROOTS)
 
