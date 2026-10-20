@@ -296,6 +296,68 @@ class CatalogContractTests(unittest.TestCase):
             self.assertFalse({"GH_TOKEN", "OPENAI_API_KEY", "AGENTPLUGINS_DIRECTORY_SNAPSHOT"} & env.keys())
             self.assertEqual(env["AGENTPLUGINS_DIRECTORY_ORIGIN"], self.args.directory_origin)
 
+    def test_add_invokes_the_released_cli_with_no_save(self):
+        # 0.1.88's add distinguishes manifest saving; the readiness add step must
+        # install without saving portable dependency intent.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "claude", "copilot", "npx"):
+                (tools / name).write_bytes(b"fixture only; never executed")
+            args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
+                                      copilot=tools / "copilot", npx=tools / "npx", inspector=None)
+            invocations = []
+            def stop_at_add(binary, argv, env, cwd, *, root, readonly):
+                invocations.append(argv)
+                raise ValueError("fixture stops at the add step")
+            selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
+            with patch.object(gate, "command", side_effect=stop_at_add):
+                with self.assertRaisesRegex(ValueError, "fixture stops"):
+                    gate.run_lifecycle(args, root / "case", selection, gate.CORE, vars(self.args))
+            self.assertEqual(invocations, [["add", "agent-code-navigator", "--target", "codex,cursor,kiro", "--no-save"]])
+
+    def test_isolated_environment_seeds_grok_kimi_qoder_roots_and_path_stubs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            roots, env = gate.isolated_environment(root, self.args.directory_origin, ())
+            for name in (".grok", ".kimi-code", ".qoder"):
+                self.assertTrue((roots["home"] / name).is_dir(), f"missing {name} config root")
+            tool_bin = root / "bin"
+            self.assertEqual(env["PATH"].split(os.pathsep)[0], str(tool_bin))
+            for name in ("grok", "kimi", "qoder"):
+                stub = tool_bin / name
+                self.assertTrue(stub.is_file(), f"missing {name} stub")
+                self.assertTrue(os.access(stub, os.X_OK), f"{name} stub is not executable")
+
+    def test_grok_kimi_qoder_stubs_answer_the_cli_projection_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            roots, env = gate.isolated_environment(root, self.args.directory_origin, ())
+            self.assertTrue(all((root / "bin" / name).is_file() for name in ("grok", "kimi", "qoder")))
+            def stub(name, *argv):
+                return subprocess.run([str(root / "bin" / name), *argv], env=env,
+                                      capture_output=True, text=True, check=False)
+            self.assertEqual(stub("kimi", "--version").stdout.strip(), "1.0.0")
+            package = root / "projected"
+            for manifest in (".grok-plugin", ".qoder-plugin"):
+                (package / manifest).mkdir(parents=True)
+                (package / manifest / "plugin.json").write_text(
+                    json.dumps({"name": "chrome-devtools", "version": "1.7.0"}, indent=2))
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout), [])
+            self.assertEqual(stub("grok", "plugin", "install", "--trust", str(package)).returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
+                             [{"name": "chrome-devtools", "status": "installed", "source": str(package),
+                               "version": "1.7.0"}])
+            self.assertEqual(stub("grok", "plugin", "uninstall", "--confirm", "chrome-devtools").returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout), [])
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout), [])
+            self.assertEqual(stub("qoder", "plugins", "install", str(package), "--scope", "user").returncode, 0)
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout),
+                             [{"id": "chrome-devtools@local", "version": "1.7.0"}])
+            self.assertEqual(stub("qoder", "plugins", "uninstall", "chrome-devtools").returncode, 0)
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout), [])
+
     def test_acquired_root_mcp_override_does_not_use_repository_plugin(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

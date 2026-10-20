@@ -327,12 +327,108 @@ def command(binary: Path, args: list[str], env: dict, cwd: Path, *, root: Path, 
     return value["data"]
 
 
+# Stateful grok/qoder stubs mirror the released client CLI contracts (install,
+# list, uninstall) over pipe-delimited registries under their config roots.
+# kimi needs no CLI activation: its registry is read from ~/.kimi-code files.
+GROK_STUB = r"""#!/bin/sh
+state="$HOME/.grok/.stub-registry"
+drop() { grep -v "^$1|" "$state" 2>/dev/null > "$state.tmp" || true; mv "$state.tmp" "$state"; }
+field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
+emit() {
+  if [ ! -s "$state" ]; then printf '[]\n'; return; fi
+  printf '['
+  first=1
+  while IFS='|' read -r name status source version; do
+    [ -n "$name" ] || continue
+    [ $first -eq 1 ] || printf ','
+    first=0
+    printf '{"name":"%s","status":"%s","source":"%s","version":"%s"}' "$name" "$status" "$source" "$version"
+  done < "$state"
+  printf ']\n'
+}
+case "$1" in
+  --version) echo "1.0.0" ;;
+  plugin)
+    case "$2" in
+      list) [ "$3" = "--json" ] || exit 1; emit ;;
+      install)
+        [ "$3" = "--trust" ] || exit 1
+        manifest="$4/.grok-plugin/plugin.json"
+        [ -f "$manifest" ] || exit 1
+        name=$(field "$manifest" name)
+        version=$(field "$manifest" version)
+        [ -n "$name" ] || exit 1
+        drop "$name"
+        printf '%s|installed|%s|%s\n' "$name" "$4" "$version" >> "$state"
+        ;;
+      uninstall) [ "$3" = "--confirm" ] || exit 1; drop "$4" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+"""
+KIMI_STUB = r"""#!/bin/sh
+case "$1" in
+  --version) echo "1.0.0" ;;
+  *) exit 1 ;;
+esac
+"""
+QODER_STUB = r"""#!/bin/sh
+state="$HOME/.qoder/.stub-registry"
+drop() { grep -v "^$1|" "$state" 2>/dev/null > "$state.tmp" || true; mv "$state.tmp" "$state"; }
+field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
+emit() {
+  if [ ! -s "$state" ]; then printf '[]\n'; return; fi
+  printf '['
+  first=1
+  while IFS='|' read -r name version source; do
+    [ -n "$name" ] || continue
+    [ $first -eq 1 ] || printf ','
+    first=0
+    printf '{"id":"%s@local","version":"%s"}' "$name" "$version"
+  done < "$state"
+  printf ']\n'
+}
+case "$1" in
+  --version) echo "1.0.0" ;;
+  plugins)
+    case "$2" in
+      list) [ "$3" = "--json" ] || exit 1; emit ;;
+      install)
+        manifest="$3/.qoder-plugin/plugin.json"
+        [ -f "$manifest" ] || exit 1
+        [ "$4" = "--scope" ] && [ "$5" = "user" ] || exit 1
+        name=$(field "$manifest" name)
+        version=$(field "$manifest" version)
+        [ -n "$name" ] || exit 1
+        drop "$name"
+        printf '%s|%s|%s\n' "$name" "$version" "$3" >> "$state"
+        ;;
+      uninstall) drop "$3" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+"""
+CLIENT_STUBS = {"grok": GROK_STUB, "kimi": KIMI_STUB, "qoder": QODER_STUB}
+
+
+def seed_client_stubs(tool_bin: Path) -> None:
+    for name, body in CLIENT_STUBS.items():
+        stub = tool_bin / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o700)
+
+
 def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tuple[dict, dict]:
     roots = {name: root / name for name in ("home", "state", "workspace", "config", "cache", "tmp")}
     for path in roots.values():
         path.mkdir(mode=0o700)
     seed_clients(root)
-    for path in (roots["home"] / ".codex", roots["home"] / ".cursor", roots["home"] / ".kiro", roots["home"] / ".copilot"):
+    for path in (roots["home"] / ".codex", roots["home"] / ".cursor", roots["home"] / ".kiro", roots["home"] / ".copilot",
+                 roots["home"] / ".grok", roots["home"] / ".kimi-code", roots["home"] / ".qoder"):
         path.mkdir(exist_ok=True)
     # Cursor's adapter gates detection on its selectable physical surfaces
     # (editor binary or desktop entry), not on the .cursor config directory.
@@ -345,6 +441,7 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
     tool_bin.mkdir()
     for tool in tools:
         (tool_bin / tool.name).symlink_to(tool.resolve(strict=True))
+    seed_client_stubs(tool_bin)
     env = {"PATH": str(tool_bin) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
            "LANG": "C.UTF-8", "HOME": str(roots["home"]), "USERPROFILE": str(roots["home"]),
            "XDG_CONFIG_HOME": str(roots["config"]), "XDG_CACHE_HOME": str(roots["cache"]),
@@ -547,7 +644,7 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
         else:
             step(phase)
         return command(args.binary, [phase, *tail], env, roots["workspace"], root=root, readonly=readonly)
-    data = run("add", selection["selector"], *common)
+    data = run("add", selection["selector"], *common, "--no-save")
     step("validate_add")
     check_identity(data, selection, ctx)
     targets = exact_targets(data, clients)
