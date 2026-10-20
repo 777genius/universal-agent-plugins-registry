@@ -2,6 +2,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -131,8 +132,14 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
             with self.subTest(field=field):
                 add = copy.deepcopy(self.add)
                 add["data"]["actions"][0][field] = value
-                with self.assertRaisesRegex(ValueError, field):
+                with self.assertRaisesRegex(ValueError, re.escape(f"add.data.actions[0].{field} ")):
                     self.verify(add=add)
+
+    def test_rejects_mismatched_environment_alias(self) -> None:
+        add = copy.deepcopy(self.add)
+        add["data"]["environment"]["alias"] = "attacker"
+        with self.assertRaisesRegex(ValueError, re.escape("add.data.environment.alias")):
+            self.verify(add=add)
 
     def test_fails_closed_on_missing_released_identity_fields(self) -> None:
         fields_by_location = {
@@ -140,6 +147,7 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
             "action": ("alias", "client_id", "action", "revision", "package_digest"),
             "data": ("dry_run",),
             "environment": ("environment",),
+            "environment_fields": ("alias", "saved"),
         }
         for location, fields in fields_by_location.items():
             for field in fields:
@@ -150,6 +158,7 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
                         "action": add["data"]["actions"][0],
                         "data": add["data"],
                         "environment": add["data"],
+                        "environment_fields": add["data"]["environment"],
                     }
                     containers[location].pop(field)
                     with self.assertRaises(ValueError):
@@ -186,7 +195,7 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "client_id"):
                     self.verify(add=add)
 
-    def test_rejects_non_boolean_dry_run_and_environment_saved(self) -> None:
+    def test_requires_true_dry_run_and_environment_saved(self) -> None:
         for value in (1, 1.0, 19.0, False, None):
             with self.subTest(dry_run=value):
                 add = copy.deepcopy(self.add)
@@ -196,7 +205,7 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
                     add["data"]["dry_run"] = value
                 with self.assertRaisesRegex(ValueError, "dry_run"):
                     self.verify(add=add)
-        for value in (1, 1.0, "true", None):
+        for value in (1, 1.0, "true", False, None):
             with self.subTest(saved=value):
                 add = copy.deepcopy(self.add)
                 if value is None:

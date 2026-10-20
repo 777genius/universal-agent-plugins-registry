@@ -135,7 +135,8 @@ def verify(
         require(action.get(field) == expected, f"add.data.actions[0].{field} does not match the selected release")
     environment = data.get("environment")
     require(isinstance(environment, dict), "add.data.environment must be an object")
-    require(type(environment.get("saved")) is bool, "add.data.environment.saved must be a boolean")
+    require(environment.get("alias") == product_id, "add.data.environment.alias does not match the plugin")
+    require(environment.get("saved") is True, "add.data.environment.saved must be true")
 
 
 def load(path: Path) -> dict[str, Any]:
