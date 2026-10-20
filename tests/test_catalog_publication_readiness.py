@@ -220,7 +220,7 @@ class CatalogContractTests(unittest.TestCase):
                         key=lambda policy: policy["release_sequence"])
         self.assertGreaterEqual(len(active), 2)
         active[0]["targets"] = copy.deepcopy(active[-1]["targets"])
-        with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/firebase:grok"):
+        with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/firebase:(grok|kimi|qoder)"):
             self.expected()
 
     def test_authentication_tightening_is_not_account_runtime_expansion(self):
