@@ -2765,6 +2765,8 @@ console.log(JSON.stringify(files));
         self.assertIn('--sequence "${EXPECTED_SEQUENCE}"', compatibility["run"])
         self.assertIn('--snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}"', compatibility["run"])
         self.assertIn("--product-id context7", compatibility["run"])
+        self.assertIn('"${run_root}/bin/cursor"', compatibility["run"])
+        self.assertIn('PATH="${run_root}/bin:${PATH}"', compatibility["run"])
         self.assertNotIn('item["distribution_id"] == "777genius/context7"', compatibility["run"])
         self.assertNotIn('result["revision"] == expected_source["revision"]', compatibility["run"])
         intent = workflow["jobs"]["promotion_intent"]

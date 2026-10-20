@@ -1253,8 +1253,16 @@ jobs:
           run_root="${RUNNER_TEMP}/released-cli-directory"
           mkdir -p "${run_root}"/{home,state,config,cache,tmp,workspace,evidence}
           mkdir -p "${run_root}/home/.cursor"
+          # Since 0.1.87 a client is selectable only through an editor binary or
+          # desktop application surface; a config directory alone is ambient
+          # evidence and cannot satisfy preflight. Stub the editor on the
+          # fixture PATH exactly as the client detector's own tests do; the
+          # dry-run gate never executes the stub.
+          mkdir -p "${run_root}/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${run_root}/bin/cursor"
+          chmod +x "${run_root}/bin/cursor"
           origin="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${EXPECTED_LEDGER_HEAD}/registry/schemas/1/"
-          isolated=(env -i PATH="${PATH}" LANG=C.UTF-8 HOME="${run_root}/home" USERPROFILE="${run_root}/home" \
+          isolated=(env -i PATH="${run_root}/bin:${PATH}" LANG=C.UTF-8 HOME="${run_root}/home" USERPROFILE="${run_root}/home" \
             XDG_CONFIG_HOME="${run_root}/config" XDG_CACHE_HOME="${run_root}/cache" \
             AGENTPLUGINS_HOME="${run_root}/state" AGENTPLUGINS_DIRECTORY_ORIGIN="${origin}" \
             TMPDIR="${run_root}/tmp" GIT_CONFIG_GLOBAL="${run_root}/home/.gitconfig" \

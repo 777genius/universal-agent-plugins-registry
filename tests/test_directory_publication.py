@@ -1816,6 +1816,8 @@ class PublicationWorkflowTests(unittest.TestCase):
         )
         self.assertIn('--snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}"', cli_step["run"])
         self.assertIn("--product-id context7", cli_step["run"])
+        self.assertIn('"${run_root}/bin/cursor"', cli_step["run"])
+        self.assertIn('PATH="${run_root}/bin:${PATH}"', cli_step["run"])
         self.assertNotIn('result["revision"] == expected_source["revision"]', cli_step["run"])
         self.assertEqual(
             set(workflow["jobs"]["promotion_intent"]["needs"]),
