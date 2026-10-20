@@ -333,7 +333,7 @@ def command(binary: Path, args: list[str], env: dict, cwd: Path, *, root: Path, 
 GROK_STUB = r"""#!/bin/sh
 state="$HOME/.grok/.stub-registry"
 valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
-pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/-]*) exit 1 ;; esac; }
+pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/+-]*) exit 1 ;; esac; }
 drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1"" != n""' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
 field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
 emit() {
@@ -381,7 +381,7 @@ esac
 QODER_STUB = r"""#!/bin/sh
 state="$HOME/.qoder/.stub-registry"
 valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
-pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/-]*) exit 1 ;; esac; }
+pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/+-]*) exit 1 ;; esac; }
 drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1"" != n""' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
 field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
 emit() {

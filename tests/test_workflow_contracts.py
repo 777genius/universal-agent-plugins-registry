@@ -391,6 +391,15 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(readiness_cli["tag"], f"agentplugins-v{workflow['env']['AGENTPLUGINS_VERSION']}")
         self.assertEqual(readiness_cli["commit"], workflow["env"]["AGENTPLUGINS_COMMIT"])
         self.assertIn(readiness_cli["binary_digest"].removeprefix("sha256:"), commands(producer))
+        compat_job = load(DIRECTORY_PUBLICATION)["jobs"]["gate_exact_staged_publication"]
+        compat = next(step for step in compat_job["steps"]
+                      if step.get("name") == "Prove compatibility with the exact released CLI")
+        self.assertEqual(compat["env"]["AGENTPLUGINS_VERSION"], workflow["env"]["AGENTPLUGINS_VERSION"])
+        self.assertEqual(compat["env"]["AGENTPLUGINS_COMMIT"], workflow["env"]["AGENTPLUGINS_COMMIT"])
+        compat_digests = re.findall(r"\b[0-9a-f]{64}\b", compat["run"])
+        self.assertGreaterEqual(len(compat_digests), 3)
+        for digest in compat_digests:
+            self.assertIn(digest, commands(producer))
         self.assertEqual(workflow["env"]["SOURCE_POLICY_AGENTPLUGINS_VERSION"], "0.1.24")
         self.assertEqual(workflow["env"]["SOURCE_POLICY_AGENTPLUGINS_COMMIT"], "c78c79e44efd5ad07083d63436d9170b107df6cb")
         self.assertIn('ref: c78c79e44efd5ad07083d63436d9170b107df6cb', CATALOG_READINESS.read_text())

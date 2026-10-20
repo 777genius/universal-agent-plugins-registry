@@ -393,6 +393,15 @@ class CatalogContractTests(unittest.TestCase):
             self.assertNotEqual(stub("qoder", "plugins", "install", str(qweird), "--scope", "user").returncode, 0)
             self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
                              [{"name": "007", "status": "installed", "source": str(numeric), "version": "1.7.0"}])
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout),
+                             [{"id": "007@local", "version": "1.7.0"}])
+            # Ordinary extract paths with plus signs stay installable.
+            plussed = package("pkg-1.7.0+build", "cloudflare-docs", ".grok-plugin")
+            self.assertEqual(stub("grok", "plugin", "install", "--trust", str(plussed)).returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
+                             [{"name": "007", "status": "installed", "source": str(numeric), "version": "1.7.0"},
+                              {"name": "cloudflare-docs", "status": "installed", "source": str(plussed),
+                               "version": "1.7.0"}])
 
     def test_stub_seeding_refuses_to_shadow_a_linked_tool_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -414,9 +423,12 @@ class CatalogContractTests(unittest.TestCase):
         for broken in ({"activation": "manual_activation_required", "verification": "installation_verified"},
                        {"activation": "active", "verification": "not_run"},
                        {"activation": "prepared", "verification": "package_validated"},
-                       None):
+                       None,
+                       "active"):
             with self.assertRaisesRegex(ValueError, "not verified"):
                 gate.require_verified_activation([target("kimi", broken)])
+        with self.assertRaises(KeyError):
+            gate.require_verified_activation([{"target": "grok", "output": {"result": {}}}])
         # Clients outside the stub-backed set keep their documented outcomes.
         gate.require_verified_activation([target("vscode", {"activation": "manual_activation_required",
                                                             "verification": "not_run"})])
