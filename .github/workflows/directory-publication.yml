@@ -1256,7 +1256,8 @@ jobs:
           # Since 0.1.87 a client is selectable only through an editor binary or
           # desktop application surface; a config directory alone is ambient
           # evidence and cannot satisfy preflight. Stub the editor on the
-          # fixture PATH exactly as the client detector's own tests do.
+          # fixture PATH exactly as the client detector's own tests do; the
+          # dry-run gate never executes the stub.
           mkdir -p "${run_root}/bin"
           printf '#!/bin/sh\nexit 0\n' > "${run_root}/bin/cursor"
           chmod +x "${run_root}/bin/cursor"
