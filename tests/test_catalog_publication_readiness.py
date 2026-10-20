@@ -201,6 +201,28 @@ class CatalogContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered"):
             self.expected()
 
+    def test_new_client_claims_only_land_where_the_fixed_matrix_resolves_them(self):
+        # Regression: the thirteen-client widening once reached shadowed active
+        # policies (whose own target set resolves to a newer release), claiming
+        # installs the readiness matrix can never exercise.  Against a
+        # pre-widening baseline those claims were unprovable and staged
+        # publication failed closed with "uncovered target policy change".
+        stripped = copy.deepcopy(self.snapshot)
+        for distribution in stripped["distributions"]:
+            for policy in distribution["release_policies"]:
+                policy["targets"] = [target for target in policy["targets"]
+                                     if target["client"] not in ("grok", "kimi", "qoder")]
+        self.baseline = stripped
+        self.expected()
+
+        firebase = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/firebase")
+        active = sorted((policy for policy in firebase["release_policies"] if policy["status"] == "active"),
+                        key=lambda policy: policy["release_sequence"])
+        self.assertGreaterEqual(len(active), 2)
+        active[0]["targets"] = copy.deepcopy(active[-1]["targets"])
+        with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/firebase:grok"):
+            self.expected()
+
     def test_authentication_tightening_is_not_account_runtime_expansion(self):
         for snapshot, authentication in ((self.baseline, "not_required"), (self.snapshot, "required")):
             distribution = next(item for item in snapshot["distributions"] if item["id"] == "777genius/cloudflare")

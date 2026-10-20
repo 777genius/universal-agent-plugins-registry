@@ -3367,30 +3367,6 @@
                 "user"
               ],
               "delivery": "prepared"
-            },
-            {
-              "client": "grok",
-              "authentication": "not_required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
-            },
-            {
-              "client": "kimi",
-              "authentication": "not_required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
-            },
-            {
-              "client": "qoder",
-              "authentication": "not_required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -4264,30 +4240,6 @@
                 "user"
               ],
               "delivery": "prepared"
-            },
-            {
-              "client": "grok",
-              "authentication": "required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
-            },
-            {
-              "client": "kimi",
-              "authentication": "required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
-            },
-            {
-              "client": "qoder",
-              "authentication": "required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
             }
           ],
           "current_evidence": []
@@ -5923,30 +5875,6 @@
                 "user"
               ],
               "delivery": "prepared"
-            },
-            {
-              "client": "grok",
-              "authentication": "required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
-            },
-            {
-              "client": "kimi",
-              "authentication": "required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
-            },
-            {
-              "client": "qoder",
-              "authentication": "required",
-              "scopes": [
-                "user"
-              ],
-              "delivery": "managed"
             }
           ],
           "current_evidence": []
