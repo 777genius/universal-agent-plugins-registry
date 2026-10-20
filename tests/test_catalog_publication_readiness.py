@@ -306,7 +306,8 @@ class CatalogContractTests(unittest.TestCase):
             for name in ("agentplugins", "claude", "copilot", "npx"):
                 (tools / name).write_bytes(b"fixture only; never executed")
             args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
-                                      copilot=tools / "copilot", npx=tools / "npx", inspector=None)
+                                      copilot=tools / "copilot", npx=tools / "npx",
+                                      inspector=None, opencode=None)
             invocations = []
             def stop_at_add(binary, argv, env, cwd, *, root, readonly):
                 invocations.append(argv)
@@ -357,6 +358,55 @@ class CatalogContractTests(unittest.TestCase):
                              [{"id": "chrome-devtools@local", "version": "1.7.0"}])
             self.assertEqual(stub("qoder", "plugins", "uninstall", "chrome-devtools").returncode, 0)
             self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout), [])
+
+    def test_produce_parser_and_lifecycle_expose_the_native_opencode_fixture(self):
+        # OpenCode preflight verifies native executable bytes and rejects
+        # shell/npm shims, so the producer must receive a Go fixture and the
+        # lifecycle must expose it on the case PATH as `opencode`.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "claude", "copilot", "npx", "opencode"):
+                (tools / name).write_bytes(b"fixture only; never executed")
+            argv = ["produce", "--feed", str(root / "feed"), "--trusted-keys", str(root / "keys"),
+                    "--baseline-feed", str(root / "base")]
+            for name, value in vars(self.args).items():
+                argv += ["--" + name.replace("_", "-"), str(value)]
+            argv += ["--binary", str(tools / "agentplugins"), "--claude", str(tools / "claude"),
+                     "--copilot", str(tools / "copilot"), "--sandbox", str(root / "sandbox"),
+                     "--output", str(root / "out.json"), "--opencode", str(tools / "opencode")]
+            self.assertEqual(gate.parser().parse_args(argv).opencode, tools / "opencode")
+            args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
+                                      copilot=tools / "copilot", npx=tools / "npx",
+                                      inspector=None, opencode=tools / "opencode")
+            def stop_at_add(binary, argv, env, cwd, *, root, readonly):
+                raise ValueError("fixture stops at the add step")
+            selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
+            with patch.object(gate, "command", side_effect=stop_at_add):
+                with self.assertRaisesRegex(ValueError, "fixture stops"):
+                    gate.run_lifecycle(args, root / "case", selection, gate.CORE, vars(self.args))
+            exposed = root / "case" / "bin" / "opencode"
+            self.assertTrue(exposed.exists(), "opencode fixture missing from the lifecycle PATH")
+            self.assertEqual(exposed.resolve(), (tools / "opencode").resolve())
+
+    @unittest.skipUnless(shutil.which("go"), "Go toolchain required to build the native fixture")
+    def test_opencode_fixture_is_native_and_answers_only_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            binary = root / "opencode"
+            env = dict(os.environ, CGO_ENABLED="0", GO111MODULE="off", GOENV="off",
+                       GOTOOLCHAIN="local", GOFLAGS="", GOPATH=str(root / "go-path"),
+                       GOCACHE=str(root / "go-cache"), GOMODCACHE=str(root / "go-mod-cache"))
+            build = subprocess.run(["go", "build", "-trimpath", "-o", str(binary),
+                                    str(ROOT / "tests/fixtures/opencode-fixture.go")],
+                                   env=env, capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            self.assertFalse(binary.read_bytes().startswith(b"#!"), "fixture is a script shim")
+            version = subprocess.run([str(binary), "--version"], capture_output=True, text=True)
+            self.assertEqual(version.returncode, 0, version.stderr)
+            self.assertEqual(version.stdout.strip(), "1.18.34")
+            self.assertNotEqual(subprocess.run([str(binary), "--help"], capture_output=True).returncode, 0)
 
     def test_acquired_root_mcp_override_does_not_use_repository_plugin(self):
         with tempfile.TemporaryDirectory() as root:
@@ -409,10 +459,11 @@ class CatalogContractTests(unittest.TestCase):
                 parent = Path(temporary).resolve()
                 tools = parent / "tools"
                 tools.mkdir()
-                for name in ("agentplugins", "claude", "copilot", "npx"):
+                for name in ("agentplugins", "claude", "copilot", "npx", "opencode"):
                     (tools / name).write_bytes(b"fixture only; not executed")
                 args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
-                                          copilot=tools / "copilot", npx=tools / "npx", inspector=None)
+                                          copilot=tools / "copilot", npx=tools / "npx", inspector=None,
+                                          opencode=tools / "opencode")
                 def child(argv, **_):
                     name = Path(argv[0]).name
                     self.assertEqual(argv[1:], ["--version"])
@@ -672,10 +723,11 @@ class CatalogContractTests(unittest.TestCase):
         """
         tools = parent / "tools"
         tools.mkdir()
-        for name in ("agentplugins", "claude", "copilot", "npx"):
+        for name in ("agentplugins", "claude", "copilot", "npx", "opencode"):
             (tools / name).write_bytes(b"fixture only; never executed")
         args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
-                                  copilot=tools / "copilot", npx=tools / "npx", inspector=None)
+                                  copilot=tools / "copilot", npx=tools / "npx", inspector=None,
+                                  opencode=tools / "opencode")
         root = parent / "case"
         selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
         package_revision = {key: selection[key] for key in ("tree_digest", "manifest_digest")}
@@ -843,7 +895,8 @@ class CatalogContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
-                                      claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None)
+                                      claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
+                                      opencode=Path("opencode"))
             args.binary.write_bytes(b"fixture binary")
             with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                     patch.object(gate, "run_lifecycle") as lifecycle, \
@@ -868,7 +921,8 @@ class CatalogContractTests(unittest.TestCase):
             with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
-                                          claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None)
+                                          claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
+                                          opencode=Path("opencode"))
                 args.binary.write_bytes(b"fixture binary")
                 with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                         patch.object(gate, "run_lifecycle") as lifecycle, \

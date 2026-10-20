@@ -243,6 +243,17 @@ jobs:
             --release-manifest "$RUNNER_TEMP/source-policy-release/release-manifest.json" \
             --release-checksums "$RUNNER_TEMP/source-policy-release/checksums.txt" \
             --uap-sha "$WORKFLOW_SHA" --output evidence/source-policy-conformance.json
+      - name: Build the native OpenCode fixture
+        env:
+          TOOLS_ROOT: ${{ runner.temp }}/catalog-tools
+        run: |
+          # OpenCode preflight verifies native executable bytes and rejects
+          # shell/npm shims, so readiness needs a real binary that answers
+          # only --version and executes no client runtime actions.
+          mkdir -p "${TOOLS_ROOT}/fixture-bin"
+          CGO_ENABLED=0 GO111MODULE=off GOENV=off GOTOOLCHAIN=local GOFLAGS='' \
+            GOPATH="${TOOLS_ROOT}/go-path" GOCACHE="${TOOLS_ROOT}/go-cache" GOMODCACHE="${TOOLS_ROOT}/go-mod-cache" \
+            go build -trimpath -o "${TOOLS_ROOT}/fixture-bin/opencode" tests/fixtures/opencode-fixture.go
       - name: Prove the exact catalog matrix in fresh credential-free roots
         run: |
           test "$(git -C staged rev-parse HEAD)" = "$MATERIALIZED_LEDGER_SHA"
@@ -255,6 +266,7 @@ jobs:
             --claude "$RUNNER_TEMP/catalog-tools/node_modules/.bin/claude" \
             --copilot "$RUNNER_TEMP/catalog-tools/node_modules/.bin/copilot" --npx "$(command -v npx)" \
             --inspector "$RUNNER_TEMP/catalog-tools/node_modules/.bin/mcp-inspector" \
+            --opencode "$RUNNER_TEMP/catalog-tools/fixture-bin/opencode" \
             --publication-id "$PUBLICATION_ID" --sequence "$PUBLICATION_SEQUENCE" \
             --snapshot-digest "$SNAPSHOT_DIGEST" --source-sha "$SOURCE_SHA" --workflow-sha "$WORKFLOW_SHA" \
             --signed-ledger-sha "$SIGNED_LEDGER_SHA" --materialized-ledger-sha "$MATERIALIZED_LEDGER_SHA" \

@@ -304,7 +304,7 @@ def validate_artifact(value: dict, expected: dict) -> None:
 
 def tool_paths(args: argparse.Namespace) -> tuple[Path, ...]:
     paths = {args.binary.absolute().parent}
-    for tool in (args.claude, args.copilot, args.inspector, args.npx):
+    for tool in (args.claude, args.copilot, args.inspector, args.opencode, args.npx):
         if tool is not None:
             # npm's .bin links need their sibling packages/dependencies, not only .bin.
             paths.add(tool.absolute().parent.parent if tool.parent.name == ".bin" else tool.resolve().parent)
@@ -627,7 +627,8 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     step = lambda name: lifecycle_step(args, selection.get("_case_id", selection["selector"]), name)
     step("prepare")
     root.mkdir(mode=0o700)
-    roots, env = isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot))
+    roots, env = isolated_environment(root, ctx["directory_origin"],
+                                      tuple(tool for tool in (args.claude, args.copilot, args.opencode) if tool is not None))
     readonly = tool_paths(args)
     if "claude" in clients:
         for tool in (args.claude, args.copilot):
@@ -808,7 +809,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector"):
+    for name in ("binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result
@@ -827,7 +828,7 @@ def main(argv: list[str] | None = None) -> int:
             require(args.artifact is not None, "--artifact required")
             validate_artifact(read_json(args.artifact, canonical=True), expected)
         else:
-            require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot")), "producer paths required")
+            require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot", "opencode")), "producer paths required")
             produce(args, snapshot, expected)
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:
