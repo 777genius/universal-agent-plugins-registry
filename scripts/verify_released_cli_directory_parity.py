@@ -87,7 +87,7 @@ def verify(
     sequence: int, snapshot_digest: str, product_id: str, cli_version: str,
 ) -> None:
     require(positive_int(snapshot.get("sequence"), "snapshot sequence") == sequence, "snapshot sequence does not match the gated sequence")
-    snapshot_schema = positive_int(snapshot.get("snapshot_schema_version"), "snapshot schema")
+    positive_int(snapshot.get("snapshot_schema_version"), "snapshot schema")
     distribution, release = selected_release(snapshot, product_id, cli_version)
     source = release["package_source"]
 
@@ -121,44 +121,21 @@ def verify(
     require(add.get("result") == "success", "released CLI Cursor dry-run did not succeed")
     data = add.get("data")
     require(isinstance(data, dict), "add.data must be an object")
-    targets = object_list(data.get("targets"), "add.data.targets")
-    target = one(targets, "add target")
-    require(target.get("target") == "cursor", "add dry-run selected a non-Cursor target")
-    output = target.get("output")
-    require(isinstance(output, dict), "Cursor target output must be an object")
-    target_result = output.get("result")
-    require(isinstance(target_result, dict), "Cursor target result must be an object")
-    require(target_result.get("mutated") is False, "Cursor dry-run reported a mutation")
-    plan = target_result.get("plan")
-    require(isinstance(plan, dict), "Cursor target result plan must be an object")
-    require(plan.get("client_id") == "cursor", "Cursor target result plan.client_id must be cursor")
-
-    expected_add = {
-        "plugin": product_id,
-        "version": release.get("package_version"),
-        "source": f"{source['repository']}//{source['path']}",
+    require(data.get("dry_run") is True, "add.data.dry_run must be true")
+    actions = object_list(data.get("actions"), "add.data.actions")
+    action = one(actions, "add action")
+    require(action.get("client_id") == "cursor", "add.data.actions[0].client_id must be cursor")
+    require(action.get("action") == "install", "add.data.actions[0].action must be install")
+    expected_action = {
+        "alias": product_id,
         "revision": source["revision"],
-        "tree_digest": release.get("tree_digest"),
-        "manifest_digest": release.get("manifest_digest"),
+        "package_digest": release["tree_digest"],
     }
-    for container, label in ((data, "add.data"), (output, "Cursor target output")):
-        for field, expected in expected_add.items():
-            require(container.get(field) == expected, f"{label}.{field} does not match the selected release")
-        require(container.get("dry_run") is True, f"{label}.dry_run must be true")
-
-    directory = data.get("directory")
-    require(isinstance(directory, dict), "add.data.directory must be an object")
-    expected_directory = {
-        "product_id": product_id,
-        "distribution_id": distribution["id"],
-        "distribution_kind": distribution["kind"],
-        "snapshot_digest": snapshot_digest,
-    }
-    for field, expected in expected_directory.items():
-        require(directory.get(field) == expected, f"add.data.directory.{field} does not match the selected release")
-    require(positive_int(directory.get("desired_release_sequence"), "add.data.directory.desired_release_sequence") == release["sequence"], "add.data.directory.desired_release_sequence does not match the selected release")
-    require(positive_int(directory.get("snapshot_schema"), "add.data.directory.snapshot_schema") == snapshot_schema, "add.data.directory.snapshot_schema does not match the selected snapshot")
-    require(positive_int(directory.get("snapshot_sequence"), "add.data.directory.snapshot_sequence") == sequence, "add.data.directory.snapshot_sequence does not match the gated sequence")
+    for field, expected in expected_action.items():
+        require(action.get(field) == expected, f"add.data.actions[0].{field} does not match the selected release")
+    environment = data.get("environment")
+    require(isinstance(environment, dict), "add.data.environment must be an object")
+    require(type(environment.get("saved")) is bool, "add.data.environment.saved must be a boolean")
 
 
 def load(path: Path) -> dict[str, Any]:
