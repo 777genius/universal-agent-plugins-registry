@@ -465,6 +465,20 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
     return roots, env
 
 
+def public_source(source: dict) -> str:
+    # Exact rendering contract of the pinned released CLI's publicRepositoryPath
+    # (read.go at CLI["commit"]): slash-trimmed repository and subpath joined by
+    # one "/", or the bare repository when the subpath is empty. Older CLI pins
+    # rendered repository//subpath (e.g. build_chatgpt_observer_projection.py),
+    # so a pin bump must re-derive this against the new binary's add output.
+    # The single-slash delimiter cannot forge a wrong selection: the caller also
+    # requires the exact revision, tree digest, and manifest digest.
+    repository = source["repository"].strip("/")
+    subpath = source["path"].strip("/")
+    require(bool(repository.strip()), "package source repository missing")
+    return repository if not subpath else repository + "/" + subpath
+
+
 def check_identity(data: dict, selection: dict, ctx: dict) -> None:
     source = selection["package_source"]
     # The CLI omits an optional empty package version from its JSON report.
@@ -472,7 +486,7 @@ def check_identity(data: dict, selection: dict, ctx: dict) -> None:
     identity = dict(data)
     identity.setdefault("version", "")
     for key, expected in {"plugin": selection["product_id"], "version": selection["package_version"],
-                          "source": f"{source['repository']}//{source['path']}", "revision": source["revision"],
+                          "source": public_source(source), "revision": source["revision"],
                           "tree_digest": selection["tree_digest"], "manifest_digest": selection["manifest_digest"]}.items():
         require(identity.get(key) == expected, f"CLI selected wrong {key}")
     directory = data.get("directory", {})

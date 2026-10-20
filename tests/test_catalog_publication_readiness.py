@@ -124,7 +124,7 @@ class CatalogContractTests(unittest.TestCase):
         source = selection["package_source"]
         data = {
             "plugin": selection["product_id"],
-            "source": f"{source['repository']}//{source['path']}",
+            "source": gate.public_source(source),
             "revision": source["revision"],
             "tree_digest": selection["tree_digest"],
             "manifest_digest": selection["manifest_digest"],
@@ -150,7 +150,7 @@ class CatalogContractTests(unittest.TestCase):
         source = selection["package_source"]
         data = {
             "plugin": selection["product_id"],
-            "source": f"{source['repository']}//{source['path']}",
+            "source": gate.public_source(source),
             "revision": source["revision"],
             "tree_digest": selection["tree_digest"],
             "manifest_digest": selection["manifest_digest"],
@@ -167,6 +167,45 @@ class CatalogContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "wrong version"):
             gate.check_identity(data, selection, self.identity)
+
+    def test_identity_source_matches_the_pinned_cli_public_repository_path(self):
+        # The released CLI renders add's source as repository/subpath
+        # (publicRepositoryPath at the pinned commit). The harness once demanded
+        # a repository//subpath string the released CLI never emits, so every
+        # real add failed validate_add with "CLI selected wrong source".
+        selection = gate.selected(self.snapshot, "context7", gate.CORE)
+        source = selection["package_source"]
+        repository, subpath = source["repository"].strip("/"), source["path"].strip("/")
+        rendered = repository if not subpath else repository + "/" + subpath
+        self.assertEqual(gate.public_source(source), rendered)
+        self.assertNotIn("//", rendered)
+        data = {
+            "plugin": selection["product_id"],
+            "version": selection["package_version"],
+            "source": rendered,
+            "revision": source["revision"],
+            "tree_digest": selection["tree_digest"],
+            "manifest_digest": selection["manifest_digest"],
+            "directory": {
+                "product_id": selection["product_id"],
+                "distribution_id": selection["distribution_id"],
+                "distribution_kind": selection["distribution_kind"],
+                "desired_release_sequence": selection["release_sequence"],
+                "snapshot_schema": 1,
+                "snapshot_sequence": self.identity["sequence"],
+                "snapshot_digest": self.identity["snapshot_digest"],
+            },
+        }
+        gate.check_identity(data, selection, self.identity)
+        for wrong in (repository + "//" + subpath, rendered + "/extra",
+                      repository.upper() + "/" + subpath, "local"):
+            with self.subTest(wrong=wrong), self.assertRaisesRegex(ValueError, "wrong source"):
+                gate.check_identity({**data, "source": wrong}, selection, self.identity)
+        self.assertEqual(gate.public_source({"repository": "/example/repo/", "path": "/"}), "example/repo")
+        self.assertEqual(gate.public_source({"repository": "r/", "path": "/plugins/context7/"}), "r/plugins/context7")
+        for missing in ({"repository": "//", "path": "pkg"}, {"repository": "  ", "path": "pkg"}):
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "repository missing"):
+                gate.public_source(missing)
 
     def test_new_uncovered_target_policy_fails_closed(self):
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
@@ -857,7 +896,7 @@ class CatalogContractTests(unittest.TestCase):
                                "fetched": True, "validated": True}
                 data = {**targets(), **package_revision, "plugin": selection["product_id"],
                         "version": selection["package_version"],
-                        "source": selection["package_source"]["repository"] + "//" + selection["package_source"]["path"],
+                        "source": gate.public_source(selection["package_source"]),
                         "revision": selection["package_source"]["revision"], "acquisition": acquisition,
                         "target_outcomes": {client: {**acquisition, "outcome": "passed"} for client in gate.CORE},
                         "directory": {"product_id": selection["product_id"], "distribution_id": selection["distribution_id"],
