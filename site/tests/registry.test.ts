@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { authenticationLabel, deliveryLabel, directoryIsExpired, expectedDistribution, githubSourceUrl, isPinnedExternalSource, mirroredIconPath, parseDirectoryData, parseRegistryIndex, resolveDistribution, targetAuthenticationLabel, validationLabel } from '../utils/registry.ts'
+import { authenticationLabel, CLIENTS, deliveryLabel, directoryIsExpired, expectedDistribution, githubSourceUrl, isPinnedExternalSource, mirroredIconPath, parseDirectoryData, parseRegistryIndex, resolveDistribution, targetAuthenticationLabel, validationLabel } from '../utils/registry.ts'
 import { pluginCommands } from '../utils/commands.ts'
 import type { ClientID } from '../types/registry.ts'
 
@@ -75,10 +75,10 @@ function mix(first: RGB, second: RGB, firstWeight: number): RGB {
 }
 
 describe('registry parsing', () => {
-  it('parses the reviewed Chrome alias for all ten clients without runtime claims', () => {
+  it('parses the reviewed Chrome alias for all thirteen clients without runtime claims', () => {
     const raw = JSON.parse(readFileSync(fileURLToPath(new URL('../../registry/directory.json', import.meta.url)), 'utf8'))
     const plugin = parseDirectoryData(raw, 'review_preview').plugins.find(item => item.name === 'chrome-devtools')!
-    const clients: ClientID[] = ['codex', 'cursor', 'copilot', 'vscode', 'kiro', 'claude', 'gemini', 'opencode', 'cline', 'windsurf']
+    const clients: ClientID[] = ['codex', 'cursor', 'copilot', 'vscode', 'kiro', 'claude', 'gemini', 'opencode', 'cline', 'windsurf', 'grok', 'kimi', 'qoder']
     assert.equal(plugin.declared_default_distribution, '777genius/chrome-devtools')
     assert.equal(plugin.default_distribution, '777genius/chrome-devtools-bridge')
     assert.deepEqual(new Set(plugin.client_support.clients), new Set(clients))
@@ -93,7 +93,7 @@ describe('registry parsing', () => {
       assert.equal(pluginCommands(plugin, targets).add, `npx universal-agent-plugins add chrome-devtools --target ${targets.join(',')}`)
     }
     assert.equal(expectedDistribution(plugin, [...clients, 'chatgpt']), undefined)
-    const delivery = { claude: 'managed', gemini: 'managed', opencode: 'managed', cline: 'managed', windsurf: 'prepared' }
+    const delivery = { claude: 'managed', gemini: 'managed', opencode: 'managed', cline: 'managed', windsurf: 'prepared', grok: 'managed', kimi: 'managed', qoder: 'managed' }
     for (const [client, mode] of Object.entries(delivery) as Array<[ClientID, string]>) {
       assert.equal(plugin.client_support.delivery[client], mode)
       assert.deepEqual(plugin.client_support.scopes[client], ['user'])
@@ -103,7 +103,7 @@ describe('registry parsing', () => {
   })
 
   it('accepts new client targets and evidence in the published snapshot parser', () => {
-    for (const client of ['claude', 'gemini', 'opencode', 'cline', 'windsurf'] as const) {
+    for (const client of ['claude', 'gemini', 'opencode', 'cline', 'windsurf', 'grok', 'kimi', 'qoder'] as const) {
       const raw = signedFixture()
       const delivery = client === 'windsurf' ? 'prepared' : 'managed'
       const bridge = raw.distributions.find(item => item.id === 'example/demo-bridge')!
@@ -120,11 +120,18 @@ describe('registry parsing', () => {
 
   it('includes new clients in the selector with local icon assets', () => {
     const source = readFileSync(fileURLToPath(new URL('../composables/useSite.ts', import.meta.url)), 'utf8')
-    for (const client of ['claude', 'gemini', 'opencode', 'cline', 'windsurf']) {
+    for (const client of ['claude', 'gemini', 'opencode', 'cline', 'windsurf', 'grok', 'kimi', 'qoder']) {
       const match = source.match(new RegExp(`id: '${client}', name: '[^']+', icon: '([^']+)'`))
       assert.ok(match, `${client} must be selectable`)
       assert.ok(readFileSync(fileURLToPath(new URL(`../public/client-icons/${match[1]}`, import.meta.url)), 'utf8').includes('<svg'))
     }
+  })
+
+  it('keeps the parser whitelist and the selector catalog in lockstep', () => {
+    const source = readFileSync(fileURLToPath(new URL('../composables/useSite.ts', import.meta.url)), 'utf8')
+    const selectorIDs = [...source.matchAll(/id: '([^']+)', name:/g)].map(match => match[1]!)
+    assert.equal(selectorIDs.length, CLIENTS.size, 'selector entries must be unique')
+    assert.deepEqual(new Set(selectorIDs), CLIENTS)
   })
 
   it('normalizes a signed snapshot into one product with source alternatives and exact evidence', () => {

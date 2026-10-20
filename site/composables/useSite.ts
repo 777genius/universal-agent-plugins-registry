@@ -13,6 +13,9 @@ export const clients: ClientTarget[] = [
   { id: 'opencode', name: 'OpenCode', icon: 'opencode.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
   { id: 'cline', name: 'Cline', icon: 'cline.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
   { id: 'windsurf', name: 'Windsurf', icon: 'windsurf.svg', note: 'Prepared package; manual activation required', status: 'CLI prepares' },
+  { id: 'grok', name: 'Grok', icon: 'terminal.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
+  { id: 'kimi', name: 'Kimi', icon: 'kimi.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
+  { id: 'qoder', name: 'Qoder', icon: 'terminal.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
 ]
 
 export function useSite() {

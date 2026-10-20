@@ -118,7 +118,7 @@ try {
         .filter({ has: page.locator('a[href$="/plugins/chrome-devtools/"]') })
         .filter({ has: page.locator('.plugin-card__ribbon', { hasText: /^reviewed listing$/i }) })
       const chromeCommand = await checkCard('Chrome DevTools', chrome, 'chrome-devtools')
-      await expect(chrome).toContainText('8 installed automatically · 2 require one final step')
+      await expect(chrome).toContainText('11 installed automatically · 2 require one final step')
       const selector = 'discovery:vectorize-io/hindsight//hindsight-integrations/agent-plugin'
       const hindsight = page.locator(`.plugin-card[data-install-source="${selector}"]`)
       const communityCommand = await checkCard('hindsight', hindsight, selector)
