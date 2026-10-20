@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { authenticationLabel, deliveryLabel, directoryIsExpired, expectedDistribution, githubSourceUrl, isPinnedExternalSource, mirroredIconPath, parseDirectoryData, parseRegistryIndex, resolveDistribution, targetAuthenticationLabel, validationLabel } from '../utils/registry.ts'
+import { authenticationLabel, CLIENTS, deliveryLabel, directoryIsExpired, expectedDistribution, githubSourceUrl, isPinnedExternalSource, mirroredIconPath, parseDirectoryData, parseRegistryIndex, resolveDistribution, targetAuthenticationLabel, validationLabel } from '../utils/registry.ts'
 import { pluginCommands } from '../utils/commands.ts'
 import type { ClientID } from '../types/registry.ts'
 
@@ -125,6 +125,13 @@ describe('registry parsing', () => {
       assert.ok(match, `${client} must be selectable`)
       assert.ok(readFileSync(fileURLToPath(new URL(`../public/client-icons/${match[1]}`, import.meta.url)), 'utf8').includes('<svg'))
     }
+  })
+
+  it('keeps the parser whitelist and the selector catalog in lockstep', () => {
+    const source = readFileSync(fileURLToPath(new URL('../composables/useSite.ts', import.meta.url)), 'utf8')
+    const selectorIDs = [...source.matchAll(/id: '([^']+)', name:/g)].map(match => match[1]!)
+    assert.equal(selectorIDs.length, CLIENTS.size, 'selector entries must be unique')
+    assert.deepEqual(new Set(selectorIDs), CLIENTS)
   })
 
   it('normalizes a signed snapshot into one product with source alternatives and exact evidence', () => {

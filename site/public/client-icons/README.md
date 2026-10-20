@@ -2,7 +2,7 @@
 
 These marks identify supported clients. They remain trademarks of their owners;
 their inclusion does not imply affiliation or endorsement. Sources were checked
-on 2026-08-31.
+on 2026-08-31, plus the Kimi mark on 2026-10-20.
 
 | Asset | Official source |
 | --- | --- |
