@@ -360,6 +360,67 @@ class CatalogContractTests(unittest.TestCase):
             self.assertEqual(stub("qoder", "plugins", "uninstall", "chrome-devtools").returncode, 0)
             self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout), [])
 
+    def test_stub_state_drops_exact_names_and_rejects_corrupting_source_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            roots, env = gate.isolated_environment(root, self.args.directory_origin, ())
+            def stub(name, *argv):
+                return subprocess.run([str(root / "bin" / name), *argv], env=env,
+                                      capture_output=True, text=True, check=False)
+            def package(dirname, manifest_name, manifest):
+                pkg = root / dirname
+                (pkg / manifest).mkdir(parents=True)
+                (pkg / manifest / "plugin.json").write_text(
+                    json.dumps({"name": manifest_name, "version": "1.7.0"}, indent=2))
+                return pkg
+            # A numeric-looking name must not collide with a different name in
+            # the state registry: "7" must never drop the "007" entry.
+            numeric = package("numeric", "007", ".grok-plugin")
+            self.assertEqual(stub("grok", "plugin", "install", "--trust", str(numeric)).returncode, 0)
+            self.assertEqual(stub("grok", "plugin", "uninstall", "--confirm", "7").returncode, 0)
+            self.assertEqual([item["name"] for item in json.loads(stub("grok", "plugin", "list", "--json").stdout)],
+                             ["007"])
+            qnumeric = package("qnumeric", "007", ".qoder-plugin")
+            self.assertEqual(stub("qoder", "plugins", "install", str(qnumeric), "--scope", "user").returncode, 0)
+            self.assertEqual(stub("qoder", "plugins", "uninstall", "7").returncode, 0)
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout),
+                             [{"id": "007@local", "version": "1.7.0"}])
+            # A source path with a pipe must be rejected: writing it into the
+            # pipe-delimited registry would corrupt the list --json emission.
+            weird = package("pa|ckage", "chrome-devtools", ".grok-plugin")
+            self.assertNotEqual(stub("grok", "plugin", "install", "--trust", str(weird)).returncode, 0)
+            qweird = package("qpa|ckage", "chrome-devtools", ".qoder-plugin")
+            self.assertNotEqual(stub("qoder", "plugins", "install", str(qweird), "--scope", "user").returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
+                             [{"name": "007", "status": "installed", "source": str(numeric), "version": "1.7.0"}])
+
+    def test_stub_seeding_refuses_to_shadow_a_linked_tool_fixture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            tool_bin = Path(temporary) / "bin"
+            tool_bin.mkdir()
+            fixture = tool_bin / "real-tool"
+            fixture.write_bytes(b"fixture bytes")
+            (tool_bin / "grok").symlink_to(fixture)
+            with self.assertRaisesRegex(ValueError, "refusing to shadow"):
+                gate.seed_client_stubs(tool_bin)
+            self.assertEqual(fixture.read_bytes(), b"fixture bytes")
+            self.assertTrue((tool_bin / "grok").is_symlink())
+
+    def test_only_verified_active_activation_counts_for_stub_backed_clients(self):
+        def target(name, activation):
+            return {"target": name, "output": {"result": {"activation": activation}}}
+        active = {"activation": "active", "verification": "installation_verified"}
+        gate.require_verified_activation([target("grok", active), target("kimi", active), target("qoder", active)])
+        for broken in ({"activation": "manual_activation_required", "verification": "installation_verified"},
+                       {"activation": "active", "verification": "not_run"},
+                       {"activation": "prepared", "verification": "package_validated"},
+                       None):
+            with self.assertRaisesRegex(ValueError, "not verified"):
+                gate.require_verified_activation([target("kimi", broken)])
+        # Clients outside the stub-backed set keep their documented outcomes.
+        gate.require_verified_activation([target("vscode", {"activation": "manual_activation_required",
+                                                            "verification": "not_run"})])
+
     def test_produce_parser_and_lifecycle_expose_the_native_opencode_fixture(self):
         # OpenCode preflight verifies native executable bytes and rejects
         # shell/npm shims, so the producer must receive a Go fixture and the

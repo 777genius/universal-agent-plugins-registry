@@ -333,7 +333,8 @@ def command(binary: Path, args: list[str], env: dict, cwd: Path, *, root: Path, 
 GROK_STUB = r"""#!/bin/sh
 state="$HOME/.grok/.stub-registry"
 valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
-drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1 != n' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
+pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/-]*) exit 1 ;; esac; }
+drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1"" != n""' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
 field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
 emit() {
   if [ ! -s "$state" ]; then printf '[]\n'; return; fi
@@ -354,13 +355,14 @@ case "$1" in
       list) [ "$3" = "--json" ] || exit 1; emit ;;
       install)
         [ "$3" = "--trust" ] || exit 1
+        pathvalid "$4"
         manifest="$4/.grok-plugin/plugin.json"
         [ -f "$manifest" ] || exit 1
         name=$(field "$manifest" name)
         version=$(field "$manifest" version)
         valid "$name"
         case "$version" in ""|*[!A-Za-z0-9._+-]*) exit 1 ;; esac
-        drop "$name"
+        drop "$name" || exit 1
         printf '%s|installed|%s|%s\n' "$name" "$4" "$version" >> "$state"
         ;;
       uninstall) [ "$3" = "--confirm" ] || exit 1; drop "$4" ;;
@@ -379,7 +381,8 @@ esac
 QODER_STUB = r"""#!/bin/sh
 state="$HOME/.qoder/.stub-registry"
 valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
-drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1 != n' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
+pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/-]*) exit 1 ;; esac; }
+drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1"" != n""' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
 field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
 emit() {
   if [ ! -s "$state" ]; then printf '[]\n'; return; fi
@@ -399,6 +402,7 @@ case "$1" in
     case "$2" in
       list) [ "$3" = "--json" ] || exit 1; emit ;;
       install)
+        pathvalid "$3"
         manifest="$3/.qoder-plugin/plugin.json"
         [ -f "$manifest" ] || exit 1
         [ "$4" = "--scope" ] && [ "$5" = "user" ] || exit 1
@@ -406,7 +410,7 @@ case "$1" in
         version=$(field "$manifest" version)
         valid "$name"
         case "$version" in ""|*[!A-Za-z0-9._+-]*) exit 1 ;; esac
-        drop "$name"
+        drop "$name" || exit 1
         printf '%s|%s|%s\n' "$name" "$version" "$3" >> "$state"
         ;;
       uninstall) drop "$3" ;;
@@ -424,6 +428,7 @@ def seed_client_stubs(tool_bin: Path) -> None:
         stub = tool_bin / name
         # Never write through an existing symlink: tool fixtures are linked into
         # this directory first and must keep their real bytes.
+        require(not stub.is_symlink(), f"refusing to shadow the linked tool fixture {stub}")
         stub.unlink(missing_ok=True)
         stub.write_text(body, encoding="utf-8")
         stub.chmod(0o700)
@@ -583,6 +588,16 @@ def exact_targets(data: dict, clients: tuple) -> list:
     return targets
 
 
+def require_verified_activation(targets: list) -> None:
+    for target in targets:
+        if target["target"] in ("grok", "kimi", "qoder"):
+            activation = target["output"]["result"]["activation"]
+            require(isinstance(activation, dict)
+                    and activation.get("activation") == "active"
+                    and activation.get("verification") == "installation_verified",
+                    "%s activation was not verified against its client registry" % target["target"])
+
+
 def validate_native_version(client: str, output: str) -> None:
     require(client in CLI["native_clients"], "unknown native version client")
     expected = re.escape(CLI["native_clients"][client])
@@ -656,12 +671,7 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     step("validate_add")
     check_identity(data, selection, ctx)
     targets = exact_targets(data, clients)
-    for target in targets:
-        if target["target"] in ("grok", "kimi", "qoder"):
-            activation = target["output"]["result"]["activation"]
-            require(activation.get("activation") == "active"
-                    and activation.get("verification") == "installation_verified",
-                    "%s activation was not verified against its client registry" % target["target"])
+    require_verified_activation(targets)
     plans = [target.get("output", {}).get("result", {}).get("plan", {}) for target in targets]
     physical_ids = {plan.get("physical_artifact_id") for plan in plans}
     require(len(physical_ids) == 1 and all(isinstance(item, str) and bool(item.strip()) for item in physical_ids),
