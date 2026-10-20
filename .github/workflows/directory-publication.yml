@@ -1212,8 +1212,8 @@ jobs:
           done
       - name: Prove compatibility with the exact released CLI
         env:
-          AGENTPLUGINS_COMMIT: 37682cfe042f27a0ecf9e1094168b61077918509
-          AGENTPLUGINS_VERSION: 0.1.87
+          AGENTPLUGINS_COMMIT: 24a69f403b88bbdaf93ae1f5e755a86a6b112b5d
+          AGENTPLUGINS_VERSION: 0.1.88
           EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
           EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
           EXPECTED_LEDGER_HEAD: ${{ needs.materialize_site.outputs.ledger_commit }}
@@ -1228,9 +1228,9 @@ jobs:
           binary="${release_dir}/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
           chmod +x "${binary}"
           cd "${release_dir}"
-          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = 6940f3fa1877e9b7327c3ed3a43dde92b2725c5ce6bd1a8c5216bf17bfa06e70
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 15a2898a1d57cd3cf437ccb380005345002a3a3a4ce80f3b5f73a2539eec391e
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = ac16137670369183e891aad0b4887ec4797b1c6c7456fd61207e4bdce8c1f6c3
+          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = c4a315480a95b1825225ac1e001f2ee1af8c1e44133e5b5d5e11b8341d7407d6
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 64334aa98f66028a87fc1b517d70b71984d0a240b9a389789227926d9fb523e7
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = ed481957b1a76174633b2853f12974aa25487cf02cb1bc239d3d436166d600db
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib

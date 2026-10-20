@@ -44,9 +44,9 @@ CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha
                   "run_id", "run_attempt", "directory_origin")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-CLI = {"version": "0.1.87", "tag": "agentplugins-v0.1.87",
-       "commit": "37682cfe042f27a0ecf9e1094168b61077918509",
-       "binary_digest": "sha256:6940f3fa1877e9b7327c3ed3a43dde92b2725c5ce6bd1a8c5216bf17bfa06e70",
+CLI = {"version": "0.1.88", "tag": "agentplugins-v0.1.88",
+       "commit": "24a69f403b88bbdaf93ae1f5e755a86a6b112b5d",
+       "binary_digest": "sha256:c4a315480a95b1825225ac1e001f2ee1af8c1e44133e5b5d5e11b8341d7407d6",
        "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
@@ -304,7 +304,7 @@ def validate_artifact(value: dict, expected: dict) -> None:
 
 def tool_paths(args: argparse.Namespace) -> tuple[Path, ...]:
     paths = {args.binary.absolute().parent}
-    for tool in (args.claude, args.copilot, args.inspector, args.npx):
+    for tool in (args.claude, args.copilot, args.inspector, args.opencode, args.npx):
         if tool is not None:
             # npm's .bin links need their sibling packages/dependencies, not only .bin.
             paths.add(tool.absolute().parent.parent if tool.parent.name == ".bin" else tool.resolve().parent)
@@ -327,12 +327,120 @@ def command(binary: Path, args: list[str], env: dict, cwd: Path, *, root: Path, 
     return value["data"]
 
 
+# Stateful grok/qoder stubs mirror the released client CLI contracts (install,
+# list, uninstall) over pipe-delimited registries under their config roots.
+# kimi needs no CLI activation: its registry is read from ~/.kimi-code files.
+GROK_STUB = r"""#!/bin/sh
+state="$HOME/.grok/.stub-registry"
+valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
+pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/+-]*) exit 1 ;; esac; }
+drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1"" != n""' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
+field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
+emit() {
+  if [ ! -s "$state" ]; then printf '[]\n'; return; fi
+  printf '['
+  first=1
+  while IFS='|' read -r name status source version; do
+    [ -n "$name" ] || continue
+    [ $first -eq 1 ] || printf ','
+    first=0
+    printf '{"name":"%s","status":"%s","source":"%s","version":"%s"}' "$name" "$status" "$source" "$version"
+  done < "$state"
+  printf ']\n'
+}
+case "$1" in
+  --version) echo "1.0.0" ;;
+  plugin)
+    case "$2" in
+      list) [ "$3" = "--json" ] || exit 1; emit ;;
+      install)
+        [ "$3" = "--trust" ] || exit 1
+        pathvalid "$4"
+        manifest="$4/.grok-plugin/plugin.json"
+        [ -f "$manifest" ] || exit 1
+        name=$(field "$manifest" name)
+        version=$(field "$manifest" version)
+        valid "$name"
+        case "$version" in ""|*[!A-Za-z0-9._+-]*) exit 1 ;; esac
+        drop "$name" || exit 1
+        printf '%s|installed|%s|%s\n' "$name" "$4" "$version" >> "$state"
+        ;;
+      uninstall) [ "$3" = "--confirm" ] || exit 1; drop "$4" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+"""
+KIMI_STUB = r"""#!/bin/sh
+case "$1" in
+  --version) echo "1.0.0" ;;
+  *) exit 1 ;;
+esac
+"""
+QODER_STUB = r"""#!/bin/sh
+state="$HOME/.qoder/.stub-registry"
+valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
+pathvalid() { case "$1" in ""|*[!A-Za-z0-9._/+-]*) exit 1 ;; esac; }
+drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1"" != n""' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
+field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
+emit() {
+  if [ ! -s "$state" ]; then printf '[]\n'; return; fi
+  printf '['
+  first=1
+  while IFS='|' read -r name version source; do
+    [ -n "$name" ] || continue
+    [ $first -eq 1 ] || printf ','
+    first=0
+    printf '{"id":"%s@local","version":"%s"}' "$name" "$version"
+  done < "$state"
+  printf ']\n'
+}
+case "$1" in
+  --version) echo "1.0.0" ;;
+  plugins)
+    case "$2" in
+      list) [ "$3" = "--json" ] || exit 1; emit ;;
+      install)
+        pathvalid "$3"
+        manifest="$3/.qoder-plugin/plugin.json"
+        [ -f "$manifest" ] || exit 1
+        [ "$4" = "--scope" ] && [ "$5" = "user" ] || exit 1
+        name=$(field "$manifest" name)
+        version=$(field "$manifest" version)
+        valid "$name"
+        case "$version" in ""|*[!A-Za-z0-9._+-]*) exit 1 ;; esac
+        drop "$name" || exit 1
+        printf '%s|%s|%s\n' "$name" "$version" "$3" >> "$state"
+        ;;
+      uninstall) drop "$3" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+"""
+CLIENT_STUBS = {"grok": GROK_STUB, "kimi": KIMI_STUB, "qoder": QODER_STUB}
+
+
+def seed_client_stubs(tool_bin: Path) -> None:
+    for name, body in CLIENT_STUBS.items():
+        stub = tool_bin / name
+        # Never write through an existing symlink: tool fixtures are linked into
+        # this directory first and must keep their real bytes.
+        require(not stub.is_symlink(), f"refusing to shadow the linked tool fixture {stub}")
+        stub.unlink(missing_ok=True)
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o700)
+
+
 def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tuple[dict, dict]:
     roots = {name: root / name for name in ("home", "state", "workspace", "config", "cache", "tmp")}
     for path in roots.values():
         path.mkdir(mode=0o700)
     seed_clients(root)
-    for path in (roots["home"] / ".codex", roots["home"] / ".cursor", roots["home"] / ".kiro", roots["home"] / ".copilot"):
+    for path in (roots["home"] / ".codex", roots["home"] / ".cursor", roots["home"] / ".kiro", roots["home"] / ".copilot",
+                 roots["home"] / ".grok", roots["home"] / ".kimi-code", roots["home"] / ".qoder"):
         path.mkdir(exist_ok=True)
     # Cursor's adapter gates detection on its selectable physical surfaces
     # (editor binary or desktop entry), not on the .cursor config directory.
@@ -345,6 +453,7 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
     tool_bin.mkdir()
     for tool in tools:
         (tool_bin / tool.name).symlink_to(tool.resolve(strict=True))
+    seed_client_stubs(tool_bin)
     env = {"PATH": str(tool_bin) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
            "LANG": "C.UTF-8", "HOME": str(roots["home"]), "USERPROFILE": str(roots["home"]),
            "XDG_CONFIG_HOME": str(roots["config"]), "XDG_CACHE_HOME": str(roots["cache"]),
@@ -479,6 +588,16 @@ def exact_targets(data: dict, clients: tuple) -> list:
     return targets
 
 
+def require_verified_activation(targets: list) -> None:
+    for target in targets:
+        if target["target"] in ("grok", "kimi", "qoder"):
+            activation = target["output"]["result"]["activation"]
+            require(isinstance(activation, dict)
+                    and activation.get("activation") == "active"
+                    and activation.get("verification") == "installation_verified",
+                    "%s activation was not verified against its client registry" % target["target"])
+
+
 def validate_native_version(client: str, output: str) -> None:
     require(client in CLI["native_clients"], "unknown native version client")
     expected = re.escape(CLI["native_clients"][client])
@@ -530,7 +649,8 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     step = lambda name: lifecycle_step(args, selection.get("_case_id", selection["selector"]), name)
     step("prepare")
     root.mkdir(mode=0o700)
-    roots, env = isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot))
+    roots, env = isolated_environment(root, ctx["directory_origin"],
+                                      tuple(tool for tool in (args.claude, args.copilot, args.opencode) if tool is not None))
     readonly = tool_paths(args)
     if "claude" in clients:
         for tool in (args.claude, args.copilot):
@@ -547,10 +667,11 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
         else:
             step(phase)
         return command(args.binary, [phase, *tail], env, roots["workspace"], root=root, readonly=readonly)
-    data = run("add", selection["selector"], *common)
+    data = run("add", selection["selector"], *common, "--no-save")
     step("validate_add")
     check_identity(data, selection, ctx)
     targets = exact_targets(data, clients)
+    require_verified_activation(targets)
     plans = [target.get("output", {}).get("result", {}).get("plan", {}) for target in targets]
     physical_ids = {plan.get("physical_artifact_id") for plan in plans}
     require(len(physical_ids) == 1 and all(isinstance(item, str) and bool(item.strip()) for item in physical_ids),
@@ -711,7 +832,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector"):
+    for name in ("binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result
@@ -730,7 +851,7 @@ def main(argv: list[str] | None = None) -> int:
             require(args.artifact is not None, "--artifact required")
             validate_artifact(read_json(args.artifact, canonical=True), expected)
         else:
-            require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot")), "producer paths required")
+            require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot", "opencode")), "producer paths required")
             produce(args, snapshot, expected)
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:
