@@ -468,11 +468,14 @@ def isolated_environment(root: Path, origin: str, tools: tuple[Path, ...]) -> tu
 def public_source(source: dict) -> str:
     # Exact rendering contract of the pinned released CLI's publicRepositoryPath
     # (read.go at CLI["commit"]): slash-trimmed repository and subpath joined by
-    # one "/", or the bare repository when the subpath is empty. A pin bump must
-    # re-derive this against the new released binary's add output.
+    # one "/", or the bare repository when the subpath is empty. Older CLI pins
+    # rendered repository//subpath (e.g. build_chatgpt_observer_projection.py),
+    # so a pin bump must re-derive this against the new binary's add output.
+    # The single-slash delimiter cannot forge a wrong selection: the caller also
+    # requires the exact revision, tree digest, and manifest digest.
     repository = source["repository"].strip("/")
     subpath = source["path"].strip("/")
-    require(bool(repository), "package source repository missing")
+    require(bool(repository.strip()), "package source repository missing")
     return repository if not subpath else repository + "/" + subpath
 
 

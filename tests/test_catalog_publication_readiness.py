@@ -202,8 +202,10 @@ class CatalogContractTests(unittest.TestCase):
             with self.subTest(wrong=wrong), self.assertRaisesRegex(ValueError, "wrong source"):
                 gate.check_identity({**data, "source": wrong}, selection, self.identity)
         self.assertEqual(gate.public_source({"repository": "/example/repo/", "path": "/"}), "example/repo")
-        with self.assertRaisesRegex(ValueError, "repository missing"):
-            gate.public_source({"repository": "//", "path": "pkg"})
+        self.assertEqual(gate.public_source({"repository": "r/", "path": "/plugins/context7/"}), "r/plugins/context7")
+        for missing in ({"repository": "//", "path": "pkg"}, {"repository": "  ", "path": "pkg"}):
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "repository missing"):
+                gate.public_source(missing)
 
     def test_new_uncovered_target_policy_fails_closed(self):
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
