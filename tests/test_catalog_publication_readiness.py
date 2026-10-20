@@ -237,8 +237,9 @@ class CatalogContractTests(unittest.TestCase):
     def test_new_cli_floor_and_missing_alias_fail(self):
         selected = gate.selected(self.snapshot, "chrome-devtools", gate.CHROME)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == selected["distribution_id"])
+        major, minor, patch = (int(part) for part in gate.CLI["version"].split("."))
         for policy in distribution["release_policies"]:
-            policy["minimum_installer_version"] = "0.1.88"
+            policy["minimum_installer_version"] = "%d.%d.%d" % (major, minor, patch + 1)
         with self.assertRaisesRegex(ValueError, "newer CLI"):
             gate.plan(self.snapshot)
         self.snapshot = catalog()
@@ -389,6 +390,7 @@ class CatalogContractTests(unittest.TestCase):
             exposed = root / "case" / "bin" / "opencode"
             self.assertTrue(exposed.exists(), "opencode fixture missing from the lifecycle PATH")
             self.assertEqual(exposed.resolve(), (tools / "opencode").resolve())
+            self.assertIn((tools / "opencode").resolve().parent, gate.tool_paths(args))
 
     @unittest.skipUnless(shutil.which("go"), "Go toolchain required to build the native fixture")
     def test_opencode_fixture_is_native_and_answers_only_version(self):
@@ -403,10 +405,22 @@ class CatalogContractTests(unittest.TestCase):
                                    env=env, capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)
             self.assertFalse(binary.read_bytes().startswith(b"#!"), "fixture is a script shim")
+            self.assertIn(binary.read_bytes()[:4], (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
+                                                    b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
+                                                    b"\xca\xfe\xba\xbe", b"MZ"),
+                          "fixture is not native executable bytes")
             version = subprocess.run([str(binary), "--version"], capture_output=True, text=True)
             self.assertEqual(version.returncode, 0, version.stderr)
             self.assertEqual(version.stdout.strip(), "1.18.34")
             self.assertNotEqual(subprocess.run([str(binary), "--help"], capture_output=True).returncode, 0)
+            home, sandbox = root / "home", root / "sandbox"
+            home.mkdir(); sandbox.mkdir()
+            tree = lambda: sorted(str(p.relative_to(root)) for base in (home, sandbox) for p in base.rglob("*"))
+            before = tree()
+            run = subprocess.run([str(binary), "--version"], cwd=sandbox,
+                                 env={"PATH": "/usr/bin:/bin", "HOME": str(home)}, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(tree(), before, "fixture wrote to HOME or cwd at runtime")
 
     def test_acquired_root_mcp_override_does_not_use_repository_plugin(self):
         with tempfile.TemporaryDirectory() as root:

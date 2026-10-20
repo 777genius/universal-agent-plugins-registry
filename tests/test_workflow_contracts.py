@@ -287,6 +287,20 @@ sys.modules['catalog_process_isolation']=module
                 self.assertEqual(result.returncode == 0, expected, result.stderr.decode())
                 self.assertEqual((root / "calls").read_text(), "install\n" if phase == "install" else "install\naudit\n")
 
+    def test_opencode_fixture_build_is_native_hermetic_and_wired_before_the_matrix_proof(self) -> None:
+        producer = load(CATALOG_READINESS)["jobs"]["produce"]
+        fixture = next(step for step in producer["steps"] if step.get("name") == "Build the native OpenCode fixture")
+        proof = next(step for step in producer["steps"] if step.get("name") == "Prove the exact catalog matrix in fresh credential-free roots")
+        self.assertLess(producer["steps"].index(fixture), producer["steps"].index(proof))
+        self.assertEqual(fixture["env"]["GOTELEMETRY"], "off")
+        self.assertIn("catalog-tools/fixture-home", fixture["env"]["HOME"])
+        for hardening in ("CGO_ENABLED=0", "GO111MODULE=off", "GOENV=off", "GOTOOLCHAIN=local", "GOFLAGS=''", "-trimpath"):
+            self.assertIn(hardening, fixture["run"])
+        self.assertIn("tests/fixtures/opencode-fixture.go", fixture["run"])
+        built = re.search(r'-o "\$\{TOOLS_ROOT\}/([^"]+)"', fixture["run"])
+        self.assertIsNotNone(built)
+        self.assertIn('--opencode "$RUNNER_TEMP/catalog-tools/%s"' % built.group(1), proof["run"])
+
     def test_every_full_python_suite_consumer_prepares_mandatory_linux_isolation(self) -> None:
         producer = load(CATALOG_READINESS)["jobs"]["produce"]
         install_name = "Install the current stable Ubuntu bubblewrap package and record namespace policy"
@@ -365,8 +379,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertNotIn("continue-on-error", policy)
         self.assertIn("--schema-version 2", policy["run"])
         self.assertIn("run_source_policy_conformance.py", policy["run"])
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.87")
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "37682cfe042f27a0ecf9e1094168b61077918509")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.88")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "24a69f403b88bbdaf93ae1f5e755a86a6b112b5d")
         readiness_tree = ast.parse((ROOT / "scripts/catalog_publication_readiness.py").read_text())
         readiness_cli = ast.literal_eval(next(
             node.value for node in readiness_tree.body

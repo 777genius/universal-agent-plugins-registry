@@ -44,9 +44,9 @@ CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha
                   "run_id", "run_attempt", "directory_origin")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-CLI = {"version": "0.1.87", "tag": "agentplugins-v0.1.87",
-       "commit": "37682cfe042f27a0ecf9e1094168b61077918509",
-       "binary_digest": "sha256:6940f3fa1877e9b7327c3ed3a43dde92b2725c5ce6bd1a8c5216bf17bfa06e70",
+CLI = {"version": "0.1.88", "tag": "agentplugins-v0.1.88",
+       "commit": "24a69f403b88bbdaf93ae1f5e755a86a6b112b5d",
+       "binary_digest": "sha256:c4a315480a95b1825225ac1e001f2ee1af8c1e44133e5b5d5e11b8341d7407d6",
        "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
@@ -332,7 +332,8 @@ def command(binary: Path, args: list[str], env: dict, cwd: Path, *, root: Path, 
 # kimi needs no CLI activation: its registry is read from ~/.kimi-code files.
 GROK_STUB = r"""#!/bin/sh
 state="$HOME/.grok/.stub-registry"
-drop() { grep -v "^$1|" "$state" 2>/dev/null > "$state.tmp" || true; mv "$state.tmp" "$state"; }
+valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
+drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1 != n' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
 field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
 emit() {
   if [ ! -s "$state" ]; then printf '[]\n'; return; fi
@@ -357,7 +358,8 @@ case "$1" in
         [ -f "$manifest" ] || exit 1
         name=$(field "$manifest" name)
         version=$(field "$manifest" version)
-        [ -n "$name" ] || exit 1
+        valid "$name"
+        case "$version" in ""|*[!A-Za-z0-9._+-]*) exit 1 ;; esac
         drop "$name"
         printf '%s|installed|%s|%s\n' "$name" "$4" "$version" >> "$state"
         ;;
@@ -376,7 +378,8 @@ esac
 """
 QODER_STUB = r"""#!/bin/sh
 state="$HOME/.qoder/.stub-registry"
-drop() { grep -v "^$1|" "$state" 2>/dev/null > "$state.tmp" || true; mv "$state.tmp" "$state"; }
+valid() { case "$1" in ""|*[!A-Za-z0-9._-]*) exit 1 ;; esac; }
+drop() { valid "$1"; [ -f "$state" ] || return 0; awk -F'|' -v n="$1" '$1 != n' "$state" > "$state.tmp" || exit 1; mv "$state.tmp" "$state"; }
 field() { sed -n "s/^  \"$2\": \"\\([^\"]*\\)\",*\$/\\1/p" "$1" | head -n 1; }
 emit() {
   if [ ! -s "$state" ]; then printf '[]\n'; return; fi
@@ -401,7 +404,8 @@ case "$1" in
         [ "$4" = "--scope" ] && [ "$5" = "user" ] || exit 1
         name=$(field "$manifest" name)
         version=$(field "$manifest" version)
-        [ -n "$name" ] || exit 1
+        valid "$name"
+        case "$version" in ""|*[!A-Za-z0-9._+-]*) exit 1 ;; esac
         drop "$name"
         printf '%s|%s|%s\n' "$name" "$version" "$3" >> "$state"
         ;;
@@ -418,6 +422,9 @@ CLIENT_STUBS = {"grok": GROK_STUB, "kimi": KIMI_STUB, "qoder": QODER_STUB}
 def seed_client_stubs(tool_bin: Path) -> None:
     for name, body in CLIENT_STUBS.items():
         stub = tool_bin / name
+        # Never write through an existing symlink: tool fixtures are linked into
+        # this directory first and must keep their real bytes.
+        stub.unlink(missing_ok=True)
         stub.write_text(body, encoding="utf-8")
         stub.chmod(0o700)
 
@@ -649,6 +656,12 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     step("validate_add")
     check_identity(data, selection, ctx)
     targets = exact_targets(data, clients)
+    for target in targets:
+        if target["target"] in ("grok", "kimi", "qoder"):
+            activation = target["output"]["result"]["activation"]
+            require(activation.get("activation") == "active"
+                    and activation.get("verification") == "installation_verified",
+                    "%s activation was not verified against its client registry" % target["target"])
     plans = [target.get("output", {}).get("result", {}).get("plan", {}) for target in targets]
     physical_ids = {plan.get("physical_artifact_id") for plan in plans}
     require(len(physical_ids) == 1 and all(isinstance(item, str) and bool(item.strip()) for item in physical_ids),
