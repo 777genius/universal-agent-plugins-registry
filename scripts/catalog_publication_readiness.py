@@ -44,9 +44,9 @@ CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha
                   "run_id", "run_attempt", "directory_origin")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-CLI = {"version": "0.1.88", "tag": "agentplugins-v0.1.88",
-       "commit": "24a69f403b88bbdaf93ae1f5e755a86a6b112b5d",
-       "binary_digest": "sha256:c4a315480a95b1825225ac1e001f2ee1af8c1e44133e5b5d5e11b8341d7407d6",
+CLI = {"version": "0.1.89", "tag": "agentplugins-v0.1.89",
+       "commit": "36b2dd824d56523613b0c773ff89eb5107934584",
+       "binary_digest": "sha256:41bb941b8cd583588759748ad77d01f0a3ad015a779231ed1dd5e0c7f40a6134",
        "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
