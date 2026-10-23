@@ -45,7 +45,8 @@ function diversifiedDiscovery(plugins: RegistryPlugin[]): RegistryPlugin[] {
   const ranked: RegistryPlugin[] = []
   for (let index = 0; ranked.length < plugins.length; index += 1) {
     for (const [, group] of repositories) {
-      if (group[index]) ranked.push(group[index])
+      const plugin = group[index]
+      if (plugin) ranked.push(plugin)
     }
   }
   return ranked

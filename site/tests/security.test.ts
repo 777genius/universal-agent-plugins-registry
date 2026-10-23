@@ -95,7 +95,8 @@ describe('signed public Security Index', () => {
   it('rejects tampering, stale feeds, and inconsistent projected counts', async () => {
     const data = fixture()
     const tampered = structuredClone(data.payloads)
-    tampered.snapshot[tampered.snapshot.length - 2] ^= 1
+    const index = tampered.snapshot.length - 2
+    tampered.snapshot[index] = tampered.snapshot[index]! ^ 1
     await assert.rejects(verifySecurity(tampered.pointer, tampered.snapshot, tampered.envelope, data.trust, now), /canonical|digest|JSON/)
     await assert.rejects(verifySecurity(data.payloads.pointer, data.payloads.snapshot, data.payloads.envelope, data.trust, new Date('2026-10-05T00:00:00Z')), /stale/)
 
