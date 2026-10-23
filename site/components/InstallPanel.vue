@@ -29,9 +29,9 @@ const targetOptions = computed(() => clients.map(client => ({
     return 'No active release supports this client'
   })(),
 })))
-const commands = computed(() => current.value && targets.value.length && (autoDetect.value || hasCompleteSource.value) ? pluginCommands(props.plugin, autoDetect.value ? undefined : targets.value) : undefined)
-const resolution = computed(() => resolveDistribution(props.plugin, targets.value))
 const retired = computed(() => isRetiredPlugin(props.plugin))
+const commands = computed(() => retired.value ? undefined : current.value && targets.value.length && (autoDetect.value || hasCompleteSource.value) ? pluginCommands(props.plugin, autoDetect.value ? undefined : targets.value) : undefined)
+const resolution = computed(() => resolveDistribution(props.plugin, targets.value))
 const removeCommand = computed(() => {
   if (!retired.value || !current.value) return undefined
   // Retired products list no eligible targets, so scoped removal falls back to auto-detection.
