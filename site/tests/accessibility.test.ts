@@ -143,7 +143,7 @@ describe('focused catalog accessibility contract', () => {
     const detail = source('../pages/plugins/[slug].vue')
     assert.match(card, /selectedDistribution\.components/)
     assert.match(card, /githubSourceUrl\(plugin, selectedDistribution\)/)
-    assert.match(card, /authenticationLabel\(resolution\.value\.distribution, targets\.value, props\.plugin\.authentication\)/)
+    assert.match(card, /authenticationIndicator\(selectedDistribution\.value, targets\.value, autoDetect\.value\)/)
     assert.doesNotMatch(card, /plugin\.(?:version|components|evidence|package_evidence)/)
     for (const field of ['version', 'components', 'source', 'package_evidence', 'evidence']) {
       assert.match(detail, new RegExp(`installCandidate\\.${field}`))
