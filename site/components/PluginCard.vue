@@ -4,7 +4,7 @@
 -->
 <script setup lang="ts">
 import type { RegistryPlugin } from '~/types/registry'
-import { authenticationLabel, deliveryLabel, expectedDistribution, githubSourceUrl, resolveDistribution } from '~/utils/registry'
+import { authenticationLabel, deliveryLabel, expectedDistribution, githubSourceUrl, resolveDistribution, vendorInstaller } from '~/utils/registry'
 import { pluginCommands } from '~/utils/commands'
 
 const props = defineProps<{ plugin: RegistryPlugin }>()
@@ -18,6 +18,8 @@ const autoDetect = ref(true)
 const installExpanded = ref(false)
 const installPanelId = `plugin-install-${props.plugin.install_source.replace(/[^a-z0-9_-]+/gi, '-')}`
 const resolution = computed(() => resolveDistribution(props.plugin, targets.value))
+const installerOverride = computed(() => vendorInstaller(props.plugin))
+const installerAvailable = computed(() => Boolean(installerOverride.value && current.value))
 const selectedDistribution = computed(() => isDiscovered.value || current.value ? resolution.value.distribution : undefined)
 const canInstall = computed(() => isDiscovered.value
   ? props.plugin.installable && (autoDetect.value || Boolean(selectedDistribution.value))
@@ -79,7 +81,7 @@ function updateAutoDetect(value: boolean) {
 
 <template>
   <article class="plugin-card" :class="{ 'plugin-card--expanded': installExpanded }">
-    <span v-if="!isDiscovered" class="plugin-card__ribbon" :class="{ 'plugin-card__ribbon--muted': !canInstall }">{{ canInstall ? 'Reviewed plugin' : expired ? 'Temporarily paused' : !published ? 'Preview only' : 'Not available' }}</span>
+    <span v-if="!isDiscovered" class="plugin-card__ribbon" :class="{ 'plugin-card__ribbon--muted': !canInstall && !installerAvailable }">{{ canInstall || installerAvailable ? 'Reviewed plugin' : expired ? 'Temporarily paused' : !published ? 'Preview only' : 'Not available' }}</span>
     <div class="plugin-card__identity" :class="{ 'plugin-card__identity--no-icon': !iconURL, 'plugin-card__identity--with-ribbon': !isDiscovered }">
       <span v-if="iconURL" class="plugin-card__icon"><img :src="iconURL" alt="" width="32" height="32" loading="lazy" /></span>
       <div class="plugin-card__identity-copy">
@@ -108,7 +110,8 @@ function updateAutoDetect(value: boolean) {
       >
         Install
       </button>
-      <span v-else class="plugin-card__unavailable">{{ isDiscovered ? 'Unavailable at its indexed source; no install command is generated.' : expired ? 'Commands disabled because the Directory is temporarily stale.' : !published ? 'Commands disabled in preview.' : resolution.unavailable_reason }}</span>
+      <span v-else class="plugin-card__unavailable">{{ isDiscovered ? 'Unavailable at its indexed source; no install command is generated.' : expired ? 'Commands disabled because the Directory is temporarily stale.' : !published ? 'Commands disabled in preview.' : installerOverride ? 'Installs with its own installer; no universal CLI command is generated.' : resolution.unavailable_reason }}</span>
+      <a v-if="installerOverride && !canInstall && !isDiscovered" class="plugin-card__vendor-install" :href="installerOverride.url" target="_blank" rel="noreferrer">{{ installerOverride.label }} ↗</a>
       <Transition name="plugin-install">
         <div v-if="installExpanded && canInstall" :id="installPanelId" class="plugin-card__install-panel">
           <p v-if="!autoDetect && selectedDistribution" class="plugin-card__author">By {{ selectedDistribution.publisher }} · <a :href="isDiscovered ? provenanceURL : githubSourceUrl(plugin, selectedDistribution)" target="_blank" rel="noreferrer">View source <span class="sr-only">for {{ plugin.name }}</span></a></p>

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "product_count": 29,
+  "product_count": 30,
   "products": [
     {
       "id": "agent-code-navigator",
@@ -21,260 +21,18 @@
       "fallback_order": [
         "777genius/agent-code-navigator"
       ],
-      "target_resolutions": [
-        {
-          "targets": [
-            {
-              "client": "claude",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "cline",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "codex",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "copilot",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "cursor",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "gemini",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "grok",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "kimi",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "kiro",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "opencode",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "qoder",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "vscode",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "windsurf",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        },
-        {
-          "targets": [
-            {
-              "client": "codex",
-              "authentication": "not_required"
-            },
-            {
-              "client": "cursor",
-              "authentication": "not_required"
-            },
-            {
-              "client": "copilot",
-              "authentication": "not_required"
-            },
-            {
-              "client": "vscode",
-              "authentication": "not_required"
-            },
-            {
-              "client": "kiro",
-              "authentication": "not_required"
-            },
-            {
-              "client": "claude",
-              "authentication": "not_required"
-            },
-            {
-              "client": "gemini",
-              "authentication": "not_required"
-            },
-            {
-              "client": "opencode",
-              "authentication": "not_required"
-            },
-            {
-              "client": "cline",
-              "authentication": "not_required"
-            },
-            {
-              "client": "windsurf",
-              "authentication": "not_required"
-            },
-            {
-              "client": "grok",
-              "authentication": "not_required"
-            },
-            {
-              "client": "kimi",
-              "authentication": "not_required"
-            },
-            {
-              "client": "qoder",
-              "authentication": "not_required"
-            }
-          ],
-          "distribution_id": "777genius/agent-code-navigator",
-          "release_sequence": 1
-        }
-      ],
+      "target_resolutions": [],
       "distributions": [
         {
           "id": "777genius/agent-code-navigator",
           "kind": "community",
-          "status": "active",
+          "status": "suspended",
           "release_sequence": 1,
           "package_version": "0.1.0",
           "components": [
             "skills"
           ],
-          "eligible_targets": [
-            {
-              "client": "codex",
-              "authentication": "not_required"
-            },
-            {
-              "client": "cursor",
-              "authentication": "not_required"
-            },
-            {
-              "client": "copilot",
-              "authentication": "not_required"
-            },
-            {
-              "client": "vscode",
-              "authentication": "not_required"
-            },
-            {
-              "client": "kiro",
-              "authentication": "not_required"
-            },
-            {
-              "client": "claude",
-              "authentication": "not_required"
-            },
-            {
-              "client": "gemini",
-              "authentication": "not_required"
-            },
-            {
-              "client": "opencode",
-              "authentication": "not_required"
-            },
-            {
-              "client": "cline",
-              "authentication": "not_required"
-            },
-            {
-              "client": "windsurf",
-              "authentication": "not_required"
-            },
-            {
-              "client": "grok",
-              "authentication": "not_required"
-            },
-            {
-              "client": "kimi",
-              "authentication": "not_required"
-            },
-            {
-              "client": "qoder",
-              "authentication": "not_required"
-            }
-          ],
+          "eligible_targets": [],
           "current_evidence": [],
           "source": {
             "repository": "777genius/universal-agent-plugins",
@@ -284,6 +42,48 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:0087169b1eee5fbdf0d000f4f8b328a89aec5c11bc5d2c129f92c5cd62d33c30",
           "manifest_digest": "sha256:675fb48dff9431f75e2986211039b3bfb04860a84d6a5bd157b9658514a2394e"
+        }
+      ]
+    },
+    {
+      "id": "agent-notifications",
+      "display_name": "Agent Notifications",
+      "description": "Desktop notifications for coding agents. Get a native alert the moment a task finishes, needs your input, or fails.",
+      "aliases": [
+        "agent-notifications"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "mcp",
+        "notifications"
+      ],
+      "default_distribution": "777genius/agent-notifications",
+      "fallback_order": [
+        "777genius/agent-notifications"
+      ],
+      "target_resolutions": [],
+      "distributions": [
+        {
+          "id": "777genius/agent-notifications",
+          "kind": "community",
+          "status": "suspended",
+          "release_sequence": 1,
+          "package_version": "1.0.0",
+          "components": [
+            "mcp",
+            "skills"
+          ],
+          "eligible_targets": [],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/agent-notifications"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:cb4d2caf389ba700191f599e0479afd4d04082d88456d950c368265599243fc0",
+          "manifest_digest": "sha256:c4c8d6a9f35575e5ff52f18c9a08f42fa5da3391a62660207f5b32089b082d83"
         }
       ]
     },

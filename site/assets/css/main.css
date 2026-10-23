@@ -282,6 +282,8 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .plugin-card__install-toggle[aria-expanded="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, #07140f 12%, transparent), 0 8px 20px color-mix(in srgb, var(--green) 18%, transparent); }
 :root[data-theme="light"] .plugin-card__install-toggle { color: #fff; }
 .plugin-card__unavailable { color: var(--subtle); font-size: .68rem; line-height: 1.45; }
+.plugin-card__vendor-install { width: 100%; min-height: 38px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; border: 1px dashed color-mix(in srgb, var(--primary) 45%, var(--line)); border-radius: 10px; color: var(--primary-bright); background: var(--surface-solid); font-family: inherit; font-size: .74rem; font-weight: 750; text-align: center; text-decoration: none; transition: transform .17s ease, border-color .17s ease, box-shadow .17s ease; }
+.plugin-card__vendor-install:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: 0 10px 22px color-mix(in srgb, var(--primary) 16%, transparent); }
 .plugin-card__install-panel { width: 100%; display: grid; gap: 9px; padding-top: 2px; }
 .plugin-card__install-panel .plugin-card__author { margin: 0; }
 .plugin-install-enter-active, .plugin-install-leave-active { transition: opacity .18s ease, transform .18s ease; }

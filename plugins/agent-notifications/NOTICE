@@ -1,0 +1,16 @@
+Agent Notifications curated package
+
+This Agent Plugins package is assembled and published by 777genius in this
+registry. Its component files mirror the portable package published by the
+product repository at a pinned revision.
+
+Product repository: 777genius/agent-notifications
+Pinned revision: 61a8775d996635e677073d3a643627171cfd4b94
+Product license: GPL-3.0-or-later
+Server evidence: portable-package/mcp.json (SHA-256 b298ba055a9032f554edc15e430a0b1b750de44bf9445fa367ac0485d0d16571)
+Skill evidence: portable-package/skills/agent-notifications/SKILL.md (SHA-256 73bd701ff8edfba60ca7276a2019dc9856b6c8463b7f741fb6bb34b2a6b319db)
+
+No binary bytes are copied into this package. The platform notifier executable
+is delivered only by the vendor release installer at
+https://agent-notifications.com/#install, which is the sole supported
+installation path for this product.
