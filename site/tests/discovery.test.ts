@@ -166,7 +166,8 @@ describe('signed public Discovery Index', () => {
   it('rejects tampered projections, expired snapshots, and sequence equivocation', async () => {
     const data = fixture()
     const tampered = structuredClone(data.bytes)
-    tampered.search[tampered.search.length - 2] ^= 1
+    const index = tampered.search.length - 2
+    tampered.search[index] = tampered.search[index]! ^ 1
     await assert.rejects(verifyDiscovery(tampered, data.trust, {}, now), /canonical|digest|JSON/)
     await assert.rejects(verifyDiscovery(data.bytes, data.trust, {}, new Date('2026-08-31T00:00:00Z')), /stale/)
 

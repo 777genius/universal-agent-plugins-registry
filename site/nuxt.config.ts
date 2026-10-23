@@ -24,18 +24,13 @@ const repositoryUrl = process.env.NUXT_PUBLIC_REPOSITORY_URL
   ?? 'https://github.com/777genius/universal-agent-plugins-registry'
 const discoveryKeyID = process.env.NUXT_PUBLIC_DISCOVERY_KEY_ID ?? 'uap-discovery-2026-01'
 const discoveryPublicKey = process.env.NUXT_PUBLIC_DISCOVERY_PUBLIC_KEY ?? 'IxWvGuscXR9crlCrGyBQZNqroYNVPbBA1B3pnjSffhc='
-// Production HTML is finalized after prerendering so script-src contains the
-// hashes of the exact Nuxt-generated inline scripts and style elements for
-// each route. The finalizer also adds byte-exact hashes for Reka UI's two
-// reviewed viewport rules. Runtime popover positioning needs style attributes;
-// the scoped exception does not allow inline scripts or other style elements.
-const contentSecurityPolicy = "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; upgrade-insecure-requests"
-const productionMeta = process.env.NODE_ENV === 'production'
-  ? [{ 'http-equiv': 'Content-Security-Policy', content: contentSecurityPolicy }]
-  : []
+// server/plugins/csp.ts emits the production policy outside reactive app.head.
+// The static finalizer adds exact inline hashes before Pages publication.
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-10',
+  // Keep the established root-level app structure when upgrading Nuxt.
+  srcDir: '.',
   ssr: true,
   devtools: { enabled: false },
   modules: ['@nuxt/eslint'],
@@ -46,7 +41,6 @@ export default defineNuxtConfig({
       htmlAttrs: { lang: 'en' },
       titleTemplate: '%s · Universal Agent Plugins',
       meta: [
-        ...productionMeta,
         { name: 'referrer', content: 'strict-origin-when-cross-origin' },
       ],
       link: [

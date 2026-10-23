@@ -122,10 +122,10 @@ describe('focused catalog accessibility contract', () => {
   })
 
   it('renders contributor copy as text under a restrictive static CSP', () => {
-    const config = source('../nuxt.config.ts')
+    const policy = source('../server/plugins/csp.ts')
     const components = [source('../components/PluginCard.vue'), source('../pages/plugins/[slug].vue')].join('\n')
-    assert.match(config, /contentSecurityPolicy = "default-src 'self'/)
-    assert.match(config, /object-src 'none'/)
+    assert.match(policy, /contentSecurityPolicy = "default-src 'self'/)
+    assert.match(policy, /object-src 'none'/)
     assert.doesNotMatch(components, /v-html/)
   })
 
@@ -143,7 +143,7 @@ describe('focused catalog accessibility contract', () => {
     const detail = source('../pages/plugins/[slug].vue')
     assert.match(card, /selectedDistribution\.components/)
     assert.match(card, /githubSourceUrl\(plugin, selectedDistribution\)/)
-    assert.match(card, /authenticationLabel\(resolution\.value\.distribution, targets\.value, props\.plugin\.authentication\)/)
+    assert.match(card, /authenticationIndicator\(selectedDistribution\.value, targets\.value, autoDetect\.value\)/)
     assert.doesNotMatch(card, /plugin\.(?:version|components|evidence|package_evidence)/)
     for (const field of ['version', 'components', 'source', 'package_evidence', 'evidence']) {
       assert.match(detail, new RegExp(`installCandidate\\.${field}`))
