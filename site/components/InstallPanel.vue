@@ -32,6 +32,12 @@ const targetOptions = computed(() => clients.map(client => ({
 const commands = computed(() => current.value && targets.value.length && (autoDetect.value || hasCompleteSource.value) ? pluginCommands(props.plugin, autoDetect.value ? undefined : targets.value) : undefined)
 const resolution = computed(() => resolveDistribution(props.plugin, targets.value))
 const retired = computed(() => isRetiredPlugin(props.plugin))
+const removeCommand = computed(() => {
+  if (!retired.value || !current.value) return undefined
+  // Retired products list no eligible targets, so scoped removal falls back to auto-detection.
+  const explicit = !autoDetect.value && targets.value.length ? targets.value : undefined
+  return pluginCommands(props.plugin, explicit).remove
+})
 const expectedSource = computed(() => current.value ? resolution.value.distribution : undefined)
 const hasCompleteSource = computed(() => Boolean(expectedSource.value))
 const selectedTargets = computed(() => expectedSource.value?.targets.filter(target => targets.value.includes(target.client)) ?? [])
@@ -68,6 +74,9 @@ watch(availableClients, (next) => {
       <CommandSnippet label="Update" kind="update" :command="commands.update" />
       <CommandSnippet label="Repair" kind="repair" :command="commands.repair" />
       <CommandSnippet label="Remove" kind="remove" :command="commands.remove" />
+    </div>
+    <div v-if="!commands && removeCommand" class="command-stack">
+      <CommandSnippet label="Remove" kind="remove" :command="removeCommand" />
     </div>
     <p v-if="expired" class="install-panel__notice" role="status"><strong>Commands unavailable: stale Directory.</strong> This signed snapshot has expired. Browse its history, then return after a fresh snapshot is published.</p>
     <p v-else-if="!published" class="install-panel__notice" role="status"><strong>Commands unavailable in review preview.</strong> Unresolved data is for review only; production commands require a published signed Directory snapshot.</p>
