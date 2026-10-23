@@ -236,7 +236,7 @@ test('keeps bridge alternatives on one product page', async ({ page }) => {
   expect(failures).toEqual([])
 })
 
-test('shows authentication on collapsed cards and explains the resolved target on touch and keyboard', async ({ page }) => {
+test('shows authentication on collapsed cards and explains the resolved target on touch and keyboard', async ({ page, isMobile }) => {
   const failures = observeFailures(page)
   await page.goto('plugins')
   await expect(page.getByText(/2 community packages found on GitHub/)).toBeVisible()
@@ -246,7 +246,8 @@ test('shows authentication on collapsed cards and explains the resolved target o
   const portable = page.locator('.plugin-card').filter({ hasText: 'portable-demo' })
   const indicator = portable.getByRole('button', { name: 'Authentication requirements unknown', exact: true })
   await expect(indicator).toBeVisible()
-  await indicator.click()
+  if (isMobile) await indicator.tap()
+  else await indicator.click()
   await expect(page.locator('.authentication-indicator__content')).toContainText('Select agents in Install')
   await expect(page.locator('.authentication-indicator__content')).toBeInViewport({ ratio: 1 })
   await page.keyboard.press('Escape')
