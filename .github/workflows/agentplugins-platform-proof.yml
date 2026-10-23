@@ -92,7 +92,7 @@ jobs:
           ref: refs/tags/${{ inputs.uap_tag }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.23.2"
       - name: Validate exact release inputs and checked-out UAP tag
@@ -123,12 +123,12 @@ jobs:
           git merge-base --is-ancestor HEAD refs/remotes/public/main
           [[ "$EXPECTED_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]]
           [[ "$EXPECTED_SHASUM" =~ ^[0-9a-f]{40}$ ]]
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ inputs.package_source == 'staged_artifact' }}
         with:
           name: ${{ inputs.tarball_artifact }}
           path: ${{ runner.temp }}/npm-tarball
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ inputs.package_source == 'staged_artifact' }}
         with:
           name: ${{ inputs.release_artifact }}
@@ -248,7 +248,7 @@ jobs:
             throw new Error("six-platform evidence did not prove installed npm shim execution");
           }
           NODE
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agentplugins-${{ inputs.version }}-${{ inputs.package_source || 'public-npm' }}-${{ matrix.target }}-proof
           path: ${{ runner.temp }}/proof-${{ matrix.target }}.json
