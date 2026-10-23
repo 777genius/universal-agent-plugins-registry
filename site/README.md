@@ -1,8 +1,8 @@
 # Universal Agent Plugins site
 
-Static Nuxt 3 frontend for the Universal Agent Plugins Directory.
+Static Nuxt 4 frontend for the Universal Agent Plugins Directory.
 
-Requirements: Node.js 22 or newer. The typed build adapter accepts the current
+Requirements: Node.js 22.13 or newer. The typed build adapter accepts the current
 `../registry/index.json`, a deterministic review preview, or an exact published
 signed snapshot without changing Vue components.
 
@@ -29,7 +29,9 @@ deployments pass `UAP_DIRECTORY_PREVIEW_PATH`; the rendered site then carries a
 prominent preview label and never presents unresolved data as production.
 
 Production generation and build finalize every prerendered HTML page with CSP
-SHA-256 hashes for its exact inline scripts and style blocks. The policy is
+SHA-256 hashes for its exact inline scripts and style blocks. The server-only
+`server/plugins/csp.ts` emits the policy so client head hydration cannot reset
+the finalized hashes. The policy is
 delivered in HTML because GitHub Pages cannot configure response headers;
 directives unsupported in CSP meta elements are intentionally omitted.
 `check:generated` verifies the final policy and fails if inline content is
@@ -44,3 +46,11 @@ does not claim screen-reader or other assistive-technology E2E.
 
 The site emits no analytics or tracking requests. See `NOTICE.md` and the icon
 README files under `public/` for copied/adapted code and mark attribution.
+
+Security dependency overrides live in `package.json` alongside the existing
+patched dependencies. pnpm 10 takes `pnpm.overrides` there in preference to the
+workspace override map; keep one authoritative map so security pins take effect.
+Nuxt 4.6.2 replaces the unsupported Nuxt 3 security baseline while `srcDir: '.'`
+preserves this site's existing directory layout. Vue Router 5 matches Nuxt's
+dependency, and ESLint 10 matches the current Nuxt ESLint module's peer range.
+The dependency audit remains enabled without exceptions.

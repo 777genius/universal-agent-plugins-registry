@@ -122,10 +122,10 @@ describe('focused catalog accessibility contract', () => {
   })
 
   it('renders contributor copy as text under a restrictive static CSP', () => {
-    const config = source('../nuxt.config.ts')
+    const policy = source('../server/plugins/csp.ts')
     const components = [source('../components/PluginCard.vue'), source('../pages/plugins/[slug].vue')].join('\n')
-    assert.match(config, /contentSecurityPolicy = "default-src 'self'/)
-    assert.match(config, /object-src 'none'/)
+    assert.match(policy, /contentSecurityPolicy = "default-src 'self'/)
+    assert.match(policy, /object-src 'none'/)
     assert.doesNotMatch(components, /v-html/)
   })
 

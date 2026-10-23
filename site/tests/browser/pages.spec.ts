@@ -196,6 +196,9 @@ test('keeps each plugin selector compact above a two-line command', async ({ pag
 test('operates combobox and select catalog filters entirely by keyboard', async ({ page }) => {
   const failures = observeFailures(page)
   await page.goto('plugins')
+  const policy = page.locator('meta[http-equiv="Content-Security-Policy"]')
+  const finalizedPolicy = await policy.getAttribute('content')
+  expect(finalizedPolicy).toContain("'sha256-0sLsI2a+NIcumVvBF9zD/ArGqlZR2xfnxsALPmK7nj8='")
 
   const category = page.getByRole('combobox', { name: 'Filter by category' })
   await expect(category).toHaveAttribute('data-hydrated', 'true')
@@ -220,6 +223,7 @@ test('operates combobox and select catalog filters entirely by keyboard', async 
   await source.press('Space')
   await page.getByRole('option', { name: /^Community bridges/ }).press('Enter')
   await expect(source).toContainText('Community bridges')
+  await expect(policy).toHaveAttribute('content', finalizedPolicy!)
 
   const cards = page.locator('.plugin-card')
   await expect(cards).toHaveCount(1)
