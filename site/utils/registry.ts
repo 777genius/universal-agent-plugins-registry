@@ -616,6 +616,24 @@ export function defaultDistribution(plugin: RegistryPlugin): DistributionView {
   return distribution
 }
 
+export function isRetiredPlugin(plugin: RegistryPlugin): boolean {
+  return plugin.distributions.every(distribution =>
+    distribution.releases.every(release => release.release_status === 'revoked'))
+}
+
+export interface VendorInstaller {
+  label: string
+  url: string
+}
+
+const vendorInstallers: Record<string, VendorInstaller> = {
+  'agent-notifications': { label: 'Official installer', url: 'https://agent-notifications.com/#install' },
+}
+
+export function vendorInstaller(plugin: RegistryPlugin): VendorInstaller | undefined {
+  return vendorInstallers[plugin.name]
+}
+
 function eligibleRelease(distribution: DistributionView, targets: ReadonlySet<ClientID>): { release?: DistributionReleaseView, reason?: string } {
   if (distribution.status !== 'active') return { reason: `distribution is ${distribution.status}` }
   const reasons: string[] = []

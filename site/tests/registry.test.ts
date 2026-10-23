@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { authenticationLabel, CLIENTS, deliveryLabel, directoryIsExpired, expectedDistribution, githubSourceUrl, isPinnedExternalSource, mirroredIconPath, parseDirectoryData, parseRegistryIndex, resolveDistribution, targetAuthenticationLabel, validationLabel } from '../utils/registry.ts'
+import { authenticationLabel, CLIENTS, defaultDistribution, deliveryLabel, directoryIsExpired, expectedDistribution, githubSourceUrl, isPinnedExternalSource, isRetiredPlugin, mirroredIconPath, parseDirectoryData, parseRegistryIndex, resolveDistribution, targetAuthenticationLabel, validationLabel, vendorInstaller } from '../utils/registry.ts'
+import { catalogVisiblePlugins } from '../utils/filter.ts'
 import { pluginCommands } from '../utils/commands.ts'
 import type { ClientID } from '../types/registry.ts'
 
@@ -430,13 +431,25 @@ describe('registry parsing', () => {
     const directory = parseDirectoryData(raw, 'published_snapshot')
     const navigator = directory.plugins.find(plugin => plugin.name === 'agent-code-navigator')!
     const atlassian = directory.plugins.find(plugin => plugin.name === 'atlassian')!
-    const navigatorRelease = expectedDistribution(navigator, ['codex', 'cursor'])!
+    const navigatorRelease = defaultDistribution(navigator)
     const atlassianRelease = expectedDistribution(atlassian, ['codex', 'cursor'])!
 
     assert.deepEqual(navigatorRelease.targets.filter(target => ['codex', 'cursor'].includes(target.client)).map(target => target.authentication), ['not_required', 'not_required'])
     assert.deepEqual(atlassianRelease.targets.filter(target => ['codex', 'cursor'].includes(target.client)).map(target => target.authentication), ['required', 'required'])
     assert.equal(authenticationLabel(navigatorRelease, ['codex', 'cursor'], navigator.authentication), 'No account required')
     assert.equal(authenticationLabel(atlassianRelease, ['codex', 'cursor'], atlassian.authentication), 'Authentication required')
+    // The retired navigator keeps its signed data but resolves no installable source and leaves the catalog.
+    assert.equal(isRetiredPlugin(navigator), true)
+    assert.equal(isRetiredPlugin(atlassian), false)
+    assert.equal(expectedDistribution(navigator, ['codex', 'cursor']), undefined)
+    assert.deepEqual(catalogVisiblePlugins(directory.plugins).map(plugin => plugin.name), ['atlassian'])
+  })
+
+  it('offers the vendor installer override for agent-notifications only', () => {
+    const named = (name: string) => ({ name }) as Parameters<typeof vendorInstaller>[0]
+    assert.deepEqual(vendorInstaller(named('agent-notifications')), { label: 'Official installer', url: 'https://agent-notifications.com/#install' })
+    assert.equal(vendorInstaller(named('agent-code-navigator')), undefined)
+    assert.equal(vendorInstaller(named('context7')), undefined)
   })
 
   it('rejects missing or invalid signed target authentication', () => {

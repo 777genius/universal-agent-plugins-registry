@@ -32,6 +32,33 @@
     },
     {
       "schema_version": 1,
+      "id": "agent-notifications",
+      "display_name": "Agent Notifications",
+      "description": "Desktop notifications for coding agents. Get a native alert the moment a task finishes, needs your input, or fails.",
+      "manifest_name": "agent-notifications",
+      "aliases": [
+        "agent-notifications"
+      ],
+      "reserved_aliases": [
+        "agent-notifications"
+      ],
+      "categories": [
+        "agent-plugins",
+        "ai-agents",
+        "mcp",
+        "notifications"
+      ],
+      "minimum_capabilities": {
+        "skills": "optional",
+        "mcp": "required"
+      },
+      "default_distribution": "777genius/agent-notifications",
+      "distributions": [
+        "777genius/agent-notifications"
+      ]
+    },
+    {
+      "schema_version": 1,
       "id": "atlassian",
       "display_name": "Atlassian",
       "description": "Community package for the official Atlassian Rovo MCP plugin for Jira, Confluence, and Compass workflows through Atlassian's hosted remote MCP service.",
@@ -976,7 +1003,7 @@
       "id": "777genius/agent-code-navigator",
       "product_id": "agent-code-navigator",
       "kind": "community",
-      "status": "active",
+      "status": "suspended",
       "packager": "777genius",
       "releases": [
         {
@@ -996,6 +1023,148 @@
             "skills"
           ],
           "published_at": "2026-08-09T22:28:33Z"
+        }
+      ],
+      "release_policies": [
+        {
+          "release_sequence": 1,
+          "status": "revoked",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "777genius/agent-notifications",
+      "product_id": "agent-notifications",
+      "kind": "community",
+      "status": "suspended",
+      "packager": "777genius",
+      "releases": [
+        {
+          "sequence": 1,
+          "package_version": "1.0.0",
+          "manifest_name": "agent-notifications",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/agent-notifications"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:cb4d2caf389ba700191f599e0479afd4d04082d88456d950c368265599243fc0",
+          "manifest_digest": "sha256:c4c8d6a9f35575e5ff52f18c9a08f42fa5da3391a62660207f5b32089b082d83",
+          "components": [
+            "mcp",
+            "skills"
+          ]
         }
       ],
       "release_policies": [

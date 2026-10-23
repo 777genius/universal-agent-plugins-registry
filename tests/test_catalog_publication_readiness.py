@@ -56,7 +56,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 393)
+        self.assertEqual(len(artifact["rows"]), 380)
         self.assertEqual(len(artifact["static_metadata"]), 2)
         self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
@@ -352,11 +352,11 @@ class CatalogContractTests(unittest.TestCase):
             def stop_at_add(binary, argv, env, cwd, *, root, readonly):
                 invocations.append(argv)
                 raise ValueError("fixture stops at the add step")
-            selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
+            selection = gate.selected(self.snapshot, "context7", gate.CORE)
             with patch.object(gate, "command", side_effect=stop_at_add):
                 with self.assertRaisesRegex(ValueError, "fixture stops"):
                     gate.run_lifecycle(args, root / "case", selection, gate.CORE, vars(self.args))
-            self.assertEqual(invocations, [["add", "agent-code-navigator", "--target", "codex,cursor,kiro", "--no-save"]])
+            self.assertEqual(invocations, [["add", "context7", "--target", "codex,cursor,kiro", "--no-save"]])
 
     def test_isolated_environment_seeds_grok_kimi_qoder_roots_and_path_stubs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -495,7 +495,7 @@ class CatalogContractTests(unittest.TestCase):
                                       inspector=None, opencode=tools / "opencode")
             def stop_at_add(binary, argv, env, cwd, *, root, readonly):
                 raise ValueError("fixture stops at the add step")
-            selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
+            selection = gate.selected(self.snapshot, "context7", gate.CORE)
             with patch.object(gate, "command", side_effect=stop_at_add):
                 with self.assertRaisesRegex(ValueError, "fixture stops"):
                     gate.run_lifecycle(args, root / "case", selection, gate.CORE, vars(self.args))
@@ -845,7 +845,7 @@ class CatalogContractTests(unittest.TestCase):
 
         Released c78c79 service.go stores plan.ActivePath as TargetLocator;
         planner.go joins the physical artifact ID and stager.go materializes a
-        managed_package_directory, including for skills-only agent-code-navigator.
+        managed_package_directory, including for skills-only packages.
         """
         tools = parent / "tools"
         tools.mkdir()
@@ -855,9 +855,9 @@ class CatalogContractTests(unittest.TestCase):
                                   copilot=tools / "copilot", npx=tools / "npx", inspector=None,
                                   opencode=tools / "opencode")
         root = parent / "case"
-        selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
+        selection = gate.selected(self.snapshot, "context7", gate.CORE)
         package_revision = {key: selection[key] for key in ("tree_digest", "manifest_digest")}
-        owned = {client: root / "state" / "managed" / client / "agent-code-navigator-fixture" for client in gate.CORE}
+        owned = {client: root / "state" / "managed" / client / "context7-fixture" for client in gate.CORE}
         clients = {client: {"client_id": client, "target_locator": str(path),
                             "affected_surfaces": [client], "package_revision": package_revision}
                    for client, path in owned.items()}
@@ -869,7 +869,7 @@ class CatalogContractTests(unittest.TestCase):
         calls = []
 
         def targets():
-            physical_id = None if mutation == "missing_physical_id" else "agent-code-navigator-fixture"
+            physical_id = None if mutation == "missing_physical_id" else "context7-fixture"
             return {"succeeded": 3, "failed": 0, "targets": [
                 {"target": client, "status": "external_completed", "output": {"result": {
                     "installation_id": "fixture-installation", "no_change": True, "mutated": False,
@@ -955,7 +955,7 @@ class CatalogContractTests(unittest.TestCase):
             args, calls, error = self.run_first_package_fixture(root)
             self.assertIsNone(error)
             self.assertEqual(calls, ["add", "info", "update", "remove", "list", "doctor"])
-            self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:complete")
+            self.assertEqual(args.failure_phase, "lifecycle:context7:complete")
             self.assertEqual(gate.read_json(root / "case/state/state-v2.json")["installations"], [])
             self.assertFalse(any(path.is_file() or path.is_symlink() for path in (root / "case/state/managed").rglob("*")))
 
@@ -965,14 +965,14 @@ class CatalogContractTests(unittest.TestCase):
                 args, calls, error = self.run_first_package_fixture(Path(temporary).resolve(), mutation)
                 self.assertIsInstance(error, ValueError)
                 self.assertEqual(calls, ["add", "info", "update"])
-                self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:snapshot_after_update")
+                self.assertEqual(args.failure_phase, "lifecycle:context7:snapshot_after_update")
 
     def test_file_locator_is_rejected_not_silently_dropped_from_snapshot(self):
         with tempfile.TemporaryDirectory() as temporary:
             args, calls, error = self.run_first_package_fixture(Path(temporary).resolve(), "file_locator")
             self.assertIsInstance(error, gate.EvidenceError)
             self.assertEqual(calls, ["add", "info"])
-            self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:snapshot_before_update")
+            self.assertEqual(args.failure_phase, "lifecycle:context7:snapshot_before_update")
 
     def test_missing_physical_artifact_id_fails_before_identity_hashing(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -980,7 +980,7 @@ class CatalogContractTests(unittest.TestCase):
             self.assertIsInstance(error, ValueError)
             self.assertIn("valid physical artifact", str(error))
             self.assertEqual(calls, ["add"])
-            self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:validate_add")
+            self.assertEqual(args.failure_phase, "lifecycle:context7:validate_add")
 
     def test_doctor_wrong_command_findings_mutation_and_open_operation_fail_precisely(self):
         for mutation, phase in (("wrong_command", "doctor"), ("doctor_findings", "validate_doctor"),
@@ -989,10 +989,10 @@ class CatalogContractTests(unittest.TestCase):
                 args, calls, error = self.run_first_package_fixture(Path(temporary).resolve(), mutation)
                 self.assertIsNotNone(error)
                 self.assertEqual(calls[-1], "doctor")
-                self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:" + phase)
+                self.assertEqual(args.failure_phase, "lifecycle:context7:" + phase)
 
     def test_diagnostic_steps_reject_unbounded_input(self):
-        for selector, step in (("/private/path", "add"), ("agent-code-navigator", "raw log secret")):
+        for selector, step in (("/private/path", "add"), ("context7", "raw log secret")):
             with self.assertRaisesRegex(ValueError, "unknown lifecycle"):
                 gate.lifecycle_step(argparse.Namespace(), selector, step)
 
@@ -1031,7 +1031,7 @@ class CatalogContractTests(unittest.TestCase):
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                self.assertEqual(lifecycle.call_count, 31)
+                self.assertEqual(lifecycle.call_count, 30)
                 default_call = next(call for call in lifecycle.call_args_list
                                     if call.args[2]["selector"] == "github/github")
                 self.assertEqual(default_call.args[1].name, "default-github")

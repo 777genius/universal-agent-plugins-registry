@@ -27,7 +27,9 @@ from run_chrome_five_client_lifecycle import EvidenceError, snapshot_roots, seed
 from run_mcp_e2e import inspector_check
 from repository_identity import active_registry_repository
 
-ALIASES = tuple("agent-code-navigator atlassian chrome-devtools cloudflare cloudflare-bindings "
+# agent-code-navigator left this accepted matrix when its Directory releases
+# were retired (suspended and revoked): the short name no longer installs.
+ALIASES = tuple("atlassian chrome-devtools cloudflare cloudflare-bindings "
                 "cloudflare-docs cloudflare-observability cloudflare-radar context7 docker-hub "
                 "figma firebase firecrawl github gitlab greptile heroku hubspot-crm hubspot-developer "
                 "linear neon notion playwright sentry statsig stripe supabase tinyfish vercel".split())

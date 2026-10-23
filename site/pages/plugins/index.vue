@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { catalogVisiblePlugins } from '~/utils/filter'
+
 const registry = useRegistry()
-const reviewedCount = computed(() => registry.plugins.filter(plugin => plugin.trust_state !== 'conformant_unreviewed').length)
-const discoveryCount = computed(() => registry.plugins.length - reviewedCount.value)
+const visiblePlugins = computed(() => catalogVisiblePlugins(registry.plugins))
+const reviewedCount = computed(() => visiblePlugins.value.filter(plugin => plugin.trust_state !== 'conformant_unreviewed').length)
+const discoveryCount = computed(() => visiblePlugins.value.length - reviewedCount.value)
 const description = 'Browse Agent Plugins 1.0 by capability, agent support, component, and source.'
 useSeoMeta({ title: 'Plugin directory', description, ogTitle: 'Plugin directory · Universal Agent Plugins', ogDescription: description })
 useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}/plugins` }] })
@@ -15,6 +18,6 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
       <p>Browse by capability, agent support, and validation status. Community packages stay linked to reviewable GitHub source.</p>
       <p><NuxtLink to="/discovery-scan">Browse the saved scan preview</NuxtLink> · Incomplete scan, package validation evidence only.</p>
     </div>
-    <PluginCatalog :plugins="registry.plugins" />
+    <PluginCatalog :plugins="visiblePlugins" />
   </div>
 </template>

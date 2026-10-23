@@ -24,6 +24,7 @@ SPEC.loader.exec_module(registry)
 
 CANONICAL_PRODUCT_IDS = {
     "agent-code-navigator",
+    "agent-notifications",
     "atlassian",
     "chrome-devtools",
     "cloudflare",
@@ -590,7 +591,13 @@ class DirectoryDomainTests(unittest.TestCase):
             "id": "zz-community/zz-community-product",
             "product_id": "zz-community-product",
             "packager": "zz-community",
+            # Live entries get retired over time; the fixture needs its own
+            # eligibility baseline. Tests that need revoked/suspended state
+            # set it explicitly.
+            "status": "active",
         })
+        for policy in distribution["release_policies"]:
+            policy["status"] = "active"
         distribution["releases"][0].update({
             "manifest_name": "zz-community-product",
             "package_source": {
@@ -1080,6 +1087,8 @@ class DirectoryDomainTests(unittest.TestCase):
             if distribution["id"] not in expected_distribution_ids:
                 continue
             suspended_live_npx = {
+                "777genius/agent-code-navigator",
+                "777genius/agent-notifications",
                 "777genius/chrome-devtools",
             }
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
@@ -1142,6 +1151,8 @@ class DirectoryDomainTests(unittest.TestCase):
                         else registry.LOCKED_NPM_RUNTIME_MINIMUM_INSTALLER_VERSION
                     )
                 if distribution["id"] == "777genius/context7" and policy["release_sequence"] >= 2:
+                    expected_minimum = "0.1.26"
+                if distribution["id"] in {"777genius/agent-code-navigator", "777genius/agent-notifications"}:
                     expected_minimum = "0.1.26"
                 if distribution["id"] == "upstash/context7":
                     expected_minimum = "0.1.87"
@@ -1250,6 +1261,40 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertTrue(all(policy["status"] in {"revoked", "superseded"} for policy in bridge["release_policies"][:-1]))
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "chrome-devtools")
 
+    def test_agent_code_navigator_is_retired_and_agent_notifications_is_visible_not_installable(self) -> None:
+        source = self.source()
+        distributions = {item["id"]: item for item in source["distributions"]}
+        navigator = distributions["777genius/agent-code-navigator"]
+        self.assertEqual(navigator["status"], "suspended")
+        self.assertEqual({policy["status"] for policy in navigator["release_policies"]}, {"revoked"})
+        notifications = distributions["777genius/agent-notifications"]
+        self.assertEqual(notifications["product_id"], "agent-notifications")
+        self.assertEqual(notifications["status"], "suspended")
+        self.assertEqual([policy["status"] for policy in notifications["release_policies"]], ["active"])
+        self.assertEqual(notifications["release_policies"][0]["current_evidence"], [])
+        registry.validate_release_package(
+            registry.ROOT / "plugins" / "agent-notifications",
+            notifications["releases"][0],
+            label="777genius/agent-notifications@1",
+            allow_unresolved_revision=True,
+        )
+        for selector in ("agent-code-navigator", "777genius/agent-code-navigator", "agent-notifications", "777genius/agent-notifications"):
+            with self.subTest(selector=selector):
+                with self.assertRaises(registry.RegistryError):
+                    registry.resolve_directory(source, selector, ["codex"])
+                self.assertEqual(registry.eligible_product_targets(source, selector), [])
+        preview = registry.directory_preview(source)
+        card = next(item for item in preview["products"] if item["id"] == "agent-notifications")
+        self.assertEqual(card["display_name"], "Agent Notifications")
+        self.assertEqual([item["id"] for item in card["distributions"]], ["777genius/agent-notifications"])
+        self.assertEqual(card["distributions"][0]["status"], "suspended")
+        self.assertEqual(card["distributions"][0]["eligible_targets"], [])
+        for product_id in ("agent-code-navigator", "agent-notifications"):
+            readme = (registry.ROOT / "plugins" / product_id / "README.md").read_text()
+            block = readme.split("<!-- agentplugins-install:start -->", 1)[1].split("<!-- agentplugins-install:end -->", 1)[0]
+            self.assertIn("Installation is currently unavailable", block)
+            self.assertNotIn("npx universal-agent-plugins add", block)
+
     def test_context7_locked_npm_runtime_is_complete(self) -> None:
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "context7")
         source = self.source()
@@ -1287,6 +1332,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_every_reviewed_product_resolves_the_complete_cli_client_set(self) -> None:
         source = self.source()
         clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"]
+        not_installable = {"agent-code-navigator", "agent-notifications"}
         expected_delivery = {
             "codex": "managed", "cursor": "managed", "copilot": "managed", "vscode": "prepared",
             "kiro": "managed", "claude": "managed", "gemini": "managed", "opencode": "managed",
@@ -1294,6 +1340,10 @@ class DirectoryDomainTests(unittest.TestCase):
         }
         for product in source["products"]:
             with self.subTest(product=product["id"]):
+                if product["id"] in not_installable:
+                    with self.assertRaises(registry.RegistryError):
+                        registry.resolve_directory(source, product["id"], clients)
+                    continue
                 resolved = registry.resolve_directory(source, product["id"], clients)
                 distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])
                 policy = next(item for item in distribution["release_policies"] if item["release_sequence"] == resolved["release_sequence"])
@@ -2237,6 +2287,7 @@ class DirectoryDomainTests(unittest.TestCase):
         source = self.source()
         expected_not_required = {
             "agent-code-navigator",
+            "agent-notifications",
             "chrome-devtools",
             "cloudflare-docs",
             "context7",
