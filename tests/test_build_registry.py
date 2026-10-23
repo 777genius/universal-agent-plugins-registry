@@ -591,7 +591,13 @@ class DirectoryDomainTests(unittest.TestCase):
             "id": "zz-community/zz-community-product",
             "product_id": "zz-community-product",
             "packager": "zz-community",
+            # Live entries get retired over time; the fixture needs its own
+            # eligibility baseline. Tests that need revoked/suspended state
+            # set it explicitly.
+            "status": "active",
         })
+        for policy in distribution["release_policies"]:
+            policy["status"] = "active"
         distribution["releases"][0].update({
             "manifest_name": "zz-community-product",
             "package_source": {
