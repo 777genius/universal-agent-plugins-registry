@@ -29,4 +29,7 @@ In particular:
   The landing build consumes this repo's signed feeds.
 - Install buttons in the Directory must match the source kinds the released CLI
   accepts. Check `agentplugins skills add --help` or the release notes first.
-  Today the released CLI accepts GitHub sources for Skills only.
+  As of `agentplugins` 0.1.91, `skills add` accepts GitHub repositories and
+  HTTPS publishers that serve a complete `.well-known` Skills index (publisher
+  installs take an exact `--skill` name). Verify against that release's help
+  before relying on it for a newer version.
