@@ -31,5 +31,6 @@ In particular:
   accepts. Check `agentplugins skills add --help` or the release notes first.
   As of `agentplugins` 0.1.91, `skills add` accepts GitHub repositories and
   HTTPS publishers that serve a complete `.well-known` Skills index (publisher
-  installs take an exact `--skill` name). Verify against that release's help
-  before relying on it for a newer version.
+  installs take exact Skill names; repeat `--skill` for several Skills, and
+  `*` is not supported). Verify against that release's help before relying on
+  it for a newer version.
