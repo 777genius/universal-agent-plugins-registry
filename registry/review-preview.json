@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "product_count": 30,
+  "product_count": 31,
   "products": [
     {
       "id": "agent-code-navigator",
@@ -5676,6 +5676,7 @@
         "ai-agents",
         "crm",
         "hubspot",
+        "marketing",
         "mcp",
         "plugins",
         "sales"
@@ -6591,6 +6592,145 @@
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:6d74545875e84110fc490981e72527e05e891ed0a67033a716184fb507001978",
           "manifest_digest": "sha256:0b8ed223c21d206d802130ace7219b5c78af1903675640cc77f5195e4f86ef70"
+        }
+      ]
+    },
+    {
+      "id": "marketing-kit",
+      "display_name": "Marketing Kit",
+      "description": "Plan campaigns using Notion content, HubSpot CRM context and Playwright landing-page checks. UAP installs the three integrations as dependencies; account sign-in remains separate.",
+      "aliases": [
+        "marketing-kit"
+      ],
+      "categories": [
+        "campaigns",
+        "content",
+        "crm",
+        "marketing"
+      ],
+      "default_distribution": "777genius/marketing-kit",
+      "fallback_order": [
+        "777genius/marketing-kit"
+      ],
+      "target_resolutions": [
+        {
+          "targets": [
+            {
+              "client": "claude",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "cursor",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "gemini",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        }
+      ],
+      "distributions": [
+        {
+          "id": "777genius/marketing-kit",
+          "kind": "community",
+          "status": "active",
+          "release_sequence": 1,
+          "package_version": "0.1.0",
+          "components": [
+            "skills"
+          ],
+          "eligible_targets": [
+            {
+              "client": "codex",
+              "authentication": "required"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "claude",
+              "authentication": "required"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required"
+            }
+          ],
+          "current_evidence": [],
+          "source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/marketing-kit"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:8918c0f0222bd735fd0eef3cacf90b5a9351fb213483d1558a65b9911624e68a",
+          "manifest_digest": "sha256:40b18a6b33c6392134aff7beafb9a91eaeecf46ce765e0e888cdc743dd284ea2"
         }
       ]
     },

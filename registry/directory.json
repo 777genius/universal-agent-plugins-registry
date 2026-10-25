@@ -613,6 +613,7 @@
         "ai-agents",
         "crm",
         "hubspot",
+        "marketing",
         "mcp",
         "plugins",
         "sales"
@@ -697,6 +698,33 @@
         "path": "assets/plugin-icons/linear.svg",
         "digest": "sha256:3700486fede168b1fbaf0987eda06621d0e54dd30968578b857fd7360cb2029e"
       }
+    },
+    {
+      "schema_version": 1,
+      "id": "marketing-kit",
+      "display_name": "Marketing Kit",
+      "description": "Plan campaigns using Notion content, HubSpot CRM context and Playwright landing-page checks. UAP installs the three integrations as dependencies; account sign-in remains separate.",
+      "manifest_name": "marketing-kit",
+      "aliases": [
+        "marketing-kit"
+      ],
+      "reserved_aliases": [
+        "marketing-kit"
+      ],
+      "categories": [
+        "campaigns",
+        "content",
+        "crm",
+        "marketing"
+      ],
+      "minimum_capabilities": {
+        "skills": "required",
+        "mcp": "optional"
+      },
+      "default_distribution": "777genius/marketing-kit",
+      "distributions": [
+        "777genius/marketing-kit"
+      ]
     },
     {
       "schema_version": 1,
@@ -6293,6 +6321,83 @@
             },
             {
               "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "777genius/marketing-kit",
+      "product_id": "marketing-kit",
+      "kind": "community",
+      "status": "active",
+      "packager": "777genius",
+      "releases": [
+        {
+          "sequence": 1,
+          "package_version": "0.1.0",
+          "manifest_name": "marketing-kit",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/marketing-kit"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:8918c0f0222bd735fd0eef3cacf90b5a9351fb213483d1558a65b9911624e68a",
+          "manifest_digest": "sha256:40b18a6b33c6392134aff7beafb9a91eaeecf46ce765e0e888cdc743dd284ea2",
+          "components": [
+            "skills"
+          ]
+        }
+      ],
+      "release_policies": [
+        {
+          "release_sequence": 1,
+          "status": "active",
+          "minimum_installer_version": "0.1.91",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
               "authentication": "required",
               "scopes": [
                 "user"
