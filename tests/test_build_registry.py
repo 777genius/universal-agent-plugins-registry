@@ -44,6 +44,7 @@ CANONICAL_PRODUCT_IDS = {
     "hubspot-crm",
     "hubspot-developer",
     "linear",
+    "marketing-kit",
     "neon",
     "notion",
     "playwright",
@@ -1171,6 +1172,9 @@ class DirectoryDomainTests(unittest.TestCase):
                     "777genius/github-bridge",
                 }:
                     expected_minimum = "0.1.26"
+                if distribution["id"] == "777genius/marketing-kit":
+                    # The kit has mandatory package dependencies and requires saved add.
+                    expected_minimum = "0.1.91"
                 self.assertEqual(policy["minimum_installer_version"], expected_minimum)
             release = distribution["releases"][0]
             if release["package_source"]["revision"] is not None:
@@ -1343,6 +1347,21 @@ class DirectoryDomainTests(unittest.TestCase):
                 if product["id"] in not_installable:
                     with self.assertRaises(registry.RegistryError):
                         registry.resolve_directory(source, product["id"], clients)
+                    continue
+                if product["id"] == "marketing-kit":
+                    # New dependency-managed packages qualify their own target subset;
+                    # they do not inherit the legacy catalog's broad target claims.
+                    admitted = ["codex", "cursor", "claude", "gemini", "opencode"]
+                    with self.assertRaises(registry.RegistryError):
+                        registry.resolve_directory(source, product["id"], clients)
+                    resolved = registry.resolve_directory(source, product["id"], admitted)
+                    distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])
+                    policy = distribution["release_policies"][0]
+                    self.assertEqual([target["client"] for target in policy["targets"]], admitted)
+                    self.assertTrue(all(target["authentication"] == "required" for target in policy["targets"]))
+                    self.assertTrue(all(target["scopes"] == ["user"] for target in policy["targets"]))
+                    self.assertEqual(policy["minimum_installer_version"], "0.1.91")
+                    self.assertEqual(policy["current_evidence"], [])
                     continue
                 resolved = registry.resolve_directory(source, product["id"], clients)
                 distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])
