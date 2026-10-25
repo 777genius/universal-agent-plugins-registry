@@ -233,6 +233,18 @@
       "category": "Productivity"
     },
     {
+      "name": "marketing-kit",
+      "source": {
+        "source": "local",
+        "path": "./compat/openai/plugins/marketing-kit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
       "name": "neon",
       "source": {
         "source": "local",

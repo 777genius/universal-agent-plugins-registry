@@ -78,3 +78,10 @@ use the tools immediately. Follow the installer's activation instructions.
 Figma is intentionally left to a design-focused kit. Context7 is not required
 for this campaign-planning workflow. The skill contains no executable scripts,
 install hooks or automatic publication.
+
+## Native marketplace compatibility
+
+A direct native marketplace install exposes the campaign-planning skill only.
+Use UAP's managed installation to install the Notion, HubSpot and Playwright
+dependency closure. Native marketplace projection does not implement UAP
+dependency resolution or authenticate accounts.

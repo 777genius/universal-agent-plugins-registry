@@ -6351,7 +6351,7 @@
             "path": "plugins/marketing-kit"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:c6943da837ae29b7fcf6c3675d68b6a4b60e44497def9f18cabfc25e4578b1ba",
+          "tree_digest": "sha256:8918c0f0222bd735fd0eef3cacf90b5a9351fb213483d1558a65b9911624e68a",
           "manifest_digest": "sha256:40b18a6b33c6392134aff7beafb9a91eaeecf46ce765e0e888cdc743dd284ea2",
           "components": [
             "skills"
