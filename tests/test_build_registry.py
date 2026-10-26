@@ -1359,9 +1359,16 @@ class DirectoryDomainTests(unittest.TestCase):
                     policy = distribution["release_policies"][0]
                     self.assertEqual([target["client"] for target in policy["targets"]], admitted)
                     self.assertTrue(all(target["authentication"] == "required" for target in policy["targets"]))
-                    self.assertTrue(all(target["scopes"] == ["user"] for target in policy["targets"]))
+                    self.assertTrue(all(target["scopes"] == ["user", "project"] for target in policy["targets"]))
                     self.assertEqual(policy["minimum_installer_version"], "0.1.91")
                     self.assertEqual(policy["current_evidence"], [])
+                    for dependency in ("777genius/notion", "777genius/hubspot-crm", "777genius/playwright-bridge"):
+                        leaf = next(item for item in source["distributions"] if item["id"] == dependency)
+                        active = [item for item in leaf["release_policies"] if item["status"] == "active"]
+                        self.assertTrue(active)
+                        for leaf_policy in active:
+                            for target in leaf_policy["targets"]:
+                                self.assertEqual(target["scopes"], ["user", "project"] if target["client"] in admitted else ["user"])
                     continue
                 resolved = registry.resolve_directory(source, product["id"], clients)
                 distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])

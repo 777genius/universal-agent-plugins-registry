@@ -1,10 +1,12 @@
 """Offline contract tests; no CLI/native runtime or network."""
 from __future__ import annotations
 
+import argparse
 import copy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tests.test_catalog_publication_readiness import catalog
 import catalog_publication_readiness as gate
@@ -148,3 +150,84 @@ class ManagedReadinessTests(unittest.TestCase):
             link.unlink()
             link.symlink_to(root / "missing")
             self.assertNotEqual(before, managed.snapshot_paths(paths))
+
+    def project_case(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        for distribution in snapshot["distributions"]:
+            if distribution["id"] in managed.PINS:
+                for policy in distribution["release_policies"]:
+                    for target in policy["targets"]:
+                        if target["client"] in managed.CLIENTS:
+                            target["scopes"] = ["user", "project"]
+        return snapshot, managed.expected(snapshot, gate.selected)
+
+    def test_project_case_is_conditional_and_keeps_released_user_pin(self):
+        snapshot, case = self.project_case()
+        self.assertEqual(case["cli"], managed.CLI)
+        self.assertEqual(case["project"]["cli"], managed.PROJECT_CLI)
+        self.assertEqual(case["project"]["scope"], "project")
+        self.assertEqual(case["project"]["closure"], case["closure"])
+        self.assertEqual(case["project"]["proof"]["native_plugin_listing"], {client: "not_tested" for client in managed.CLIENTS})
+        self.assertTrue(case["project"]["proof"]["user_owned_paths_unchanged"])
+        for distribution in snapshot["distributions"]:
+            if distribution["id"] in managed.PINS:
+                for policy in distribution["release_policies"]:
+                    for target in policy["targets"]:
+                        target["scopes"] = ["user"]
+        legacy = managed.expected(snapshot, gate.selected)
+        self.assertNotIn("project", legacy)
+        root = next(item for item in snapshot["distributions"] if item["id"] == managed.ROOT)
+        root["release_policies"][0]["targets"][0]["scopes"].append("project")
+        with self.assertRaisesRegex(ValueError, "incomplete managed project"):
+            managed.expected(snapshot, gate.selected)
+
+    def test_user_and_project_run_in_distinct_fresh_roots(self):
+        _, case = self.project_case()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "managed-cases"
+            args, ctx = argparse.Namespace(), {"sequence": 44}
+            with patch.object(managed, "run_case") as run_case:
+                managed.run(args, root, case, ctx)
+            self.assertEqual(run_case.call_count, 2)
+            self.assertEqual(run_case.call_args_list[0].args, (args, root / "user", case, ctx))
+            self.assertEqual(run_case.call_args_list[1].args, (args, root / "project", case["project"], ctx))
+            with self.assertRaises(FileExistsError):
+                managed.run(args, root, case, ctx)
+
+    def test_project_receipts_scope_and_paths_must_stay_in_selected_project(self):
+        _, case = self.project_case()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "project"
+            workspace.mkdir()
+            state, ctx, aliases = self.state(workspace)
+            for installation in state["installations"]:
+                for binding in installation["clients"].values():
+                    binding["scope"] = "project"
+                    binding["activation"] = "prepared"
+            for receipt in state["environment_receipts"]:
+                receipt["environment_id"] = "project-default"
+            managed.validate_state(state, case["project"], ctx, workspace, aliases)
+            for mutation in (
+                lambda value: value["environment_receipts"][0].update(environment_id="user-default"),
+                lambda value: value["installations"][0]["clients"]["claude"].update(scope="user"),
+                lambda value: value["installations"][0]["clients"]["codex"].update(target_locator=str(root)),
+            ):
+                value = copy.deepcopy(state)
+                mutation(value)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    managed.validate_state(value, case["project"], ctx, workspace, aliases)
+
+    def test_offline_project_proof_cannot_be_omitted_or_overclaim_native_use(self):
+        snapshot, _ = self.project_case()
+        expected = gate.expected_artifact(snapshot, snapshot, {"sequence": 43}, {"sequence": 44})
+        for mutation in (
+            lambda value: value["managed_dependencies"].pop("project"),
+            lambda value: value["managed_dependencies"]["project"]["cli"].update(version="0.1.91"),
+            lambda value: value["managed_dependencies"]["project"]["proof"]["native_plugin_listing"].update(claude="passed"),
+            lambda value: value["managed_dependencies"]["project"]["proof"].update(user_owned_paths_unchanged=False),
+        ):
+            value = copy.deepcopy(expected)
+            mutation(value)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                gate.validate_artifact(value, expected)
