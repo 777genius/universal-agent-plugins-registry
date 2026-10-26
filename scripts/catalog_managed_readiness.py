@@ -14,9 +14,6 @@ import tomllib
 CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
        "commit": "4555aa53844ee0078e9036cd82638afd67f77c16",
        "binary_digest": "sha256:7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"}
-PROJECT_CLI = {"version": "0.1.93", "tag": "agentplugins-v0.1.93",
-               "commit": "d5c16856cef67a1457704971d46765739141ab08",
-               "binary_digest": "sha256:af9b9519fa66ff5705f94c6cff20adb3c921acdcc41ed8087ef40f7327a07b50"}
 CLIENTS = ("codex", "cursor", "claude", "gemini", "opencode")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
@@ -46,22 +43,14 @@ def expected(snapshot, select):
              "receipt_count": 0, "open_operation_count": 0,
              "native_plugin_listing": {client: "passed" if client == "claude" else "not_tested" for client in CLIENTS},
              "account_runtime": "not_tested", "oauth": "not_tested"}
-    result = {"cli": CLI, "scope": "user", "root": ROOT, "targets": list(CLIENTS), "closure": closure,
+    return {"cli": CLI, "root": ROOT, "targets": list(CLIENTS), "closure": closure,
             "edges": [{"parent": ROOT, "dependency": key, "version": value} for key, value in PINS.items() if key != ROOT],
             "associations": [{"distribution_id": item["distribution_id"], "release_sequence": item["release_sequence"], "client": client}
                              for item in closure for client in CLIENTS], "proof": proof}
-    qualified = [target for item in closure for target in item["policy"]["targets"] if target["client"] in CLIENTS]
-    require(len(qualified) == 20 and all("user" in target["scopes"] and set(target["scopes"]) <= {"user", "project"} for target in qualified), "managed scope policy changed")
-    if any("project" in target["scopes"] for target in qualified):
-        require(all(set(target["scopes"]) == {"user", "project"} for target in qualified), "incomplete managed project policy")
-        project_proof = {**proof, "native_plugin_listing": {client: "not_tested" for client in CLIENTS},
-                         "user_owned_paths_unchanged": True, "shared_immutable_cache": True}
-        result["project"] = {**result, "cli": PROJECT_CLI, "scope": "project", "proof": project_proof}
-    return result
 
 
 def coverage(case):
-    return set() if case is None else {(item["distribution_id"], item["release_sequence"], item["client"]) for item in case["associations"]}
+    return set() if case is None else {(item["distribution_id"], item["release_sequence"], item["client"], "user") for item in case["associations"]}
 
 
 def validate_lock(lock, case):
@@ -98,8 +87,6 @@ def validate_lock(lock, case):
 
 
 def validate_state(state, case, ctx, root, aliases):
-    scope = case.get("scope", "user")
-    environment_id = "project-default" if scope == "project" else "user-default"
     installations = state.get("installations", [])
     require(len(installations) == 4, "managed installation count")
     by_distribution = {item.get("directory", {}).get("distribution_id"): item for item in installations}
@@ -121,7 +108,7 @@ def validate_state(state, case, ctx, root, aliases):
         bindings = list(installation.get("clients", {}).values())
         require(len(bindings) == 5 and {binding.get("client_id") for binding in bindings} == set(CLIENTS), "managed bindings")
         for binding in bindings:
-            require(binding.get("scope") == scope and binding.get("materialization") == "materialized" and
+            require(binding.get("scope") == "user" and binding.get("materialization") == "materialized" and
                     binding.get("verification") in ("installation_verified", "package_validated"), "managed binding not materialized")
             revision = binding.get("package_revision", {})
             require(all(revision.get(key) == value for key, value in {
@@ -140,7 +127,7 @@ def validate_state(state, case, ctx, root, aliases):
                                    binding["client_binding_id"], "directory:" + selected["distribution_id"], selected["tree_digest"]))
     actual_receipts = set()
     for receipt in receipts:
-        require(receipt.get("environment_id") == environment_id and receipt.get("phase") == "committed", "managed receipt owner or phase")
+        require(receipt.get("environment_id") == "user-default" and receipt.get("phase") == "committed", "managed receipt owner or phase")
         actual_receipts.add(tuple(receipt.get(key) for key in ("alias", "client_id", "installation_id", "client_binding_id", "source_key", "package_digest")))
     require(actual_receipts == expected_receipts, "managed receipt identity")
     return by_distribution, owned
@@ -174,44 +161,25 @@ def snapshot_paths(paths):
 
 
 def run(args, root, case, ctx):
-    root.mkdir(mode=0o700)
-    run_case(args, root / "user", case, ctx)
-    if "project" in case:
-        run_case(args, root / "project", case["project"], ctx)
-
-
-def run_case(args, root, case, ctx):
     # The composition owner provides confinement and the legacy native-listing
     # parser; no third client engine or portable semantics are introduced here.
     import catalog_publication_readiness as gate
-    scope = case.get("scope", "user")
-    environment_id = "project-default" if scope == "project" else "user-default"
-    binary = getattr(args, "project_binary" if scope == "project" else "managed_binary", None)
-    require(binary is not None and gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong managed released binary")
-    args.failure_phase = "managed:" + scope + ":prepare"
+    require(getattr(args, "managed_binary", None) is not None and gate.digest(args.managed_binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
+    args.failure_phase = "managed:prepare"
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot, args.opencode))
-    readonly = (*gate.tool_paths(args), binary.absolute().parent)
+    readonly = (*gate.tool_paths(args), args.managed_binary.absolute().parent)
     for name in ("codex", "cursor"):
         stub = root / "bin" / name
         require(not stub.exists() and not stub.is_symlink(), "managed fixture collision")
         stub.write_text('#!/bin/sh\n[ "$1" = --version ] || exit 1\necho 0.0.0\n')
         stub.chmod(0o700)
 
-    protected = {name: roots["state"] / name for name in ("state-v2.json", "uap.toml", "uap.lock", "managed", "plugin-data", "operations-v2", "mutation.lock", "environment.lock")}
-    protected["user-home"] = roots["home"]
-    protected["user-config"] = roots["config"]
-    protected_before = snapshot_paths(protected)
-    env["NPM_CONFIG_CACHE"] = str(roots["tmp"] / "npm-cache")
-
     def command(*argv):
-        args.failure_phase = "managed:" + scope + ":" + argv[0]
-        scoped = (*argv, "--scope", "project") if scope == "project" else argv
-        result = gate.child([str(binary), *scoped, "--format", "json"], root=root, readonly=readonly,
+        args.failure_phase = "managed:" + argv[0]
+        result = gate.child([str(args.managed_binary), *argv, "--format", "json"], root=root, readonly=readonly,
                             env=env, cwd=roots["workspace"], timeout=600)
         require(result.returncode == 0, "managed CLI failed: " + argv[0])
-        if scope == "project":
-            require(snapshot_paths(protected) == protected_before, "project operation changed user owned paths")
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)
         require(isinstance(value, dict), "managed CLI JSON shape")
         if argv[0] in ("add", "info", "list", "doctor"):
@@ -221,10 +189,8 @@ def run_case(args, root, case, ctx):
 
     added = command("add", "marketing-kit", "--target", ",".join(CLIENTS))
     require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == 20, "managed saved add incomplete")
-    namespace = roots["workspace"] / ".uap" if scope == "project" else roots["state"]
-    intent_root = roots["workspace"] if scope == "project" else roots["state"]
-    state_file = namespace / "state-v2.json"
-    manifest, lock_path = intent_root / "uap.toml", intent_root / "uap.lock"
+    state_file = roots["state"] / "state-v2.json"
+    manifest, lock_path = roots["state"] / "uap.toml", roots["state"] / "uap.lock"
     # Dependency file location is a released output, but must remain confined to
     # the new state root rather than trusting arbitrary JSON paths.
     environment = added["environment"]
@@ -235,7 +201,7 @@ def run_case(args, root, case, ctx):
     requirements = tomllib.loads(manifest.read_text())
     require(set(requirements.get("dependencies", {})) == {aliases[ROOT]} and
             requirements.get("targets") == {client: [aliases[ROOT]] for client in CLIENTS}, "managed root intent")
-    installations, owned = validate_state(gate.read_json(state_file), case, ctx, roots["workspace"] if scope == "project" else root, aliases)
+    installations, owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
     store = roots["state"] / "store"
     for selected in case["closure"]:
         package = store / "packages" / "agentplugins-tree-sha256-v1" / selected["tree_digest"].removeprefix("sha256:") / "package"
@@ -248,8 +214,6 @@ def run_case(args, root, case, ctx):
                 {item["client_id"] for item in info.get("clients", [])} == set(CLIENTS), "managed info identity")
 
     def native(installed):
-        if scope == "project":
-            return
         for selected in case["closure"]:
             binding = gate.native_binding(list(installations[selected["distribution_id"]]["clients"].values()), "claude")
             gate.native_listing(args.claude, env, roots["workspace"], selected["product_id"], installed, root=root, readonly=readonly,
@@ -257,9 +221,9 @@ def run_case(args, root, case, ctx):
                                 expected_version=selected["package_version"], expected_path=Path(binding["target_locator"]))
     native(True)
     status = command("deps", "status")
-    require(status.get("scope") == scope and status.get("pending_recovery") is False and len(status.get("facts", [])) == 20, "managed status incomplete")
+    require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == 20, "managed status incomplete")
     require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in CLIENTS}, "managed status identities")
-    require(all(item.get("owner") == environment_id and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
+    require(all(item.get("owner") == "user-default" and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
     immutable = {"manifest": manifest, "lock": lock_path, "state": state_file, "store": store,
                  **{f"owned-{index}": path for index, path in enumerate(owned)}}
     for argv in (("install", "--locked", "--yes"), ("update", "marketing-kit")):
@@ -268,7 +232,7 @@ def run_case(args, root, case, ctx):
         require(result.get("outcome") == "completed" and result.get("results") == [] and
                 len(result.get("actions", [])) == 20 and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
-    retained = {"store": store, "plugin-data": namespace / "plugin-data"}
+    retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
     retained_before = snapshot_paths(retained)
     require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed native removal")
     native(False)
@@ -291,7 +255,4 @@ def run_case(args, root, case, ctx):
     gate.validate_doctor({"command": "doctor", "result": "success", "data": doctor}, post_remove=True)
     require(doctor.get("read_only") is True and doctor.get("installation_count") == 0 and doctor.get("open_operation_count") == 0 and
             gate.snapshot_roots(roots) == before, "managed doctor not clean/read-only")
-    if scope == "project":
-        require(snapshot_paths(protected) == protected_before, "project lifecycle changed user owned paths")
-        require(not (namespace / "store").exists(), "project unexpectedly copied shared content store")
-    args.failure_phase = "managed:" + scope + ":complete"
+    args.failure_phase = "managed:complete"

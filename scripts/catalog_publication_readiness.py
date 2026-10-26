@@ -212,9 +212,9 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
     Requiring authentication is a restriction, not a claim that accounts work.
     The two Cloudflare ChatGPT app replacements receive metadata-only checks.
     """
-    covered = {(selection["distribution_id"], selection["release_sequence"], client)
+    covered = {(selection["distribution_id"], selection["release_sequence"], client, "user")
                for selection, clients in selections for client in clients}
-    covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt")
+    covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt", "user")
                    for selection in (selected(snapshot, selector, ("chatgpt",)) for selector in STATIC))
     covered.update(managed.coverage(managed.expected(snapshot, selected)))
     old = {item["id"]: item for item in baseline["distributions"]}
@@ -228,7 +228,8 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
             if policy["status"] != "active" or distribution["status"] != "active":
                 continue
             for target in policy["targets"]:
-                if (distribution["id"], policy["release_sequence"], target["client"]) in covered:
+                if target["scopes"] and all((distribution["id"], policy["release_sequence"], target["client"], scope) in covered
+                                            for scope in target["scopes"]):
                     continue
                 old_entry = previous.get((policy["release_sequence"], target["client"]))
                 prior = old_entry[0] if old_entry else None
@@ -857,7 +858,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "managed-binary", "project-binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector", "opencode"):
+    for name in ("binary", "managed-binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result

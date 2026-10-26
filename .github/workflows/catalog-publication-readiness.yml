@@ -209,44 +209,6 @@ jobs:
               --source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners
           done
           chmod +x "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
-      - name: Download and authenticate the project dependency CLI 0.1.93 before execution
-        env:
-          AGENTPLUGINS_VERSION: "0.1.93"
-          AGENTPLUGINS_COMMIT: d5c16856cef67a1457704971d46765739141ab08
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/release-project"
-          gh release download "agentplugins-v${AGENTPLUGINS_VERSION}" \
-            --repo 777genius/universal-agent-plugins \
-            --pattern "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
-            --pattern checksums.txt --pattern release-manifest.json --pattern THIRD_PARTY_NOTICES.txt \
-            --dir "$RUNNER_TEMP/release-project"
-          cd "$RUNNER_TEMP/release-project"
-          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = af9b9519fa66ff5705f94c6cff20adb3c921acdcc41ed8087ef40f7327a07b50
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 32277bdb94a5a2dcdf0a11d5c5a5eb6c630ec86ed0b80be9401e5a609962b072
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = b0607ce1e74f43d69acdd038d0ffe0a299df1e46804a9313348acf1e2aca7a5c
-          test "$(sha256sum THIRD_PARTY_NOTICES.txt | cut -d ' ' -f 1)" = f19bbcef2085b8ec5c11e242130d9218260ad70552a077af0fe2093184c75bfb
-          sha256sum --check checksums.txt --ignore-missing
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          manifest = json.loads(Path("release-manifest.json").read_text())
-          asset = manifest["assets"]["linux-amd64"]
-          assert manifest["schema_version"] == 2
-          assert manifest["tag"] == f"agentplugins-v{os.environ['AGENTPLUGINS_VERSION']}"
-          assert manifest["version"] == os.environ["AGENTPLUGINS_VERSION"]
-          assert manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]
-          assert asset["file"] == f"agentplugins_{os.environ['AGENTPLUGINS_VERSION']}_linux_amd64"
-          binary = Path(asset["file"])
-          assert asset["size"] == binary.stat().st_size
-          assert asset["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
-          PY
-          for asset in "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
-            gh attestation verify "$asset" --repo 777genius/universal-agent-plugins \
-              --signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml \
-              --source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners
-          done
-          chmod +x "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
       - name: Install exact public clients without account credentials
         env:
           TOOLS_ROOT: ${{ runner.temp }}/catalog-tools
@@ -341,7 +303,6 @@ jobs:
             --directory-origin "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${MATERIALIZED_LEDGER_SHA}/registry/schemas/1/" \
             --binary "$RUNNER_TEMP/release/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
             --managed-binary "$RUNNER_TEMP/release-managed/agentplugins_0.1.91_linux_amd64" \
-            --project-binary "$RUNNER_TEMP/release-project/agentplugins_0.1.93_linux_amd64" \
             --claude "$RUNNER_TEMP/catalog-tools/node_modules/.bin/claude" \
             --copilot "$RUNNER_TEMP/catalog-tools/node_modules/.bin/copilot" --npx "$(command -v npx)" \
             --inspector "$RUNNER_TEMP/catalog-tools/node_modules/.bin/mcp-inspector" \
