@@ -22,6 +22,7 @@ on:
       - "scripts/publication_trust_policy.py"
       - "scripts/sign_directory_publication.py"
       - "scripts/catalog_publication_readiness.py"
+      - "scripts/catalog_managed_readiness.py"
       - ".github/workflows/catalog-publication-readiness.yml"
   schedule:
     - cron: "17 4 * * 1"

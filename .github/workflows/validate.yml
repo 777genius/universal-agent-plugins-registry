@@ -192,3 +192,216 @@ jobs:
           name: agentplugins-chatgpt-catalog-v2-${{ github.run_id }}
           path: /tmp/agentplugins-chatgpt-catalog-v2-e2e.json
           retention-days: 30
+
+  managed-catalog-smoke:
+    name: Managed dependency catalog lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      CLAUDE_CODE_VERSION: 2.1.251
+      CLAUDE_CODE_NPM_INTEGRITY: sha512-eG+ZPPpW2Dbmnntf1Fz9/T9ewS8I8SKfc1tcU2PqSwmftfjRPP7BXPaCyLuZ8kvgTdiPnJi/2/JnTvTRieneEQ==
+      COPILOT_VERSION: 1.0.82
+      COPILOT_NPM_INTEGRITY: sha512-+mDIwBO3dCpL3k2rVLc4+1tFzqcVBTJNA/0co+okEpmCgcHjaz91Cqq7++pJKN5yJQuGC6bKangm7PSoheI1Xw==
+      INSPECTOR_VERSION: 2.1.0
+      INSPECTOR_NPM_INTEGRITY: sha512-Fp3kvgW5W6tcttErlYKy9iud6nE1oKUUB+qpFgh+ImfvYDJDgtGtx7IHJ+E6K1rXAerr9HQvYQenWrGP8lAqPQ==
+      UAP_ACTIVE_REPOSITORY: 777genius/universal-agent-plugins-registry
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 9cac490aceb31bf698ed35813204c9964359234b
+        path: staged
+        persist-credentials: false
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 24.20.0
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.13'
+    - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+      with:
+        go-version: 1.25.13
+        cache: false
+    - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0
+    - name: Install the current stable Ubuntu bubblewrap package and record namespace policy
+      run: |
+        test "$RUNNER_OS" = Linux
+        sudo apt-get update
+        candidate="$(apt-cache policy bubblewrap | awk '$1 == "Candidate:" {print $2}')"
+        test -n "$candidate"
+        test "$candidate" != '(none)'
+        sudo apt-get install --yes --no-install-recommends "bubblewrap=$candidate"
+        test "$(dpkg-query -W -f='${Version}' bubblewrap)" = "$candidate"
+        /usr/bin/bwrap --version
+        uname -r
+        for setting in /proc/sys/kernel/unprivileged_userns_clone /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; do
+          if test -r "$setting"; then printf '%s=' "$setting"; cat "$setting"; fi
+        done
+    - name: Allow user namespaces only for the root-owned bubblewrap executable
+      id: isolation_profile
+      run: |
+        test "$RUNNER_OS" = Linux
+        test "$GITHUB_ACTIONS" = true
+        test -f /usr/bin/bwrap
+        test ! -L /usr/bin/bwrap
+        test "$(stat -c '%U:%G:%a' /usr/bin/bwrap)" = root:root:755
+        test "$(cat /sys/module/apparmor/parameters/enabled)" = Y
+        profile=/etc/apparmor.d/uap-catalog-bwrap
+        test ! -e "$profile"
+        test ! -L "$profile"
+        if sudo grep -R -q -F /usr/bin/bwrap /etc/apparmor.d; then
+          echo "An existing bubblewrap AppArmor policy requires review" >&2
+          exit 1
+        else
+          test "$?" -eq 1
+        fi
+        if sudo grep -q '^uap-catalog-bwrap ' /sys/kernel/security/apparmor/profiles; then
+          echo "The catalog AppArmor profile is already loaded" >&2
+          exit 1
+        else
+          test "$?" -eq 1
+        fi
+        sudo /usr/sbin/apparmor_parser --skip-kernel-load --skip-cache tests/e2e/catalog-bwrap.apparmor
+        echo "profile_owned=true" >> "$GITHUB_OUTPUT"
+        sudo install -o root -g root -m 0644 tests/e2e/catalog-bwrap.apparmor "$profile"
+        test "$(stat -c '%U:%G:%a' "$profile")" = root:root:644
+        sudo /usr/sbin/apparmor_parser --add --skip-cache "$profile"
+    - name: Require Linux child confinement before any untrusted execution
+      run: python3 -m unittest tests.test_catalog_process_isolation -v
+    - name: Download and authenticate the managed dependency CLI 0.1.91 before execution
+      env:
+        AGENTPLUGINS_VERSION: 0.1.91
+        AGENTPLUGINS_COMMIT: 4555aa53844ee0078e9036cd82638afd67f77c16
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/release-managed"
+        gh release download "agentplugins-v${AGENTPLUGINS_VERSION}" \
+          --repo 777genius/universal-agent-plugins \
+          --pattern "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
+          --pattern checksums.txt --pattern release-manifest.json \
+          --dir "$RUNNER_TEMP/release-managed"
+        cd "$RUNNER_TEMP/release-managed"
+        test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = 7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626
+        test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 7988df7f3d87c2c7485f2ce84bb434fbefe1f0cf24ef60e99ae626245685ebad
+        test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = de7c6ea83db79f091b722a589cc415b805a5b0819a84f9ed327476fb0cb4b937
+        sha256sum --check checksums.txt --ignore-missing
+        python3 - <<'PY'
+        import hashlib, json, os
+        from pathlib import Path
+        manifest = json.loads(Path("release-manifest.json").read_text())
+        asset = manifest["assets"]["linux-amd64"]
+        assert manifest["schema_version"] == 2
+        assert manifest["tag"] == f"agentplugins-v{os.environ['AGENTPLUGINS_VERSION']}"
+        assert manifest["version"] == os.environ["AGENTPLUGINS_VERSION"]
+        assert manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]
+        assert asset["file"] == f"agentplugins_{os.environ['AGENTPLUGINS_VERSION']}_linux_amd64"
+        binary = Path(asset["file"])
+        assert asset["size"] == binary.stat().st_size
+        assert asset["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+        PY
+        for asset in "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
+          gh attestation verify "$asset" --repo 777genius/universal-agent-plugins \
+            --signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml \
+            --source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners
+        done
+        chmod +x "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
+    - name: Install exact public clients without account credentials
+      env:
+        TOOLS_ROOT: ${{ runner.temp }}/catalog-tools
+      run: |
+        test "$(npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity)" = "$CLAUDE_CODE_NPM_INTEGRITY"
+        test "$(npm view "@github/copilot@${COPILOT_VERSION}" dist.integrity)" = "$COPILOT_NPM_INTEGRITY"
+        test "$(npm view "@modelcontextprotocol/inspector@${INSPECTOR_VERSION}" dist.integrity)" = "$INSPECTOR_NPM_INTEGRITY"
+        python3 - <<'PY'
+        import json, os, shutil, sys
+        from pathlib import Path
+        sys.path.insert(0, "scripts")
+        from catalog_process_isolation import run_isolated
+        root = Path(os.environ["TOOLS_ROOT"]).resolve()
+        root.mkdir(mode=0o700)
+        for name in ("home", "tmp", "npm-cache"):
+            (root / name).mkdir(mode=0o700)
+        env = {
+            "PATH": os.environ["PATH"], "LANG": "C.UTF-8", "CI": "true",
+            "HOME": str(root / "home"), "USERPROFILE": str(root / "home"),
+            "TMPDIR": str(root / "tmp"), "NPM_CONFIG_CACHE": str(root / "npm-cache"),
+            "NPM_CONFIG_USERCONFIG": str(root / "home/.npmrc"),
+            "NPM_CONFIG_GLOBALCONFIG": str(root / "home/global.npmrc"),
+            "GIT_CONFIG_GLOBAL": str(root / "home/.gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+        }
+        packages = {
+            "@anthropic-ai/claude-code": os.environ["CLAUDE_CODE_VERSION"],
+            "@github/copilot": os.environ["COPILOT_VERSION"],
+            "@modelcontextprotocol/inspector": os.environ["INSPECTOR_VERSION"],
+        }
+        npm = str(Path(shutil.which("npm")).resolve(strict=True))
+        node_root = Path(shutil.which("node")).resolve(strict=True).parent.parent
+        commands = (
+            [npm, "install", "--prefix", str(root), "--no-audit", "--no-fund", *[f"{name}@{version}" for name, version in packages.items()]],
+            [npm, "audit", "signatures", "--prefix", str(root)],
+        )
+        for command in commands:
+            result = run_isolated(command, writable_root=root.resolve(), cwd=root.resolve(),
+                                  env=env, read_only_paths=(node_root,), timeout=600)
+            print(result.stdout)
+            print(result.stderr, file=sys.stderr)
+            result.check_returncode()
+        for name, version in packages.items():
+            assert json.loads((root / "node_modules" / name / "package.json").read_text())["version"] == version
+        PY
+    - name: Build the native OpenCode fixture
+      env:
+        TOOLS_ROOT: ${{ runner.temp }}/catalog-tools
+        HOME: ${{ runner.temp }}/catalog-tools/fixture-home
+        GOTELEMETRY: 'off'
+      run: |
+        # OpenCode preflight verifies native executable bytes and rejects
+        # shell/npm shims, so readiness needs a real binary that answers
+        # only --version and executes no client runtime actions.
+        mkdir -p "${TOOLS_ROOT}/fixture-bin"
+        CGO_ENABLED=0 GO111MODULE=off GOENV=off GOTOOLCHAIN=local GOFLAGS='' \
+          GOPATH="${TOOLS_ROOT}/go-path" GOCACHE="${TOOLS_ROOT}/go-cache" GOMODCACHE="${TOOLS_ROOT}/go-mod-cache" \
+          go build -trimpath -o "${TOOLS_ROOT}/fixture-bin/opencode" tests/fixtures/opencode-fixture.go
+    - name: Exercise the signed dependency bundle without publication evidence
+      run: |
+        python3 - <<'PYCODE'
+        import argparse, shutil, sys
+        from pathlib import Path
+        sys.path.insert(0, "scripts")
+        import catalog_publication_readiness as gate
+        import catalog_managed_readiness as managed
+        snapshot, identity = gate.load_feed(Path("staged/registry/schemas/1"), Path("registry/publication/trusted-keys.json"), baseline=True)
+        gate.require(identity == {"sequence": 43, "snapshot_digest": "sha256:7ffb6078ac08e7ed00575dbf9a871b0dba53c755591d8983dd9399bfdc4edaf6"}, "unexpected smoke fixture")
+        import os
+        parent = Path(os.environ["RUNNER_TEMP"])
+        args = argparse.Namespace(managed_binary=parent / "release-managed/agentplugins_0.1.91_linux_amd64",
+            binary=parent / "release-managed/agentplugins_0.1.91_linux_amd64",
+            claude=parent / "catalog-tools/node_modules/.bin/claude", copilot=parent / "catalog-tools/node_modules/.bin/copilot",
+            inspector=parent / "catalog-tools/node_modules/.bin/mcp-inspector", opencode=parent / "catalog-tools/fixture-bin/opencode",
+            npx=Path(shutil.which("npx")), failure_phase="managed:prepare")
+        root = parent / "managed-smoke"
+        try:
+            managed.run(args, root, managed.expected(snapshot, gate.selected),
+                {**identity, "directory_origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins-registry/9cac490aceb31bf698ed35813204c9964359234b/registry/schemas/1/"})
+            print("Managed dependency lifecycle passed; account runtime and OAuth not tested.")
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+        PYCODE
+    - name: Remove only this job's ephemeral AppArmor allowance
+      if: ${{ always() && steps.isolation_profile.outputs.profile_owned == 'true' }}
+      run: |
+        profile=/etc/apparmor.d/uap-catalog-bwrap
+        if test ! -e "$profile" && test ! -L "$profile"; then exit 0; fi
+        test -f "$profile"
+        test ! -L "$profile"
+        status=0
+        sudo /usr/sbin/apparmor_parser --remove --skip-cache "$profile" || status=$?
+        sudo rm -- "$profile"
+        exit "$status"

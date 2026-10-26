@@ -1025,12 +1025,14 @@ class CatalogContractTests(unittest.TestCase):
                                       opencode=Path("opencode"))
             args.binary.write_bytes(b"fixture binary")
             with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                    patch.object(gate.managed, "run") as managed_run, \
                     patch.object(gate, "run_lifecycle") as lifecycle, \
                     patch.object(gate, "acquired_package", return_value=root) as acquire, \
                     patch.object(gate, "check_static_package") as static, \
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
+                managed_run.assert_called_once()
                 self.assertEqual(lifecycle.call_count, 30)
                 default_call = next(call for call in lifecycle.call_args_list
                                     if call.args[2]["selector"] == "github/github")
@@ -1043,7 +1045,7 @@ class CatalogContractTests(unittest.TestCase):
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 
     def test_failed_cli_mcp_static_or_cleanup_never_emits_success(self):
-        for failing in ("run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
+        for failing in ("managed", "run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
             with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
@@ -1051,6 +1053,7 @@ class CatalogContractTests(unittest.TestCase):
                                           opencode=Path("opencode"))
                 args.binary.write_bytes(b"fixture binary")
                 with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                        patch.object(gate.managed, "run") as managed_run, \
                         patch.object(gate, "run_lifecycle") as lifecycle, \
                         patch.object(gate, "acquired_package", return_value=root), \
                         patch.object(gate, "check_static_package") as static, \
@@ -1061,7 +1064,7 @@ class CatalogContractTests(unittest.TestCase):
                             with self.assertRaises(OSError):
                                 gate.produce(args, self.snapshot, expected)
                     else:
-                        {"run_lifecycle": lifecycle, "inspector_check": probe, "check_static_package": static}[failing].side_effect = ValueError("fixture phase failure")
+                        {"managed": managed_run, "run_lifecycle": lifecycle, "inspector_check": probe, "check_static_package": static}[failing].side_effect = ValueError("fixture phase failure")
                         with self.assertRaises(ValueError):
                             gate.produce(args, self.snapshot, expected)
                         self.assertFalse(args.sandbox.exists())
