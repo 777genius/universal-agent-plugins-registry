@@ -201,6 +201,8 @@ jobs:
       contents: read
       attestations: read
     env:
+      CODEX_VERSION: "0.164.0"
+      CODEX_NPM_INTEGRITY: sha512-TWj7UGyPRe3Pj/A3ddNAxs1te3a/W/xAd+J0LHrrFTmsSfahGMOLF/vn88D3QCIgAT3B1rm1y/Z3NYE0rx6cZQ==
       CLAUDE_CODE_VERSION: 2.1.251
       CLAUDE_CODE_NPM_INTEGRITY: sha512-eG+ZPPpW2Dbmnntf1Fz9/T9ewS8I8SKfc1tcU2PqSwmftfjRPP7BXPaCyLuZ8kvgTdiPnJi/2/JnTvTRieneEQ==
       COPILOT_VERSION: 1.0.82
@@ -336,6 +338,7 @@ jobs:
             "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
         }
         packages = {
+            "@openai/codex": os.environ["CODEX_VERSION"],
             "@anthropic-ai/claude-code": os.environ["CLAUDE_CODE_VERSION"],
             "@github/copilot": os.environ["COPILOT_VERSION"],
             "@modelcontextprotocol/inspector": os.environ["INSPECTOR_VERSION"],
@@ -352,12 +355,16 @@ jobs:
             print(result.stdout)
             print(result.stderr, file=sys.stderr)
             result.check_returncode()
-        integrities = dict(zip(packages, (os.environ["CLAUDE_CODE_NPM_INTEGRITY"], os.environ["COPILOT_NPM_INTEGRITY"], os.environ["INSPECTOR_NPM_INTEGRITY"])))
+        integrities = dict(zip(packages, (os.environ["CODEX_NPM_INTEGRITY"], os.environ["CLAUDE_CODE_NPM_INTEGRITY"], os.environ["COPILOT_NPM_INTEGRITY"], os.environ["INSPECTOR_NPM_INTEGRITY"])))
         lock = json.loads((root / "package-lock.json").read_text())["packages"]
         for name, version in packages.items():
             assert json.loads((root / "node_modules" / name / "package.json").read_text())["version"] == version
             assert lock["node_modules/" + name]["version"] == version
             assert lock["node_modules/" + name]["integrity"] == integrities[name]
+        version = run_isolated([str(root / "node_modules/.bin/codex"), "--version"],
+            writable_root=root.resolve(), cwd=root.resolve(), env=env, read_only_paths=(node_root,), timeout=60)
+        version.check_returncode()
+        assert version.stdout.strip() == "codex-cli " + os.environ["CODEX_VERSION"]
         PY
     - name: Build the native OpenCode fixture
       env:
@@ -386,7 +393,7 @@ jobs:
         parent = Path(os.environ["RUNNER_TEMP"])
         args = argparse.Namespace(managed_binary=parent / "release-managed/agentplugins_0.1.91_linux_amd64",
             binary=parent / "release-managed/agentplugins_0.1.91_linux_amd64",
-            claude=parent / "catalog-tools/node_modules/.bin/claude", copilot=parent / "catalog-tools/node_modules/.bin/copilot",
+            codex=parent / "catalog-tools/node_modules/.bin/codex", claude=parent / "catalog-tools/node_modules/.bin/claude", copilot=parent / "catalog-tools/node_modules/.bin/copilot",
             inspector=parent / "catalog-tools/node_modules/.bin/mcp-inspector", opencode=parent / "catalog-tools/fixture-bin/opencode",
             npx=Path(shutil.which("npx")), failure_phase="managed:prepare")
         # The child receives only the credential-free test environment through

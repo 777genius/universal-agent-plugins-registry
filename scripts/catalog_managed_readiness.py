@@ -19,6 +19,7 @@ CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
        "commit": "4555aa53844ee0078e9036cd82638afd67f77c16",
        "binary_digest": "sha256:7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"}
 CLIENTS = ("codex", "cursor", "claude", "gemini", "opencode")
+NATIVE_TARGETS = ("codex", "claude")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
 ROOT = "777genius/marketing-kit"
@@ -90,13 +91,14 @@ def validate_lock(lock, case):
     return aliases
 
 
-def validate_state(state, case, ctx, root, aliases):
+def validate_state(state, case, ctx, root, aliases, *, clients=CLIENTS):
     installations = state.get("installations", [])
     require(len(installations) == 4, "managed installation count")
     by_distribution = {item.get("directory", {}).get("distribution_id"): item for item in installations}
     require(len(by_distribution) == 4, "managed installation duplicate")
     receipts = state.get("environment_receipts", [])
-    require(len(receipts) == 20 and len({item.get("receipt_id") for item in receipts}) == 20, "managed receipt count")
+    receipt_count = len(case["closure"]) * len(clients)
+    require(len(receipts) == receipt_count and len({item.get("receipt_id") for item in receipts}) == receipt_count, "managed receipt count")
     expected_receipts, owned = set(), []
     for selected in case["closure"]:
         installation = by_distribution.get(selected["distribution_id"], {})
@@ -110,7 +112,7 @@ def validate_state(state, case, ctx, root, aliases):
         require(directory.get("desired_release_sequence") == selected["release_sequence"] and
                 directory.get("snapshot_sequence") == ctx["sequence"] and directory.get("snapshot_digest") == ctx["snapshot_digest"], "managed installation Directory identity")
         bindings = list(installation.get("clients", {}).values())
-        require(len(bindings) == 5 and {binding.get("client_id") for binding in bindings} == set(CLIENTS), "managed bindings")
+        require(len(bindings) == len(clients) and {binding.get("client_id") for binding in bindings} == set(clients), "managed bindings")
         for binding in bindings:
             require(binding.get("scope") == "user" and binding.get("materialization") == "materialized" and
                     binding.get("verification") in ("installation_verified", "package_validated"), "managed binding not materialized")
@@ -164,10 +166,11 @@ def snapshot_paths(paths):
     return result
 
 
-def seed_runtime(tool_bin, env):
-    # A version-only Codex shim is still a native activation backend to the
-    # released adapter. Keep native Codex absent; its config surface and the
-    # Cursor desktop fixture qualify preparation only. Expose Node explicitly.
+def seed_runtime(tool_bin, env, codex):
+    # Saved installs require a real Codex activation backend in the released
+    # installer. Only expose the explicitly pinned tool, never an ambient CLI.
+    require(codex.is_absolute(), "managed Codex path must be absolute")
+    expected_codex = codex.resolve(strict=True)
     for name in ("node", "npm", "npx"):
         runtime = shutil.which(name)
         require(runtime is not None, "managed runtime tool missing")
@@ -175,8 +178,14 @@ def seed_runtime(tool_bin, env):
         require(not path.exists() and not path.is_symlink(), "managed runtime fixture collision")
         path.symlink_to(Path(runtime).resolve(strict=True))
     env["PATH"] = str(tool_bin) + ":/usr/bin:/bin"
-    require(all(shutil.which(name, path=env["PATH"]) is None for name in ("codex", "cursor")),
-            "managed preparation fixture unexpectedly exposes a native client")
+    linked_codex = tool_bin / "codex"
+    require(linked_codex.is_symlink() and linked_codex.resolve(strict=True) == expected_codex,
+            "managed pinned Codex link missing or substituted")
+    detected_codex = shutil.which("codex", path=env["PATH"])
+    require(detected_codex is not None and Path(detected_codex).resolve(strict=True) == expected_codex,
+            "managed pinned Codex is not executable")
+    require(shutil.which("cursor", path=env["PATH"]) is None,
+            "managed preparation fixture unexpectedly exposes native Cursor")
 
 
 def failure_diagnostics(command, result):
@@ -204,11 +213,14 @@ def run(args, root, case, ctx):
     require(getattr(args, "managed_binary", None) is not None, "missing managed released binary")
     binary = args.managed_binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
+    codex = getattr(args, "codex", None)
+    require(isinstance(codex, Path) and codex.is_absolute(), "managed Codex path must be absolute")
+    require(codex.resolve(strict=True).is_file(), "managed Codex executable missing")
     args.failure_phase = "managed:prepare"
     root.mkdir(mode=0o700)
-    roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot, args.opencode))
+    roots, env = gate.isolated_environment(root, ctx["directory_origin"], (codex, args.claude, args.copilot, args.opencode))
     readonly = (*gate.tool_paths(args), binary.parent)
-    seed_runtime(root / "bin", env)
+    seed_runtime(root / "bin", env, codex)
 
     def command(*argv):
         args.failure_phase = "managed:" + argv[0]
@@ -273,11 +285,11 @@ def run(args, root, case, ctx):
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
     retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
     retained_before = snapshot_paths(retained)
-    require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed native removal")
+    require(command("remove", "marketing-kit", "--target", ",".join(NATIVE_TARGETS)).get("outcome") == "completed", "managed native removal")
     native(False)
     partial = gate.read_json(state_file)
-    require(len(partial.get("environment_receipts", [])) == 16 and
-            all("claude" not in {binding["client_id"] for binding in item["clients"].values()} for item in partial["installations"]), "managed partial removal")
+    remaining = tuple(client for client in CLIENTS if client not in NATIVE_TARGETS)
+    validate_state(partial, case, ctx, root, aliases, clients=remaining)
     require(command("remove", "marketing-kit", "--external-uninstalled").get("outcome") == "completed", "managed orphan removal")
     state = gate.read_json(state_file)
     require(state.get("installations") == [] and state.get("environment_receipts", []) == [], "managed orphan state remains")

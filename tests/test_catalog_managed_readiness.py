@@ -42,22 +42,38 @@ class ManagedReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered target policy"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
 
-    def test_preparation_does_not_expose_ambient_or_version_only_native_clients(self):
+    def test_runtime_exposes_only_explicit_codex_and_no_ambient_cursor(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            ambient, tool_bin = root / "ambient", root / "bin"
-            ambient.mkdir(); tool_bin.mkdir()
+            ambient, tool_bin, pinned = root / "ambient", root / "bin", root / "pinned"
+            ambient.mkdir(); tool_bin.mkdir(); pinned.mkdir()
             for name in ("node", "npm", "npx", "codex", "cursor"):
                 tool = ambient / name
                 tool.write_text("#!/bin/sh\nexit 1\n")
                 tool.chmod(0o700)
+            codex = pinned / "codex"
+            codex.write_text("#!/bin/sh\nexit 1\n")
+            codex.chmod(0o700)
+            (tool_bin / "codex").symlink_to(codex)
             env = {"PATH": str(ambient)}
             self.assertIsNotNone(shutil.which("codex", path=env["PATH"]))
             with patch.dict(os.environ, {"PATH": str(ambient)}):
-                managed.seed_runtime(tool_bin, env)
-            self.assertIsNone(shutil.which("codex", path=env["PATH"]))
+                managed.seed_runtime(tool_bin, env, codex)
+            self.assertEqual(Path(shutil.which("codex", path=env["PATH"])).resolve(), codex)
             self.assertIsNone(shutil.which("cursor", path=env["PATH"]))
             self.assertEqual(Path(shutil.which("npm", path=env["PATH"])).resolve(), ambient / "npm")
+            with self.assertRaisesRegex(ValueError, "must be absolute"):
+                managed.seed_runtime(tool_bin, env, Path("codex"))
+
+            # Substituting the explicitly linked native tool must not qualify
+            # an arbitrary executable merely because its name is Codex.
+            for replacement in (None, ambient / "codex"):
+                for name in ("node", "npm", "npx", "codex"):
+                    (tool_bin / name).unlink(missing_ok=True)
+                if replacement is not None:
+                    (tool_bin / "codex").symlink_to(replacement)
+                with patch.dict(os.environ, {"PATH": str(ambient)}), self.assertRaises(ValueError):
+                    managed.seed_runtime(tool_bin, env, codex)
 
     def test_failure_diagnostics_never_copy_untrusted_response_text(self):
         result = subprocess.CompletedProcess([], 1, "codex activation failed token=PRIVATE", "/private/path https://secret.test/")
@@ -150,6 +166,28 @@ class ManagedReadinessTests(unittest.TestCase):
                 mutation(value)
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     managed.validate_state(value, self.case, ctx, root, aliases)
+
+    def test_native_removal_leaves_exact_prepared_target_closure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state, ctx, aliases = self.state(root)
+            before = copy.deepcopy(state)
+            remaining = tuple(client for client in managed.CLIENTS if client not in managed.NATIVE_TARGETS)
+            for installation in state["installations"]:
+                installation["clients"] = {client: binding for client, binding in installation["clients"].items() if client in remaining}
+            state["environment_receipts"] = [receipt for receipt in state["environment_receipts"] if receipt["client_id"] in remaining]
+            _, owned = managed.validate_state(state, self.case, ctx, root, aliases, clients=remaining)
+            self.assertEqual(len(owned), 12)
+            for mutation in (
+                lambda value: value["environment_receipts"].append(before["environment_receipts"][0]),
+                lambda value: value["installations"][0]["clients"].update(codex=before["installations"][0]["clients"]["codex"]),
+                lambda value: value["environment_receipts"].pop(),
+                lambda value: value["installations"][0]["clients"].pop("cursor"),
+            ):
+                value = copy.deepcopy(state)
+                mutation(value)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    managed.validate_state(value, self.case, ctx, root, aliases, clients=remaining)
 
     def test_offline_artifact_cannot_omit_or_forge_managed_proof(self):
         baseline = copy.deepcopy(self.snapshot)
