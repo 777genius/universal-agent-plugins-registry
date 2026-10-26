@@ -45,6 +45,7 @@ def expected(snapshot, select):
              "state_bytes_unchanged": True, "owned_artifacts_unchanged": True,
              "remove": "passed_orphan_cleanup", "retained_store_and_data": True,
              "doctor": "passed_read_only", "installation_count": 0,
+             "retained_installation_count": 4, "active_binding_count": 0,
              "receipt_count": 0, "open_operation_count": 0,
              "native_plugin_listing": {client: "passed" if client == "claude" else "not_tested" for client in CLIENTS},
              "account_runtime": "not_tested", "oauth": "not_tested"}
@@ -164,6 +165,73 @@ def snapshot_paths(paths):
                 entries.append((relative, mode, "directory"))
         result[name] = entries
     return result
+
+
+def retained_state_summary(state):
+    """Only fixed field names, JSON types and counts; no identifiers or data."""
+    def field(value):
+        kind = {type(None): "null", list: "array", dict: "object", bool: "boolean",
+                int: "integer", float: "number", str: "string"}.get(type(value), "other")
+        return {"type": kind, "count": len(value) if type(value) in (list, dict) else None}
+    installations = state.get("installations")
+    records = installations if isinstance(installations, list) else []
+    return json.dumps({"installations": field(installations),
+        "environment_receipts": field(state.get("environment_receipts")),
+        "client_bindings": [field(item.get("clients")) for item in records if isinstance(item, dict)],
+        "retained_installation_count": sum(item.get("data_retained") is True for item in records if isinstance(item, dict))}, sort_keys=True)
+
+
+def validate_retained_state(state, case, ctx, root, aliases, initial):
+    # Plain remove retains four data-owning installation records. Public list
+    # and doctor count only installations with active bindings (read.go).
+    summary = retained_state_summary(state)
+    receipts = state.get("environment_receipts")
+    require(receipts is None or (type(receipts) is list and receipts == []), "managed retained receipts remain: " + summary)
+    retained, _ = validate_state({**state, "environment_receipts": []}, case, ctx, root, aliases, clients=())
+    additions = set()
+    for distribution, installation in retained.items():
+        before = initial[distribution]
+        require(installation.get("installation_id") == before["installation_id"] and
+                all(installation.get(key) == before.get(key) for key in ("package", "source", "directory")) and
+                installation.get("data_retained") is True and installation.get("clients") == {} and
+                isinstance(installation.get("data_receipts"), dict) and bool(installation["data_receipts"]), "managed retained state identity: " + summary)
+        old_data = before.get("data_receipts", {})
+        if old_data:
+            require(installation["data_receipts"] == old_data, "managed retained data receipts changed: " + summary)
+            continue
+        # finalizeLastBindingState creates data only when the installation had
+        # none. It uses precisely the bindings removed in the last operation.
+        backends = {(binding["physical_artifact_id"], binding["scope"]) for binding in before["clients"].values()
+                    if binding["client_id"] not in NATIVE_TARGETS}
+        expected_ids = set()
+        for backend, scope in backends:
+            require(isinstance(backend, str) and backend not in ("", ".", "..") and Path(backend).name == backend and scope == "user", "managed retained data backend")
+            receipt_id = "data_" + hashlib.sha256((before["installation_id"] + "\0" + backend + "\0" + scope).encode()).hexdigest()[:24]
+            locator = root / "state" / "plugin-data" / backend
+            ownership = "sha256:" + hashlib.sha256(("agentplugins-plugin-data-v1\0" + receipt_id + "\0" + str(locator)).encode()).hexdigest()
+            receipt = installation["data_receipts"].get(receipt_id, {})
+            require(isinstance(receipt, dict) and set(receipt) <= {"data_receipt_id", "physical_backend_id", "scope", "locator", "ownership_digest", "state", "created_at", "updated_at"} and
+                    all(receipt.get(key) == value for key, value in {"data_receipt_id": receipt_id,
+                    "physical_backend_id": backend, "scope": scope, "locator": str(locator),
+                    "ownership_digest": ownership, "state": "owned"}.items()), "managed new retained data identity")
+            marker = locator / ".agentplugins-data-owner.json"
+            require(locator.resolve().is_relative_to(root.resolve()) and locator.is_dir() and not locator.is_symlink() and stat.S_IMODE(locator.stat().st_mode) == 0o700 and
+                    marker.is_file() and not marker.is_symlink() and stat.S_IMODE(marker.stat().st_mode) == 0o600 and
+                    json.loads(marker.read_text()) == receipt and set(locator.iterdir()) == {marker}, "managed new retained data ownership")
+            expected_ids.add(receipt_id)
+            additions.update((backend, backend + "/.agentplugins-data-owner.json"))
+        require(set(installation["data_receipts"]) == expected_ids, "managed new retained data receipt closure")
+    return additions
+
+
+def validate_retained_paths(before, after, additions):
+    require(after["store"] == before["store"], "managed removal changed retained store")
+    old, new = dict((item[0], item[1:]) for item in before["plugin-data"]), dict((item[0], item[1:]) for item in after["plugin-data"])
+    if old.get(".") == ("absent",) and additions:
+        require(new.get(".") == (0o700, "directory"), "managed retained data root")
+        old.pop(".")
+    require(all(new.get(path) == value for path, value in old.items()), "managed removal changed existing plugin data")
+    require(set(new) - set(old) <= additions | ({"."} if additions else set()), "managed removal created unrelated plugin data")
 
 
 def seed_runtime(tool_bin, env, codex):
@@ -357,13 +425,17 @@ def run(args, root, case, ctx):
     validate_state(partial, case, ctx, root, aliases, clients=remaining)
     require(command("remove", "marketing-kit").get("outcome") == "completed", "managed orphan removal")
     state = gate.read_json(state_file)
-    require(state.get("installations") == [] and state.get("environment_receipts", []) == [], "managed orphan state remains")
+    try:
+        data_additions = validate_retained_state(state, case, ctx, root, aliases, installations)
+    except (ValueError, OSError) as error:
+        reason = str(error) if type(error) is ValueError else type(error).__name__
+        raise ValueError("managed final state invalid: " + reason + "; " + retained_state_summary(state)) from None
     require(gate.read_json(lock_path).get("packages") == [], "managed orphan lock remains")
     # Native objects can be shared registries retained for an empty profile;
     # the per-binding target locators must all have disappeared.
     require(all(not Path(binding["target_locator"]).exists() and not Path(binding["target_locator"]).is_symlink()
                 for installation in installations.values() for binding in installation["clients"].values()), "managed owned package remains")
-    require(snapshot_paths(retained) == retained_before, "managed removal changed retained store/data")
+    validate_retained_paths(retained_before, snapshot_paths(retained), data_additions)
     require(command("list").get("installations") == [], "managed list not empty")
     native(False)
     before = gate.snapshot_roots(roots)

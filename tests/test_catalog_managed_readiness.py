@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -187,6 +189,7 @@ class ManagedReadinessTests(unittest.TestCase):
                 path = root / f"{index}-{client}"
                 path.mkdir()
                 binding = {"client_binding_id": f"b{index}-{client}", "client_id": client, "scope": "user", "materialization": "materialized", "verification": "installation_verified", "target_locator": str(path),
+                    "physical_artifact_id": f"artifact-{index}-{client}",
                     "package_revision": {"version": selected["package_version"], "resolved_revision": source["revision"], "tree_digest": selected["tree_digest"], "manifest_digest": selected["manifest_digest"]}}
                 installation["clients"][client] = binding
                 state["environment_receipts"].append({"receipt_id": binding["client_binding_id"], "environment_id": "user-default", "phase": "committed", "alias": aliases[selected["distribution_id"]], "client_id": client,
@@ -237,6 +240,87 @@ class ManagedReadinessTests(unittest.TestCase):
                 mutation(value)
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     managed.validate_state(value, self.case, ctx, root, aliases, clients=remaining)
+
+    def test_plain_remove_keeps_only_exact_retained_data_records(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state, ctx, aliases = self.state(root)
+            for index, installation in enumerate(state["installations"]):
+                installation["data_receipts"] = {f"receipt-{index}": {"locator": str(root / f"data-{index}"), "state": "owned"}}
+            initial = {item["directory"]["distribution_id"]: copy.deepcopy(item) for item in state["installations"]}
+            for installation in state["installations"]:
+                installation["clients"] = {}
+                installation["data_retained"] = True
+            for receipts in (None, []):
+                state["environment_receipts"] = receipts
+                managed.validate_retained_state(state, self.case, ctx, root, aliases, initial)
+            state.pop("environment_receipts")
+            managed.validate_retained_state(state, self.case, ctx, root, aliases, initial)
+            for mutation in (
+                lambda value: value["installations"].pop(),
+                lambda value: value["installations"][0].update(data_retained=False),
+                lambda value: value["installations"][0].update(installation_id="another"),
+                lambda value: value["installations"][0].update(data_receipts={}),
+                lambda value: value["installations"][0]["data_receipts"].update(forged={"secret": "PRIVATE"}),
+                lambda value: value["installations"][0]["clients"].update(codex=initial[managed.ROOT]["clients"]["codex"]),
+                lambda value: value["installations"][0]["source"].update(resolved_revision="b" * 40),
+            ):
+                value = copy.deepcopy(state)
+                mutation(value)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    managed.validate_retained_state(value, self.case, ctx, root, aliases, initial)
+            for receipts in ({}, False, 0, "", [{"secret": "PRIVATE"}]):
+                value = {**state, "environment_receipts": receipts}
+                with self.subTest(receipts=receipts), self.assertRaises(ValueError):
+                    managed.validate_retained_state(value, self.case, ctx, root, aliases, initial)
+            summary = managed.retained_state_summary({**state, "environment_receipts": [{"secret": "PRIVATE"}]})
+            self.assertIn('"count": 4', summary)
+            self.assertIn('"retained_installation_count": 4', summary)
+            for private in ("PRIVATE", "secret", str(root), "marketing-kit"):
+                self.assertNotIn(private, summary)
+            self.assertEqual(self.case["proof"]["retained_installation_count"], 4)
+            self.assertEqual(self.case["proof"]["active_binding_count"], 0)
+            self.assertEqual(self.case["proof"]["installation_count"], 0)
+
+    def test_removal_can_create_only_canonical_empty_retained_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state, ctx, aliases = self.state(root)
+            initial = {item["directory"]["distribution_id"]: copy.deepcopy(item) for item in state["installations"]}
+            paths = {"store": root / "state" / "store", "plugin-data": root / "state" / "plugin-data"}
+            before_paths = managed.snapshot_paths(paths)
+            for installation in state["installations"]:
+                original = initial[installation["directory"]["distribution_id"]]
+                installation.update(clients={}, data_retained=True, data_receipts={})
+                for binding in original["clients"].values():
+                    if binding["client_id"] in managed.NATIVE_TARGETS:
+                        continue
+                    backend = binding["physical_artifact_id"]
+                    receipt_id = "data_" + hashlib.sha256((original["installation_id"] + "\0" + backend + "\0user").encode()).hexdigest()[:24]
+                    locator = paths["plugin-data"] / backend
+                    locator.mkdir(parents=True, mode=0o700)
+                    paths["plugin-data"].chmod(0o700)
+                    receipt = {"data_receipt_id": receipt_id, "physical_backend_id": backend, "scope": "user", "locator": str(locator),
+                        "ownership_digest": "sha256:" + hashlib.sha256(("agentplugins-plugin-data-v1\0" + receipt_id + "\0" + str(locator)).encode()).hexdigest(), "state": "owned"}
+                    marker = locator / ".agentplugins-data-owner.json"
+                    marker.write_text(json.dumps(receipt) + "\n")
+                    marker.chmod(0o600)
+                    installation["data_receipts"][receipt_id] = receipt
+            state["environment_receipts"] = []
+            additions = managed.validate_retained_state(state, self.case, ctx, root, aliases, initial)
+            self.assertEqual(len(additions), 24)
+            managed.validate_retained_paths(before_paths, managed.snapshot_paths(paths), additions)
+            (paths["plugin-data"] / "unrelated").write_text("PRIVATE")
+            with self.assertRaisesRegex(ValueError, "unrelated"):
+                managed.validate_retained_paths(before_paths, managed.snapshot_paths(paths), additions)
+            (paths["plugin-data"] / "unrelated").unlink()
+            marker.write_text("{}")
+            with self.assertRaisesRegex(ValueError, "ownership"):
+                managed.validate_retained_state(state, self.case, ctx, root, aliases, initial)
+            existing = {"store": [], "plugin-data": [(".", 0o700, "directory"), ("keep", 0o600, "file", "old")]}
+            mutated = {"store": [], "plugin-data": [(".", 0o700, "directory"), ("keep", 0o600, "file", "new")]}
+            with self.assertRaisesRegex(ValueError, "existing"):
+                managed.validate_retained_paths(existing, mutated, set())
 
     def test_offline_artifact_cannot_omit_or_forge_managed_proof(self):
         baseline = copy.deepcopy(self.snapshot)
