@@ -6,6 +6,10 @@ released saved-environment protocol, including the transitive MCP closure.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
+import shutil
+import sys
 import os
 import stat
 from pathlib import Path
@@ -160,6 +164,39 @@ def snapshot_paths(paths):
     return result
 
 
+def seed_runtime(tool_bin, env):
+    # A version-only Codex shim is still a native activation backend to the
+    # released adapter. Keep native Codex absent; its config surface and the
+    # Cursor desktop fixture qualify preparation only. Expose Node explicitly.
+    for name in ("node", "npm", "npx"):
+        runtime = shutil.which(name)
+        require(runtime is not None, "managed runtime tool missing")
+        path = tool_bin / name
+        require(not path.exists() and not path.is_symlink(), "managed runtime fixture collision")
+        path.symlink_to(Path(runtime).resolve(strict=True))
+    env["PATH"] = str(tool_bin) + ":/usr/bin:/bin"
+    require(all(shutil.which(name, path=env["PATH"]) is None for name in ("codex", "cursor")),
+            "managed preparation fixture unexpectedly exposes a native client")
+
+
+def failure_diagnostics(command, result):
+    # Persist only fixed categories/client IDs, never response text, paths,
+    # URLs, credentials or native logs. Useful even for credential-free smoke.
+    body = (result.stdout + "\n" + result.stderr).lower()
+    categories = {
+        "client_missing": ("not detected", "client missing"),
+        "activation_failed": ("activation", "marketplace", "plugin add"),
+        "runtime_failed": ("npm", "node", "npx", "executable"),
+        "directory_refused": ("directory", "snapshot", "installer version"),
+        "network_failed": ("timeout", "timed out", "download", "http status"),
+        "ownership_refused": ("ownership", "permission", "drift"),
+        "transaction_failed": ("receipt", "transaction"),
+    }
+    return json.dumps({"command": command, "exit_code": result.returncode,
+        "categories": sorted(key for key, patterns in categories.items() if any(value in body for value in patterns)),
+        "clients": [name for name in CLIENTS if re.search(r"\b" + re.escape(name) + r"\b", body)]}, sort_keys=True)
+
+
 def run(args, root, case, ctx):
     # The composition owner provides confinement and the legacy native-listing
     # parser; no third client engine or portable semantics are introduced here.
@@ -169,17 +206,15 @@ def run(args, root, case, ctx):
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot, args.opencode))
     readonly = (*gate.tool_paths(args), args.managed_binary.absolute().parent)
-    for name in ("codex", "cursor"):
-        stub = root / "bin" / name
-        require(not stub.exists() and not stub.is_symlink(), "managed fixture collision")
-        stub.write_text('#!/bin/sh\n[ "$1" = --version ] || exit 1\necho 0.0.0\n')
-        stub.chmod(0o700)
+    seed_runtime(root / "bin", env)
 
     def command(*argv):
         args.failure_phase = "managed:" + argv[0]
         result = gate.child([str(args.managed_binary), *argv, "--format", "json"], root=root, readonly=readonly,
                             env=env, cwd=roots["workspace"], timeout=600)
-        require(result.returncode == 0, "managed CLI failed: " + argv[0])
+        if result.returncode != 0:
+            print("managed CLI failure: " + failure_diagnostics(argv[0], result), file=sys.stderr, flush=True)
+            raise ValueError("managed CLI command failed")
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)
         require(isinstance(value, dict), "managed CLI JSON shape")
         if argv[0] in ("add", "info", "list", "doctor"):

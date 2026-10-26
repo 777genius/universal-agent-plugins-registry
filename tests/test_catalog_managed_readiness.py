@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import copy
+import os
+import shutil
+import subprocess
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
@@ -37,6 +41,31 @@ class ManagedReadinessTests(unittest.TestCase):
         target["scopes"].append("project")
         with self.assertRaisesRegex(ValueError, "uncovered target policy"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
+
+    def test_preparation_does_not_expose_ambient_or_version_only_native_clients(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            ambient, tool_bin = root / "ambient", root / "bin"
+            ambient.mkdir(); tool_bin.mkdir()
+            for name in ("node", "npm", "npx", "codex", "cursor"):
+                tool = ambient / name
+                tool.write_text("#!/bin/sh\nexit 1\n")
+                tool.chmod(0o700)
+            env = {"PATH": str(ambient)}
+            self.assertIsNotNone(shutil.which("codex", path=env["PATH"]))
+            with patch.dict(os.environ, {"PATH": str(ambient)}):
+                managed.seed_runtime(tool_bin, env)
+            self.assertIsNone(shutil.which("codex", path=env["PATH"]))
+            self.assertIsNone(shutil.which("cursor", path=env["PATH"]))
+            self.assertEqual(Path(shutil.which("npm", path=env["PATH"])).resolve(), ambient / "npm")
+
+    def test_failure_diagnostics_never_copy_untrusted_response_text(self):
+        result = subprocess.CompletedProcess([], 1, "codex activation failed token=PRIVATE", "/private/path https://secret.test/")
+        summary = managed.failure_diagnostics("add", result)
+        self.assertIn('"activation_failed"', summary)
+        self.assertIn('"codex"', summary)
+        for private in ("PRIVATE", "private/path", "secret.test", "token="):
+            self.assertNotIn(private, summary)
 
     def test_policy_and_version_changes_fail_closed(self):
         for mutation in (
