@@ -201,18 +201,22 @@ def run(args, root, case, ctx):
     # The composition owner provides confinement and the legacy native-listing
     # parser; no third client engine or portable semantics are introduced here.
     import catalog_publication_readiness as gate
-    require(getattr(args, "managed_binary", None) is not None and gate.digest(args.managed_binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
+    require(getattr(args, "managed_binary", None) is not None, "missing managed released binary")
+    binary = args.managed_binary.resolve(strict=True)
+    require(gate.digest(binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
     args.failure_phase = "managed:prepare"
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.claude, args.copilot, args.opencode))
-    readonly = (*gate.tool_paths(args), args.managed_binary.absolute().parent)
+    readonly = (*gate.tool_paths(args), binary.parent)
     seed_runtime(root / "bin", env)
 
     def command(*argv):
         args.failure_phase = "managed:" + argv[0]
-        result = gate.child([str(args.managed_binary), *argv, "--format", "json"], root=root, readonly=readonly,
+        result = gate.child([str(binary), *argv, "--format", "json"], root=root, readonly=readonly,
                             env=env, cwd=roots["workspace"], timeout=600)
         if result.returncode != 0:
+            if callable(getattr(args, "on_failure", None)):
+                args.on_failure(result)
             print("managed CLI failure: " + failure_diagnostics(argv[0], result), file=sys.stderr, flush=True)
             raise ValueError("managed CLI command failed")
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)

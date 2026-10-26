@@ -314,7 +314,7 @@ sys.modules['catalog_process_isolation']=module
                         continue
                     consumers.add((path.name, name))
                     with self.subTest(workflow=path.name, job=name):
-                        expected_runner = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}" if path.name == "validate.yml" else "ubuntu-24.04"
+                        expected_runner = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}" if path.name in {"validate.yml", "pages.yml"} else "ubuntu-24.04"
                         self.assertEqual(job["runs-on"], expected_runner)
                         install = next((item for item in steps[:suite_index] if item.get("name") == install_name), None)
                         self.assertIsNotNone(install, "full discovery requires bubblewrap setup before the suite")

@@ -352,8 +352,12 @@ jobs:
             print(result.stdout)
             print(result.stderr, file=sys.stderr)
             result.check_returncode()
+        integrities = dict(zip(packages, (os.environ["CLAUDE_CODE_NPM_INTEGRITY"], os.environ["COPILOT_NPM_INTEGRITY"], os.environ["INSPECTOR_NPM_INTEGRITY"])))
+        lock = json.loads((root / "package-lock.json").read_text())["packages"]
         for name, version in packages.items():
             assert json.loads((root / "node_modules" / name / "package.json").read_text())["version"] == version
+            assert lock["node_modules/" + name]["version"] == version
+            assert lock["node_modules/" + name]["integrity"] == integrities[name]
         PY
     - name: Build the native OpenCode fixture
       env:
@@ -385,6 +389,9 @@ jobs:
             claude=parent / "catalog-tools/node_modules/.bin/claude", copilot=parent / "catalog-tools/node_modules/.bin/copilot",
             inspector=parent / "catalog-tools/node_modules/.bin/mcp-inspector", opencode=parent / "catalog-tools/fixture-bin/opencode",
             npx=Path(shutil.which("npx")), failure_phase="managed:prepare")
+        # The child receives only the credential-free test environment through
+        # run_isolated. Preserve bounded CLI errors for this non-publishing smoke.
+        args.on_failure = lambda result: print("Smoke CLI response:", result.stdout[:16000], result.stderr[:16000], file=sys.stderr)
         root = parent / "managed-smoke"
         try:
             managed.run(args, root, managed.expected(snapshot, gate.selected),
@@ -403,5 +410,5 @@ jobs:
         test ! -L "$profile"
         status=0
         sudo /usr/sbin/apparmor_parser --remove --skip-cache "$profile" || status=$?
-        sudo rm -- "$profile"
+        if test "$status" -eq 0; then sudo rm -- "$profile"; fi
         exit "$status"
