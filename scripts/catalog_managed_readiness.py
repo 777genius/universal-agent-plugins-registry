@@ -184,8 +184,16 @@ def seed_runtime(tool_bin, env, codex):
     detected_codex = shutil.which("codex", path=env["PATH"])
     require(detected_codex is not None and Path(detected_codex).resolve(strict=True) == expected_codex,
             "managed pinned Codex is not executable")
-    require(shutil.which("cursor", path=env["PATH"]) is None,
-            "managed preparation fixture unexpectedly exposes native Cursor")
+    # Released saved-install preflight requires an executable for Cursor too,
+    # but its adapter only prepares files and never invokes a native backend.
+    # This fixture answers version detection and cannot fake native operations.
+    cursor = tool_bin / "cursor"
+    require(not cursor.exists() and not cursor.is_symlink(), "managed Cursor fixture collision")
+    cursor.write_text('#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 1\necho 0.0.0\n')
+    cursor.chmod(0o700)
+    detected_cursor = shutil.which("cursor", path=env["PATH"])
+    require(detected_cursor is not None and Path(detected_cursor).resolve(strict=True) == cursor.resolve(strict=True),
+            "managed Cursor preparation fixture missing or substituted")
 
 
 def failure_diagnostics(command, result):

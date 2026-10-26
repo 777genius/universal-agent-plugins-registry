@@ -42,7 +42,7 @@ class ManagedReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered target policy"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
 
-    def test_runtime_exposes_only_explicit_codex_and_no_ambient_cursor(self):
+    def test_runtime_exposes_explicit_codex_and_owned_cursor_version_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             ambient, tool_bin, pinned = root / "ambient", root / "bin", root / "pinned"
@@ -60,15 +60,30 @@ class ManagedReadinessTests(unittest.TestCase):
             with patch.dict(os.environ, {"PATH": str(ambient)}):
                 managed.seed_runtime(tool_bin, env, codex)
             self.assertEqual(Path(shutil.which("codex", path=env["PATH"])).resolve(), codex)
-            self.assertIsNone(shutil.which("cursor", path=env["PATH"]))
+            cursor = tool_bin / "cursor"
+            self.assertEqual(Path(shutil.which("cursor", path=env["PATH"])).resolve(), cursor)
+            version = subprocess.run([str(cursor), "--version"], cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual((version.returncode, version.stdout.strip()), (0, "0.0.0"))
+            for argv in (("plugin", "list"), ("--version", "extra")):
+                result = subprocess.run([str(cursor), *argv], cwd=root, capture_output=True, text=True, check=False)
+                self.assertNotEqual(result.returncode, 0)
             self.assertEqual(Path(shutil.which("npm", path=env["PATH"])).resolve(), ambient / "npm")
             with self.assertRaisesRegex(ValueError, "must be absolute"):
                 managed.seed_runtime(tool_bin, env, Path("codex"))
 
+            # Do not replace an existing Cursor link with a permissive fixture.
+            cursor.unlink()
+            cursor.symlink_to(ambient / "cursor")
+            for name in ("node", "npm", "npx"):
+                (tool_bin / name).unlink()
+            with patch.dict(os.environ, {"PATH": str(ambient)}), self.assertRaisesRegex(ValueError, "Cursor fixture collision"):
+                managed.seed_runtime(tool_bin, env, codex)
+            self.assertEqual(cursor.resolve(), ambient / "cursor")
+
             # Substituting the explicitly linked native tool must not qualify
             # an arbitrary executable merely because its name is Codex.
             for replacement in (None, ambient / "codex"):
-                for name in ("node", "npm", "npx", "codex"):
+                for name in ("node", "npm", "npx", "codex", "cursor"):
                     (tool_bin / name).unlink(missing_ok=True)
                 if replacement is not None:
                     (tool_bin / "codex").symlink_to(replacement)
