@@ -98,6 +98,40 @@ class ManagedReadinessTests(unittest.TestCase):
         for private in ("PRIVATE", "private/path", "secret.test", "token="):
             self.assertNotIn(private, summary)
 
+    def test_codex_external_removal_uses_exact_native_identities_and_verifies_absence(self):
+        identities = [(name, "agentplugins-" + f"{index:012x}")
+                      for index, name in enumerate(("marketing-kit", "hubspot-crm", "notion", "playwright-bridge"))]
+        entries = [{"pluginId": name + "@" + marketplace, "name": name, "marketplaceName": marketplace,
+                    "installed": True, "enabled": True} for name, marketplace in identities]
+        for initial in (entries, [], entries[:2]):
+            calls = []
+            listings = iter(({"installed": initial}, {"installed": []}))
+            def command(*argv, **kwargs):
+                calls.append((argv, kwargs))
+                return next(listings) if argv[:2] == ("plugin", "list") else None
+            managed.remove_codex_plugins(command, identities)
+            self.assertEqual(calls[0], (("plugin", "list", "--json"), {}))
+            self.assertEqual(calls[-1], (("plugin", "list", "--json"), {}))
+            expected = []
+            for name, marketplace in identities:
+                expected.extend([(("plugin", "remove", name + "@" + marketplace, "--json"), {"allow_absent": True}),
+                                 (("plugin", "marketplace", "remove", marketplace, "--json"), {"allow_absent": True})])
+            self.assertEqual(calls[1:-1], expected)
+        for malformed in ([], {}, {"installed": {}}, {"installed": entries + entries[:1]},
+                          {"installed": [{**entries[0], "pluginId": "wrong@namespace"}]},
+                          {"installed": [{**entries[0], "enabled": "true"}]},
+                          {"installed": [{**entries[0], "name": "another-plugin", "pluginId": "another-plugin@" + identities[0][1]}]}):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                managed.validate_codex_listing(malformed, identities)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            managed.validate_codex_listing({"installed": entries[:1]}, identities, absent=True)
+        # A disabled or uninstalled row is still not proof that its identity was
+        # removed from Codex; the final installed[] must contain none of them.
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            managed.validate_codex_listing({"installed": [{**entries[0], "installed": False, "enabled": False}]}, identities, absent=True)
+        with self.assertRaisesRegex(ValueError, "identities"):
+            managed.remove_codex_plugins(lambda *a, **k: self.fail("must not invoke native CLI"), identities[:-1] + identities[:1])
+
     def test_policy_and_version_changes_fail_closed(self):
         for mutation in (
             lambda item: item["release_policies"][0].update(minimum_installer_version="0.1.90"),

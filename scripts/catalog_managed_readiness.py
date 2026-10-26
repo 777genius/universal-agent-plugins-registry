@@ -214,6 +214,39 @@ def failure_diagnostics(command, result):
         "clients": [name for name in CLIENTS if re.search(r"\b" + re.escape(name) + r"\b", body)]}, sort_keys=True)
 
 
+def validate_codex_listing(value, identities, *, absent=False):
+    """Recognize the released Codex installed[] contract, never text markers."""
+    require(isinstance(value, dict) and isinstance(value.get("installed"), list), "managed Codex listing shape")
+    expected = {name + "@" + marketplace for name, marketplace in identities}
+    found = set()
+    for entry in value["installed"]:
+        require(isinstance(entry, dict) and all(isinstance(entry.get(key), str) and entry[key]
+                for key in ("pluginId", "name", "marketplaceName")) and
+                type(entry.get("installed")) is bool and type(entry.get("enabled")) is bool,
+                "managed Codex listing entry")
+        identity = entry["pluginId"]
+        require(identity == entry["name"] + "@" + entry["marketplaceName"] and
+                identity in expected and identity not in found, "managed Codex listing identity")
+        found.add(identity)
+    require(not absent or not found, "managed Codex external removal incomplete")
+
+
+def remove_codex_plugins(command, identities):
+    # These identities come from the four validated saved bindings. The fresh
+    # profile may contain an inactive/absent plugin; both cases still require
+    # exact native cleanup before attesting external removal to UAP.
+    require(len(identities) == 4 and len({name for name, _ in identities}) == 4 and
+            len({marketplace for _, marketplace in identities}) == 4 and
+            all(re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) and
+                re.fullmatch(r"agentplugins-[0-9a-f]{12}", marketplace)
+                for name, marketplace in identities), "managed Codex removal identities")
+    validate_codex_listing(command("plugin", "list", "--json"), identities)
+    for name, marketplace in identities:
+        command("plugin", "remove", name + "@" + marketplace, "--json", allow_absent=True)
+        command("plugin", "marketplace", "remove", marketplace, "--json", allow_absent=True)
+    validate_codex_listing(command("plugin", "list", "--json"), identities, absent=True)
+
+
 def run(args, root, case, ctx):
     # The composition owner provides confinement and the legacy native-listing
     # parser; no third client engine or portable semantics are introduced here.
@@ -293,12 +326,36 @@ def run(args, root, case, ctx):
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
     retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
     retained_before = snapshot_paths(retained)
-    require(command("remove", "marketing-kit", "--target", ",".join(NATIVE_TARGETS)).get("outcome") == "completed", "managed native removal")
+    require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed Claude removal")
     native(False)
+
+    def codex_command(*argv, allow_absent=False):
+        args.failure_phase = "managed:codex_external_remove"
+        result = gate.child([str(codex), *argv], root=root, readonly=readonly,
+                            env={**env, "CODEX_HOME": str(roots["home"] / ".codex")},
+                            cwd=roots["workspace"], timeout=60)
+        if result.returncode != 0:
+            # This is the same idempotent negative recognized by the released
+            # adapter. Every removal is followed by a strict absence listing.
+            if allow_absent and "not configured or installed" in result.stdout + result.stderr:
+                return None
+            if callable(getattr(args, "on_failure", None)):
+                args.on_failure(result)
+            print("managed CLI failure: " + failure_diagnostics("remove", result), file=sys.stderr, flush=True)
+            raise ValueError("managed Codex external command failed")
+        if argv[:2] == ("plugin", "list"):
+            return gate.publication.parse_json_bytes(result.stdout.encode(), "managed Codex listing", max_bytes=gate.LIMIT)
+        return None
+
+    identities = [(selected["product_id"], gate.managed_marketplace(next(binding for binding in
+        installations[selected["distribution_id"]]["clients"].values() if binding["client_id"] == "codex")["physical_artifact_id"]))
+        for selected in case["closure"]]
+    remove_codex_plugins(codex_command, identities)
+    require(command("remove", "marketing-kit", "--target", "codex", "--external-uninstalled").get("outcome") == "completed", "managed Codex removal")
     partial = gate.read_json(state_file)
     remaining = tuple(client for client in CLIENTS if client not in NATIVE_TARGETS)
     validate_state(partial, case, ctx, root, aliases, clients=remaining)
-    require(command("remove", "marketing-kit", "--external-uninstalled").get("outcome") == "completed", "managed orphan removal")
+    require(command("remove", "marketing-kit").get("outcome") == "completed", "managed orphan removal")
     state = gate.read_json(state_file)
     require(state.get("installations") == [] and state.get("environment_receipts", []) == [], "managed orphan state remains")
     require(gate.read_json(lock_path).get("packages") == [], "managed orphan lock remains")
