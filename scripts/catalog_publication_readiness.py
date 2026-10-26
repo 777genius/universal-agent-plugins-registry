@@ -19,6 +19,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import catalog_managed_readiness as managed
 import build_registry as registry
 import directory_publication as publication
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -137,13 +138,13 @@ def context(args: argparse.Namespace, snapshot: dict, identity: dict) -> dict:
     return result
 
 
-def selected(snapshot: dict, alias: str, clients: tuple[str, ...]) -> dict:
+def selected(snapshot: dict, alias: str, clients: tuple[str, ...], *, cli: dict = CLI) -> dict:
     resolved = registry.resolve_directory(snapshot, alias, list(clients))
     distribution = next(item for item in snapshot["distributions"] if item["id"] == resolved["distribution_id"])
     release = next(item for item in distribution["releases"] if item["sequence"] == resolved["release_sequence"])
     policy = next(item for item in distribution["release_policies"] if item["release_sequence"] == release["sequence"])
     floor = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
-    cli_version = tuple(int(part) for part in CLI["version"].split("."))
+    cli_version = tuple(int(part) for part in cli["version"].split("."))
     require(floor <= cli_version, f"{alias}: selected release requires newer CLI")
     source = release["package_source"]
     require(SHA.fullmatch(source["revision"]) is not None, f"{alias}: source is not immutable")
@@ -211,10 +212,11 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
     Requiring authentication is a restriction, not a claim that accounts work.
     The two Cloudflare ChatGPT app replacements receive metadata-only checks.
     """
-    covered = {(selection["distribution_id"], selection["release_sequence"], client)
+    covered = {(selection["distribution_id"], selection["release_sequence"], client, "user")
                for selection, clients in selections for client in clients}
-    covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt")
+    covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt", "user")
                    for selection in (selected(snapshot, selector, ("chatgpt",)) for selector in STATIC))
+    covered.update(managed.coverage(managed.expected(snapshot, selected)))
     old = {item["id"]: item for item in baseline["distributions"]}
     for distribution in snapshot["distributions"]:
         before = old.get(distribution["id"], {})
@@ -226,7 +228,8 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
             if policy["status"] != "active" or distribution["status"] != "active":
                 continue
             for target in policy["targets"]:
-                if (distribution["id"], policy["release_sequence"], target["client"]) in covered:
+                if target["scopes"] and all((distribution["id"], policy["release_sequence"], target["client"], scope) in covered
+                                            for scope in target["scopes"]):
                     continue
                 old_entry = previous.get((policy["release_sequence"], target["client"]))
                 prior = old_entry[0] if old_entry else None
@@ -292,11 +295,15 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     )
     require(len(rows) == expected_rows and len(probes) >= 4,
             "fixed matrix cardinality mismatch")
-    return {"schema_version": 1, "kind": "catalog-publication-readiness-v1", "outcome": "passed",
+    result = {"schema_version": 1, "kind": "catalog-publication-readiness-v1", "outcome": "passed",
             "context": ctx, "cli": CLI, "baseline": identity, "rows": rows,
             "static_metadata": static_rows(snapshot), "mcp_probes": probes,
             "process_isolation": "linux-bubblewrap-per-child-v1",
             "runtime_claims": False, "account_runtime": "not_tested", "oauth": "not_tested"}
+    case = managed.expected(snapshot, selected)
+    if case is not None:
+        result["managed_dependencies"] = case
+    return result
 
 
 def validate_artifact(value: dict, expected: dict) -> None:
@@ -805,6 +812,9 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     require(not args.output.exists(), "output must be new; refusing stale success artifact")
     root.mkdir(mode=0o700)
     try:
+        if "managed_dependencies" in expected:
+            args.failure_phase = "managed:prepare"
+            managed.run(args, root / "managed-marketing-kit", expected["managed_dependencies"], expected["context"])
         for selection, clients in plan(snapshot):
             case_id = selection.get("_case_id", selection["selector"])
             args.failure_phase = "lifecycle:" + case_id
@@ -848,7 +858,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "sandbox", "output", "artifact", "claude", "copilot", "inspector", "opencode"):
+    for name in ("binary", "managed-binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result

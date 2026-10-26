@@ -226,7 +226,7 @@ class WorkflowContractTests(unittest.TestCase):
         producer = load(CATALOG_READINESS)["jobs"]["produce"]
         portable = load(VALIDATE)["jobs"]["portable-catalog"]
         self.assertEqual(producer["runs-on"], "ubuntu-24.04")
-        self.assertEqual(portable["runs-on"], producer["runs-on"])
+        self.assertEqual(portable["runs-on"], "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}")
         for job in (producer, portable):
             install = next(step for step in job["steps"] if step.get("name") == "Install the current stable Ubuntu bubblewrap package and record namespace policy")
             preflight = next(step for step in job["steps"] if step.get("name", "").startswith("Require Linux child confinement"))
@@ -260,32 +260,38 @@ module=types.ModuleType('catalog_process_isolation')
 def isolated(argv, **kwargs):
     root=Path(os.environ['TOOLS_ROOT']).resolve()
     assert kwargs['writable_root'] == kwargs['cwd'] == root
-    assert kwargs['timeout'] == 600
+    assert kwargs['timeout'] == (60 if argv[1] == '--version' else 600)
     assert 'GITHUB_TOKEN' not in kwargs['env']
     assert kwargs['env']['HOME'] == str(root/'home')
     assert kwargs['env']['NPM_CONFIG_CACHE'] == str(root/'npm-cache')
     assert kwargs['read_only_paths'] == (Path('/usr'),)
     if argv[1] == 'install':
-        for name,key in (('@anthropic-ai/claude-code','CLAUDE_CODE_VERSION'),('@github/copilot','COPILOT_VERSION'),('@modelcontextprotocol/inspector','INSPECTOR_VERSION')):
+        lock = {}
+        for name,key,integrity in (('@openai/codex','CODEX_VERSION','CODEX_NPM_INTEGRITY'),('@anthropic-ai/claude-code','CLAUDE_CODE_VERSION','CLAUDE_CODE_NPM_INTEGRITY'),('@github/copilot','COPILOT_VERSION','COPILOT_NPM_INTEGRITY'),('@modelcontextprotocol/inspector','INSPECTOR_VERSION','INSPECTOR_NPM_INTEGRITY')):
             path=root/'node_modules'/name/'package.json'
             path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text(json.dumps({'version':os.environ[key]}))
+            lock['node_modules/'+name] = {'version':os.environ[key], 'integrity':os.environ[integrity]}
+        if os.environ['FAIL_PHASE'] == 'integrity': lock['node_modules/@openai/codex']['integrity'] = 'wrong'
+        (root/'package-lock.json').write_text(json.dumps({'packages':lock}))
     with (root/'calls').open('a') as stream: stream.write(argv[1]+'\\n')
-    return subprocess.CompletedProcess(argv, 1 if os.environ['FAIL_PHASE']==argv[1] else 0, '', '')
+    return subprocess.CompletedProcess(argv, 1 if os.environ['FAIL_PHASE']==argv[1] else 0, ('codex-cli '+os.environ['CODEX_VERSION'] if argv[1]=='--version' else ''), '')
 module.run_isolated=isolated
 sys.modules['catalog_process_isolation']=module
 '''
-        for phase, expected in (("none", True), ("install", False), ("audit", False)):
+        for phase, expected in (("none", True), ("install", False), ("audit", False), ("integrity", False), ("--version", False)):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory) / "tools"
                 environment = {
                     "PATH": os.environ["PATH"], "TOOLS_ROOT": str(root), "FAIL_PHASE": phase,
                     "GITHUB_TOKEN": "fixture-must-not-reach-child",
+                    "CODEX_VERSION": "0.164.0", "CODEX_NPM_INTEGRITY": "fixture-codex",
+                    "CLAUDE_CODE_NPM_INTEGRITY": "fixture-claude", "COPILOT_NPM_INTEGRITY": "fixture-copilot", "INSPECTOR_NPM_INTEGRITY": "fixture-inspector",
                     "CLAUDE_CODE_VERSION": "2.1.251", "COPILOT_VERSION": "1.0.82", "INSPECTOR_VERSION": "2.1.0",
                 }
                 result = subprocess.run(["python3", "-c", prelude + code], cwd=directory, env=environment, capture_output=True)
                 self.assertEqual(result.returncode == 0, expected, result.stderr.decode())
-                self.assertEqual((root / "calls").read_text(), "install\n" if phase == "install" else "install\naudit\n")
+                self.assertEqual((root / "calls").read_text(), "install\n" if phase == "install" else "install\naudit\n" + ("--version\n" if phase in ("none", "--version") else ""))
 
     def test_opencode_fixture_build_is_native_hermetic_and_wired_before_the_matrix_proof(self) -> None:
         producer = load(CATALOG_READINESS)["jobs"]["produce"]
@@ -314,7 +320,8 @@ sys.modules['catalog_process_isolation']=module
                         continue
                     consumers.add((path.name, name))
                     with self.subTest(workflow=path.name, job=name):
-                        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+                        expected_runner = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}" if path.name in {"validate.yml", "pages.yml"} else "ubuntu-24.04"
+                        self.assertEqual(job["runs-on"], expected_runner)
                         install = next((item for item in steps[:suite_index] if item.get("name") == install_name), None)
                         self.assertIsNotNone(install, "full discovery requires bubblewrap setup before the suite")
                         self.assertEqual(install["run"], required_install)
