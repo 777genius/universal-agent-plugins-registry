@@ -116,8 +116,8 @@ env:
   AGENTPLUGINS_VERSION: "0.1.24"
 
 concurrency:
-  group: stable-launch-evidence-${{ github.repository }}-${{ github.sha }}-${{ github.run_attempt }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('stable-launch-fixture-pr-{0}', github.event.pull_request.number) || format('stable-launch-evidence-{0}-{1}-{2}', github.repository, github.sha, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate-publication-sequence:
