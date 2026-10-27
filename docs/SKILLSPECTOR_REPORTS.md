@@ -21,9 +21,9 @@ Use the repository, revision, and package path of the actual published Directory
 release when adding plugin entries. `path` must point to a root containing
 `SKILL.md`. For standalone skills, the displayed name is read from that file.
 
-The current 28-root selection covers every skill in the three active
-skill-bearing packages in published Directory snapshot 42: Context7, Cloudflare,
-and Agent Notifications (15 plugin skill roots). It also covers 13 standalone
+The current 28-root selection includes 15 skill roots from the three
+skill-bearing package sources represented in published Directory snapshot 42:
+Context7, Cloudflare, and Agent Notifications. It also covers 13 standalone
 skills from the live Skills catalog, including Cloudflare's `turnstile-spin` and
 12 of the first 14 popular listings observed on 2026-10-27. Standalone roots and
 frontmatter names were inspected at their recorded commits; the Cloudflare
