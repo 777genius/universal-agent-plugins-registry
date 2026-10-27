@@ -33,9 +33,18 @@ every scan and publication job.
 
 Eight partitions each attempt at most 128 skills per run. Every partition has a
 35-minute cooperative work budget within a 45-minute job, including bounded
-source preparation. New and changed identities advance before scheduled retries;
-older attempts receive priority within the retry queue. Results and attempt
-timestamps persist between runs. A source not yet attempted is counted as
+source preparation. Never-attempted logical skill roots advance first, in the
+selection's reviewed/popularity order. Changed immutable identities follow,
+ordered by the logical root's oldest attempt; expired unchanged retries come
+last, ordered by their exact-source attempt date. Logical scheduling identity
+uses kind, lowercase repository, path and plugin path, excluding the revision.
+Its bounded history survives head changes so a busy repository cannot repeatedly
+reset the queue ahead of never-attempted roots. History carries no scan results
+or retry cooldown to a new revision. Exact immutable identity still determines
+all evidence reuse and cooldowns. Results, exact attempts and logical history
+persist between runs in the internal 8 MiB attempt state, with at most 10,000
+currently selected logical subjects. Older state without history derives it
+only from validated actual attempts. A source not yet attempted is counted as
 pending, with no fabricated scan record. Acquisition and scan failures produce
 explicit results and retry state, so one unavailable source cannot repeatedly
 hold up the rest of the queue.

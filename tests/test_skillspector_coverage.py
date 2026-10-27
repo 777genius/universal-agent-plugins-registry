@@ -85,6 +85,85 @@ class CoverageTests(unittest.TestCase):
             records, _ = coverage.compatible_previous(prior, changed)
             self.assertNotIn(subjects[0]["id"], records)
 
+    def test_logical_progress_survives_four_serialized_repository_head_changes(self):
+        selection = {"schema_version": 1, "sources": [item(id=f"fixture/{n:03d}", path=f"skills/s{n}") for n in range(129)]}
+        previous, visited = None, set()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for number, revision in enumerate("abcd"):
+                current = copy.deepcopy(selection)
+                for subject in current["sources"]:
+                    subject["revision"] = revision * 40
+                chosen = coverage.plan_attempts(current, previous, 0, 1, 128)
+                self.assertEqual(len(chosen), 128)
+                if number == 1:
+                    self.assertEqual(chosen[0]["id"], "fixture/128")
+                visited.update(subject["id"] for subject in chosen)
+                coverage.merge_reports(current, previous, [worker(current,
+                    [outcome(subject, status="complete", days=4 - number) for subject in chosen])],
+                    source_commit=COMMIT, output_dir=root / str(number))
+                previous = coverage.read_bundle(root / str(number))
+                self.assertEqual(previous["manifest"]["coverage"]["pending"], 1)
+                self.assertTrue(all(record["source"]["revision"] == revision * 40
+                    for record in previous["records"].values()))
+                self.assertEqual(len(previous["history"]), 128 if number == 0 else 129)
+        self.assertEqual(len(visited), 129)
+
+    def test_legacy_attempts_derive_history_and_pending_history_survives_without_evidence(self):
+        selection = {"schema_version": 1, "sources": [item(id="fixture/known"),
+            item(id="fixture/new", path="skills/new")]}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prior = bundle(root / "legacy", selection,
+                [outcome(selection["sources"][0], status="complete", days=1)])
+            state_path = root / "legacy" / "attempts.json"
+            state = coverage.read_json(state_path, max_bytes=coverage.MAX_STATE_BYTES)
+            del state["history"]
+            coverage.write_bounded(state_path, state, coverage.MAX_STATE_BYTES)
+            prior = coverage.read_bundle(root / "legacy")
+            self.assertEqual(len(prior["history"]), 1)
+            changed = copy.deepcopy(selection)
+            changed["sources"][0].update(id="fixture/renamed", revision="d" * 40)
+            changed["sources"][1]["revision"] = "d" * 40
+            coverage.merge_reports(changed, prior, [worker(changed)], source_commit=COMMIT,
+                output_dir=root / "pending")
+            pending = coverage.read_bundle(root / "pending")
+            self.assertEqual(pending["records"], {})
+            self.assertEqual(pending["attempts"], {})
+            self.assertEqual(pending["manifest"]["coverage"], {"selected": 2, "reported": 0, "pending": 2})
+            history = list(pending["history"].values())
+            self.assertEqual([entry["id"] for entry in history], ["fixture/renamed"])
+            self.assertEqual(history[0]["last_attempted_at"], list(prior["history"].values())[0]["last_attempted_at"])
+            self.assertEqual([subject["id"] for subject in coverage.plan_attempts(changed, pending, 0, 1, 128)],
+                ["fixture/new", "fixture/renamed"])
+            self.assertEqual(coverage.logical_digest(item(repository="OWNER/REPO", revision="b" * 40)),
+                coverage.logical_digest(item()))
+
+    def test_logical_history_rejects_unknown_duplicate_future_and_regressed_entries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prior = bundle(root)
+            path = root / "attempts.json"
+            valid = coverage.read_json(path, max_bytes=coverage.MAX_STATE_BYTES)
+            variants = [None]
+            for modify in (
+                lambda state: state.update(history=[]),
+                lambda state: state["history"].append(copy.deepcopy(state["history"][0])),
+                lambda state: state["history"][0].update(id="unknown/subject"),
+                lambda state: state["history"][0].update(logical_digest="sha256:" + "0" * 64),
+                lambda state: state["history"][0].update(last_attempted_at="2099-01-01T00:00:00Z"),
+                lambda state: state["history"][0].update(last_attempted_at=ago(5)),
+                lambda state: state.update(history=[state["history"][0]] * (coverage.MAX_SOURCES + 1)),
+            ):
+                altered = copy.deepcopy(valid)
+                modify(altered)
+                variants.append(altered)
+            for altered in variants:
+                with self.subTest(history=altered):
+                    coverage.write_bounded(path, altered, coverage.MAX_STATE_BYTES)
+                    with self.assertRaises(PublicationError):
+                        coverage.read_bundle(root)
+
     def test_repository_partition_is_case_insensitive_and_exclusive(self):
         self.assertEqual(coverage.partition_for("Owner/Repo"), coverage.partition_for("owner/repo"))
         subjects = [item(id=f"fixture/{n}", repository=f"owner/repo{n}", path=f"skills/s{n}") for n in range(80)]

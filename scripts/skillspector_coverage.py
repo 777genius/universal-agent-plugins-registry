@@ -81,6 +81,43 @@ def source_digest(item):
         ("kind", "repository", "revision", "path", "plugin_path")}))
 
 
+def logical_digest(item):
+    """Scheduling identity only; never a key for reusable scan evidence."""
+    subject = {key: item[key] for key in ("kind", "repository", "path", "plugin_path")}
+    subject["repository"] = subject["repository"].lower()
+    return sha256_digest(canonical_json(subject))
+
+
+def update_history(selection, attempts, previous=None):
+    """Keep the latest actual attempt for each currently selected logical root."""
+    subjects = {}
+    for item in selection["sources"]:
+        subjects.setdefault(logical_digest(item), item)
+    history = {}
+    for key, entry in (previous or {}).items():
+        if key in subjects:
+            history[key] = {"id": subjects[key]["id"], "logical_digest": key,
+                            "last_attempted_at": entry["last_attempted_at"]}
+    by_id = {item["id"]: item for item in selection["sources"]}
+    for attempt in attempts.values():
+        key = logical_digest(by_id[attempt["id"]])
+        if key not in history or attempt["last_attempted_at"] > history[key]["last_attempted_at"]:
+            history[key] = {"id": subjects[key]["id"], "logical_digest": key,
+                            "last_attempted_at": attempt["last_attempted_at"]}
+    return history
+
+
+def compatible_history(previous, selection):
+    if not previous:
+        return {}
+    # Old v2 bundles predate scheduling history. Their already validated exact
+    # attempts establish history; pending roots establish no attempt evidence.
+    history = previous.get("history")
+    if history is None:
+        history = update_history(previous["selection"], previous["attempts"])
+    return update_history(selection, {}, history)
+
+
 def partition_for(repository: str, count: int = MAX_PARTITIONS) -> int:
     return int(hashlib.sha256(repository.lower().encode()).hexdigest(), 16) % count
 
@@ -212,7 +249,8 @@ def read_bundle(directory: Path | None):
             validate_record(record, item, generated)
             records[record["id"]] = record
     state = read_json(directory / "attempts.json", max_bytes=MAX_STATE_BYTES)
-    exact(state, ("schema_version", "source_commit", "generated_at", "selection_digest", "attempts"), "attempt state")
+    state_fields = ("schema_version", "source_commit", "generated_at", "selection_digest", "attempts")
+    exact(state, (*state_fields, "history") if isinstance(state, dict) and "history" in state else state_fields, "attempt state")
     require(state["schema_version"] == 2 and state["source_commit"] == manifest["source_commit"] and
             state["generated_at"] == manifest["generated_at"] and state["selection_digest"] == digest,
             "attempt state identity differs")
@@ -230,13 +268,35 @@ def read_bundle(directory: Path | None):
                 "attempt precedes its scan")
         attempts[attempt["id"]] = attempt
     require(set(attempts) == set(records), "attempt state must cover every reported source")
+    if "history" in state:
+        require(isinstance(state["history"], list) and len(state["history"]) <= MAX_SOURCES,
+                "invalid logical scheduling history")
+        history, history_ids = {}, set()
+        for entry in state["history"]:
+            exact(entry, ("id", "logical_digest", "last_attempted_at"), "logical history")
+            require(isinstance(entry["id"], str) and isinstance(entry["logical_digest"], str),
+                    "invalid logical history identity")
+            item = expected.get(entry["id"])
+            key = entry["logical_digest"]
+            require(item is not None and key == logical_digest(item) and key not in history and
+                    entry["id"] not in history_ids, "unknown or repeated logical history subject")
+            require(timestamp(entry["last_attempted_at"], "logical last_attempted_at") <= generated,
+                    "logical history is newer than bundle")
+            history[key] = entry
+            history_ids.add(entry["id"])
+        for attempt in attempts.values():
+            entry = history.get(logical_digest(expected[attempt["id"]]))
+            require(entry is not None and entry["last_attempted_at"] >= attempt["last_attempted_at"],
+                    "logical history precedes or omits a current attempt")
+    else:
+        history = update_history(selection, attempts)
     require(manifest["plugin_coverage"] == plugin_coverage(selection, records),
             "plugin coverage differs from selected and reported roots")
     summary_path = directory / "coverage.json"
     if summary_path.exists():
         require(summary_path.is_file() and not summary_path.is_symlink(), "discovery summary must be regular")
         validate_discovery_summary(read_json(summary_path, max_bytes=MAX_DISCOVERY_BYTES), selection, manifest["source_commit"])
-    return {"manifest": manifest, "selection": selection, "records": records, "attempts": attempts}
+    return {"manifest": manifest, "selection": selection, "records": records, "attempts": attempts, "history": history}
 
 
 def compatible_previous(previous, selection):
@@ -257,6 +317,7 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
     require(type(maximum_attempts) is int and 1 <= maximum_attempts <= MAX_ATTEMPTS, "invalid maximum attempts")
     current = current or datetime.now(timezone.utc)
     _, attempts = compatible_previous(previous, selection)
+    history = compatible_history(previous, selection)
     eligible = []
     for position, item in enumerate(selection["sources"]):
         if partition_for(item["repository"], partition_count) != partition_index:
@@ -267,8 +328,14 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
             deadline = ERROR_RETRY_SECONDS if old["status"] == "error" else CACHE_SECONDS
             if age < deadline:
                 continue
-        eligible.append((0 if old is None else 1, "" if old is None else old["last_attempted_at"],
-                         position if old is None else 0, item["id"], item))
+        logical = history.get(logical_digest(item))
+        if old is not None:
+            priority, last_attempt, tie = 2, old["last_attempted_at"], 0
+        elif logical is not None:
+            priority, last_attempt, tie = 1, logical["last_attempted_at"], position
+        else:
+            priority, last_attempt, tie = 0, "", position
+        eligible.append((priority, last_attempt, tie, item["id"], item))
     eligible.sort(key=lambda entry: entry[:4])
     return [entry[4] for entry in eligible[:maximum_attempts]]
 
@@ -456,6 +523,7 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     require(SHA.fullmatch(source_commit) is not None, "invalid source commit")
     require(workers, "worker artifacts are required")
     records, attempts = compatible_previous(previous, selection)
+    history = compatible_history(previous, selection)
     partitions, seen = set(), set()
     expected_count = workers[0]["partition"]["count"]
     for worker in workers:
@@ -472,6 +540,7 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
             attempts[outcome["id"]] = {key: outcome[key] for key in ("id", "source_digest", "last_attempted_at")}
             attempts[outcome["id"]]["status"] = outcome["record"]["status"]
     require(partitions == set(range(expected_count)), "missing worker partition")
+    history = update_history(selection, attempts, history)
     output_dir.mkdir(parents=True, exist_ok=True)
     grouped = defaultdict(list)
     for record in sorted(records.values(), key=lambda r: r["id"]):
@@ -510,7 +579,9 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     validate_manifest(manifest)
     write_bounded(output_dir / "selection.json", selection, MAX_SELECTION_BYTES)
     write_bounded(output_dir / "attempts.json", {"schema_version": 2, "source_commit": source_commit,
-        "generated_at": generated, "selection_digest": digest, "attempts": sorted(attempts.values(), key=lambda a: a["id"])}, MAX_STATE_BYTES)
+        "generated_at": generated, "selection_digest": digest,
+        "attempts": sorted(attempts.values(), key=lambda a: a["id"]),
+        "history": sorted(history.values(), key=lambda entry: entry["logical_digest"])}, MAX_STATE_BYTES)
     if discovery_summary is not None:
         summary = read_json(discovery_summary, max_bytes=MAX_DISCOVERY_BYTES)
         validate_discovery_summary(summary, selection, source_commit)
