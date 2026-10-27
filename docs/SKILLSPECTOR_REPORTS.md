@@ -83,6 +83,10 @@ v2 manifest (HTTP 404) permits fallback to the unchanged legacy v1 report.
 
 Loading, unavailable, incomplete and failed checks stay distinct. An absent
 assessment in an available repository report remains neutral as “Not checked.”
+Per-plugin coverage identifies how many selected skills have reports and how many
+are still waiting for background checks. A partly checked plugin cannot receive
+a no-findings status; its details show the checked/selected count. Pending skills
+are not represented as failed or completed scans.
 Plugin cards without skills omit the indicator. Results older than seven days
 or from a different plugin revision are historical. Standalone catalog listings
 do not provide an immutable source revision, so their matched reports remain
