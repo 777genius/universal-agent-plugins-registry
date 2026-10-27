@@ -24,6 +24,206 @@
       "revision": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
       "path": "skills/frontend-design",
       "plugin_path": null
+    },
+    {
+      "id": "registry/agents-sdk",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/agents-sdk",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/cloudflare-email-service",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/cloudflare-email-service",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/cloudflare-one-migrations",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/cloudflare-one-migrations",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/cloudflare-one",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/cloudflare-one",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/cloudflare",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/cloudflare",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/durable-objects",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/durable-objects",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/sandbox-migrate-to-next",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/sandbox-migrate-to-next",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/sandbox-next",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/sandbox-next",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/sandbox-stable",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/sandbox-stable",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/web-perf",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/web-perf",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/workers-best-practices",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/workers-best-practices",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/wrangler",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/wrangler",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "registry/agent-notifications",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "04697236be9c5bf202502e771240a97f29573905",
+      "path": "plugins/agent-notifications/skills/agent-notifications",
+      "plugin_path": "plugins/agent-notifications"
+    },
+    {
+      "id": "cloudflare/skills/turnstile-spin",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "9177f9a0bafc1ab61a0dae8dca57a8eb4d9f636d",
+      "path": "skills/turnstile-spin",
+      "plugin_path": null
+    },
+    {
+      "id": "vercel-labs/skills/find-skills",
+      "kind": "standalone_skill",
+      "repository": "vercel-labs/skills",
+      "revision": "533c7df02f9b4d913fb8eba553aa99d86103d1d4",
+      "path": "skills/find-skills",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/grill-me",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/productivity/grill-me",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/grill-with-docs",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/grill-with-docs",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/improve-codebase-architecture",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/improve-codebase-architecture",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/tdd",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/tdd",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/setup-matt-pocock-skills",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/setup-matt-pocock-skills",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/handoff",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/productivity/handoff",
+      "plugin_path": null
+    },
+    {
+      "id": "heygen-com/hyperframes/hyperframes-cli",
+      "kind": "standalone_skill",
+      "repository": "heygen-com/hyperframes",
+      "revision": "7053aa90dd16e9d1975b565a7014446964a86b20",
+      "path": "skills/hyperframes-cli",
+      "plugin_path": null
+    },
+    {
+      "id": "heygen-com/hyperframes/hyperframes",
+      "kind": "standalone_skill",
+      "repository": "heygen-com/hyperframes",
+      "revision": "7053aa90dd16e9d1975b565a7014446964a86b20",
+      "path": "skills/hyperframes",
+      "plugin_path": null
+    },
+    {
+      "id": "heygen-com/hyperframes/media-use",
+      "kind": "standalone_skill",
+      "repository": "heygen-com/hyperframes",
+      "revision": "7053aa90dd16e9d1975b565a7014446964a86b20",
+      "path": "skills/media-use",
+      "plugin_path": null
+    },
+    {
+      "id": "vercel-labs/agent-browser/agent-browser",
+      "kind": "standalone_skill",
+      "repository": "vercel-labs/agent-browser",
+      "revision": "edb40f1878864f90e14f6c11e26fdafd3fecc8dc",
+      "path": "skills/agent-browser",
+      "plugin_path": null
     }
   ]
 }
