@@ -35,7 +35,7 @@ SCANNER = {"id": "skillspector", "version": "2.13.1", "revision": "f3b25697d7625
 MAX_REPORT_BYTES = 8 << 20
 MAX_FINDINGS = 32
 MAX_ERRORS = 16
-MAX_FILES = 256
+MAX_FILES = 512
 MAX_TREE_BYTES = 4 << 20
 SCAN_TIMEOUT = 60
 PROFILE_DOCUMENT = {
@@ -229,8 +229,12 @@ def scan_source(scanner: Path, item: dict[str, Any], pinned: PinnedRepository,
     record = empty_record(item)
     try:
         files = bounded_package_files(pinned, item["path"])
-        require(len(files) <= MAX_FILES and sum(len(body) for _, _, body in files) <= MAX_TREE_BYTES,
-                "selected skill exceeds report scan limits")
+        tree_bytes = sum(len(body) for _, _, body in files)
+        if len(files) > MAX_FILES or tree_bytes > MAX_TREE_BYTES:
+            add_error(record, "input_limit_exceeded",
+                      f"Selected skill contains {len(files)} files and {tree_bytes} bytes; "
+                      f"limits are {MAX_FILES} files and {MAX_TREE_BYTES} bytes.")
+            return record
         require(any(path == "SKILL.md" for path, _, _ in files), "selected root has no SKILL.md")
         with tempfile.TemporaryDirectory(prefix="uap-skillspector-") as temporary:
             home = Path(temporary)
@@ -257,6 +261,10 @@ def scan_source(scanner: Path, item: dict[str, Any], pinned: PinnedRepository,
             code, body = run_scanner(scanner, ["scan", str(root), *PROFILE_DOCUMENT["arguments"]], home, SCAN_TIMEOUT)
             require(directory_tree_digest(root) == digest, "selected bytes changed during scan")
             return normalize_report(record, body, code, root)
+    except subprocess.TimeoutExpired:
+        record["status"] = "error"
+        add_error(record, "scan_timeout", f"Static scan exceeded its {SCAN_TIMEOUT}-second deadline.")
+        return record
     except (BridgeError, DiscoveryError, PublicationError, RegistryError, OSError, ValueError, RecursionError, yaml.YAMLError, subprocess.SubprocessError):
         record["status"] = "error"
         add_error(record, "scan_failed", "Selected skill could not be acquired, parsed, or scanned completely.")

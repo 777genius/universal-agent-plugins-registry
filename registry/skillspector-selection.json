@@ -224,6 +224,806 @@
       "revision": "edb40f1878864f90e14f6c11e26fdafd3fecc8dc",
       "path": "skills/agent-browser",
       "plugin_path": null
+    },
+    {
+      "id": "flowkit-labs/skills/reddit-automation",
+      "kind": "standalone_skill",
+      "repository": "flowkit-labs/skills",
+      "revision": "0c9e2b63f504a296a86e45ed3a60a426dd979ca6",
+      "path": "reddit-automation",
+      "plugin_path": null
+    },
+    {
+      "id": "designed-by-ai/skills/design-mobile-apps",
+      "kind": "standalone_skill",
+      "repository": "designed-by-ai/skills",
+      "revision": "03c20aec6dcedb5fabfb03dc37982eb52ef19ed6",
+      "path": "skills/design-mobile-apps",
+      "plugin_path": null
+    },
+    {
+      "id": "heygen-com/hyperframes/hyperframes-registry",
+      "kind": "standalone_skill",
+      "repository": "heygen-com/hyperframes",
+      "revision": "88068af95078be4a9d849496bce832509515b647",
+      "path": "skills/hyperframes-registry",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/triage",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/triage",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/prototype",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/prototype",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/grilling",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/productivity/grilling",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/domain-modeling",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/domain-modeling",
+      "plugin_path": null
+    },
+    {
+      "id": "101-skills/superpowers/ai-video-generation",
+      "kind": "standalone_skill",
+      "repository": "101-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/video/ai-video-generation",
+      "plugin_path": null
+    },
+    {
+      "id": "101-skills/superpowers/ai-image-generation",
+      "kind": "standalone_skill",
+      "repository": "101-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/image/ai-image-generation",
+      "plugin_path": null
+    },
+    {
+      "id": "101-skills/superpowers/twitter-automation",
+      "kind": "standalone_skill",
+      "repository": "101-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/social/twitter-automation",
+      "plugin_path": null
+    },
+    {
+      "id": "101-skills/superpowers/ai-avatar-video",
+      "kind": "standalone_skill",
+      "repository": "101-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/video/ai-avatar-video",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/teach",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/productivity/teach",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/codebase-design",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/codebase-design",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/diagnosing-bugs",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/diagnosing-bugs",
+      "plugin_path": null
+    },
+    {
+      "id": "vercel-labs/agent-skills/vercel-react-best-practices",
+      "kind": "standalone_skill",
+      "repository": "vercel-labs/agent-skills",
+      "revision": "6ec269328bc400712ee225a173a14b6b29128df7",
+      "path": "skills/react-best-practices",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/code-review",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/code-review",
+      "plugin_path": null
+    },
+    {
+      "id": "vercel-labs/agent-skills/web-design-guidelines",
+      "kind": "standalone_skill",
+      "repository": "vercel-labs/agent-skills",
+      "revision": "6ec269328bc400712ee225a173a14b6b29128df7",
+      "path": "skills/web-design-guidelines",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/implement",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/implement",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/ask-matt",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/ask-matt",
+      "plugin_path": null
+    },
+    {
+      "id": "magentosh/superpowers/ai-image-generation",
+      "kind": "standalone_skill",
+      "repository": "magentosh/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/image/ai-image-generation",
+      "plugin_path": null
+    },
+    {
+      "id": "magentosh/superpowers/ai-video-generation",
+      "kind": "standalone_skill",
+      "repository": "magentosh/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/video/ai-video-generation",
+      "plugin_path": null
+    },
+    {
+      "id": "magentosh/superpowers/ai-avatar-video",
+      "kind": "standalone_skill",
+      "repository": "magentosh/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/video/ai-avatar-video",
+      "plugin_path": null
+    },
+    {
+      "id": "magentosh/superpowers/twitter-automation",
+      "kind": "standalone_skill",
+      "repository": "magentosh/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/social/twitter-automation",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/wayfinder",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/wayfinder",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/to-spec",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/to-spec",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/to-tickets",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/to-tickets",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/research",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/research",
+      "plugin_path": null
+    },
+    {
+      "id": "remotion-dev/skills/remotion-best-practices",
+      "kind": "standalone_skill",
+      "repository": "remotion-dev/skills",
+      "revision": "30d4553ecd46fbc5212fd0ff006ae43af522158b",
+      "path": "skills/remotion-best-practices",
+      "plugin_path": null
+    },
+    {
+      "id": "leonxlnx/taste-skill/design-taste-frontend",
+      "kind": "standalone_skill",
+      "repository": "leonxlnx/taste-skill",
+      "revision": "12af471f627f866411b4bd785b19646d3672784c",
+      "path": "skills/taste-skill",
+      "plugin_path": null
+    },
+    {
+      "id": "juliusbrussee/caveman/caveman",
+      "kind": "standalone_skill",
+      "repository": "juliusbrussee/caveman",
+      "revision": "9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4",
+      "path": "skills/caveman",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/microsoft-foundry",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/microsoft-foundry",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-diagnostics",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-diagnostics",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-prepare",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-prepare",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-ai",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-ai",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-deploy",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-deploy",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-validate",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-validate",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-storage",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-storage",
+      "plugin_path": null
+    },
+    {
+      "id": "qu-skills/superpowers/ai-avatar-video",
+      "kind": "standalone_skill",
+      "repository": "qu-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/video/ai-avatar-video",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-compliance",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-compliance",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/appinsights-instrumentation",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/appinsights-instrumentation",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-resource-lookup",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-resource-lookup",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-resource-visualizer",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-resource-visualizer",
+      "plugin_path": null
+    },
+    {
+      "id": "qu-skills/superpowers/twitter-automation",
+      "kind": "standalone_skill",
+      "repository": "qu-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/social/twitter-automation",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/entra-app-registration",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/entra-app-registration",
+      "plugin_path": null
+    },
+    {
+      "id": "qu-skills/superpowers/ai-video-generation",
+      "kind": "standalone_skill",
+      "repository": "qu-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/video/ai-video-generation",
+      "plugin_path": null
+    },
+    {
+      "id": "qu-skills/superpowers/ai-image-generation",
+      "kind": "standalone_skill",
+      "repository": "qu-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/image/ai-image-generation",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-kusto",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-kusto",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-aigateway",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-aigateway",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/wizard",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/engineering/wizard",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-messaging",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-messaging",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-compute",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-compute",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/cloudflare",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/cloudflare",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/cloudflare-email-service",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/cloudflare-email-service",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/cloudflare-one",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/cloudflare-one",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/cloudflare-one-migrations",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/cloudflare-one-migrations",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/nextjs-on-cloudflare",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/nextjs-on-cloudflare",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/wrangler",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/wrangler",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/workers-best-practices",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/workers-best-practices",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/durable-objects",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/durable-objects",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/web-perf",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/web-perf",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/agents-sdk",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/agents-sdk",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/sandbox-stable",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/sandbox-stable",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/sandbox-next",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/sandbox-next",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/sandbox-migrate-to-next",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/sandbox-migrate-to-next",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/basin",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/basin",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/k2",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/k2",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/workers-profiling",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/workers-profiling",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/cf-cli",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/cf-cli",
+      "plugin_path": null
+    },
+    {
+      "id": "cloudflare/skills/gateway-workers",
+      "kind": "standalone_skill",
+      "repository": "cloudflare/skills",
+      "revision": "86505e44f87d801aa1864a3c4109e9a8ae5c409f",
+      "path": "skills/gateway-workers",
+      "plugin_path": null
+    },
+    {
+      "id": "heygen-com/hyperframes/remotion-to-hyperframes",
+      "kind": "standalone_skill",
+      "repository": "heygen-com/hyperframes",
+      "revision": "88068af95078be4a9d849496bce832509515b647",
+      "path": "skills/remotion-to-hyperframes",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-adk-code",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-adk-code",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-cloud-migrate",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-cloud-migrate",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-deploy",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-deploy",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-publish",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-publish",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-workflow",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-workflow",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-eval",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-eval",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-scaffold",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-scaffold",
+      "plugin_path": null
+    },
+    {
+      "id": "google/agents-cli/google-agents-cli-observability",
+      "kind": "standalone_skill",
+      "repository": "google/agents-cli",
+      "revision": "f4e994044164ff6617f0799900dba0fc091ef0e3",
+      "path": "skills/google-agents-cli-observability",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/to-questionnaire",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/productivity/to-questionnaire",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/git-guardrails-claude-code",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/misc/git-guardrails-claude-code",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/setup-pre-commit",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/misc/setup-pre-commit",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/writing-beats",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/in-progress/writing-beats",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/writing-shape",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/in-progress/writing-shape",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/writing-fragments",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/in-progress/writing-fragments",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/scaffold-exercises",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/misc/scaffold-exercises",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/migrate-to-shoehorn",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/misc/migrate-to-shoehorn",
+      "plugin_path": null
+    },
+    {
+      "id": "mattpocock/skills/writing-for-agents",
+      "kind": "standalone_skill",
+      "repository": "mattpocock/skills",
+      "revision": "59db609eb1e18aaf59b63284d0e52255aff0c63c",
+      "path": "skills/productivity/writing-for-agents",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-doc",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-doc",
+      "plugin_path": null
+    },
+    {
+      "id": "lllllllama/rigorpilot-skills/paper-context-resolver",
+      "kind": "standalone_skill",
+      "repository": "lllllllama/rigorpilot-skills",
+      "revision": "fb3ccdf5aa64b1fa5b1d0463e666a8bc8bc26e01",
+      "path": "skills/paper-context-resolver",
+      "plugin_path": null
+    },
+    {
+      "id": "lllllllama/rigorpilot-skills/repo-intake-and-plan",
+      "kind": "standalone_skill",
+      "repository": "lllllllama/rigorpilot-skills",
+      "revision": "fb3ccdf5aa64b1fa5b1d0463e666a8bc8bc26e01",
+      "path": "skills/repo-intake-and-plan",
+      "plugin_path": null
+    },
+    {
+      "id": "lllllllama/rigorpilot-skills/minimal-run-and-audit",
+      "kind": "standalone_skill",
+      "repository": "lllllllama/rigorpilot-skills",
+      "revision": "fb3ccdf5aa64b1fa5b1d0463e666a8bc8bc26e01",
+      "path": "skills/minimal-run-and-audit",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-base",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-base",
+      "plugin_path": null
+    },
+    {
+      "id": "lllllllama/rigorpilot-skills/env-and-assets-bootstrap",
+      "kind": "standalone_skill",
+      "repository": "lllllllama/rigorpilot-skills",
+      "revision": "fb3ccdf5aa64b1fa5b1d0463e666a8bc8bc26e01",
+      "path": "skills/env-and-assets-bootstrap",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-shared",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-shared",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-im",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-im",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-drive",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-drive",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-sheets",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-sheets",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-wiki",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-wiki",
+      "plugin_path": null
+    },
+    {
+      "id": "microsoft/azure-skills/azure-quotas",
+      "kind": "standalone_skill",
+      "repository": "microsoft/azure-skills",
+      "revision": "9bbcb2e7188e02dab5cc47d981f34f38a2d0419d",
+      "path": ".github/plugins/azure-skills/skills/azure-quotas",
+      "plugin_path": null
+    },
+    {
+      "id": "larksuite/cli/lark-whiteboard",
+      "kind": "standalone_skill",
+      "repository": "larksuite/cli",
+      "revision": "a92db8779c0959bc14beb69d82fb262123cfb79b",
+      "path": "skills/lark-whiteboard",
+      "plugin_path": null
     }
   ]
 }
