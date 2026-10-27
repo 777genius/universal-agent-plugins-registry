@@ -265,10 +265,15 @@ def load_sources(path):
     return value["sources"]
 
 
+def subject_key(source):
+    return (source["kind"], source["repository"].casefold(), source["revision"], source["path"], source["plugin_path"])
+
+
 def discover(listings, catalog, api, budget, *, source_commit, previous=(), reviewed=(), plugins=(),
              workers=8, mirror_root=None, previous_summary=None, max_pages=MAX_PAGES):
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be immutable")
     grouped = collections.defaultdict(list)
+    listing_names = {}
     diagnostics = []
     for listing in listings:
         if REPOSITORY_RE.fullmatch(listing["source"]) is None:
@@ -277,7 +282,9 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             diagnostics.append({"code": "listing_identity_limit", "repository": listing["source"]})
         else:
             grouped[listing["source"].casefold()].append(listing)
+            listing_names[f"{listing['source'].casefold()}/{listing['skillId']}"] = listing["name"]
     previous_by_repo = collections.defaultdict(list)
+    previous_by_id = {source["id"]: source for source in previous}
     for source in previous:
         previous_by_repo[source["repository"].casefold()].append(source)
     cache = previous_summary.get("resolution_cache", {}) if isinstance(previous_summary, dict) else {}
@@ -306,18 +313,21 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         prior = cache.get(repo, {})
         if not isinstance(prior, dict):
             prior = {}
-        prior_sources = {s["id"]: s for s in previous}
+        prior_sources = previous_by_id
         ids = prior.get("selected_ids")
         if prior.get("revision") == revision and prior.get("hints_digest") == hints and isinstance(ids, list) and \
                 all(isinstance(i, str) and i in prior_sources and prior_sources[i]["revision"] == revision and
-                    prior_sources[i]["repository"].casefold() == canonical.casefold() and
+                    prior_sources[i]["repository"].casefold() == repo.casefold() and
                     prior_sources[i]["kind"] == "standalone_skill" for i in ids) and \
                 isinstance(prior.get("diagnostics"), list) and all(isinstance(d, dict) and isinstance(d.get("code"), str) for d in prior["diagnostics"]):
             return repo, [prior_sources[i] for i in ids], prior.get("diagnostics", []), prior
         pinned = PinnedRepository(canonical, revision, mirror_root,
                                   github_token=getattr(api, "token", None) if mirror_root is None else None, work_budget=budget)
         try:
-            sources, issues, _ = resolve_listings(canonical, revision, grouped[repo], pinned, budget)
+            # Keep the provider locator for the public repository/name join.
+            # GitHub's canonical repository is used for acquisition and its
+            # verified immutable head is the subject revision either way.
+            sources, issues, _ = resolve_listings(repo, revision, grouped[repo], pinned, budget)
         finally:
             pinned.close()
         entry = {"revision": revision, "hints_digest": hints, "selected_ids": [s["id"] for s in sources],
@@ -337,19 +347,20 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, UnicodeError, subprocess.SubprocessError):
                 diagnostics.append({"code": "repository_acquisition_failed", "repository": repo})
 
-    fresh_sources = [source for sources in resolved.values() for source in sources]
-    # A fresh exact-name match supersedes its reviewed standalone predecessor;
-    # keeping two revisions would make the public repo/name assessment ambiguous.
-    candidates = [old for old in reviewed if old["kind"] == "plugin_skill" or not any(
-        new["repository"].casefold() == old["repository"].casefold() and
-        (new["path"] == old["path"] or new["id"].rsplit("/", 1)[-1] == old["id"].rsplit("/", 1)[-1])
-        for new in fresh_sources)]
+    candidates = []
+    superseded_plugin_roots = set()
     for repo in sorted(grouped):
         if repo in resolved:
             candidates.extend(resolved[repo])
         else:
-            candidates.extend(previous_by_repo.get(repo, []))
-            if previous_by_repo.get(repo):
+            # A provider locator may be an old alias while a previous subject
+            # stores GitHub's canonical renamed repository. Its stable listing
+            # ID still proves which historical subject must survive a failure.
+            historical = list(previous_by_repo.get(repo, []))
+            historical.extend(previous_by_id[identity] for row in grouped[repo]
+                if (identity := f"{row['source'].casefold()}/{row['skillId']}") in previous_by_id)
+            candidates.extend(historical)
+            if historical:
                 retained.add(repo)
     if not catalog["complete"]:
         for repo in sorted(set(previous_by_repo) - set(grouped)):
@@ -369,6 +380,12 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             finally:
                 pinned.close()
             prefix = (source["path"] + "/" if source["path"] else "") + "skills/"
+            # An explicit published Directory source supersedes historical
+            # plugin revisions only after successful enumeration. Otherwise
+            # preserve their exact immutable evidence for the next attempt.
+            candidates = [old for old in candidates if not (old["kind"] == "plugin_skill" and
+                old["repository"].casefold() == source["repository"].casefold() and old["plugin_path"] == source["path"])]
+            superseded_plugin_roots.add((source["repository"].casefold(), source["path"]))
             for path in sorted({path for paths in names.values() for path in paths}):
                 if path.startswith(prefix) and "/" not in path[len(prefix):]:
                     candidates.append({"id": f"plugin:{plugin['name']}/{path[len(prefix):]}", "kind": "plugin_skill",
@@ -378,9 +395,21 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             diagnostics.append({"code": "plugin_acquisition_failed", "repository": source.get("repository", "")})
             candidates.extend(s for s in previous if s["kind"] == "plugin_skill" and
                               s["repository"] == source.get("repository") and s["plugin_path"] == source.get("path"))
+    # Current resolved or retained prior subjects take precedence over the
+    # initial reviewed bootstrap. A failed acquisition must never regress a
+    # previously resolved current subject to its older bootstrap revision.
+    for old in reviewed:
+        if old["kind"] == "plugin_skill" and (old["repository"].casefold(), old["plugin_path"]) in superseded_plugin_roots:
+            continue
+        successor = any(new["kind"] == old["kind"] and new["repository"].casefold() == old["repository"].casefold() and
+            (new["path"] == old["path"] or (old["kind"] == "standalone_skill" and
+             old["id"].rsplit("/", 1)[-1] in {new["id"].rsplit("/", 1)[-1], listing_names.get(new["id"])}))
+            for new in candidates)
+        if not successor:
+            candidates.append(old)
     subjects, ids, selected = set(), set(), []
     for source in candidates:
-        subject = tuple(source[key] for key in ("kind", "repository", "revision", "path", "plugin_path"))
+        subject = subject_key(source)
         if source["id"] not in ids and subject not in subjects and valid_source(source):
             ids.add(source["id"])
             subjects.add(subject)
@@ -389,10 +418,10 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
     selected = selected[:MAX_ROOTS]
     # Dedupe can replace a generated ID with an equivalent already-selected ID.
     # Cache only the actual emitted subjects, so the next run can reuse them.
-    emitted_by_subject = {tuple(s[k] for k in ("kind", "repository", "revision", "path", "plugin_path")): s["id"] for s in selected}
+    emitted_by_subject = {subject_key(s): s["id"] for s in selected}
     for repo, entry in resolution_cache.items():
         entry["selected_ids"] = sorted({emitted_by_subject[subject] for s in resolved[repo]
-            if (subject := tuple(s[k] for k in ("kind", "repository", "revision", "path", "plugin_path"))) in emitted_by_subject})
+            if (subject := subject_key(s)) in emitted_by_subject})
     counts = dict(sorted(collections.Counter(d["code"] for d in diagnostics).items()))
     selection = {"schema_version": 1, "sources": sorted(selected, key=lambda s: s["id"])}
     summary = {"schema_version": 1, "source_commit": source_commit, "generated_at": now(),
@@ -401,7 +430,7 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                "listings_observed": len(listings), "repositories_observed": len(grouped),
                "repositories_resolved": len(resolved), "repositories_retained": len(retained),
                "selected_roots": len(selected), "selection_digest": sha256_digest(canonical_json(selection)),
-               "complete": catalog["complete"] and len(resolved) == len(grouped) and not truncated,
+               "complete": catalog["complete"] and len(resolved) == len(grouped) and not truncated and not counts.get("plugin_acquisition_failed"),
                "selection_truncated": truncated, "diagnostic_counts": counts,
                "diagnostics": diagnostics[:MAX_DIAGNOSTICS], "diagnostics_truncated": len(diagnostics) > MAX_DIAGNOSTICS,
                "resolution_cache": resolution_cache}
@@ -422,7 +451,7 @@ def main():
     budget = WorkBudget(args.budget_seconds)
     listings, catalog = browse_catalog(budget, max_pages=args.max_pages)
     previous_summary = read_json(args.previous_summary, max_bytes=16 << 20) if args.previous_summary and args.previous_summary.exists() else None
-    selection, summary = discover(listings, catalog, GitHubAPI(os.environ.get("GITHUB_TOKEN", "")), budget,
+    selection, summary = discover(listings, catalog, GitHubAPI(os.environ.get("GITHUB_TOKEN", ""), work_budget=budget), budget,
                                   source_commit=args.source_commit, previous=load_sources(args.previous_selection),
                                   reviewed=load_sources(ROOT / "registry/skillspector-selection.json"),
                                   plugins=read_json(ROOT / "registry/index.json")["plugins"], workers=args.workers,

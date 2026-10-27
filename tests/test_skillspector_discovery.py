@@ -191,6 +191,60 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(discovery.valid_source(item(path="../outside")))
         self.assertFalse(discovery.valid_source(item(kind="plugin_skill", plugin_path="plugins/demo", path="skills/demo")))
 
+    def test_transient_renamed_repository_keeps_canonical_previous_subject(self):
+        previous = item(id="owner/repo/demo", repository="canonical/renamed")
+        state = {"owner/repo": {"available": True, "repository": "canonical/renamed", "revision": "a" * 40}}
+        with mock.patch.object(discovery, "repository_states", return_value=state), \
+             mock.patch.object(discovery, "PinnedRepository", side_effect=OSError("temporary")):
+            selection, summary = self.run_discovery([listing()], previous=[previous])
+        self.assertEqual(selection["sources"], [previous])
+        self.assertEqual(summary["repositories_retained"], 1)
+
+    def test_explicit_published_plugin_replaces_historical_revision_only_on_success(self):
+        old = item(id="reviewed/demo", kind="plugin_skill", path="plugins/current/skills/demo",
+                   plugin_path="plugins/current", revision="c" * 40)
+        plugin = {"name": "current", "components": ["skills"], "source": {
+            "repository": "owner/repo", "revision": "d" * 40, "path": "plugins/current"}}
+        with mock.patch.object(discovery, "PinnedRepository"), \
+             mock.patch.object(discovery, "skill_documents", return_value=({"demo": [old["path"]]}, [])):
+            selection, _ = self.run_discovery([], reviewed=[old], plugins=[plugin])
+        self.assertEqual(len(selection["sources"]), 1)
+        self.assertEqual(selection["sources"][0]["revision"], "d" * 40)
+        with mock.patch.object(discovery, "PinnedRepository", side_effect=OSError("temporary")):
+            selection, summary = self.run_discovery([], reviewed=[old], plugins=[plugin])
+        self.assertEqual(selection["sources"], [old])
+        self.assertEqual(summary["diagnostic_counts"]["plugin_acquisition_failed"], 1)
+
+    def test_subject_identity_is_repository_case_insensitive(self):
+        self.assertEqual(discovery.subject_key(item(repository="Owner/Repo")), discovery.subject_key(item()))
+
+    def test_failed_refresh_never_regresses_current_to_older_reviewed_bootstrap(self):
+        old = item(id="owner/repo/demo", revision="c" * 40)
+        previous = item(id="owner/repo/demo", revision="d" * 40)
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository", side_effect=OSError("temporary")):
+            selection, _ = self.run_discovery([listing()], previous=[previous], reviewed=[old])
+        self.assertEqual(selection["sources"], [previous])
+
+    def test_renamed_repo_fetches_canonical_but_reports_provider_join_identity(self):
+        state = {"owner/repo": {"available": True, "repository": "canonical/renamed", "revision": "a" * 40}}
+        with mock.patch.object(discovery, "repository_states", return_value=state), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned, \
+             mock.patch.object(discovery, "resolve_listings", return_value=([item(id="owner/repo/demo")], [], {})) as resolve:
+            selection, _ = self.run_discovery([listing()])
+        self.assertEqual(pinned.call_args.args[0], "canonical/renamed")
+        self.assertEqual(resolve.call_args.args[0], "owner/repo")
+        self.assertEqual(selection["sources"][0]["repository"], "owner/repo")
+
+    def test_moved_root_with_new_slug_supersedes_same_exact_declared_name(self):
+        old = item(id="legacy/demo", revision="c" * 40)
+        current = item(id="owner/repo/new-slug", path="new-location/demo")
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository"), \
+             mock.patch.object(discovery, "resolve_listings", return_value=([current], [], {})):
+            selection, _ = self.run_discovery([listing("demo", "new-slug")], reviewed=[old])
+        self.assertEqual(selection["sources"], [current])
+
 
 if __name__ == "__main__":
     unittest.main()
