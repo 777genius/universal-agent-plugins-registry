@@ -258,7 +258,7 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
     current = current or datetime.now(timezone.utc)
     _, attempts = compatible_previous(previous, selection)
     eligible = []
-    for item in selection["sources"]:
+    for position, item in enumerate(selection["sources"]):
         if partition_for(item["repository"], partition_count) != partition_index:
             continue
         old = attempts.get(item["id"])
@@ -267,9 +267,10 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
             deadline = ERROR_RETRY_SECONDS if old["status"] == "error" else CACHE_SECONDS
             if age < deadline:
                 continue
-        eligible.append((0 if old is None else 1, "" if old is None else old["last_attempted_at"], item["id"], item))
-    eligible.sort(key=lambda entry: entry[:3])
-    return [entry[3] for entry in eligible[:maximum_attempts]]
+        eligible.append((0 if old is None else 1, "" if old is None else old["last_attempted_at"],
+                         position if old is None else 0, item["id"], item))
+    eligible.sort(key=lambda entry: entry[:4])
+    return [entry[4] for entry in eligible[:maximum_attempts]]
 
 
 def scan_selected(scanner, item, pinned, budget):

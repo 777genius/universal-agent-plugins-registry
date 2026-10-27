@@ -92,6 +92,14 @@ class CoverageTests(unittest.TestCase):
         all_ids = [s["id"] for index in range(8) for s in coverage.plan_attempts(selection, None, index, 8, 128)]
         self.assertEqual(sorted(all_ids), sorted(s["id"] for s in subjects))
 
+    def test_cold_queue_preserves_reviewed_and_popular_priority_instead_of_lexical_ids(self):
+        subjects = [item(id="z-reviewed/known", path="skills/known"),
+                    item(id="m-popular/top", path="skills/popular"),
+                    item(id="a-tail/low", path="skills/tail")]
+        selection = {"schema_version": 1, "sources": subjects}
+        chosen = coverage.plan_attempts(selection, None, 0, 1, 2)
+        self.assertEqual([source["id"] for source in chosen], [source["id"] for source in subjects[:2]])
+
     def test_actual_inert_fixture_scan_has_no_llm_and_reuses_exact_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
