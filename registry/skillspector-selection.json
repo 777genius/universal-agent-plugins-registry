@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "upstash/context7-mcp",
+      "kind": "plugin_skill",
+      "repository": "upstash/context7",
+      "revision": "769c6cd22c3d95462d1f55d789e9532cabefa5a9",
+      "path": "plugins/agent-plugins/context7/skills/context7-mcp",
+      "plugin_path": "plugins/agent-plugins/context7"
+    },
+    {
+      "id": "registry/turnstile-spin",
+      "kind": "plugin_skill",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091",
+      "path": "plugins/cloudflare/skills/turnstile-spin",
+      "plugin_path": "plugins/cloudflare"
+    },
+    {
+      "id": "anthropics/frontend-design",
+      "kind": "standalone_skill",
+      "repository": "anthropics/skills",
+      "revision": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+      "path": "skills/frontend-design",
+      "plugin_path": null
+    }
+  ]
+}

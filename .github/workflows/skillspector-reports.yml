@@ -1,0 +1,107 @@
+name: SkillSpector static reports
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "registry/skillspector-selection.json"
+      - "schemas/skillspector-*.schema.json"
+      - "scripts/skillspector_reports.py"
+      - "scripts/publish_skillspector_reports.py"
+      - "tests/test_skillspector*.py"
+      - ".github/workflows/skillspector-reports.yml"
+  schedule:
+    - cron: "19 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skillspector-static-reports
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035 # v2.13.1
+          persist-credentials: false
+          path: scanner
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned tooling and locked scanner
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4 cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+      - name: Test scanner and publication boundaries
+        working-directory: source
+        run: python3 -m unittest tests.test_skillspector_reports tests.test_skillspector_publication
+      - name: Read previous display results for bounded cache reuse
+        working-directory: source
+        run: python3 -m scripts.publish_skillspector_reports previous --output "${RUNNER_TEMP}/previous.json"
+      - name: Scan selected immutable skills without LLMs
+        working-directory: source
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m scripts.skillspector_reports \
+            --scanner "${GITHUB_WORKSPACE}/scanner/.venv/bin/skillspector" \
+            --source-commit "${SOURCE_COMMIT}" \
+            --previous "${RUNNER_TEMP}/previous.json" \
+            --output "${RUNNER_TEMP}/skillspector/index.json"
+          python3 -m scripts.publish_skillspector_reports check \
+            --report "${RUNNER_TEMP}/skillspector/index.json" --source-commit "${SOURCE_COMMIT}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-static-report
+          path: ${{ runner.temp }}/skillspector/index.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: scan
+    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: skillspector-static-report
+          path: ${{ runner.temp }}/skillspector
+      - name: Validate artifact against this exact source and selection
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m scripts.publish_skillspector_reports check \
+            --report "${RUNNER_TEMP}/skillspector/index.json" --source-commit "${SOURCE_COMMIT}"
+      - name: Publish only the display report to its dedicated branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m scripts.publish_skillspector_reports publish \
+            --report "${RUNNER_TEMP}/skillspector/index.json" --source-commit "${SOURCE_COMMIT}"
