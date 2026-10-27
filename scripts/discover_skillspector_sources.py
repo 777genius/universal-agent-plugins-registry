@@ -425,16 +425,47 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             ids.add(source["id"])
             subjects.add(subject)
             selected.append(source)
+    # Preserve useful cold-start coverage: reviewed roots (including verified
+    # successors) first, then the provider's popularity order. Retained roots
+    # outside the acquired catalog keep a deterministic ID fallback.
+    reviewed_ids, reviewed_paths, reviewed_names = {}, {}, {}
+    for position, source in enumerate(reviewed):
+        reviewed_ids.setdefault(source["id"], position)
+        reviewed_paths.setdefault((source["kind"], source["repository"].casefold(), source["path"]), position)
+        if source["kind"] == "standalone_skill":
+            reviewed_names.setdefault((source["repository"].casefold(), source["id"].rsplit("/", 1)[-1]), position)
+    catalog_positions = {}
+    for position, row in enumerate(listings):
+        catalog_positions.setdefault(f"{row['source'].casefold()}/{row['skillId']}", position)
+
+    def priority(source):
+        positions = [reviewed_ids.get(source["id"]), reviewed_paths.get((source["kind"], source["repository"].casefold(), source["path"]))]
+        if source["kind"] == "standalone_skill":
+            positions.extend(reviewed_names.get((source["repository"].casefold(), name)) for name in
+                             (source["id"].rsplit("/", 1)[-1], listing_names.get(source["id"])))
+        positions = [position for position in positions if position is not None]
+        if positions:
+            return (0, min(positions), source["id"])
+        if source["id"] in catalog_positions:
+            return (1, catalog_positions[source["id"]], source["id"])
+        return (2, 0, source["id"])
+
+    selected.sort(key=priority)
     truncated = len(selected) > MAX_ROOTS
     selected = selected[:MAX_ROOTS]
     # Dedupe can replace a generated ID with an equivalent already-selected ID.
     # Cache only the actual emitted subjects, so the next run can reuse them.
     emitted_by_subject = {subject_key(s): s["id"] for s in selected}
-    for repo, entry in resolution_cache.items():
+    for repo, entry in list(resolution_cache.items()):
+        if any(subject_key(source) not in emitted_by_subject for source in resolved[repo]):
+            # A capped result is not a complete reusable name resolution. Do
+            # not let omitted roots become permanent cache misses next run.
+            del resolution_cache[repo]
+            continue
         entry["selected_ids"] = sorted({emitted_by_subject[subject] for s in resolved[repo]
             if (subject := subject_key(s)) in emitted_by_subject})
     counts = dict(sorted(collections.Counter(d["code"] for d in diagnostics).items()))
-    selection = {"schema_version": 1, "sources": sorted(selected, key=lambda s: s["id"])}
+    selection = {"schema_version": 1, "sources": selected}
     summary = {"schema_version": 1, "source_commit": source_commit, "generated_at": now(),
                "scope": "bounded_catalog_and_reviewed_sources", "catalog": catalog,
                "bounds": {"pages": max_pages, "listings": MAX_LISTINGS, "roots": MAX_ROOTS},

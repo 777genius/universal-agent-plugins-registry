@@ -140,7 +140,7 @@ class DiscoveryTests(unittest.TestCase):
         previous = [item(id="owner/repo/demo"), item(id="other/repo/demo", repository="other/repo")]
         with mock.patch.object(discovery, "repository_states", return_value={}):
             selection, summary = self.run_discovery([listing()], previous=previous, catalog=catalog(False))
-        self.assertEqual(selection["sources"], sorted(previous, key=lambda s: s["id"]))
+        self.assertEqual(selection["sources"], previous)
         self.assertEqual(summary["repositories_retained"], 2)
         self.assertFalse(summary["complete"])
 
@@ -257,6 +257,23 @@ class DiscoveryTests(unittest.TestCase):
              mock.patch.object(discovery, "resolve_listings", return_value=([current], [], {})):
             selection, _ = self.run_discovery([listing("demo", "new-slug")], reviewed=[old])
         self.assertEqual(selection["sources"], [current])
+
+    def test_reviewed_successor_and_popularity_win_before_alphabetical_cold_tail_and_cap(self):
+        old = item(id="legacy/reviewed", path="skills/reviewed", revision="c" * 40)
+        reviewed = item(id="owner/repo/z-reviewed", path="skills/reviewed")
+        popular = item(id="owner/repo/z-popular", path="skills/popular")
+        tail = item(id="owner/repo/a-tail", path="skills/tail")
+        rows = [listing("popular", "z-popular"), listing("tail", "a-tail"), listing("reviewed", "z-reviewed")]
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository"), \
+             mock.patch.object(discovery, "resolve_listings", return_value=([tail, popular, reviewed], [], {})):
+            selection, _ = self.run_discovery(rows, reviewed=[old])
+            self.assertEqual(selection["sources"], [reviewed, popular, tail])
+            with mock.patch.object(discovery, "MAX_ROOTS", 2):
+                capped, summary = self.run_discovery(rows, reviewed=[old])
+        self.assertEqual(capped["sources"], [reviewed, popular])
+        self.assertTrue(summary["selection_truncated"])
+        self.assertNotIn("owner/repo", summary["resolution_cache"])
 
 
 if __name__ == "__main__":
