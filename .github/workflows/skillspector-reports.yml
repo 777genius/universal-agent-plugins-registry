@@ -38,7 +38,7 @@ concurrency:
 jobs:
   prepare:
     if: github.repository == '777genius/universal-agent-plugins-registry' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
       contents: read
@@ -52,7 +52,7 @@ jobs:
           python-version: "3.12"
       - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
       - name: Test discovery, scanner and publication boundaries
-        run: python3 -m unittest discover -s tests -p 'test_skillspector*.py'
+        run: python3 -m unittest tests.test_skillspector_reports tests.test_skillspector_publication tests.test_skillspector_discovery tests.test_skillspector_coverage
       - name: Read the previous immutable report snapshot
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -81,7 +81,7 @@ jobs:
 
   scan:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -137,7 +137,7 @@ jobs:
 
   assemble:
     needs: [prepare, scan]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -182,7 +182,7 @@ jobs:
   publish:
     needs: assemble
     if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
