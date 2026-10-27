@@ -91,6 +91,10 @@ class DiscoveryError(Exception):
     pass
 
 
+class DiscoveryInputLimitError(DiscoveryError):
+    """A selected tree was refused before acquiring oversized blob contents."""
+
+
 class ProgressReporter:
     """Emit only explicit operational fields, outside all signed artifacts."""
 
@@ -492,7 +496,9 @@ def repository_states(api: GitHubAPI, repositories: list[str],
     return states
 
 
-def bounded_package_files(repository: PinnedRepository, package_path: str) -> list[tuple[str, int, bytes]]:
+def bounded_package_files(repository: PinnedRepository, package_path: str, *,
+                          max_files: int = MAX_FILES, max_file_bytes: int = MAX_FILE_BYTES,
+                          max_tree_bytes: int = MAX_TREE_BYTES) -> list[tuple[str, int, bytes]]:
     budget = getattr(repository, "work_budget", None)
     git_options = {"work_budget": budget} if budget else {}
     prefix = normalized_path(package_path)
@@ -528,11 +534,15 @@ def bounded_package_files(repository: PinnedRepository, package_path: str) -> li
             size = int(size_body.strip())
         except ValueError as error:
             raise DiscoveryError(f"invalid blob size for {full_path}") from error
-        require(0 <= size <= MAX_FILE_BYTES, f"package file exceeds {MAX_FILE_BYTES} bytes: {full_path}")
+        require(size >= 0, f"package file has invalid size: {full_path}")
+        if size > max_file_bytes:
+            raise DiscoveryInputLimitError(f"package file exceeds {max_file_bytes} bytes: {full_path}")
         total += size
-        require(total <= MAX_TREE_BYTES, f"package tree exceeds {MAX_TREE_BYTES} bytes")
+        if total > max_tree_bytes:
+            raise DiscoveryInputLimitError(f"package tree exceeds {max_tree_bytes} bytes")
         records.append((full_path, mode, object_id))
-        require(len(records) <= MAX_FILES, f"package tree exceeds {MAX_FILES} files")
+        if len(records) > max_files:
+            raise DiscoveryInputLimitError(f"package tree exceeds {max_files} files")
     require(bool(records), f"package path {pathspec!r} is empty")
     result: list[tuple[str, int, bytes]] = []
     prefix_with_slash = prefix + "/" if prefix else ""
