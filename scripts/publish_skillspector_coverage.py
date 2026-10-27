@@ -213,7 +213,9 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
     tree = github.request("POST", "git/trees", {"tree": [
         {"path": path, "mode": "100644", "type": "blob", "sha": sha} for path, sha in sorted(entries.items())]})
     commit = github.request("POST", "git/commits", {"message": f"chore(skillspector): publish automatic static coverage {manifest['generated_at']}",
-        "tree": tree["sha"], "parents": [head] if head else []})
+        "tree": tree["sha"], "parents": [head] if head else [],
+        "author": {"name": "777genius", "email": "13103045+777genius@users.noreply.github.com",
+                   "date": manifest["generated_at"]}})
     # Check again after uploading blobs, before the single pointer update.
     main = github.request("GET", "git/ref/heads/main")
     require(main is not None and main["object"]["sha"] == source_commit, "main changed during coverage publication")
