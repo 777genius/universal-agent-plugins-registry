@@ -189,6 +189,11 @@ class CoverageTests(unittest.TestCase):
                 "plugin_path": "plugins/demo", "selected": 13, "reported": 1, "pending": 12}])
             self.assertEqual(prior["records"][subjects[0]["id"]]["status"], "complete")
             self.assertEqual(len(prior["records"]), 1)
+            impossible = copy.deepcopy(prior["manifest"])
+            impossible["coverage"].update(reported=13, pending=0)
+            impossible["shards"][0]["record_count"] = 13
+            with self.assertRaises(PublicationError):
+                coverage.validate_manifest(impossible)
             manifest = prior["manifest"]
             # Internally consistent forged counts must still bind to the real selection.
             manifest["plugin_coverage"][0].update(selected=1, pending=0)

@@ -159,7 +159,8 @@ def validate_manifest(manifest):
         seen_plugins.add(key)
         require(subject["selected"] == subject["reported"] + subject["pending"], "incorrect plugin pending count")
     require(sum(subject["selected"] for subject in manifest["plugin_coverage"]) <= coverage["selected"] and
-        sum(subject["reported"] for subject in manifest["plugin_coverage"]) <= coverage["reported"],
+        sum(subject["reported"] for subject in manifest["plugin_coverage"]) <= coverage["reported"] and
+        sum(subject["pending"] for subject in manifest["plugin_coverage"]) <= coverage["pending"],
         "plugin coverage exceeds total coverage")
 
 
