@@ -213,7 +213,45 @@ class PipelineTests(unittest.TestCase):
             with mock.patch.object(reports,'MAX_TREE_BYTES',1):
                 result=reports.build_reports(selection,executable,mirror_root=mirrors,source_commit="c"*40)
             self.assertEqual(result['records'][0]['status'],'error')
-            self.assertEqual(result['records'][0]['errors'][0]['code'],'scan_failed')
+            self.assertEqual(result['records'][0]['errors'][0]['code'],'input_limit_exceeded')
+            self.assertIn('limits are 512 files and 1 bytes',result['records'][0]['errors'][0]['message'])
+
+    def test_file_limit_accepts_512_and_rejects_513_before_scanning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);mirrors,selection=fixture_repository(root);executable=scanner(root)
+            files=[('SKILL.md',0o644,b'# Demo\n')]+[
+                (f'references/{n}.md',0o644,b'Inert reference\n') for n in range(512)]
+            with mock.patch.object(reports,'bounded_package_files',return_value=files[:512]), \
+                    mock.patch.object(reports,'run_scanner',wraps=reports.run_scanner) as run:
+                accepted=reports.build_reports(selection,executable,mirror_root=mirrors,source_commit='c'*40)
+            self.assertEqual(accepted['records'][0]['status'],'complete')
+            self.assertIsNotNone(accepted['records'][0]['source']['content_digest'])
+            self.assertEqual(run.call_count,2) # Version probe and a scan at the exact input bound.
+            with mock.patch.object(reports,'bounded_package_files',return_value=files), \
+                    mock.patch.object(reports,'run_scanner',wraps=reports.run_scanner) as run:
+                result=reports.build_reports(selection,executable,mirror_root=mirrors,source_commit='c'*40)
+            output=result['records'][0]
+            self.assertEqual(output['status'],'error')
+            self.assertEqual(output['errors'][0]['code'],'input_limit_exceeded')
+            self.assertIn('513 files',output['errors'][0]['message'])
+            self.assertIsNone(output['source']['content_digest'])
+            self.assertIsNone(output['scanned_at'])
+            self.assertEqual(run.call_count,1) # Version probe only; input must not be scanned.
+
+    def test_selection_accepts_128_roots_and_rejects_129(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);path=root/'selection.json';executable=scanner(root)
+            selection={'schema_version':1,'sources':[
+                item(id=f'fixture/skill-{n}',path=f'skills/skill-{n}') for n in range(128)]}
+            path.write_bytes(canonical_json(selection))
+            loaded=reports.load_selection(path)
+            result=reports.build_reports(loaded,executable,mirror_root=root/'missing',source_commit='c'*40)
+            self.assertEqual(len(result['records']),128)
+            self.assertEqual({r['id'] for r in result['records']},{r['id'] for r in selection['sources']})
+            self.assertTrue(all(r['status']=='error' for r in result['records']))
+            selection['sources'].append(item(id='fixture/skill-128',path='skills/skill-128'))
+            path.write_bytes(canonical_json(selection))
+            with self.assertRaises(PublicationError):reports.load_selection(path)
 
     def test_symlinked_skill_and_timeout_remain_error_records(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -232,6 +270,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result['records'][0]['status'],'error')
             self.assertIsNotNone(result['records'][0]['scanned_at'])
             self.assertIsNotNone(result['records'][0]['source']['content_digest'])
+            self.assertEqual(result['records'][0]['errors'][0]['code'],'scan_timeout')
+            self.assertIn('60-second deadline',result['records'][0]['errors'][0]['message'])
 
     def test_selection_rejects_mutable_refs_duplicate_ids_and_outside_plugin_root(self):
         with tempfile.TemporaryDirectory() as directory:

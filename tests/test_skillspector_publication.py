@@ -55,6 +55,18 @@ class PublicationTests(unittest.TestCase):
         document, selection = report()
         self.assertEqual(self.validate(document, selection), document)
 
+    def test_expanded_report_covers_128_selected_roots_and_rejects_129(self):
+        document, selection = report()
+        selection['sources'] = [item(id=f'fixture/skill-{n}',path=f'skills/skill-{n}') for n in range(128)]
+        document['records'] = [scanner.empty_record(source) for source in selection['sources']]
+        document['selection_digest'] = sha256_digest(canonical_json(selection))
+        self.assertEqual(self.validate(document, selection), document)
+        extra = item(id='fixture/skill-128',path='skills/skill-128')
+        selection['sources'].append(extra)
+        document['records'].append(scanner.empty_record(extra))
+        document['selection_digest'] = sha256_digest(canonical_json(selection))
+        with self.assertRaises(PublicationError):self.validate(document, selection)
+
     def test_artifact_must_cover_this_source_and_every_selected_identity(self):
         original, selection = report()
         variants = []
