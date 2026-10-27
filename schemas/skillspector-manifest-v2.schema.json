@@ -10,7 +10,8 @@
     "profile",
     "selection_digest",
     "coverage",
-    "shards"
+    "shards",
+    "plugin_coverage"
   ],
   "properties": {
     "schema_version": {
@@ -130,6 +131,48 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 256
+          }
+        }
+      }
+    },
+    "plugin_coverage": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repository",
+          "plugin_path",
+          "selected",
+          "reported",
+          "pending"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "maxLength": 200
+          },
+          "plugin_path": {
+            "type": "string",
+            "maxLength": 1000,
+            "pattern": "^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$"
+          },
+          "selected": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "reported": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
           }
         }
       }

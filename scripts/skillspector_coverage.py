@@ -20,7 +20,7 @@ import yaml
 
 from scripts import skillspector_reports as legacy
 from scripts.build_bridges import BridgeError, PinnedRepository
-from scripts.build_discovery_index import DiscoveryError, bounded_package_files, materialize_package
+from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError, bounded_package_files, materialize_package
 from scripts.build_registry import RegistryError, directory_tree_digest
 from scripts.directory_publication import (PublicationError, canonical_json, parse_timestamp,
     read_bytes_bounded, read_json, require, sha256_digest)
@@ -152,6 +152,30 @@ def validate_manifest(manifest):
         require(part["path"] not in paths, "repeated shard descriptor")
         paths.add(part["path"])
     require(sum(s["bytes"] for s in manifest["shards"]) <= MAX_TOTAL_SHARD_BYTES, "total shard budget exceeded")
+    seen_plugins = set()
+    for subject in manifest["plugin_coverage"]:
+        key = (subject["repository"].lower(), subject["plugin_path"])
+        require(key not in seen_plugins, "repeated plugin coverage subject")
+        seen_plugins.add(key)
+        require(subject["selected"] == subject["reported"] + subject["pending"], "incorrect plugin pending count")
+    require(sum(subject["selected"] for subject in manifest["plugin_coverage"]) <= coverage["selected"] and
+        sum(subject["reported"] for subject in manifest["plugin_coverage"]) <= coverage["reported"],
+        "plugin coverage exceeds total coverage")
+
+
+def plugin_coverage(selection, records):
+    """Selected root coverage is independent of the completeness of any one scan."""
+    subjects = {}
+    for item in selection["sources"]:
+        if item["kind"] != "plugin_skill":
+            continue
+        key = (item["repository"].lower(), item["plugin_path"])
+        counts = subjects.setdefault(key, {"repository": item["repository"], "plugin_path": item["plugin_path"],
+            "selected": 0, "reported": 0, "pending": 0})
+        counts["selected"] += 1
+        counts["reported"] += item["id"] in records
+        counts["pending"] += item["id"] not in records
+    return [subjects[key] for key in sorted(subjects)]
 
 
 def read_bundle(directory: Path | None):
@@ -205,6 +229,8 @@ def read_bundle(directory: Path | None):
                 "attempt precedes its scan")
         attempts[attempt["id"]] = attempt
     require(set(attempts) == set(records), "attempt state must cover every reported source")
+    require(manifest["plugin_coverage"] == plugin_coverage(selection, records),
+            "plugin coverage differs from selected and reported roots")
     summary_path = directory / "coverage.json"
     if summary_path.exists():
         require(summary_path.is_file() and not summary_path.is_symlink(), "discovery summary must be regular")
@@ -275,6 +301,9 @@ def scan_selected(scanner, item, pinned, budget):
         legacy.add_error(record, "scan_timeout", "Static scan exceeded its bounded deadline.")
     except CheckpointYield:
         legacy.add_error(record, "preparation_timeout", "Source preparation exceeded its bounded deadline.")
+    except DiscoveryInputLimitError as error:
+        legacy.add_error(record, "input_limit_exceeded", f"Selected skill exceeds the {legacy.MAX_FILES}-file / "
+            f"{legacy.MAX_TREE_BYTES}-byte static scan input limits: {error}")
     except (BridgeError, DiscoveryError, PublicationError, RegistryError, OSError, ValueError,
             RecursionError, yaml.YAMLError, subprocess.SubprocessError):
         legacy.add_error(record, "scan_failed", "Selected skill could not be acquired, parsed, or scanned completely.")
@@ -474,6 +503,7 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     manifest = {"schema_version": 2, "source_commit": source_commit, "generated_at": generated,
         "scope": "selected_sources", "scanner": SCANNER, "profile": PROFILE, "selection_digest": digest,
         "coverage": {"selected": len(selection["sources"]), "reported": len(records), "pending": len(selection["sources"]) - len(records)},
+        "plugin_coverage": plugin_coverage(selection, records),
         "shards": descriptors}
     validate_manifest(manifest)
     write_bounded(output_dir / "selection.json", selection, MAX_SELECTION_BYTES)

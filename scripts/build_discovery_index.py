@@ -91,6 +91,10 @@ class DiscoveryError(Exception):
     pass
 
 
+class DiscoveryInputLimitError(DiscoveryError):
+    """A selected tree was refused before acquiring oversized blob contents."""
+
+
 class ProgressReporter:
     """Emit only explicit operational fields, outside all signed artifacts."""
 
@@ -530,11 +534,15 @@ def bounded_package_files(repository: PinnedRepository, package_path: str, *,
             size = int(size_body.strip())
         except ValueError as error:
             raise DiscoveryError(f"invalid blob size for {full_path}") from error
-        require(0 <= size <= max_file_bytes, f"package file exceeds {max_file_bytes} bytes: {full_path}")
+        require(size >= 0, f"package file has invalid size: {full_path}")
+        if size > max_file_bytes:
+            raise DiscoveryInputLimitError(f"package file exceeds {max_file_bytes} bytes: {full_path}")
         total += size
-        require(total <= max_tree_bytes, f"package tree exceeds {max_tree_bytes} bytes")
+        if total > max_tree_bytes:
+            raise DiscoveryInputLimitError(f"package tree exceeds {max_tree_bytes} bytes")
         records.append((full_path, mode, object_id))
-        require(len(records) <= max_files, f"package tree exceeds {max_files} files")
+        if len(records) > max_files:
+            raise DiscoveryInputLimitError(f"package tree exceeds {max_files} files")
     require(bool(records), f"package path {pathspec!r} is empty")
     result: list[tuple[str, int, bytes]] = []
     prefix_with_slash = prefix + "/" if prefix else ""

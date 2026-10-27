@@ -178,15 +178,62 @@ class CoverageTests(unittest.TestCase):
             self.assertEqual(prior["records"], {})
             self.assertEqual(prior["manifest"]["coverage"], {"selected": 1, "reported": 0, "pending": 1})
 
+    def test_one_of_thirteen_plugin_roots_preserves_the_twelve_pending_roots(self):
+        subjects = [item(id=f"plugin/s{n}", kind="plugin_skill", plugin_path="plugins/demo",
+            path=f"plugins/demo/skills/s{n}") for n in range(13)]
+        selection = {"schema_version": 1, "sources": subjects}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prior = bundle(root, selection, [outcome(subjects[0], status="complete")])
+            self.assertEqual(prior["manifest"]["plugin_coverage"], [{"repository": "owner/repo",
+                "plugin_path": "plugins/demo", "selected": 13, "reported": 1, "pending": 12}])
+            self.assertEqual(prior["records"][subjects[0]["id"]]["status"], "complete")
+            self.assertEqual(len(prior["records"]), 1)
+            manifest = prior["manifest"]
+            # Internally consistent forged counts must still bind to the real selection.
+            manifest["plugin_coverage"][0].update(selected=1, pending=0)
+            coverage.write_bounded(root / "index.json", manifest, coverage.MAX_MANIFEST_BYTES)
+            with self.assertRaises(PublicationError):
+                publisher.validate_directory(root, COMMIT)
+
+    def test_fully_pending_plugin_is_present_and_duplicate_coverage_joins_are_rejected(self):
+        subject = item(kind="plugin_skill", plugin_path="plugins/demo", path="plugins/demo/skills/first")
+        selection = {"schema_version": 1, "sources": [subject]}
+        with tempfile.TemporaryDirectory() as temporary:
+            prior = bundle(Path(temporary), selection, [])
+            manifest = prior["manifest"]
+            self.assertEqual(manifest["plugin_coverage"][0]["reported"], 0)
+            self.assertEqual(manifest["plugin_coverage"][0]["pending"], 1)
+            duplicate = copy.deepcopy(manifest["plugin_coverage"][0])
+            duplicate["repository"] = "OWNER/REPO"
+            manifest["plugin_coverage"].append(duplicate)
+            with self.assertRaises(PublicationError):
+                coverage.validate_manifest(manifest)
+
     def test_input_limit_is_enforced_before_blob_body_is_acquired(self):
         pinned = mock.Mock(root=Path("/unused"), revision="a" * 40, work_budget=None)
         tree = b"100644 blob " + b"b" * 40 + b"\tskills/demo/SKILL.md\0"
         with mock.patch.object(acquisition, "git", side_effect=[tree, b"20"]) as git:
-            with self.assertRaises(acquisition.DiscoveryError):
+            with self.assertRaises(acquisition.DiscoveryInputLimitError):
                 acquisition.bounded_package_files(pinned, "skills/demo", max_files=512,
                     max_file_bytes=16, max_tree_bytes=16)
         self.assertEqual(git.call_count, 2)
         self.assertFalse(any("show" in call.args for call in git.call_args_list))
+
+    def test_oversized_source_has_an_explicit_limit_refusal_without_materializing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, selection = fixture_repository(root)
+            with mock.patch.object(legacy, "MAX_TREE_BYTES", 16), \
+                 mock.patch.object(coverage, "materialize_package") as materialize:
+                result = coverage.scan_partition(selection, scanner(root), None, source_commit=COMMIT,
+                    partition_index=0, partition_count=1, mirror_root=mirrors)
+            materialize.assert_not_called()
+            record = result["attempts"][0]["record"]
+            self.assertEqual(record["status"], "error")
+            self.assertIsNone(record["source"]["content_digest"])
+            self.assertIsNone(record["scanned_at"])
+            self.assertEqual(record["errors"][0]["code"], "input_limit_exceeded")
 
     def test_discovery_summary_identity_and_cache_are_validated_against_selection(self):
         row = {"source": "owner/repo", "skillId": "demo", "name": "demo"}
