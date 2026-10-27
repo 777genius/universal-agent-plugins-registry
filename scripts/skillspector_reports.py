@@ -108,13 +108,18 @@ def load_selection(path: Path) -> dict[str, Any]:
 def cache_records(path: Path | None) -> dict[tuple[str, str, str, str], dict[str, Any]]:
     if path is None or not path.exists():
         return {}
-    report = read_json(path, max_bytes=MAX_REPORT_BYTES)
-    validate_with_schema(report, SCHEMA)
-    if report["scanner"] != SCANNER or report["profile"] != PROFILE:
+    try:
+        report = read_json(path, max_bytes=MAX_REPORT_BYTES)
+        validate_with_schema(report, SCHEMA)
+        if report["scanner"] != SCANNER or report["profile"] != PROFILE:
+            return {}
+        return {(r["source"]["repository"], r["source"]["revision"], r["source"]["path"], r["source"]["content_digest"]): r
+                for r in report["records"] if r["status"] == "complete" and
+                0 <= (datetime.now(timezone.utc) - parse_timestamp(r["scanned_at"], "scanned_at")).total_seconds() < 86400}
+    except (PublicationError, RecursionError):
+        # Prior output is an optional optimization, never a prerequisite for a
+        # fresh scan. Scanner/schema upgrades and damaged caches are misses.
         return {}
-    return {(r["source"]["repository"], r["source"]["revision"], r["source"]["path"], r["source"]["content_digest"]): r
-            for r in report["records"] if r["status"] == "complete" and
-            0 <= (datetime.now(timezone.utc) - parse_timestamp(r["scanned_at"], "scanned_at")).total_seconds() < 86400}
 
 
 def empty_record(item: dict[str, Any]) -> dict[str, Any]:
@@ -170,7 +175,8 @@ def normalize_report(record: dict[str, Any], body: bytes, returncode: int, root:
         if type(line) is int and line > 0:
             output["line"] = line
         normalized.append(output)
-    normalized.sort(key=lambda f: (f["severity"], f["rule"], f["path"], f.get("line", 0), f["message"]))
+    severity_rank = {name: rank for rank, name in enumerate(("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"))}
+    normalized.sort(key=lambda f: (severity_rank[f["severity"]], f["rule"], f["path"], f.get("line", 0), f["message"]))
     record.update(finding_count=len(normalized), findings=normalized[:MAX_FINDINGS], findings_truncated=len(normalized) > MAX_FINDINGS)
     coverage_complete = completeness["is_complete"] is True and completeness.get("status") == "complete"
     for key in ("partially_inspected_files", "entirely_uninspected_files"):

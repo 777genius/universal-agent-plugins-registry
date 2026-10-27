@@ -52,6 +52,7 @@ jobs:
         run: python3 -m unittest tests.test_skillspector_reports tests.test_skillspector_publication
       - name: Read previous display results for bounded cache reuse
         working-directory: source
+        continue-on-error: true
         run: python3 -m scripts.publish_skillspector_reports previous --output "${RUNNER_TEMP}/previous.json"
       - name: Scan selected immutable skills without LLMs
         working-directory: source

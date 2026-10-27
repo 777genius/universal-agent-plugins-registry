@@ -99,6 +99,19 @@ class NormalizationTests(unittest.TestCase):
         self.assertNotIn("safe", result)
         self.assertEqual(result["scanned_at"], record()["scanned_at"])
 
+    def test_truncation_preserves_highest_severity_findings(self):
+        raw=upstream_report()
+        severities=['LOW']*33+['INFO','HIGH','MEDIUM','CRITICAL']
+        raw['issues']=[{'id':'RULE','severity':severity,'explanation':'Review this warning.',
+                        'location':{'file':'SKILL.md','start_line':n+1}} for n,severity in enumerate(severities)]
+        result=self.normalize(raw)
+        self.assertEqual(result['finding_count'],37)
+        self.assertTrue(result['findings_truncated'])
+        self.assertEqual(len(result['findings']),32)
+        self.assertEqual([f['severity'] for f in result['findings'][:3]],['CRITICAL','HIGH','MEDIUM'])
+        self.assertEqual([f['line'] for f in result['findings'][3:]],list(range(1,30)))
+        self.assertNotIn('INFO',[f['severity'] for f in result['findings']])
+
     def test_exit_zero_does_not_override_incomplete_errors_or_failed_analyzer(self):
         variations = []
         raw = upstream_report(); raw['analysis_completeness']['is_complete'] = False; variations.append(raw)
@@ -164,9 +177,23 @@ class PipelineTests(unittest.TestCase):
                 else:changed['records'][0]['status']='partial'
                 previous.write_bytes(canonical_json(changed))
                 with self.subTest(mutation=mutation):
-                    if mutation=='scanner':
-                        with self.assertRaises(PublicationError):reports.cache_records(previous)
-                    else:self.assertEqual(reports.cache_records(previous),{})
+                    self.assertEqual(reports.cache_records(previous),{})
+
+    def test_incompatible_or_damaged_optional_cache_does_not_prevent_fresh_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);mirrors,selection=fixture_repository(root);executable=scanner(root)
+            previous=root/'previous.json'
+            old=copy.deepcopy(reports.build_reports(selection,executable,mirror_root=mirrors,source_commit="c"*40))
+            old['scanner']['version']='2.12.0'
+            for body in [canonical_json(old), b'{"schema_version":0}', b'{"schema_version":']:
+                previous.write_bytes(body)
+                with self.subTest(body=body[:80]):
+                    cached=reports.cache_records(previous)
+                    self.assertEqual(cached,{})
+                    with mock.patch.object(reports,'run_scanner',wraps=reports.run_scanner) as run:
+                        fresh=reports.build_reports(selection,executable,cached,mirror_root=mirrors,source_commit="c"*40)
+                    self.assertEqual(run.call_count,2) # Probe and a fresh scan.
+                    self.assertEqual(fresh['records'][0]['status'],'complete')
 
     def test_acquisition_failure_keeps_all_configured_entries(self):
         with tempfile.TemporaryDirectory() as directory:
