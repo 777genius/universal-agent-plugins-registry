@@ -63,6 +63,19 @@ class CatalogTests(unittest.TestCase):
 
 
 class DocumentTests(unittest.TestCase):
+    def test_only_exact_skill_candidates_request_blob_sizes(self):
+        skill_oid, unrelated_oid = "a" * 40, "b" * 40
+        tree = (f"100644 blob {skill_oid}\tskills/demo/SKILL.md\0" +
+                f"100644 blob {unrelated_oid}\tunrelated-large-artifact.zip\0").encode()
+        pinned = mock.Mock()
+        pinned.git.side_effect = [f"{skill_oid} blob 25\n".encode(), b"---\nname: demo\n---\n"]
+        with mock.patch.object(discovery, "bounded_tree", return_value=tree):
+            names, invalid = discovery.skill_documents(pinned, WorkBudget(10))
+        self.assertEqual(names, {"demo": ["skills/demo"]})
+        self.assertEqual(invalid, [])
+        self.assertEqual(pinned.git.call_args_list[0].kwargs["input_bytes"], (skill_oid + "\n").encode())
+        self.assertNotIn(unrelated_oid, str(pinned.git.call_args_list))
+
     def test_exact_declared_names_crlf_and_unicode(self):
         self.assertEqual(discovery.declared_name("---\r\nname: révision 2\r\n---\r\nbody".encode()), "révision 2")
 

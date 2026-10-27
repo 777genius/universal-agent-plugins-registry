@@ -148,7 +148,7 @@ def bounded_tree(pinned, budget):
                    "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
                    "GIT_OPTIONAL_LOCKS": "0", "LANG": "C", "LC_ALL": "C"}
     chunks, size = [], 0
-    with subprocess.Popen(["git", "ls-tree", "-rz", "-l", "-r", pinned.revision], cwd=pinned.root,
+    with subprocess.Popen(["git", "ls-tree", "-rz", "-r", pinned.revision], cwd=pinned.root,
                           env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           start_new_session=True) as process:
         try:
@@ -187,7 +187,7 @@ def skill_documents(pinned, budget):
         path = encoded.decode("utf-8")
         if PurePosixPath(path).name != "SKILL.md":
             continue
-        mode, kind, oid, size = metadata.decode("ascii").split()
+        mode, kind, oid = metadata.decode("ascii").split()
         if mode not in {"100644", "100755"} or kind != "blob" or not PATH_RE.fullmatch(path):
             invalid.append(path)
             continue
@@ -196,12 +196,23 @@ def skill_documents(pinned, budget):
         except BridgeError:
             invalid.append(path)
             continue
-        length = int(size)
-        require(len(documents) < MAX_DOCUMENTS and 0 <= length <= MAX_DOCUMENT_BYTES,
-                "repository skill document limit exceeded")
-        total += length
-        require(total <= MAX_DOCUMENT_TOTAL_BYTES, "repository skill documents exceed byte limit")
+        require(len(documents) < MAX_DOCUMENTS, "repository skill document limit exceeded")
         documents.append((path, oid))
+    # In a blobless repository, ls-tree -l can fetch every unrelated blob just
+    # to determine sizes. Ask for sizes only after exact candidate filtering.
+    if documents:
+        budget.check()
+        sizes = pinned.git("cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+                           input_bytes="".join(oid + "\n" for _, oid in documents).encode("ascii"))
+        rows = sizes.splitlines()
+        require(len(sizes) <= MAX_DOCUMENTS * 128 and len(rows) == len(documents), "invalid skill document sizes")
+        for (_, expected_oid), row in zip(documents, rows):
+            oid, kind, size = row.decode("ascii").split()
+            length = int(size)
+            require(oid == expected_oid and kind == "blob" and 0 <= length <= MAX_DOCUMENT_BYTES,
+                    "repository skill document limit exceeded")
+            total += length
+            require(total <= MAX_DOCUMENT_TOTAL_BYTES, "repository skill documents exceed byte limit")
     names = collections.defaultdict(list)
     for path, oid in documents:
         budget.check()
