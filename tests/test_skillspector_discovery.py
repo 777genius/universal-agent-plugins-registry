@@ -278,6 +278,98 @@ class DiscoveryTests(unittest.TestCase):
         return discovery.discover(rows, kwargs.pop("catalog", catalog()), mock.Mock(token=None), WorkBudget(10),
                                   source_commit="b" * 40, **kwargs)
 
+    def removed_exact_root(self, root):
+        mirrors, original = fixture_repository(root)
+        rows = [listing() | {"path": "skills/demo"}]
+        with mock.patch.object(discovery, "repository_states", return_value=self.state(original["sources"][0]["revision"])):
+            previous, summary = self.run_discovery(rows, mirror_root=mirrors)
+        source = root / "source"
+        git(source, "rm", "skills/demo/SKILL.md")
+        git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "remove skill")
+        revision = git(source, "rev-parse", "HEAD")
+        git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+        return rows, mirrors, revision, previous, summary
+
+    def test_removed_exact_root_preserves_report_history_and_pending_current_coverage(self):
+        from scripts import skillspector_coverage_v3 as coverage
+        from tests.test_skillspector_coverage_v3 import bundle, record, worker
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rows, mirrors, revision, previous, prior_summary = self.removed_exact_root(root)
+            with mock.patch.object(discovery, "repository_states", return_value=self.state(revision)), \
+                 mock.patch.object(discovery, "PinnedRepository", wraps=discovery.PinnedRepository) as acquired:
+                selection, summary = self.run_discovery(rows, mirror_root=mirrors,
+                    previous=previous["sources"], previous_summary=prior_summary)
+            self.assertEqual([call.args[1] for call in acquired.call_args_list], [revision])
+            old = previous["sources"][0]
+            self.assertEqual(selection, previous)
+            self.assertEqual(summary["source_states"][0], {"id": old["id"], "repository": "owner/repo",
+                "state": "historical", "current": False, "reason": "skill_removed", "revision": revision,
+                "path": "skills/demo", "selected_ids": [old["id"]], "candidates": []})
+            self.assertEqual(summary["diagnostic_counts"], {"skill_removed": 1})
+            self.assertFalse(summary["complete"])
+            validate_discovery_summary(summary, selection, "b" * 40)
+            prior = bundle(root / "prior-report", previous, [record(old)])
+            # Worker fixtures use the immutable test commit c; the discovery
+            # identity is independent of either scanned source revision.
+            summary["source_commit"] = "c" * 40
+            coverage.merge_reports(selection, prior, [worker(selection)], source_commit="c" * 40,
+                output_dir=root / "report", discovery_summary=summary)
+            published = coverage.read_bundle(root / "report")
+            self.assertEqual(published["records"][old["id"]]["source"], prior["records"][old["id"]]["source"])
+            self.assertEqual(published["records"][old["id"]]["freshness"], "historical")
+            self.assertEqual(published["manifest"]["coverage"], {"selected": 1, "reported": 1,
+                "pending": 1, "complete": 0, "partial": 0, "error": 0, "stale": 1})
+            # The validated prior removal proof binds this exact examined pin.
+            # Retain it even if the old commit is no longer fetchable.
+            with mock.patch.object(discovery, "repository_states", return_value=self.state(revision)), \
+                 mock.patch.object(discovery, "PinnedRepository", side_effect=OSError("old commit unavailable")) as acquired:
+                again, current_summary = self.run_discovery(rows, mirror_root=mirrors,
+                    previous=selection["sources"], previous_summary=summary)
+            acquired.assert_not_called()
+            self.assertEqual(again, previous)
+            self.assertEqual(current_summary["source_states"][0]["reason"], "skill_removed")
+            # The same proof cannot label a different newly examined revision.
+            for target, path in (("e" * 40, "skills/demo"), (revision, "skills/another")):
+                _, removed = discovery.previous_existence_proofs(selection["sources"], summary)
+                self.assertNotIn((old["id"], discovery.subject_key(old), target, path), removed)
+
+    def test_removed_exact_root_can_be_proven_by_old_pinned_document(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            rows, mirrors, revision, previous, _ = self.removed_exact_root(Path(temporary))
+            with mock.patch.object(discovery, "repository_states", return_value=self.state(revision)):
+                selection, summary = self.run_discovery(rows, mirror_root=mirrors, previous=previous["sources"])
+            self.assertEqual(selection, previous)
+            self.assertEqual(summary["source_states"][0]["reason"], "skill_removed")
+
+    def test_fresh_bad_path_and_unverified_old_seed_are_not_reported_as_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            rows, mirrors, revision, previous, prior_summary = self.removed_exact_root(Path(temporary))
+            for earlier, summary in (([], None),
+                    ([previous["sources"][0] | {"path": "skills/never-present"}], prior_summary)):
+                with self.subTest(previous=earlier), \
+                     mock.patch.object(discovery, "repository_states", return_value=self.state(revision)):
+                    path = earlier[0]["path"] if earlier else "skills/demo"
+                    selection, current = self.run_discovery([rows[0] | {"path": path}], mirror_root=mirrors,
+                        previous=earlier, previous_summary=summary)
+                self.assertEqual(selection["sources"], [])
+                self.assertEqual(current["source_states"][0]["state"], "unresolved")
+                self.assertEqual(current["source_states"][0]["reason"], "skill_path_not_found")
+
+    def test_unavailable_repository_does_not_claim_verified_skill_was_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            rows, mirrors, _, previous, prior_summary = self.removed_exact_root(Path(temporary))
+            with mock.patch.object(discovery, "repository_states", return_value={}), \
+                 mock.patch.object(discovery, "PinnedRepository") as pinned:
+                selection, summary = self.run_discovery(rows, mirror_root=mirrors,
+                    previous=previous["sources"], previous_summary=prior_summary)
+            pinned.assert_not_called()
+            self.assertEqual(selection, previous)
+            state = summary["source_states"][0]
+            self.assertEqual(state["state"], "historical")
+            self.assertEqual(state["reason"], "repository_unavailable")
+            self.assertIsNone(state["revision"])
+
     def test_missing_repo_and_incomplete_catalog_preserve_historical_selection(self):
         previous = [item(id="owner/repo/demo"), item(id="other/repo/demo", repository="other/repo")]
         with mock.patch.object(discovery, "repository_states", return_value={}):

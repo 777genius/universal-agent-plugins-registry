@@ -428,6 +428,31 @@ def subject_key(source):
     return (source["kind"], source["repository"].casefold(), source["revision"], source["path"], source["plugin_path"])
 
 
+def previous_existence_proofs(previous, summary):
+    """Validate positive resolutions and removal proof at an exact examined pin."""
+    if not isinstance(summary, dict) or not SHA_RE.fullmatch(str(summary.get("source_commit", ""))):
+        return set(), set()
+    from scripts.skillspector_coverage import validate_discovery_summary
+    try:
+        validate_discovery_summary(summary, {"schema_version": 1, "sources": list(previous)}, summary["source_commit"])
+    except (PublicationError, ValueError, KeyError, TypeError):
+        return set(), set()
+    subjects = {source["id"]: source for source in previous}
+    resolved, removed = set(), set()
+    for state in summary.get("source_states", []):
+        for identifier in state["selected_ids"]:
+            source = subjects[identifier]
+            if state["current"]:
+                resolved.add(subject_key(source))
+            elif state["state"] == "historical" and state["reason"] == "skill_removed" and \
+                    state["id"] == identifier and state["selected_ids"] == [identifier] and \
+                    state["repository"].casefold() == source["repository"].casefold() and state["path"] == source["path"]:
+                # Keep established proof only at the exact previously examined
+                # target; this is not evidence about a newly observed revision.
+                removed.add((identifier, subject_key(source), state["revision"], state["path"]))
+    return resolved, removed
+
+
 def listing_hints_digest(listings):
     # A resolver upgrade must re-evaluate old missing/ambiguous mappings even
     # when the catalog and revision did not change. This also prevents old
@@ -460,6 +485,8 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
     if not isinstance(cache, dict):
         cache = {}
     states, resolution_cache, resolved, retained = {}, {}, {}, set()
+    prior_resolved, prior_removed = previous_existence_proofs(previous, previous_summary)
+    removed_by_id = {}
     # Resolve in bounded batches. A transient batch failure must not erase old
     # immutable subjects, and other batches can still make progress.
     for offset in range(0, len(grouped), 50):
@@ -472,11 +499,45 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             if isinstance(error, CheckpointYield):
                 break
 
+    def confirm_removed(repo, revision, sources, issues, entry):
+        # The current resolver proved an exact path absent. Establish that the
+        # same root really existed before calling it removed, never from a
+        # missing name, a GitHub null response, or an unverified seed alone.
+        issues = [dict(issue) for issue in issues]
+        removed = {}
+        rows = {f"{row['source'].casefold()}/{row['skillId']}": row for row in grouped[repo]}
+        for issue in issues:
+            identifier = issue.get("id")
+            old, row = previous_by_id.get(identifier), rows.get(identifier)
+            if issue.get("code") != "skill_path_not_found" or old is None or row is None or "path" not in row:
+                continue
+            root = listing_path(row)
+            if old["kind"] != "standalone_skill" or old["repository"].casefold() != repo or \
+                    old["path"] != root or issue.get("path") != root or old["revision"] == revision:
+                continue
+            verified = subject_key(old) in prior_resolved or (identifier, subject_key(old), revision, root) in prior_removed
+            if not verified:
+                try:
+                    budget.check()
+                    pinned = PinnedRepository(old["repository"], old["revision"], mirror_root,
+                        github_token=getattr(api, "token", None) if mirror_root is None else None, work_budget=budget)
+                    try:
+                        names, _ = skill_documents(pinned, budget, [(root + "/" if root else "") + "SKILL.md"])
+                        verified = root in names.get(row["name"], [])
+                    finally:
+                        pinned.close()
+                except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+                    continue
+            if verified:
+                issue["code"] = "skill_removed"
+                removed[identifier] = old
+        return repo, sources, issues, entry, removed
+
     def resolve(repo):
         budget.check()
         state = states.get(repo)
         if not state or not state.get("available"):
-            return repo, None, [{"code": "repository_unavailable", "repository": repo}], None
+            return repo, None, [{"code": "repository_unavailable", "repository": repo}], None, {}
         canonical, revision = state["repository"], state["revision"]
         hints = listing_hints_digest(grouped[repo])
         prior = cache.get(repo, {})
@@ -489,7 +550,7 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                     prior_sources[i]["repository"].casefold() == repo.casefold() and
                     prior_sources[i]["kind"] == "standalone_skill" for i in ids) and \
                 isinstance(prior.get("diagnostics"), list) and all(isinstance(d, dict) and isinstance(d.get("code"), str) for d in prior["diagnostics"]):
-            return repo, [prior_sources[i] for i in ids], prior.get("diagnostics", []), prior
+            return confirm_removed(repo, revision, [prior_sources[i] for i in ids], prior.get("diagnostics", []), prior)
         pinned = PinnedRepository(canonical, revision, mirror_root,
                                   github_token=getattr(api, "token", None) if mirror_root is None else None, work_budget=budget)
         try:
@@ -501,15 +562,16 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             pinned.close()
         entry = {"revision": revision, "hints_digest": hints, "selected_ids": [s["id"] for s in sources],
                  "diagnostics": issues[:MAX_DIAGNOSTICS]}
-        return repo, sources, issues, entry
+        return confirm_removed(repo, revision, sources, issues, entry)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(resolve, repo): repo for repo in sorted(grouped)}
         for future in as_completed(futures):
             repo = futures[future]
             try:
-                _, sources, issues, entry = future.result()
+                _, sources, issues, entry, removed = future.result()
                 diagnostics.extend(issues)
+                removed_by_id.update(removed)
                 if sources is not None:
                     resolved[repo] = sources
                     resolution_cache[repo] = entry
@@ -522,6 +584,11 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
     for repo in sorted(grouped):
         if repo in resolved:
             candidates.extend(resolved[repo])
+            removed = [removed_by_id[identifier] for row in grouped[repo]
+                       if (identifier := f"{row['source'].casefold()}/{row['skillId']}") in removed_by_id]
+            candidates.extend(removed)
+            if removed:
+                retained.add(repo)
         else:
             # A provider locator may be an old alias while a previous subject
             # stores GitHub's canonical renamed repository. Its stable listing
