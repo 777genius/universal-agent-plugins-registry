@@ -18,6 +18,7 @@ from scripts import publish_skillspector_reports as v1
 from scripts import skillspector_coverage_v3 as coverage
 from scripts import skillspector_reports as scanner
 from scripts import publish_skillspector_coverage as v2
+from scripts.skillspector_publication_transport import GitHub, MAX_TREE_ENTRIES, create_filtered_tree
 from scripts.directory_publication import (PublicationError, canonical_json, parse_json_bytes,
     parse_timestamp, read_bytes_bounded, read_json, require, sha256_digest)
 
@@ -33,8 +34,6 @@ CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "coverage.json": coverage.MAX_DISCOVERY_BYTES}
 
 
-# Reuse only the bounded GitHub transport; legacy report semantics stay frozen.
-GitHub = v2.GitHub
 read_json = scanner.read_report_json
 
 
@@ -130,7 +129,7 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
     ref = github.request("GET", f"git/ref/heads/{BRANCH}")
     head = ref["object"]["sha"] if ref else None
     require(head is None or coverage.SHA.fullmatch(head) is not None, "invalid report branch head")
-    prior_manifest, old_entries = None, {}
+    prior_manifest, old_entries, old_trees = None, {}, {}
     if head:
         prior_body = fetch(head, "index.json", coverage.MAX_MANIFEST_BYTES, optional=True)
         if prior_body is not None:
@@ -144,6 +143,8 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
             if item["type"] == "blob":
                 require(item["mode"] == "100644", "report branch contains executable data")
                 old_entries[item["path"]] = item["sha"]
+            elif item["type"] == "tree":
+                old_trees[item["path"]] = item["sha"]
     entries = {}
     # Keep every supported v1/v2 control and content-addressed shard byte exact.
     # Older clients can continue using the last complete legacy publication.
@@ -185,7 +186,8 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
         if old_entries.get(path) != blob_sha:
             entry = {"path": f"blob{len(pending):05d}", "mode": "100644", "type": "blob", "content": body.decode("utf-8")}
             entry_bytes = len(canonical_json(entry))
-            if pending and pending_bytes + entry_bytes + 1 > MAX_TREE_UPLOAD_BYTES:
+            if pending and (len(pending) >= MAX_TREE_ENTRIES or
+                            pending_bytes + entry_bytes + 1 > MAX_TREE_UPLOAD_BYTES):
                 flush()
                 entry["path"] = "blob00000"
             if pending_bytes + entry_bytes + 1 > MAX_TREE_UPLOAD_BYTES:
@@ -198,9 +200,9 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                 pending_bytes += entry_bytes + 1
         entries[path] = blob_sha
     flush()
-    # No base_tree: only literal controls, immutable current/previous shards, and legacy JSON survive.
-    tree = github.request("POST", "git/trees", {"tree": [
-        {"path": path, "mode": "100644", "type": "blob", "sha": sha} for path, sha in sorted(entries.items())]})
+    # Only filtered files survive; incremental bases are fresh verified prefixes,
+    # never the unfiltered tree of the previous report branch.
+    tree = create_filtered_tree(github, entries, known_trees=old_trees)
     commit = github.request("POST", "git/commits", {"message": f"chore(skillspector): publish automatic static coverage {manifest['generated_at']}",
         "tree": tree["sha"], "parents": [head] if head else [],
         "author": {"name": "777genius", "email": "13103045+777genius@users.noreply.github.com",

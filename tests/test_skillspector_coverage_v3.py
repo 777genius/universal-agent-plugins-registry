@@ -333,28 +333,46 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaises(PublicationError):
                 publisher.previous(github, root / "bad", fetch=lambda *args, **kwargs: b"{}")
 
+    def test_many_small_shards_bound_inline_tree_cardinality_below_byte_limit(self):
+        from tests.test_skillspector_publication_transport import FakeGitHub
+        sources = [item(id=f"fixture/{index}", repository=f"owner/repo{index}") for index in range(128)]
+        selection = {"schema_version": 1, "sources": sources}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            bundle(root, selection, [record(source) for source in sources])
+            github = FakeGitHub(Path(directory) / "git")
+            publisher.publish(github, root, COMMIT)
+            inline = [data for method, path, data in github.calls if (method, path) == ("POST", "git/trees")
+                      and any("content" in entry for entry in data["tree"])]
+            self.assertEqual(len(inline), 2)
+            self.assertEqual(len(inline[0]["tree"]), 128)
+            self.assertTrue(all(len(data["tree"]) <= 128 for data in inline))
+            self.assertLess(sum(len(publisher.canonical_json(data)) for data in inline), publisher.MAX_TREE_UPLOAD_BYTES)
+            commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
+            self.assertEqual(len(github.store.flatten(commit["tree"])), 131)
+
     def test_atomic_publisher_preserves_legacy_bytes_and_refuses_obsolete_main(self):
-        from tests.test_skillspector_coverage import FakeGitHub
+        from tests.test_skillspector_publication_transport import FakeGitHub
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "reports"
             bundle(root, selection, [record(source)])
             legacy_paths = [publisher.LEGACY_PATH, publisher.v2.PREFIX + "index.json",
                 publisher.v2.PREFIX + "attempts.json", publisher.v2.PREFIX + "selection.json",
                 publisher.v2.PREFIX + "shards/" + "d" * 64 + ".json"]
             tree = [{"path": path, "mode": "100644", "type": "blob", "sha": "d" * 40} for path in legacy_paths]
             tree.append({"path": "unrelated.py", "mode": "100644", "type": "blob", "sha": "e" * 40})
-            github = FakeGitHub(old={"tree": tree})
+            github = FakeGitHub(Path(directory) / "git", old={"tree": tree})
             result = publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
             self.assertEqual(len(result), 40)
-            payload = next(data for method, path, data in github.calls if path == "git/trees" and
-                           all("sha" in entry for entry in data["tree"]))
-            entries = {entry["path"]: entry["sha"] for entry in payload["tree"]}
+            commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
+            entries = github.store.flatten(commit["tree"])
             self.assertTrue(all(entries[path] == "d" * 40 for path in legacy_paths))
             self.assertNotIn("unrelated.py", entries)
             self.assertEqual(github.calls[-1], ("PATCH", "git/refs/heads/skillspector-reports", {"sha": result, "force": False}))
-            for github in (FakeGitHub(main="f" * 40), FakeGitHub(main_changed=True)):
+            for github in (FakeGitHub(Path(directory) / "git-obsolete", main="f" * 40),
+                           FakeGitHub(Path(directory) / "git-race", main_changed=True)):
                 with self.assertRaises(PublicationError):
                     publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
                 self.assertFalse(any(method == "PATCH" for method, _, _ in github.calls))
