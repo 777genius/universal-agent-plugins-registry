@@ -122,7 +122,7 @@ def analysis_counts(selection, records):
             counts["pending"] += 1
         else:
             counts["reported"] += 1
-            if record["freshness"] == "historical":
+            if record.get("freshness", "current") == "historical":
                 counts["stale"] += 1
                 counts["pending"] += 1
             else:

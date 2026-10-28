@@ -128,7 +128,7 @@ def empty_record_v3(item: dict[str, Any], profile_id: str = "static-standard-v3"
     record = empty_record(item)
     record.update(scanner=copy.deepcopy(SCANNER), profile=copy.deepcopy(PROFILES[profile_id]),
         execution={"state": "failed", "started_at": None, "finished_at": None,
-                   "exit_code": None, "acquisition_seconds": 0.0, "analysis_seconds": 0.0},
+                   "exit_code": None, "acquisition_seconds": None, "analysis_seconds": None},
         coverage={"status": "not_started", "fully_inspected_files": 0,
                   "partially_inspected_files": 0, "entirely_uninspected_files": 0,
                   "reasons": [], "analyzers": [], "original_findings": []},

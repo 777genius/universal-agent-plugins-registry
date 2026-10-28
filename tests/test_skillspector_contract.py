@@ -19,6 +19,21 @@ class ContractTests(unittest.TestCase):
         record["scanned_at"] = scanner.now()
         return source, scanner.normalize_report_v3(record, json.dumps(upstream_report()).encode(), 0, Path("/source"))
 
+    def test_unmeasured_normalization_keeps_unknown_timings(self):
+        source, record = self.fresh_record()
+        self.assertIsNone(record["execution"]["acquisition_seconds"])
+        self.assertIsNone(record["execution"]["analysis_seconds"])
+        self.assertEqual(contract.analysis_counts({"sources": [source]}, {source["id"]: record})["complete"], 1)
+
+    def test_measurement_does_not_promote_historical_complete_to_current(self):
+        _, record = self.fresh_record()
+        record["freshness"] = "historical"
+        manifest = {"generated_at": scanner.now(), "coverage": {"selected": 1, "reported": 1, "pending": 1, "stale": 1}}
+        result = metrics.measure(manifest, {}, [record])
+        self.assertEqual(result["analysis_coverage"]["complete"], 0)
+        self.assertEqual(result["analysis_coverage"]["stale"], 1)
+        self.assertEqual(result["timings"]["analysis_seconds"]["measured_sources"], 0)
+
     def test_execution_failure_cannot_claim_complete_coverage(self):
         source, record = self.fresh_record()
         contract.validate_record(record, source, datetime.now(timezone.utc))

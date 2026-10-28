@@ -19,7 +19,7 @@ def canonical(value):
 
 
 def measure(manifest, discovery, records, *, snapshot=None):
-    statuses = Counter(record["status"] for record in records)
+    statuses = Counter(record["status"] for record in records if record.get("freshness") != "historical")
     reasons = Counter(code for record in records for code in
                       {reason["code"] for reason in record.get("errors", [])})
     timings = {}
