@@ -177,8 +177,8 @@ class ColdAcquisitionTests(unittest.TestCase):
     def test_transfer_limit_is_explicit_and_retries_extended_only_once(self):
         subject = item()
         with mock.patch.object(coverage, "bounded_package_files", side_effect=acquisition.AcquisitionTransferLimit("cap")):
-            standard = coverage.scan_selected(Path("/never-run"), subject, mock.Mock(), WorkBudget(5))
-            extended = coverage.scan_selected(Path("/never-run"), subject, mock.Mock(), WorkBudget(5),
+            standard = coverage.scan_selected(Path("/never-run"), subject, mock.Mock(), WorkBudget(2100))
+            extended = coverage.scan_selected(Path("/never-run"), subject, mock.Mock(), WorkBudget(2100),
                 profile_id=scanner.EXTENDED_PROFILE["id"])
         self.assertIsNone(standard["source"]["content_digest"])
         self.assertIsNone(standard["execution"]["analysis_seconds"])
