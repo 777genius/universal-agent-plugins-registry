@@ -267,10 +267,22 @@ def bounded_tree(pinned, budget, paths=None):
     return b"".join(chunks)
 
 
-def skill_documents(pinned, budget, paths=None):
+def skill_documents(pinned, budget, paths=None, *, plugin_path=None):
     """Read only bounded regular SKILL.md blobs; unrelated modes stay inert."""
     budget.check()
-    raw = bounded_tree(pinned, budget) if paths is None else bounded_tree(pinned, budget, paths)
+    # A published plugin installs only its immediate skills/* roots. Scope the
+    # tree request and document hydration before applying limits: unrelated
+    # packages or nested helper documents must not suppress an eligible root.
+    # This changes discovery only; scanning still acquires the full skill tree.
+    prefix = None
+    if plugin_path is not None:
+        require(paths is None, "plugin and exact document scopes are mutually exclusive")
+        if plugin_path:
+            portable_path(plugin_path, "plugin path")
+        prefix = (plugin_path + "/" if plugin_path else "") + "skills/"
+        raw = bounded_tree(pinned, budget, [prefix.removesuffix("/")])
+    else:
+        raw = bounded_tree(pinned, budget) if paths is None else bounded_tree(pinned, budget, paths)
     rows = raw.split(b"\0")
     require(len(rows) <= MAX_TREE_ENTRIES + 1, "repository entry count exceeds limit")
     documents, invalid = [], []
@@ -281,6 +293,8 @@ def skill_documents(pinned, budget, paths=None):
         metadata, encoded = row.split(b"\t", 1)
         path = encoded.decode("utf-8")
         if PurePosixPath(path).name != "SKILL.md":
+            continue
+        if prefix is not None and (not path.startswith(prefix) or len(path[len(prefix):].split("/")) != 2):
             continue
         if paths is not None and path not in paths:
             continue
@@ -638,7 +652,7 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             pinned = PinnedRepository(source["repository"], source["revision"], mirror_root,
                                       github_token=getattr(api, "token", None) if mirror_root is None else None, work_budget=budget)
             try:
-                names, invalid = skill_documents(pinned, budget)
+                names, invalid = skill_documents(pinned, budget, plugin_path=source["path"])
             finally:
                 pinned.close()
             prefix = (source["path"] + "/" if source["path"] else "") + "skills/"
