@@ -33,6 +33,7 @@ permissions:
 
 concurrency:
   group: skillspector-static-reports-${{ github.ref }}
+  queue: max
   cancel-in-progress: false
 
 jobs:
