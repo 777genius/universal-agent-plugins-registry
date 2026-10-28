@@ -11,6 +11,7 @@ import copy
 import json
 import math
 import os
+import re
 import resource
 import signal
 import subprocess
@@ -30,6 +31,7 @@ from scripts.directory_publication import (
     PublicationError, canonical_json, format_timestamp, parse_timestamp, read_bytes_bounded, read_json,
     require, sha256_digest, validate_with_schema,
 )
+from scripts.skillspector_exceptions import EXCEPTION_SET_DIGEST, matching_exception
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "schemas/skillspector-reports-v1.schema.json"
@@ -57,6 +59,7 @@ PROFILE = {"id": PROFILE_DOCUMENT["id"], "digest": sha256_digest(canonical_json(
 STANDARD_PROFILE_DOCUMENT = PROFILE_DOCUMENT | {
     "id": "static-standard-v3", "normalization_version": 3,
     "static_artifact_seconds": 30, "cache_max_age_seconds": None,
+    "exception_set_digest": EXCEPTION_SET_DIGEST,
 }
 EXTENDED_PROFILE_DOCUMENT = STANDARD_PROFILE_DOCUMENT | {
     "id": "static-extended-v3", "timeout_seconds": 180,
@@ -73,11 +76,23 @@ EXTENDED_PROFILE = PROFILES[EXTENDED_PROFILE_DOCUMENT["id"]]
 # missing-reference and unsupported-format limitations do not become retryable
 # merely because the scanner emitted them with a high severity.
 RETRYABLE_REASONS = frozenset({"scan_timeout", "preparation_timeout", "acquisition_failed",
-    "runtime_limit", "archive_time_limit", "size_limit", "input_limit_exceeded",
+    "runtime_limit", "archive_time_limit", "size_limit", "input_limit_exceeded", "acquisition_transfer_limit",
     "total_bytes_limit", "artifact_count_limit", "network_error", "network_timeout",
     "osv_request_failed", "osv_timeout"})
 DISABLED_STATIC_ANALYZERS = frozenset({"semantic_developer_intent", "semantic_quality_policy",
     "semantic_security_discovery", "meta_analyzer"})
+MAX_REFERENCE_EVIDENCE_BYTES = 1 << 20
+REFERENCE_FIELDS = frozenset({"source_path", "line", "column", "evidence", "target_path", "status",
+    "disposition", "reference_kind"})
+REFERENCE_KINDS = frozenset({"markdown_image", "documentation_image", "markdown_link", "inline_command",
+    "quoted_or_code", "plain_path"})
+LEDGER_FIELDS = frozenset({"reason_code", "message", "path", "start_line", "end_line", "outcome", "phase",
+    "error_class", "analyzers", "fatal", "scope"})
+REFERENCE_MESSAGES = {
+    "missing": ("A local path-like reference does not match any bundled artifact, "
+                "such as a file the skill writes at runtime."),
+    "ambiguous": "A local path-like reference matched more than one bundled artifact and could not be resolved to a single target.",
+}
 
 
 def report_json(value: Any) -> bytes:
@@ -165,12 +180,16 @@ def safe_report_value(value: Any, *, depth: int = 0) -> Any:
 
 def report_path(value: Any, root: Path) -> str:
     require(isinstance(value, str) and bool(value), "SkillSpector finding path is invalid")
+    directory = value.endswith("/")
     if Path(value).is_absolute():
         try:
             value = Path(value).relative_to(root).as_posix()
+            if directory:
+                value += "/"
         except ValueError:
             raise PublicationError("SkillSpector finding path escapes selected root")
-    require("\\" not in value and all(part not in {"", ".", ".."} for part in value.split("/")),
+    core = value[:-1] if value.endswith("/") else value
+    require(core and "\\" not in value and all(part not in {"", ".", ".."} for part in core.split("/")),
             "SkillSpector finding path escapes selected root")
     require(len(value) <= 1000 and clean(value, len(value)) == value,
             "SkillSpector finding path is not display-safe")
@@ -178,15 +197,127 @@ def report_path(value: Any, root: Path) -> str:
 
 
 def add_coverage_reason(record: dict, code: str, message: str, *,
-                        analyzer_id: str | None = None, path: str | None = None) -> None:
+                        analyzer_id: str | None = None, path: str | None = None,
+                        start_line: int | None = None, end_line: int | None = None,
+                        seen: set[bytes] | None = None) -> None:
     reason = {"code": clean(code, 120), "message": clean(message),
               "retryable": code in RETRYABLE_REASONS}
     if analyzer_id:
         reason["analyzer_id"] = clean(analyzer_id, 200)
     if path:
         reason["path"] = clean(path, 1000)
-    if reason not in record["coverage"]["reasons"]:
+    for key, value in (("start_line", start_line), ("end_line", end_line)):
+        if value is not None:
+            require(type(value) is int and 1 <= value < 2**53, "SkillSpector coverage position is invalid")
+            reason[key] = value
+    if start_line is not None and end_line is not None:
+        require(end_line >= start_line, "SkillSpector coverage line range is invalid")
+    if seen is not None:
+        identity = report_json(reason)
+        if identity in seen:
+            return
+        seen.add(identity)
         record["coverage"]["reasons"].append(reason)
+    elif reason not in record["coverage"]["reasons"]:
+        record["coverage"]["reasons"].append(reason)
+
+
+def reference_evidence(record: dict, completeness: dict, root: Path, *, reason_keys: set[bytes]) -> None:
+    """Retain reference and ledger context without inferring package intent.
+
+    A missing path can belong to the caller's project, a dependency, or a file
+    created when the skill is used. The upstream locations and snippets allow
+    that distinction to be reviewed; absence alone does not establish it.
+    """
+    coverage = record["coverage"]
+    for key in ("references", "ledger_exceptions"):
+        values = completeness.get(key, [])
+        require(isinstance(values, list) and len(values) <= 10_000_000, "SkillSpector reference evidence is invalid")
+        coverage[key], coverage[key + "_total"] = [], len(values)
+        for raw in values:
+            require(isinstance(raw, dict), "SkillSpector reference evidence row is invalid")
+            value = safe_report_value(raw)
+            if key == "references":
+                require(REFERENCE_FIELDS <= value.keys() <= REFERENCE_FIELDS | {"source_sha256"},
+                        "SkillSpector reference fields are invalid")
+                value["source_path"] = report_path(raw["source_path"], root)
+                for field in ("line", "column"):
+                    require(type(value[field]) is int and 1 <= value[field] < 2**53,
+                            "SkillSpector reference position is invalid")
+                require(isinstance(value["evidence"], str) and all(isinstance(value[field], str) for field in
+                        ("status", "disposition", "reference_kind")) and value["status"] in {"resolved", "missing", "ambiguous", "rejected"}
+                        and value["disposition"] in {"analyzed", "partial", "failed", "out_of_scope"}
+                        and value["reference_kind"] in REFERENCE_KINDS, "SkillSpector reference state is invalid")
+                require((value["target_path"] is not None) == (value["status"] == "resolved"),
+                        "SkillSpector reference target differs from resolution")
+                if value["target_path"] is not None:
+                    value["target_path"] = report_path(raw["target_path"], root)
+                if "source_sha256" in value:
+                    require(isinstance(value["source_sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", value["source_sha256"]),
+                            "SkillSpector reference source digest is invalid")
+                if value["status"] in REFERENCE_MESSAGES:
+                    code = "reference_missing" if value["status"] == "missing" else "reference_unresolved"
+                    add_coverage_reason(record, code, REFERENCE_MESSAGES[value["status"]],
+                        path=value["source_path"], seen=reason_keys)
+                    coverage["status"] = "partial"
+                elif value["status"] == "resolved" and value["disposition"] != "analyzed":
+                    add_coverage_reason(record, "referenced_uninspected", "A referenced artifact was not completely inspected.",
+                        path=value["source_path"], seen=reason_keys)
+                    coverage["status"] = "partial"
+            else:
+                require({"reason_code", "message"} <= value.keys() <= LEDGER_FIELDS,
+                        "SkillSpector ledger fields are invalid")
+                for field, maximum in (("reason_code", 120), ("message", MAX_REPORT_BYTES),
+                                       ("phase", 200), ("error_class", 200), ("scope", 200)):
+                    if field in value:
+                        require(isinstance(value[field], str) and 0 < len(value[field]) <= maximum,
+                                "SkillSpector ledger text is invalid")
+                if "path" in value:
+                    value["path"] = report_path(raw["path"], root)
+                for field in ("start_line", "end_line"):
+                    if value.get(field) is not None:
+                        require(type(value[field]) is int and 1 <= value[field] < 2**53,
+                                "SkillSpector ledger position is invalid")
+                if value.get("start_line") is not None and value.get("end_line") is not None:
+                    require(value["end_line"] >= value["start_line"], "SkillSpector ledger line range is invalid")
+                require("outcome" not in value or isinstance(value["outcome"], str) and
+                        value["outcome"] in {"completed", "partial", "failed", "skipped", "out_of_scope"},
+                        "SkillSpector ledger outcome is invalid")
+                require("fatal" not in value or type(value["fatal"]) is bool, "SkillSpector ledger fatal flag is invalid")
+                if "analyzers" in value:
+                    require(isinstance(value["analyzers"], list) and len(value["analyzers"]) <= 1000 and
+                            all(isinstance(analyzer, str) and 0 < len(analyzer) <= 200 for analyzer in value["analyzers"]),
+                            "SkillSpector ledger analyzers are invalid")
+            coverage[key].append(value)
+    coverage["reference_evidence_truncated"] = False
+    # Keep this additive context below a fixed aggregate budget, leaving the
+    # existing report budget for analyzer results and content findings. Every
+    # input row is validated before a whole-row prefix can be omitted.
+    publication_budget = MAX_REPORT_BYTES - (128 << 10)
+    limit_reference_evidence(coverage, min(MAX_REFERENCE_EVIDENCE_BYTES, max(0, publication_budget // 4)))
+    if coverage["reference_evidence_truncated"]:
+        add_coverage_reason(record, "normalization_truncated", "Some reference or ledger evidence exceeded the publication byte or count budget.",
+                            seen=reason_keys)
+        coverage["status"] = "partial"
+    if coverage["status"] == "partial" and record["status"] == "complete":
+        record["status"] = "partial"
+
+
+def limit_reference_evidence(coverage: dict, maximum: int) -> int:
+    """Bound the two evidence arrays, returning bytes above their empty arrays."""
+    used = 0
+    for key, count_limit in (("references", 1024), ("ledger_exceptions", 100000)):
+        retained = []
+        for value in coverage[key][:count_limit]:
+            size = len(report_json(value)) - 1 + bool(retained)
+            if used + size > maximum:
+                break
+            retained.append(value)
+            used += size
+        coverage[key] = retained
+    coverage["reference_evidence_truncated"] = any(
+        coverage[key + "_total"] > len(coverage[key]) for key in ("references", "ledger_exceptions"))
+    return used
 
 
 def coverage_finding(finding: dict) -> bool:
@@ -235,6 +366,7 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
     record["execution"]["exit_code"] = returncode
     record["execution"]["finished_at"] = now()
     coverage = record["coverage"]
+    reason_keys = {report_json(reason) for reason in coverage["reasons"]}
     coverage["status"] = "complete" if record["status"] == "complete" else "partial"
     for key in ("fully_inspected_files", "partially_inspected_files", "entirely_uninspected_files"):
         coverage[key] = completeness[key]
@@ -247,17 +379,20 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
                 analyzers = diagnostic.get("analyzers", [])
                 add_coverage_reason(record, code, str(diagnostic.get("message") or "Analysis coverage is incomplete."),
                     analyzer_id=diagnostic.get("analyzer_id") or (analyzers[0] if analyzers else None),
-                    path=diagnostic.get("path"))
+                    path=diagnostic.get("path"), seen=reason_keys)
             else:
-                add_coverage_reason(record, key, str(diagnostic) or "Analysis coverage is incomplete.")
+                add_coverage_reason(record, key, str(diagnostic) or "Analysis coverage is incomplete.", seen=reason_keys)
     for analyzer in coverage["analyzers"]:
         if analyzer.get("status") not in {"completed", "not_applicable", "disabled"} or (
             analyzer.get("status") == "disabled" and analyzer.get("analyzer_id") not in DISABLED_STATIC_ANALYZERS
         ) or any(analyzer.get(key, 0) != 0 for key in ("failed", "partial", "skipped", "unaccounted")):
             add_coverage_reason(record, str(analyzer.get("reason_code") or "analyzer_incomplete"),
                 str(analyzer.get("message") or "A static analyzer did not complete its planned work."),
-                analyzer_id=analyzer.get("analyzer_id"))
+                analyzer_id=analyzer.get("analyzer_id"), seen=reason_keys)
+    reference_evidence(record, completeness, root, reason_keys=reason_keys)
     groups: dict[str, dict] = {}
+    group_positions: dict[str, set[bytes]] = {}
+    group_finding_ids: dict[str, set[str]] = {}
     raw_count = content_count = 0
     for raw in report["issues"]:
         finding = safe_report_value(raw)
@@ -283,7 +418,7 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
             # A confirmed concealed executable may ALSO be outside analysis.
             # Preserve its content signal while exposing the coverage gap.
             add_coverage_reason(record, "unsupported_content",
-                "Executable content was detected, but its behavior was not fully inspected.", path=location["path"])
+                "Executable content was detected, but its behavior was not fully inspected.", path=location["path"], seen=reason_keys)
             coverage["status"] = "partial"
             if record["status"] == "complete":
                 record["status"] = "partial"
@@ -296,12 +431,12 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
                     require(isinstance(reason, dict), "SkillSpector coverage reason is invalid")
                     add_coverage_reason(record, str(reason.get("reason_code") or "coverage_limitation"),
                         str(reason.get("message") or finding.get("explanation") or "Analysis coverage is incomplete."),
-                        path=evidence.get("target_path") or location["path"])
+                        path=evidence.get("target_path") or location["path"], seen=reason_keys)
             else:
                 code = "size_limit" if finding["id"] in {"AE5", "AE7"} else "unsupported_content"
                 add_coverage_reason(record, str(evidence.get("inspection_limitation_reason") or code),
                     str(finding.get("explanation") or finding.get("finding") or "Artifact could not be fully inspected."),
-                    path=location["path"])
+                    path=location["path"], seen=reason_keys)
             coverage["status"] = "partial"
             if record["status"] == "complete":
                 record["status"] = "partial"
@@ -332,33 +467,69 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
                 if key in finding:
                     group[key] = finding[key]
             groups[group_id] = group
+            group_positions[group_id] = set()
+            group_finding_ids[group_id] = set()
         group = groups[group_id]
         group["raw_count"] += count
-        if finding_id and finding_id not in group["finding_ids"]:
+        if finding_id and finding_id not in group_finding_ids[group_id]:
             group["finding_ids"].append(finding_id)
+            group_finding_ids[group_id].add(finding_id)
         for occurrence in occurrences:
             position = {k: v for k, v in occurrence.items() if k != "finding_id"}
-            if not any({k: v for k, v in prior.items() if k != "finding_id"} == position
-                       for prior in group["occurrences"]):
+            position_key = report_json(position)
+            if position_key not in group_positions[group_id]:
                 group["occurrences"].append(occurrence)
+                group_positions[group_id].add(position_key)
     severity_rank = {name: rank for rank, name in enumerate(("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"))}
     normalized = sorted(groups.values(), key=lambda f: (severity_rank[f["severity"]], f["rule"], f["path"], f.get("line", 0), f["id"]))
+    if record["profile"] == PROFILES.get(record["profile"]["id"]):
+        for group in normalized:
+            exception = matching_exception(record["source"], record["scanner"], record["profile"], group)
+            if exception is not None:
+                group["review_status"] = "false_positive"
+                group["exception"] = exception
+    upstream_truncated = any(reason["code"] == "output_limit" for reason in coverage["reasons"])
+    coverage["grouping_complete"] = not upstream_truncated
     record.update(raw_finding_count=raw_count, finding_count=content_count,
-                  finding_group_count=len(normalized), findings=normalized, findings_truncated=False)
+                  finding_group_count=len(normalized), findings=normalized, findings_truncated=upstream_truncated)
     if coverage["status"] != "complete" and not coverage["reasons"]:
         for error in record["errors"]:
-            add_coverage_reason(record, error["code"], error["message"])
+            add_coverage_reason(record, error["code"], error["message"], seen=reason_keys)
     # The raw report has a hard byte cap, and its publication projection also
     # needs one. Never silently produce a complete report after losing evidence.
     publication_budget = MAX_REPORT_BYTES - (128 << 10)
     if len(report_json(record)) > publication_budget:
-        add_coverage_reason(record, "normalization_truncated", "The complete finding evidence exceeded the publication byte budget.")
+        add_coverage_reason(record, "normalization_truncated", "The complete static analysis evidence exceeded the publication byte budget.",
+                            seen=reason_keys)
         record["findings_truncated"] = True
+        coverage["grouping_complete"] = False
         coverage["status"] = "partial"
         if record["status"] == "complete":
             record["status"] = "partial"
-        while record["findings"] and len(report_json(record)) > publication_budget:
-            record["findings"].pop()
+        record["findings"] = []
+        remaining = publication_budget - len(report_json(record))
+        if remaining < 0:
+            # Reference context cannot crowd out the bounded control/analyzer
+            # evidence. Retain whole rows and their original totals; a capped
+            # context stays an explicit coverage limitation, never a finding.
+            payload = sum(len(report_json(coverage[key])) - 3 for key in ("references", "ledger_exceptions"))
+            retained_payload = limit_reference_evidence(coverage, max(0, payload + remaining))
+            remaining += payload - retained_payload
+        require(remaining >= 0, "SkillSpector coverage evidence exceeds publication budget")
+        # Compute each group's encoded size once. Re-encoding the full record
+        # after every removal would make adversarial high-volume output quadratic.
+        # report_json includes one terminal newline; array elements do not.
+        # Retain a prefix so the severity order and whole occurrences survive.
+        prefix_bytes = retained = 0
+        for index, group in enumerate(normalized):
+            size = len(report_json(group)) - 1 + bool(index)
+            if prefix_bytes + size > remaining:
+                break
+            prefix_bytes += size
+            retained = index + 1
+        record["findings"] = normalized[:retained]
+        record["findings_truncated"] = upstream_truncated or retained < len(normalized)
+        coverage["grouping_complete"] = not record["findings_truncated"]
         require(len(report_json(record)) <= publication_budget,
                 "SkillSpector coverage evidence exceeds publication budget")
     return record

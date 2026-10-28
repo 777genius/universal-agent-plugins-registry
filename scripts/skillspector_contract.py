@@ -98,10 +98,50 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
     for key in ("started_at", "finished_at"):
         if record["execution"][key] is not None:
             require(v2.timestamp(record["execution"][key], key) <= generated, "execution is newer than artifact")
+    coverage = record["coverage"]
+
+    def contained_path(value):
+        require(not Path(value).is_absolute() and scanner.report_path(value, Path("/")) == value,
+                "reference evidence path escapes source")
+
+    def line_range(value):
+        if value.get("start_line") is not None and value.get("end_line") is not None:
+            require(value["end_line"] >= value["start_line"], "coverage evidence line range is invalid")
+
+    for reason in coverage["reasons"]:
+        line_range(reason)
+    if "references" in coverage:
+        for key in ("references", "ledger_exceptions"):
+            require(coverage[key + "_total"] >= len(coverage[key]), "reference evidence total is smaller than retained rows")
+        truncated = any(coverage[key + "_total"] > len(coverage[key]) for key in ("references", "ledger_exceptions"))
+        require(coverage["reference_evidence_truncated"] == truncated, "reference evidence truncation differs from totals")
+        if truncated:
+            require(record["status"] != "complete" and coverage["status"] == "partial" and
+                    any(reason["code"] == "normalization_truncated" for reason in coverage["reasons"]),
+                    "truncated reference evidence requires an explicit coverage limitation")
+        for reference in coverage["references"]:
+            contained_path(reference["source_path"])
+            require((reference["target_path"] is not None) == (reference["status"] == "resolved"),
+                    "reference target differs from resolution")
+            if reference["target_path"] is not None:
+                contained_path(reference["target_path"])
+            if reference["status"] in {"missing", "ambiguous"} or (
+                    reference["status"] == "resolved" and reference["disposition"] != "analyzed"):
+                require(record["status"] != "complete" and coverage["status"] != "complete",
+                        "uninspected reference cannot claim complete analysis")
+        for diagnostic in coverage["ledger_exceptions"]:
+            if "path" in diagnostic:
+                contained_path(diagnostic["path"])
+            line_range(diagnostic)
     require(record["raw_finding_count"] >= record["finding_count"] >= len(record["findings"]), "invalid raw finding counts")
     require(record["finding_group_count"] >= len(record["findings"]), "invalid finding group count")
     if "legacy_format" not in record:
-        require(record["findings_truncated"] == (record["finding_group_count"] > len(record["findings"])),
+        incomplete_grouping = record["coverage"].get("grouping_complete") is False
+        if incomplete_grouping:
+            require(record["status"] != "complete" and record["coverage"]["status"] != "complete" and
+                    any(reason["code"] in {"output_limit", "normalization_truncated"} for reason in record["coverage"]["reasons"]),
+                    "incomplete grouping requires an explicit publication limitation")
+        require(record["findings_truncated"] == (incomplete_grouping or record["finding_group_count"] > len(record["findings"])),
                 "invalid grouped finding truncation")
         if not record["findings_truncated"]:
             require(record["finding_count"] == sum(finding["raw_count"] for finding in record["findings"]),
@@ -115,13 +155,21 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
             require(not Path(path).is_absolute() and "\\" not in path and
                     bool(path.removesuffix("/")) and
                     all(part not in {"", ".", ".."} for part in path.removesuffix("/").split("/")), "finding location escapes source")
-        require(finding["review_status"] == "unreviewed", "automated scan cannot claim human confirmation")
+        if finding["review_status"] == "false_positive":
+            from scripts.skillspector_exceptions import matching_exception
+            annotation = matching_exception(record["source"], record["scanner"], record["profile"], finding)
+            require((matching_profile or historical) and annotation is not None and finding.get("exception") == annotation,
+                    "false-positive annotation is not bound to verified source and scanner evidence")
+        else:
+            require(finding["review_status"] == "unreviewed" and "exception" not in finding,
+                    "automated scan cannot claim human confirmation or an unverified exception")
     if record["status"] == "complete" and "legacy_format" not in record:
         require(record["execution"]["state"] == "completed" and record["execution"]["exit_code"] in (0, 1) and
                 record["coverage"]["status"] == "complete" and not record["coverage"]["reasons"] and
                 not record["errors"] and record["coverage"]["fully_inspected_files"] > 0 and
                 record["coverage"]["partially_inspected_files"] == 0 and
                 record["coverage"]["entirely_uninspected_files"] == 0, "complete report lacks complete analysis")
+        require(not coverage.get("ledger_exceptions"), "complete report contains ledger exceptions")
         completed = {value.get("analyzer_id") for value in record["coverage"]["analyzers"] if value.get("status") == "completed"}
         require({"artifact_integrity", "static_patterns_prompt_injection", "static_yara"} <= completed,
                 "complete report lacks required analyzer evidence")

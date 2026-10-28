@@ -1,0 +1,388 @@
+{
+  "expected_bytes": 1411657,
+  "expected_files": 320,
+  "experiment": "cold_git_acquisition_and_v3_caller",
+  "final_cold_v3_caller": {
+    "attempt": {
+      "attempt_count": 1,
+      "disposition": "scheduled",
+      "fingerprint": "sha256:ed75b1cd3e167e60306e939323162e739f64edb9a127de0ced3c592d1e0fecc2",
+      "history": [
+        {
+          "acquisition_seconds": 6.710318,
+          "analysis_seconds": 53.480321,
+          "at": "2026-10-28T11:29:25Z",
+          "fingerprint": "sha256:ed75b1cd3e167e60306e939323162e739f64edb9a127de0ced3c592d1e0fecc2",
+          "profile": {
+            "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+            "id": "static-standard-v3"
+          },
+          "reason": "extended_profile_required",
+          "status": "partial"
+        }
+      ],
+      "id": "registry/cloudflare",
+      "last_attempted_at": "2026-10-28T11:29:25Z",
+      "next_attempt_at": "2026-10-28T11:29:25Z",
+      "next_profile": "static-extended-v3",
+      "policy_digest": "sha256:b056d791aec06105f7e29df50ed52835868a9cd17179add2a283690711ff44fa",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "reason": "extended_profile_required",
+      "scanner": {
+        "id": "skillspector",
+        "revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+        "version": "2.13.1"
+      },
+      "source_digest": "sha256:7dc99830042f9141348e2f8d832fdbfaf228eeb84fa7ee9c7de0b45e1748972a",
+      "status": "partial"
+    },
+    "caller_wiring_verified": true,
+    "code_base_commit": "c7325e0798d0b638371403008da227e46eea66cc",
+    "code_files_unchanged": true,
+    "code_identity_note": "Code is identified by the base commit plus the exact working-tree source hashes before the pending acquisition commit.",
+    "coverage_reasons": {
+      "analyzer_incomplete": 15,
+      "limitations": 16,
+      "reference_missing": 1,
+      "runtime_limit": 632
+    },
+    "coverage_status": "partial",
+    "elapsed_seconds": 61.710766,
+    "execution": {
+      "acquisition_seconds": 6.710318,
+      "analysis_seconds": 53.480321,
+      "exit_code": 1,
+      "finished_at": "2026-10-28T11:29:24Z",
+      "started_at": "2026-10-28T11:28:24Z",
+      "state": "completed"
+    },
+    "experiment": "final_cold_cloudflare_v3_caller",
+    "finding_count": 473,
+    "finding_group_count": 253,
+    "finished_at": "2026-10-28T11:29:25.252956+00:00",
+    "git_trace_sha256": "sha256:8676a8ec41e99172c27f233e60caf361d944b0182865b92d2f294c75b594869b",
+    "github_credentials_forwarded": false,
+    "initial_fetch_seconds": 0.720908,
+    "preparation_seconds": 120,
+    "profile": {
+      "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+      "id": "static-standard-v3"
+    },
+    "profile_document": {
+      "arguments": [
+        "--no-llm",
+        "--format",
+        "json",
+        "--fail-on-incomplete"
+      ],
+      "author_baselines": false,
+      "cache_max_age_seconds": null,
+      "exception_set_digest": "sha256:c9334dd7da799dd369b5d357ea8e327c780b7b2d00790925825a0051581e34b7",
+      "id": "static-standard-v3",
+      "max_files": 512,
+      "max_tree_bytes": 4194304,
+      "network": "scanner-default-no-transitive",
+      "normalization_version": 3,
+      "osv_timeout_seconds": 3,
+      "static_artifact_seconds": 30,
+      "timeout_seconds": 60,
+      "transitive": false,
+      "workflow_seconds": 45
+    },
+    "published_group_count": 253,
+    "raw_finding_count": 478,
+    "record_sha256": "sha256:a995b801b5aa857528d0a7a0ce4f623a90c4680a397cc7a1e73e11d403abf2f3",
+    "review_status_counts": {
+      "false_positive": 2,
+      "unreviewed": 251
+    },
+    "scanner": {
+      "id": "skillspector",
+      "revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+      "version": "2.13.1"
+    },
+    "source": {
+      "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+      "path": "plugins/cloudflare/skills/cloudflare",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+    },
+    "source_facts": {
+      "bytes": 1411657,
+      "files": 320,
+      "helper_seconds": 5.746942,
+      "limits": {
+        "max_file_bytes": 4194304,
+        "max_files": 512,
+        "max_tree_bytes": 4194304
+      }
+    },
+    "source_selection": {
+      "id": "registry/cloudflare",
+      "kind": "plugin_skill",
+      "path": "plugins/cloudflare/skills/cloudflare",
+      "plugin_path": "plugins/cloudflare",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+    },
+    "started_at": "2026-10-28T11:28:23.542181+00:00",
+    "status": "partial",
+    "success": true,
+    "trace_command_names": {
+      "_run_dashed_": 11,
+      "cat-file": 22,
+      "fetch": 11,
+      "index-pack": 11,
+      "init": 1,
+      "ls-tree": 1,
+      "maintenance": 1,
+      "remote": 11,
+      "remote-curl": 11,
+      "rev-parse": 1
+    },
+    "trace_fetch_invocations": 11,
+    "transport_proxy_keys": [
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "no_proxy"
+    ],
+    "working_tree_source_hashes": {
+      "scripts/build_bridges.py": "sha256:5903aa8f2973bb51d881c32c2e22c6182c1bb078a26fa131ea2dae8887494e4d",
+      "scripts/build_discovery_index.py": "sha256:56de40d73c615b4cda69210fb331eb2989b8a063a4ccb24bb2afa1617c2caf9c",
+      "scripts/build_registry.py": "sha256:2f4422d9f3aca20701126beb21d1eaee076da9f5c5944aff46564cd55a3ae42d",
+      "scripts/discovery_checkpoint.py": "sha256:f359f3cc6618299f7ce15118b1ec135a0eee133ce1d0664634559ca5f8dbee91",
+      "scripts/skillspector_acquisition.py": "sha256:157c97e237ae51e05e57722b3987d27db3f402ab295715873dcafe14d78a2148",
+      "scripts/skillspector_contract.py": "sha256:c924d931cc4b1efc1d2aa10bf93394977ed2685e1e64259a0a4dcde4cbaa203f",
+      "scripts/skillspector_coverage_v3.py": "sha256:ed33bfaa9b7483c94634877b82fa1b211929c345caa2f84b05b93b1d0b5ea5ab",
+      "scripts/skillspector_reports.py": "sha256:5712b2b477912e7e043f6bfa6ca4d03fbecf5d64e2374c599f492255d1a25381"
+    }
+  },
+  "final_helper_sha256": "sha256:157c97e237ae51e05e57722b3987d27db3f402ab295715873dcafe14d78a2148",
+  "harness": {
+    "adaptations": [
+      "Each experiment constructed a new PinnedRepository with mirror_root=None and github_token=None.",
+      "The environment requires its approved HTTP(S) proxy for public GitHub DNS/transport; only proxy environment keys were added to the sanitized Git transport.",
+      "GIT_TRACE2_EVENT and GIT_TRACE_REDACT recorded Git command names without HTTP headers or GitHub credentials.",
+      "The final caller wrapped the existing acquisition function only to count returned files/bytes and measure elapsed time; the same returned whole-root file list reached scan_selected.",
+      "The final caller removed GITHUB_TOKEN and GH_TOKEN from its process; the scanner retained its production environment allowlist."
+    ],
+    "commands": [
+      "python cold-acquisition-verification/run.py --label old-proxy --transport-proxy",
+      "python cold-acquisition-verification/run.py --label new-proxy --helper scripts.skillspector_acquisition:bounded_package_files --transport-proxy",
+      "python cold-acquisition-verification/scan_once.py"
+    ],
+    "location": "cold-acquisition-verification/ outside the repository",
+    "native_transport_attempt": {
+      "elapsed_seconds": 0.035271,
+      "reason": "Could not resolve host: github.com without the environment-provided proxy",
+      "status": "unavailable_in_this_environment"
+    }
+  },
+  "hosted_before_fix": {
+    "coverage_reasons": {
+      "preparation_timeout": 1
+    },
+    "execution": {
+      "acquisition_seconds": 120.002574,
+      "analysis_seconds": null,
+      "exit_code": null,
+      "finished_at": "2026-10-28T11:02:47Z",
+      "started_at": "2026-10-28T11:00:47Z",
+      "state": "failed"
+    },
+    "manifest_sha256": "sha256:2fca4cc199b0aed59c57e24b4601d9c1cd00d8a283eb6e9275201531a9ae0000",
+    "publish_job": "skipped",
+    "record_id": "registry/cloudflare",
+    "run_conclusion": "success",
+    "run_id": 40673797731,
+    "source_commit": "1a3ecb4a99a7aa0eb0cf82815e476f1048d7cf08",
+    "status": "error",
+    "url": "https://github.com/777genius/universal-agent-plugins-registry/actions/runs/40673797731"
+  },
+  "initial_batched_cold_acquisition": {
+    "bytes": 1411657,
+    "code_commit": "c7325e0798d0b638371403008da227e46eea66cc",
+    "code_files": {
+      "scripts/build_bridges.py": "sha256:5903aa8f2973bb51d881c32c2e22c6182c1bb078a26fa131ea2dae8887494e4d",
+      "scripts/build_discovery_index.py": "sha256:56de40d73c615b4cda69210fb331eb2989b8a063a4ccb24bb2afa1617c2caf9c",
+      "scripts/skillspector_acquisition.py": "sha256:2e8eda556152821802b30586cd0856fd9cd738c9d18c7d6390606da97d9630b5"
+    },
+    "code_files_unchanged": true,
+    "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+    "credentials_forwarded": false,
+    "deadline_scope": "initial pinned fetch plus package acquisition and materialization",
+    "elapsed_seconds": 10.406656,
+    "expected": {
+      "bytes": 1411657,
+      "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+      "files": 320
+    },
+    "files": 320,
+    "finished_at": "2026-10-28T11:22:03.071279+00:00",
+    "git_invocations_sha256": "sha256:f6e6f64b822474aae28ae7138a8971470f948fe8d0541de41c13fce91eaaefc4",
+    "git_trace_sha256": "sha256:b154da059c811e5638a853b29fba1130f02069e2d7465b24fba7e1c4fd06acb7",
+    "git_version": "git version 2.51.1",
+    "helper": "scripts.skillspector_acquisition:bounded_package_files",
+    "initial_fetch_seconds": 1.216447,
+    "label": "new-proxy",
+    "last_git_command": {
+      "args": [
+        "ls-tree",
+        "-rz",
+        "-r",
+        "4d7d8e075e1b0d899965496bacf2811be5d94091",
+        "--",
+        "plugins/cloudflare/skills/cloudflare"
+      ],
+      "at": "2026-10-28T11:21:53.911147+00:00",
+      "elapsed_seconds": 0.030099,
+      "outcome": "success"
+    },
+    "package_seconds": 8.860746,
+    "scanner_executed": false,
+    "source": {
+      "path": "plugins/cloudflare/skills/cloudflare",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+    },
+    "started_at": "2026-10-28T11:21:52.659920+00:00",
+    "status": "complete",
+    "timeout_seconds": 120,
+    "top_level_show_reads": 0,
+    "top_level_size_reads": 0,
+    "trace_command_names": {
+      "_run_dashed_": 11,
+      "cat-file": 22,
+      "fetch": 11,
+      "index-pack": 11,
+      "init": 1,
+      "ls-tree": 2,
+      "maintenance": 1,
+      "remote": 11,
+      "remote-curl": 11,
+      "rev-parse": 1
+    },
+    "trace_fetch_invocations": 11,
+    "transport_proxy_keys": [
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "no_proxy"
+    ],
+    "tree_files": 320,
+    "unique_tree_blob_ids": 320
+  },
+  "limits": [
+    "The existing preparation budget remains 120 seconds; scanner profiles/digests and file/tree limits were not increased.",
+    "The standalone old/initial-new acquisition harness used one 120-second budget including the initial fetch. The final scan_selected caller retained the production initial-fetch and package-preparation budgets, both 120 seconds.",
+    "One local cold network route is not a hosted-runner latency guarantee. The corrected hosted controlled run remains a separate delivery gate.",
+    "Git fetch counts include the initial pinned fetch; the old path stopped after 226 of 320 individual size queries, while both batched runs acquired the complete root.",
+    "The scan remains partial because resource/reference limitations remain; these measurements do not assert complete analysis or plugin safety."
+  ],
+  "old_cold_acquisition": {
+    "bytes": null,
+    "code_commit": "c7325e0798d0b638371403008da227e46eea66cc",
+    "code_files": {
+      "scripts/build_bridges.py": "sha256:5903aa8f2973bb51d881c32c2e22c6182c1bb078a26fa131ea2dae8887494e4d",
+      "scripts/build_discovery_index.py": "sha256:56de40d73c615b4cda69210fb331eb2989b8a063a4ccb24bb2afa1617c2caf9c"
+    },
+    "code_files_unchanged": true,
+    "content_digest": null,
+    "credentials_forwarded": false,
+    "deadline_scope": "initial pinned fetch plus package acquisition and materialization",
+    "elapsed_seconds": 120.003842,
+    "error": "work budget exhausted; checkpoint preserved",
+    "error_type": "CheckpointYield",
+    "expected": {
+      "bytes": 1411657,
+      "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+      "files": 320
+    },
+    "files": null,
+    "finished_at": "2026-10-28T11:19:04.666901+00:00",
+    "git_invocations_sha256": "sha256:0c039c597c6902a4f1f75b3f3663a3b7449a3d9d904882a46bb8d3b87c8425c1",
+    "git_trace_sha256": "sha256:6512c9004aeb96bc3766f502f70d3224f67c36b3a3bd33bc4fb24af9ce60d5b7",
+    "git_version": "git version 2.51.1",
+    "helper": "scripts.build_discovery_index:bounded_package_files",
+    "initial_fetch_seconds": 1.066212,
+    "label": "old-proxy",
+    "last_git_command": {
+      "args": [
+        "cat-file",
+        "-s",
+        "11ddda24b45055cafcac51fc39964eef1fac5b59"
+      ],
+      "at": "2026-10-28T11:19:04.666484+00:00",
+      "elapsed_seconds": 0.016479,
+      "outcome": "CheckpointYield"
+    },
+    "scanner_executed": false,
+    "source": {
+      "path": "plugins/cloudflare/skills/cloudflare",
+      "repository": "777genius/universal-agent-plugins-registry",
+      "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+    },
+    "started_at": "2026-10-28T11:17:04.662812+00:00",
+    "status": "deadline_exhausted",
+    "timeout_seconds": 120,
+    "top_level_show_reads": 0,
+    "top_level_size_reads": 226,
+    "trace_command_names": {
+      "_run_dashed_": 227,
+      "cat-file": 226,
+      "fetch": 227,
+      "gc": 4,
+      "index-pack": 226,
+      "init": 1,
+      "ls-tree": 2,
+      "maintenance": 226,
+      "pack-objects": 12,
+      "pack-refs": 4,
+      "prune": 4,
+      "reflog": 4,
+      "remote": 1,
+      "remote-curl": 226,
+      "repack": 4,
+      "rerere": 4,
+      "rev-parse": 1,
+      "worktree": 4
+    },
+    "trace_fetch_invocations": 227,
+    "transport_proxy_keys": [
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "no_proxy"
+    ],
+    "tree_files": 320,
+    "unique_tree_blob_ids": 320
+  },
+  "schema_version": 1,
+  "source": {
+    "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+    "path": "plugins/cloudflare/skills/cloudflare",
+    "repository": "777genius/universal-agent-plugins-registry",
+    "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+  },
+  "validation": {
+    "final_record": "skillspector_contract.validate_record passed",
+    "production_publication_performed": false,
+    "root_reported_focused_suite": {
+      "provenance": "root integration run, separate from these measurements",
+      "result": "pass",
+      "seconds": 18.141,
+      "tests": 164
+    },
+    "scanner_executions_in_final_verification": 1
+  }
+}

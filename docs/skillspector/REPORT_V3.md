@@ -57,6 +57,23 @@ process state, exit code and measured acquisition/analysis durations.
 the original upstream coverage findings. Execution failures are separate from
 signals about the skill's contents.
 
+Coverage also retains the scanner's reference entries and public ledger
+diagnostics: source paths and positions, reference targets, evidence snippets,
+reference status, and analyzer context. These additive arrays are optional for
+earlier v3 fixtures and legacy records. A missing reference can point to a file
+created by the skill, a dependency installed later, or a file in the caller's
+project. Absence from the inspected tree alone does not establish which case
+applies. The source excerpt remains available for review; the publisher does
+not infer a safe runtime-generated file or a defective package from absence.
+Bounded evidence truncation is explicit and keeps the report partial.
+
+`reference-evidence-reprojection-2026-10-28.json` verifies the additive contract
+against 18 retained full scanner reports: all 394 reference entries and 1,297
+ledger entries survive, including their positions and snippets. Source,
+scanner, profile, finding counts, grouping and the 3 complete / 15 partial
+statuses stay unchanged. Planned external references remain inert context;
+they do not turn a completed static scope into a failed inspection.
+
 `raw_finding_count` counts upstream occurrences including coverage signals.
 `finding_count` counts content signals; `finding_group_count` counts displayed
 content groups. A group retains IDs, the full match fingerprint, evidence,
@@ -79,7 +96,10 @@ evidence. A legacy marker cannot bypass current coverage checks.
 Catalog resolution (`catalog_coverage`, `source_states`, `plugin_states`) is
 separate from analysis. An explicitly skill-free plugin is `not_applicable`.
 Unresolved names retain candidates; unavailable sources retain historical
-evidence without inventing a current revision.
+evidence without inventing a current revision. A previously verified exact
+`SKILL.md` path that disappears at a newly inspected revision is `skill_removed`;
+its original report remains historical. An inaccessible repository alone is
+never evidence of deletion.
 
 For a selected analysis population:
 
@@ -95,7 +115,7 @@ plugin; a plugin with three completed and ten partial skills displays 3 of 13.
 
 ## Queue and execution rollout
 
-The next stage persists bounded attempt history, explicit next attempts and
+The queue persists bounded attempt history, explicit next attempts and
 separate new/retry/changed lanes. Content, scanner or profile changes create a
 new scan identity. Complete matching results are reused without a seven-day
 expiration; partial results are classified by cause.
@@ -107,6 +127,15 @@ below the workflow limit, which remains below the actual remaining process
 deadline. Controlled measurements and exception-specific evidence accompany
 activation; raising a deadline does not claim to fix parser or missing-file
 limitations.
+
+The real two-round CLI run, including automatic extended retries and byte-exact
+reuse of the other records, is documented in `CLI_E2E_2026-10-28.md`.
+
+Cold Git acquisition is measured separately in
+`COLD_ACQUISITION_2026-10-28.md`. Validated object IDs are fetched in bounded
+batches before local byte and identity checks, preserving the whole analysis
+root and the original preparation deadline. Discovery uses the same bounded
+reader only for its validated `SKILL.md` candidates.
 
 This work excludes Cisco, removal of Cloudflare, and changes to any plugin's
 functionality. It adds no broad network or credential-rule suppression.

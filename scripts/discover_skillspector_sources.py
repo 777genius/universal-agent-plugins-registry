@@ -33,6 +33,7 @@ from scripts.directory_publication import (MAX_ENVELOPE_BYTES, MAX_LATEST_BYTES,
     PublicationError, canonical_json, format_timestamp, load_public_keys, parse_json_bytes, parse_timestamp,
     read_json, sha256_digest, validate_latest, validate_snapshot_semantics, verify_envelope)
 from scripts.observe_directory_publication import cryptography_ed25519_verify
+from scripts.skillspector_acquisition import read_blobs
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_PAGES = 50
@@ -272,7 +273,7 @@ def skill_documents(pinned, budget, paths=None):
     raw = bounded_tree(pinned, budget) if paths is None else bounded_tree(pinned, budget, paths)
     rows = raw.split(b"\0")
     require(len(rows) <= MAX_TREE_ENTRIES + 1, "repository entry count exceeds limit")
-    documents, invalid, total = [], [], 0
+    documents, invalid = [], []
     for row in rows:
         budget.check()
         if not row:
@@ -294,25 +295,17 @@ def skill_documents(pinned, budget, paths=None):
             continue
         require(len(documents) < MAX_DOCUMENTS, "repository skill document limit exceeded")
         documents.append((path, oid))
-    # In a blobless repository, ls-tree -l can fetch every unrelated blob just
-    # to determine sizes. Ask for sizes only after exact candidate filtering.
+    # Hydrate only the validated SKILL.md subset in bounded batches. A plain
+    # cat-file --batch-check still lazy-fetches each cold object separately.
+    bodies = {}
     if documents:
         budget.check()
-        sizes = pinned.git("cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)",
-                           input_bytes="".join(oid + "\n" for _, oid in documents).encode("ascii"))
-        rows = sizes.splitlines()
-        require(len(sizes) <= MAX_DOCUMENTS * 128 and len(rows) == len(documents), "invalid skill document sizes")
-        for (_, expected_oid), row in zip(documents, rows):
-            oid, kind, size = row.decode("ascii").split()
-            length = int(size)
-            require(oid == expected_oid and kind == "blob" and 0 <= length <= MAX_DOCUMENT_BYTES,
-                    "repository skill document limit exceeded")
-            total += length
-            require(total <= MAX_DOCUMENT_TOTAL_BYTES, "repository skill documents exceed byte limit")
+        bodies = read_blobs(pinned, [oid for _, oid in documents], max_files=MAX_DOCUMENTS,
+            max_file_bytes=MAX_DOCUMENT_BYTES, max_tree_bytes=MAX_DOCUMENT_TOTAL_BYTES, budget=budget)
     names = collections.defaultdict(list)
     for path, oid in documents:
         budget.check()
-        body = pinned.git("cat-file", "blob", oid)
+        body = bodies[oid]
         try:
             name = declared_name(body)
         except (DiscoveryError, BridgeError, ValueError, UnicodeError, RecursionError, yaml.YAMLError):

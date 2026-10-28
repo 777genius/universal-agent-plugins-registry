@@ -143,13 +143,15 @@ class DocumentTests(unittest.TestCase):
         tree = (f"100644 blob {skill_oid}\tskills/demo/SKILL.md\0" +
                 f"100644 blob {unrelated_oid}\tunrelated-large-artifact.zip\0").encode()
         pinned = mock.Mock()
-        pinned.git.side_effect = [f"{skill_oid} blob 25\n".encode(), b"---\nname: demo\n---\n"]
-        with mock.patch.object(discovery, "bounded_tree", return_value=tree):
-            names, invalid = discovery.skill_documents(pinned, WorkBudget(10))
+        budget = WorkBudget(10)
+        with mock.patch.object(discovery, "bounded_tree", return_value=tree), \
+             mock.patch.object(discovery, "read_blobs", return_value={skill_oid: b"---\nname: demo\n---\n"}) as read:
+            names, invalid = discovery.skill_documents(pinned, budget)
         self.assertEqual(names, {"demo": ["skills/demo"]})
         self.assertEqual(invalid, [])
-        self.assertEqual(pinned.git.call_args_list[0].kwargs["input_bytes"], (skill_oid + "\n").encode())
-        self.assertNotIn(unrelated_oid, str(pinned.git.call_args_list))
+        read.assert_called_once_with(pinned, [skill_oid], max_files=discovery.MAX_DOCUMENTS,
+            max_file_bytes=discovery.MAX_DOCUMENT_BYTES, max_tree_bytes=discovery.MAX_DOCUMENT_TOTAL_BYTES, budget=budget)
+        self.assertNotIn(unrelated_oid, str(read.call_args_list))
 
     def test_exact_declared_names_crlf_and_unicode(self):
         self.assertEqual(discovery.declared_name("---\r\nname: révision 2\r\n---\r\nbody".encode()), "révision 2")

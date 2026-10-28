@@ -20,7 +20,8 @@ from scripts import skillspector_coverage as v2
 from scripts import skillspector_reports as scanner
 from scripts import skillspector_contract as contract
 from scripts.build_bridges import BridgeError, PinnedRepository
-from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError, bounded_package_files, materialize_package
+from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError, materialize_package
+from scripts.skillspector_acquisition import AcquisitionTransferLimit, bounded_package_files
 from scripts.build_registry import RegistryError, directory_tree_digest
 from scripts.directory_publication import PublicationError, canonical_json, format_timestamp, parse_timestamp, require, sha256_digest
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
@@ -34,7 +35,7 @@ MAX_TOTAL_SHARD_BYTES, MAX_SHARD_RECORDS = v2.MAX_TOTAL_SHARD_BYTES, v2.MAX_SHAR
 SHA, SHARD_PATH = v2.SHA, v2.SHARD_PATH
 PREPARATION_SECONDS = 120
 RESOURCE_REASONS = frozenset({"scan_timeout", "runtime_limit", "archive_time_limit", "size_limit",
-    "input_limit_exceeded", "total_bytes_limit", "artifact_count_limit", "output_limit", "normalization_truncated"})
+    "input_limit_exceeded", "acquisition_transfer_limit", "total_bytes_limit", "artifact_count_limit", "output_limit", "normalization_truncated"})
 TRANSIENT_REASONS = frozenset({"acquisition_failed", "preparation_timeout", "network_error", "network_timeout",
     "osv_request_failed", "osv_timeout"})
 PERMANENT_REASONS = frozenset({"static_parse_limit", "reference_missing", "reference_unresolved",
@@ -382,11 +383,16 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
             code, body = scanner.run_scanner_v3(executable, ["scan", str(root), *profile["arguments"]], home, timeout, profile_id)
             record["execution"]["analysis_seconds"] = round(time.monotonic() - analysis_started, 6)
             require(directory_tree_digest(root) == digest, "source bytes changed during scan")
-            return scanner.normalize_report_v3(record, body, code, root)
+            # Normalize transactionally: a malformed/oversized upstream report
+            # must not leave legacy-shaped or half-validated findings on the
+            # error record and make the entire worker artifact unpublishable.
+            return scanner.normalize_report_v3(copy.deepcopy(record), body, code, root)
     except subprocess.TimeoutExpired:
         fail(record, "scan_timeout", "The bounded static analysis deadline was reached.")
     except CheckpointYield:
         fail(record, "preparation_timeout", "Source preparation reached its bounded deadline.")
+    except AcquisitionTransferLimit:
+        fail(record, "acquisition_transfer_limit", "Source acquisition reached its bounded Git transfer allowance.")
     except DiscoveryInputLimitError:
         fail(record, "input_limit_exceeded", f"Source exceeds {profile['max_files']} files or {profile['max_tree_bytes']} bytes in this profile.")
     except (BridgeError, DiscoveryError, RegistryError, OSError):
