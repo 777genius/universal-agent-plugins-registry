@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
+import math
 import os
 import resource
+import signal
 import subprocess
 import sys
 import tempfile
@@ -24,7 +27,7 @@ from scripts.build_bridges import BridgeError, PinnedRepository
 from scripts.build_discovery_index import DiscoveryError, bounded_package_files, materialize_package
 from scripts.build_registry import RegistryError, directory_tree_digest, digest_bytes, parse_json_bytes as parse_scanner_json
 from scripts.directory_publication import (
-    PublicationError, canonical_json, format_timestamp, parse_timestamp, read_json,
+    PublicationError, canonical_json, format_timestamp, parse_timestamp, read_bytes_bounded, read_json,
     require, sha256_digest, validate_with_schema,
 )
 
@@ -47,6 +50,356 @@ PROFILE_DOCUMENT = {
     "cache_max_age_seconds": 86400,
 }
 PROFILE = {"id": PROFILE_DOCUMENT["id"], "digest": sha256_digest(canonical_json(PROFILE_DOCUMENT))}
+
+# Versioned separately from the legacy selected-source publisher. The outer
+# process deadline includes startup and JSON serialization; both scanner-owned
+# deadlines must expire first so an incomplete report can still be returned.
+STANDARD_PROFILE_DOCUMENT = PROFILE_DOCUMENT | {
+    "id": "static-standard-v3", "normalization_version": 3,
+    "static_artifact_seconds": 30, "cache_max_age_seconds": None,
+}
+EXTENDED_PROFILE_DOCUMENT = STANDARD_PROFILE_DOCUMENT | {
+    "id": "static-extended-v3", "timeout_seconds": 180,
+    "workflow_seconds": 150, "static_artifact_seconds": 90,
+    "max_files": 2048, "max_tree_bytes": 16 << 20,
+}
+PROFILE_DOCUMENTS = {p["id"]: p for p in (STANDARD_PROFILE_DOCUMENT, EXTENDED_PROFILE_DOCUMENT)}
+PROFILES = {key: {"id": key, "digest": sha256_digest(canonical_json(value))}
+            for key, value in PROFILE_DOCUMENTS.items()}
+STANDARD_PROFILE = PROFILES[STANDARD_PROFILE_DOCUMENT["id"]]
+EXTENDED_PROFILE = PROFILES[EXTENDED_PROFILE_DOCUMENT["id"]]
+
+# These reasons describe bounded resources or transient acquisition. Parser,
+# missing-reference and unsupported-format limitations do not become retryable
+# merely because the scanner emitted them with a high severity.
+RETRYABLE_REASONS = frozenset({"scan_timeout", "preparation_timeout", "acquisition_failed",
+    "runtime_limit", "archive_time_limit", "size_limit", "input_limit_exceeded",
+    "total_bytes_limit", "artifact_count_limit", "network_error", "network_timeout",
+    "osv_request_failed", "osv_timeout"})
+DISABLED_STATIC_ANALYZERS = frozenset({"semantic_developer_intent", "semantic_quality_policy",
+    "semantic_security_discovery", "meta_analyzer"})
+
+
+def report_json(value: Any) -> bytes:
+    """Deterministic display JSON; never used for signed directory documents.
+
+    Reports legitimately contain fractional confidence and timing/evidence
+    values. The signed feed's integer-only canonicalization remains unchanged.
+    """
+    def walk(item: Any, depth: int = 0) -> None:
+        require(depth <= 64, "SkillSpector display JSON is too deeply nested")
+        if item is None or type(item) in (str, bool, int):
+            return
+        if type(item) is float:
+            require(math.isfinite(item), "SkillSpector display JSON contains a non-finite number")
+            return
+        if isinstance(item, list):
+            for child in item:
+                walk(child, depth + 1)
+            return
+        require(isinstance(item, dict), "SkillSpector display JSON contains an unsupported value")
+        keys = set()
+        for key, child in item.items():
+            require(isinstance(key, str), "SkillSpector display JSON key is not a string")
+            identity = unicodedata.normalize("NFC", key).casefold()
+            require(identity not in keys, "SkillSpector display JSON contains colliding keys")
+            keys.add(identity)
+            walk(child, depth + 1)
+
+    try:
+        walk(value)
+        return (json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True,
+                           separators=(",", ":")) + "\n").encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as error:
+        raise PublicationError("SkillSpector display JSON is invalid") from error
+
+
+def read_report_json(path: Path, *, max_bytes: int = MAX_REPORT_BYTES) -> Any:
+    try:
+        result = parse_scanner_json(read_bytes_bounded(path, max_bytes), str(path))
+        report_json(result)  # Also rejects overflow such as 1e999, not just NaN.
+        return result
+    except RegistryError as error:
+        raise PublicationError(str(error)) from error
+
+
+def empty_record_v3(item: dict[str, Any], profile_id: str = "static-standard-v3") -> dict[str, Any]:
+    require(profile_id in PROFILES, "unknown static analysis profile")
+    record = empty_record(item)
+    record.update(scanner=copy.deepcopy(SCANNER), profile=copy.deepcopy(PROFILES[profile_id]),
+        execution={"state": "failed", "started_at": None, "finished_at": None,
+                   "exit_code": None, "acquisition_seconds": None, "analysis_seconds": None},
+        coverage={"status": "not_started", "fully_inspected_files": 0,
+                  "partially_inspected_files": 0, "entirely_uninspected_files": 0,
+                  "reasons": [], "analyzers": [], "original_findings": []},
+        raw_finding_count=0, finding_group_count=0)
+    return record
+
+
+def safe_report_value(value: Any, *, depth: int = 0) -> Any:
+    """Keep complete JSON evidence within the already bounded upstream report.
+
+    Remove terminal/display controls, but do not shorten matching snippets or
+    evidence before computing identities. A long shared prefix is not proof
+    that two different findings describe the same problem.
+    """
+    require(depth <= 32, "SkillSpector evidence is too deeply nested")
+    if isinstance(value, str):
+        return clean(value, len(value))
+    if value is None or type(value) in (bool, int):
+        return value
+    if type(value) is float:
+        require(math.isfinite(value), "SkillSpector evidence is not finite")
+        return value
+    if isinstance(value, list):
+        return [safe_report_value(v, depth=depth + 1) for v in value]
+    require(isinstance(value, dict), "SkillSpector evidence is not JSON")
+    result = {}
+    for key, item in value.items():
+        require(isinstance(key, str), "SkillSpector evidence key is invalid")
+        cleaned = clean(key, len(key))
+        require(cleaned not in result, "SkillSpector evidence keys collide after sanitization")
+        result[cleaned] = safe_report_value(item, depth=depth + 1)
+    return result
+
+
+def report_path(value: Any, root: Path) -> str:
+    require(isinstance(value, str) and bool(value), "SkillSpector finding path is invalid")
+    if Path(value).is_absolute():
+        try:
+            value = Path(value).relative_to(root).as_posix()
+        except ValueError:
+            raise PublicationError("SkillSpector finding path escapes selected root")
+    require("\\" not in value and all(part not in {"", ".", ".."} for part in value.split("/")),
+            "SkillSpector finding path escapes selected root")
+    require(len(value) <= 1000 and clean(value, len(value)) == value,
+            "SkillSpector finding path is not display-safe")
+    return value
+
+
+def add_coverage_reason(record: dict, code: str, message: str, *,
+                        analyzer_id: str | None = None, path: str | None = None) -> None:
+    reason = {"code": clean(code, 120), "message": clean(message),
+              "retryable": code in RETRYABLE_REASONS}
+    if analyzer_id:
+        reason["analyzer_id"] = clean(analyzer_id, 200)
+    if path:
+        reason["path"] = clean(path, 1000)
+    if reason not in record["coverage"]["reasons"]:
+        record["coverage"]["reasons"].append(reason)
+
+
+def coverage_finding(finding: dict) -> bool:
+    """Classify only coverage semantics verified in the pinned scanner source.
+
+    AE2/3/4/6 are content signals and must remain visible. Likewise, SC9 without
+    an explicit inspection limitation still reports concealed executable code.
+    """
+    rule, tags = finding.get("id"), finding.get("tags", [])
+    if rule in {"AE1", "AE7"} and "coverage" in tags:
+        return True
+    if rule == "AE5" and "artifact-integrity" in tags:
+        return True
+    evidence = finding.get("evidence") or {}
+    return (rule == "SC9" and evidence.get("excluded_inspection_incomplete") is True
+            and finding.get("pattern") in {"Excluded Artifact Inspection Incomplete",
+                                            "Referenced Excluded Artifact Uninspected"})
+
+
+def normalize_location(location: dict, root: Path) -> dict:
+    require(isinstance(location, dict), "SkillSpector occurrence is invalid")
+    result = {"path": report_path(location.get("file"), root)}
+    for upstream, output, minimum in (("start_line", "line", 1), ("end_line", "end_line", 1),
+                                     ("start_column", "start_column", 0), ("end_column", "end_column", 0)):
+        value = location.get(upstream)
+        if value is not None:
+            require(type(value) is int and minimum <= value < 2**53, "SkillSpector position is invalid")
+            result[output] = value
+    if "end_line" in result and "line" in result:
+        require(result["end_line"] >= result["line"], "SkillSpector line range is invalid")
+    if result.get("end_line", result.get("line")) == result.get("line") and "end_column" in result and "start_column" in result:
+        require(result["end_column"] >= result["start_column"], "SkillSpector column range is invalid")
+    for key in ("source_identity", "source_digest", "source_url", "transitive_depth"):
+        if key in location:
+            result[key] = safe_report_value(location[key])
+    return result
+
+
+def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, root: Path) -> dict[str, Any]:
+    # Preserve the legacy trust boundary: exact scanner, no LLMs or suppressions,
+    # explicit execution and analyzer coverage, and canonical source locations.
+    normalize_report(record, body, returncode, root)
+    report = parse_scanner_json(body, "SkillSpector report")
+    completeness = report["analysis_completeness"]
+    record["execution"]["state"] = "failed" if record["status"] == "error" else "completed"
+    record["execution"]["exit_code"] = returncode
+    record["execution"]["finished_at"] = now()
+    coverage = record["coverage"]
+    coverage["status"] = "complete" if record["status"] == "complete" else "partial"
+    for key in ("fully_inspected_files", "partially_inspected_files", "entirely_uninspected_files"):
+        coverage[key] = completeness[key]
+    coverage["analyzers"] = safe_report_value(completeness["analyzer_statuses"])
+    for key in ("errors", "runtime_errors", "limitations", "ledger_exceptions"):
+        values = report.get(key, []) if key in ("errors", "runtime_errors") else completeness.get(key, [])
+        for diagnostic in values:
+            if isinstance(diagnostic, dict):
+                code = str(diagnostic.get("reason_code") or key)
+                analyzers = diagnostic.get("analyzers", [])
+                add_coverage_reason(record, code, str(diagnostic.get("message") or "Analysis coverage is incomplete."),
+                    analyzer_id=diagnostic.get("analyzer_id") or (analyzers[0] if analyzers else None),
+                    path=diagnostic.get("path"))
+            else:
+                add_coverage_reason(record, key, str(diagnostic) or "Analysis coverage is incomplete.")
+    for analyzer in coverage["analyzers"]:
+        if analyzer.get("status") not in {"completed", "not_applicable", "disabled"} or (
+            analyzer.get("status") == "disabled" and analyzer.get("analyzer_id") not in DISABLED_STATIC_ANALYZERS
+        ) or any(analyzer.get(key, 0) != 0 for key in ("failed", "partial", "skipped", "unaccounted")):
+            add_coverage_reason(record, str(analyzer.get("reason_code") or "analyzer_incomplete"),
+                str(analyzer.get("message") or "A static analyzer did not complete its planned work."),
+                analyzer_id=analyzer.get("analyzer_id"))
+    groups: dict[str, dict] = {}
+    raw_count = content_count = 0
+    for raw in report["issues"]:
+        finding = safe_report_value(raw)
+        evidence = finding.get("evidence") or {}
+        require(isinstance(evidence, dict), "SkillSpector finding evidence is invalid")
+        confidence = finding.get("confidence")
+        require(confidence is None or (type(confidence) in (int, float) and 0 <= confidence <= 1),
+                "SkillSpector confidence is invalid")
+        location = normalize_location(finding["location"], root)
+        raw_occurrences = finding.get("occurrences") or [finding["location"]]
+        require(isinstance(raw_occurrences, list), "SkillSpector occurrences are invalid")
+        occurrences = [normalize_location(value, root) for value in raw_occurrences]
+        # Preserve the original upstream shape with paths made relative. This is
+        # retained for coverage signals even though they are not content findings.
+        finding["location"]["file"] = location["path"]
+        if finding.get("occurrences"):
+            for occurrence, normalized in zip(finding["occurrences"], occurrences):
+                occurrence["file"] = normalized["path"]
+        count = len(occurrences)
+        raw_count += count
+        if finding["id"] == "SC9" and not coverage_finding(finding) and any(evidence.get(key) is True for key in
+                ("excluded_inspection_incomplete", "partially_analyzed_executable", "excluded_from_analysis")):
+            # A confirmed concealed executable may ALSO be outside analysis.
+            # Preserve its content signal while exposing the coverage gap.
+            add_coverage_reason(record, "unsupported_content",
+                "Executable content was detected, but its behavior was not fully inspected.", path=location["path"])
+            coverage["status"] = "partial"
+            if record["status"] == "complete":
+                record["status"] = "partial"
+        if coverage_finding(finding):
+            coverage["original_findings"].append(finding)
+            nested = evidence.get("reasons", [])
+            require(isinstance(nested, list), "SkillSpector coverage evidence reasons are invalid")
+            if nested:
+                for reason in nested:
+                    require(isinstance(reason, dict), "SkillSpector coverage reason is invalid")
+                    add_coverage_reason(record, str(reason.get("reason_code") or "coverage_limitation"),
+                        str(reason.get("message") or finding.get("explanation") or "Analysis coverage is incomplete."),
+                        path=evidence.get("target_path") or location["path"])
+            else:
+                code = "size_limit" if finding["id"] in {"AE5", "AE7"} else "unsupported_content"
+                add_coverage_reason(record, str(evidence.get("inspection_limitation_reason") or code),
+                    str(finding.get("explanation") or finding.get("finding") or "Artifact could not be fully inspected."),
+                    path=location["path"])
+            coverage["status"] = "partial"
+            if record["status"] == "complete":
+                record["status"] = "partial"
+            continue
+        content_count += count
+        # Every distinguishing upstream field participates. Locations may be
+        # grouped only with the scanner's full-match fingerprint; otherwise an
+        # identical message on another line is not proof of one problem.
+        identity = {key: value for key, value in raw.items()
+                    if key not in {"finding_id", "location", "occurrences"}}
+        if not finding.get("match_fingerprint"):
+            identity["locations"] = occurrences
+        identity["source"] = record["source"]
+        group_id = sha256_digest(report_json(identity))
+        finding_id = finding.get("finding_id")
+        require(finding_id is None or isinstance(finding_id, str), "SkillSpector finding ID is invalid")
+        for occurrence in occurrences:
+            if finding_id:
+                occurrence["finding_id"] = finding_id
+        if group_id not in groups:
+            group = {"id": group_id, "rule": finding["id"], "severity": finding["severity"],
+                "message": finding.get("explanation") or finding["finding"], **location,
+                "finding_ids": [], "match_fingerprint": finding.get("match_fingerprint"),
+                "evidence": evidence, "confidence": confidence, "review_status": "unreviewed",
+                "occurrences": [], "raw_count": 0}
+            for key in ("category", "pattern", "finding", "remediation", "code_snippet", "intent", "tags",
+                        "context", "source_identity", "source_digest", "source_url", "transitive_depth"):
+                if key in finding:
+                    group[key] = finding[key]
+            groups[group_id] = group
+        group = groups[group_id]
+        group["raw_count"] += count
+        if finding_id and finding_id not in group["finding_ids"]:
+            group["finding_ids"].append(finding_id)
+        for occurrence in occurrences:
+            position = {k: v for k, v in occurrence.items() if k != "finding_id"}
+            if not any({k: v for k, v in prior.items() if k != "finding_id"} == position
+                       for prior in group["occurrences"]):
+                group["occurrences"].append(occurrence)
+    severity_rank = {name: rank for rank, name in enumerate(("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"))}
+    normalized = sorted(groups.values(), key=lambda f: (severity_rank[f["severity"]], f["rule"], f["path"], f.get("line", 0), f["id"]))
+    record.update(raw_finding_count=raw_count, finding_count=content_count,
+                  finding_group_count=len(normalized), findings=normalized, findings_truncated=False)
+    if coverage["status"] != "complete" and not coverage["reasons"]:
+        for error in record["errors"]:
+            add_coverage_reason(record, error["code"], error["message"])
+    # The raw report has a hard byte cap, and its publication projection also
+    # needs one. Never silently produce a complete report after losing evidence.
+    publication_budget = MAX_REPORT_BYTES - (128 << 10)
+    if len(report_json(record)) > publication_budget:
+        add_coverage_reason(record, "normalization_truncated", "The complete finding evidence exceeded the publication byte budget.")
+        record["findings_truncated"] = True
+        coverage["status"] = "partial"
+        if record["status"] == "complete":
+            record["status"] = "partial"
+        while record["findings"] and len(report_json(record)) > publication_budget:
+            record["findings"].pop()
+        require(len(report_json(record)) <= publication_budget,
+                "SkillSpector coverage evidence exceeds publication budget")
+    return record
+
+
+def environment_v3(home: Path, profile_id: str, timeout: float | None = None) -> dict[str, str]:
+    require(profile_id in PROFILE_DOCUMENTS, "unknown static analysis profile")
+    profile = PROFILE_DOCUMENTS[profile_id]
+    actual_timeout = profile["timeout_seconds"] if timeout is None else timeout
+    require(type(actual_timeout) in (int, float) and math.isfinite(actual_timeout) and actual_timeout > 1,
+            "static analysis needs a bounded positive process deadline")
+    workflow = min(profile["workflow_seconds"], max(0.1, actual_timeout - min(15, actual_timeout / 4)))
+    return environment(home) | {
+        "SKILLSPECTOR_MAX_WORKFLOW_SECONDS": str(workflow),
+        "SKILLSPECTOR_MAX_STATIC_ANALYSIS_SECONDS_PER_ARTIFACT": str(min(profile["static_artifact_seconds"], workflow)),
+        "SKILLSPECTOR_OSV_TIMEOUT": str(profile["osv_timeout_seconds"]),
+    }
+
+
+def run_scanner_v3(scanner: Path, arguments: list[str], home: Path, timeout: float,
+                   profile_id: str = "static-standard-v3") -> tuple[int, bytes]:
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        with subprocess.Popen([str(scanner), *arguments], cwd=home,
+            env=environment_v3(home, profile_id, timeout), stdout=stdout, stderr=stderr,
+            start_new_session=True, preexec_fn=output_limit) as process:
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Parser helper children share this new process group. Killing
+                # only the scanner parent would leave work running past budget.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise
+            returncode = process.returncode
+        require(stderr.tell() <= MAX_REPORT_BYTES, "scanner diagnostics exceed limit")
+        require(stdout.tell() <= MAX_REPORT_BYTES, "scanner output exceeds limit")
+        stdout.seek(0)
+        return returncode, stdout.read(MAX_REPORT_BYTES + 1)
 
 
 def now() -> str:
