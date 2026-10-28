@@ -88,6 +88,18 @@ class ContractTests(unittest.TestCase):
         retry["scanned_at"] = "2026-10-27T12:00:00Z"
         self.assertEqual(metrics.compare([record], [retry])["repeated_same_result_incomplete"], 1)
 
+    def test_legacy_directory_finding_location_survives_migration(self):
+        source = item()
+        legacy = scanner.empty_record(source)
+        legacy.update(status="partial", scanned_at=scanner.now(), report_digest="sha256:" + "a" * 64,
+            finding_count=1, findings=[{"rule": "SC9", "severity": "HIGH", "message": "Directory evidence",
+                                       "path": "tools/__pycache__/"}])
+        legacy["source"]["content_digest"] = "sha256:" + "b" * 64
+        scanner.add_error(legacy, "analysis_incomplete", "Incomplete")
+        converted = contract.import_legacy(legacy)
+        contract.validate_record(converted, source, datetime.now(timezone.utc))
+        self.assertEqual(converted["findings"][0]["path"], "tools/__pycache__/")
+
 
 if __name__ == "__main__":
     unittest.main()
