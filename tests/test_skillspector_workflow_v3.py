@@ -44,6 +44,20 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
     def setUp(self):
         self.workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
 
+    def test_configured_analysis_runner_keeps_publication_on_separate_hosted_runner(self):
+        jobs = self.workflow['jobs']
+        for name in ('prepare', 'scan', 'assemble'):
+            with self.subTest(job=name):
+                self.assertEqual(jobs[name]['runs-on'], "${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}")
+                self.assertEqual(jobs[name]['permissions'], {'contents': 'read'})
+        # All configured-runner phases depend on the original repository gate.
+        self.assertIn("github.repository == '777genius/universal-agent-plugins-registry'", jobs['prepare']['if'])
+        self.assertEqual(jobs['scan']['needs'], 'prepare')
+        self.assertEqual(set(jobs['assemble']['needs']), {'prepare', 'scan'})
+        # Write credentials must never enter the pool that parses source input.
+        self.assertEqual(jobs['publish']['runs-on'], 'ubuntu-24.04')
+        self.assertEqual(jobs['publish']['permissions'], {'contents': 'write'})
+
     def test_controlled_and_branch_runs_cannot_publish(self):
         publish = self.workflow['jobs']['publish']
         for repository in ('777genius/universal-agent-plugins-registry', 'someone/fork'):

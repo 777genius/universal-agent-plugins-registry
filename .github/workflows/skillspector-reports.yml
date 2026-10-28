@@ -47,7 +47,8 @@ concurrency:
 jobs:
   prepare:
     if: github.repository == '777genius/universal-agent-plugins-registry' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    # Read-only analysis uses the configured CI pool; publication stays hosted.
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 35
     permissions:
       contents: read
@@ -101,7 +102,7 @@ jobs:
 
   scan:
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -158,7 +159,7 @@ jobs:
 
   assemble:
     needs: [prepare, scan]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
