@@ -30,6 +30,7 @@ from scripts.directory_publication import (
     PublicationError, canonical_json, format_timestamp, parse_timestamp, read_bytes_bounded, read_json,
     require, sha256_digest, validate_with_schema,
 )
+from scripts.skillspector_exceptions import EXCEPTION_SET_DIGEST, matching_exception
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "schemas/skillspector-reports-v1.schema.json"
@@ -57,6 +58,7 @@ PROFILE = {"id": PROFILE_DOCUMENT["id"], "digest": sha256_digest(canonical_json(
 STANDARD_PROFILE_DOCUMENT = PROFILE_DOCUMENT | {
     "id": "static-standard-v3", "normalization_version": 3,
     "static_artifact_seconds": 30, "cache_max_age_seconds": None,
+    "exception_set_digest": EXCEPTION_SET_DIGEST,
 }
 EXTENDED_PROFILE_DOCUMENT = STANDARD_PROFILE_DOCUMENT | {
     "id": "static-extended-v3", "timeout_seconds": 180,
@@ -165,12 +167,16 @@ def safe_report_value(value: Any, *, depth: int = 0) -> Any:
 
 def report_path(value: Any, root: Path) -> str:
     require(isinstance(value, str) and bool(value), "SkillSpector finding path is invalid")
+    directory = value.endswith("/")
     if Path(value).is_absolute():
         try:
             value = Path(value).relative_to(root).as_posix()
+            if directory:
+                value += "/"
         except ValueError:
             raise PublicationError("SkillSpector finding path escapes selected root")
-    require("\\" not in value and all(part not in {"", ".", ".."} for part in value.split("/")),
+    core = value[:-1] if value.endswith("/") else value
+    require(core and "\\" not in value and all(part not in {"", ".", ".."} for part in core.split("/")),
             "SkillSpector finding path escapes selected root")
     require(len(value) <= 1000 and clean(value, len(value)) == value,
             "SkillSpector finding path is not display-safe")
@@ -258,6 +264,8 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
                 str(analyzer.get("message") or "A static analyzer did not complete its planned work."),
                 analyzer_id=analyzer.get("analyzer_id"))
     groups: dict[str, dict] = {}
+    group_positions: dict[str, set[bytes]] = {}
+    group_finding_ids: dict[str, set[str]] = {}
     raw_count = content_count = 0
     for raw in report["issues"]:
         finding = safe_report_value(raw)
@@ -332,19 +340,31 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
                 if key in finding:
                     group[key] = finding[key]
             groups[group_id] = group
+            group_positions[group_id] = set()
+            group_finding_ids[group_id] = set()
         group = groups[group_id]
         group["raw_count"] += count
-        if finding_id and finding_id not in group["finding_ids"]:
+        if finding_id and finding_id not in group_finding_ids[group_id]:
             group["finding_ids"].append(finding_id)
+            group_finding_ids[group_id].add(finding_id)
         for occurrence in occurrences:
             position = {k: v for k, v in occurrence.items() if k != "finding_id"}
-            if not any({k: v for k, v in prior.items() if k != "finding_id"} == position
-                       for prior in group["occurrences"]):
+            position_key = report_json(position)
+            if position_key not in group_positions[group_id]:
                 group["occurrences"].append(occurrence)
+                group_positions[group_id].add(position_key)
     severity_rank = {name: rank for rank, name in enumerate(("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"))}
     normalized = sorted(groups.values(), key=lambda f: (severity_rank[f["severity"]], f["rule"], f["path"], f.get("line", 0), f["id"]))
+    if record["profile"] == PROFILES.get(record["profile"]["id"]):
+        for group in normalized:
+            exception = matching_exception(record["source"], record["scanner"], record["profile"], group)
+            if exception is not None:
+                group["review_status"] = "false_positive"
+                group["exception"] = exception
+    upstream_truncated = any(reason["code"] == "output_limit" for reason in coverage["reasons"])
+    coverage["grouping_complete"] = not upstream_truncated
     record.update(raw_finding_count=raw_count, finding_count=content_count,
-                  finding_group_count=len(normalized), findings=normalized, findings_truncated=False)
+                  finding_group_count=len(normalized), findings=normalized, findings_truncated=upstream_truncated)
     if coverage["status"] != "complete" and not coverage["reasons"]:
         for error in record["errors"]:
             add_coverage_reason(record, error["code"], error["message"])
@@ -354,11 +374,20 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
     if len(report_json(record)) > publication_budget:
         add_coverage_reason(record, "normalization_truncated", "The complete finding evidence exceeded the publication byte budget.")
         record["findings_truncated"] = True
+        coverage["grouping_complete"] = False
         coverage["status"] = "partial"
         if record["status"] == "complete":
             record["status"] = "partial"
-        while record["findings"] and len(report_json(record)) > publication_budget:
-            record["findings"].pop()
+        record["findings"] = []
+        remaining = publication_budget - len(report_json(record))
+        # Compute each group's encoded size once. Re-encoding the full record
+        # after every removal would make adversarial high-volume output quadratic.
+        for group in normalized:
+            size = len(report_json(group)) - 1 + bool(record["findings"])
+            if size > remaining:
+                break
+            record["findings"].append(group)
+            remaining -= size
         require(len(report_json(record)) <= publication_budget,
                 "SkillSpector coverage evidence exceeds publication budget")
     return record

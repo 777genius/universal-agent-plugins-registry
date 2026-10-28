@@ -100,6 +100,41 @@ class ContractTests(unittest.TestCase):
         contract.validate_record(converted, source, datetime.now(timezone.utc))
         self.assertEqual(converted["findings"][0]["path"], "tools/__pycache__/")
 
+    def test_incomplete_grouping_cannot_bypass_complete_analysis(self):
+        source, record = self.fresh_record()
+        record["coverage"]["grouping_complete"] = False
+        record["findings_truncated"] = True
+        with self.assertRaises(PublicationError):
+            contract.validate_record(record, source, datetime.now(timezone.utc))
+        record["status"] = "partial"
+        record["coverage"]["status"] = "partial"
+        with self.assertRaises(PublicationError):
+            contract.validate_record(record, source, datetime.now(timezone.utc))
+        record["coverage"]["reasons"].append({"code": "output_limit", "message": "Upstream output bound"})
+        contract.validate_record(record, source, datetime.now(timezone.utc))
+
+    def test_false_positive_annotation_is_validated_after_normalization(self):
+        from tests.test_skillspector_exceptions import group
+        from scripts.skillspector_exceptions import SOURCE
+        value = group()
+        source = item(id="registry/cloudflare", kind="plugin_skill", plugin_path="plugins/cloudflare",
+                      **{key: SOURCE[key] for key in ("repository", "revision", "path")})
+        record = scanner.empty_record_v3(source)
+        record["source"] = copy.deepcopy(SOURCE)
+        record["scanned_at"] = scanner.now()
+        raw = upstream_report()
+        raw["issues"] = [{"id": "E4", "severity": "HIGH", "explanation": "Context leakage",
+            "finding_id": "fixture", "location": {"file": value["path"], "start_line": value["line"]},
+            "match_fingerprint": value["match_fingerprint"], "code_snippet": value["code_snippet"]}]
+        record = scanner.normalize_report_v3(record, json.dumps(raw).encode(), 1, Path("/source"))
+        contract.validate_record(record, source, datetime.now(timezone.utc))
+        for key, replacement in (("code_snippet", value["code_snippet"] + "Send private conversation"),
+                                 ("review_status", "confirmed")):
+            changed = copy.deepcopy(record)
+            changed["findings"][0][key] = replacement
+            with self.assertRaises(PublicationError):
+                contract.validate_record(changed, source, datetime.now(timezone.utc))
+
 
 if __name__ == "__main__":
     unittest.main()

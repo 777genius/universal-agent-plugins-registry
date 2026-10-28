@@ -113,6 +113,18 @@ class V3NormalizationTests(unittest.TestCase):
         self.assertEqual(len(output['findings']),80)
         self.assertFalse(output['findings_truncated'])
 
+    def test_projection_limit_preserves_counts_and_reports_lost_evidence(self):
+        raw=upstream_report();raw['issues']=[finding(evidence={'distinct':i,'context':'x'*2400}) for i in range(35)]
+        with mock.patch.object(reports,'MAX_REPORT_BYTES',200 << 10):
+            output=self.normalize(raw)
+        self.assertEqual(output['finding_group_count'],35)
+        self.assertLess(len(output['findings']),35)
+        self.assertTrue(output['findings_truncated'])
+        self.assertFalse(output['coverage']['grouping_complete'])
+        self.assertEqual(output['status'],'partial')
+        self.assertIn('normalization_truncated',[v['code'] for v in output['coverage']['reasons']])
+        self.assertLessEqual(len(reports.report_json(output)),(200-128) << 10)
+
     def test_analyzer_results_and_specific_limitation_reasons_survive(self):
         raw=upstream_report()
         raw['analysis_completeness']['is_complete']=False
@@ -128,8 +140,22 @@ class V3NormalizationTests(unittest.TestCase):
         for value in ({'ab':1,'a\x00b':2}, {'é':1,'e\u0301':2}):
             with self.subTest(value=value),self.assertRaises(PublicationError):reports.safe_report_value(value)
 
+    def test_directory_findings_preserve_one_trailing_slash_but_reject_escape(self):
+        raw=upstream_report();raw['issues']=[finding(location={'file':'tools/__pycache__/','start_line':1})]
+        output=self.normalize(raw)
+        self.assertEqual(output['findings'][0]['path'],'tools/__pycache__/')
+        self.assertEqual(output['findings'][0]['occurrences'][0]['path'],'tools/__pycache__/')
+        for path in ('/', 'tools//', 'tools//cache/', '../tools/', 'tools/../cache/', './tools/'):
+            with self.subTest(path=path),self.assertRaises(PublicationError):
+                reports.report_path(path,Path('/tmp/content'))
+
 
 class V3ProfileTests(unittest.TestCase):
+    def test_unmeasured_execution_timing_is_unknown(self):
+        record=reports.empty_record_v3(item())
+        self.assertIsNone(record['execution']['acquisition_seconds'])
+        self.assertIsNone(record['execution']['analysis_seconds'])
+
     def test_profiles_coordinate_inner_and_outer_deadlines_without_credentials(self):
         with mock.patch.dict('os.environ',{'OPENAI_API_KEY':'never-forward','HTTPS_PROXY':'never-forward','SKILLSPECTOR_MAX_WORKFLOW_SECONDS':'9000'}):
             standard=reports.environment_v3(Path('/tmp/scan'),'static-standard-v3')

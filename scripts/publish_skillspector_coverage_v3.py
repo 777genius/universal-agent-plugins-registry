@@ -122,6 +122,8 @@ def validate_directory(directory, source_commit):
 
 def publish(github, directory, source_commit, *, fetch=raw_file):
     bundle = validate_directory(directory, source_commit)
+    require((bundle.get("discovery") or {}).get("catalog", {}).get("mode") != "controlled_immutable_regression",
+            "controlled regression reports are artifacts and cannot replace catalog publication")
     manifest = bundle["manifest"]
     main = github.request("GET", "git/ref/heads/main")
     require(main is not None and main["object"]["sha"] == source_commit, "refusing coverage from obsolete main")
