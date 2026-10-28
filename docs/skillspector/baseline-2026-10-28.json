@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "snapshot": "6e8e8552a71f9d1a848758f5ea20d3f24f7ce8d1",
+  "generated_at": "2026-10-28T07:11:32Z",
+  "catalog_coverage": {
+    "listings_observed": 9911,
+    "repositories_observed": 1115,
+    "repositories_resolved": 1068,
+    "selected_roots": 7510,
+    "resolution_reasons": {
+      "ambiguous_name": 713,
+      "invalid_skill_documents": 74,
+      "repository_acquisition_failed": 11,
+      "repository_unavailable": 36,
+      "skill_not_found": 837,
+      "unsupported_source": 161
+    },
+    "exact_listing_resolution": null,
+    "diagnostics_truncated": true
+  },
+  "analysis_coverage": {
+    "pending": 3686,
+    "reported": 3824,
+    "selected": 7510,
+    "complete": 1163,
+    "partial": 2622,
+    "error": 39
+  },
+  "incompleteness_sources_by_reason": {
+    "reference_missing": 2387,
+    "limitations": 901,
+    "static_parse_limit": 626,
+    "analyzer_incomplete": 541,
+    "obfuscated_instruction_text": 123,
+    "runtime_limit": 73,
+    "analyzer_coverage_missing": 40,
+    "input_limit_exceeded": 28,
+    "output_limit": 11,
+    "scan_failed": 11,
+    "reference_unresolved": 8,
+    "excluded_executable_content": 1,
+    "opaque_content": 1,
+    "reference_extraction_limit": 1
+  },
+  "findings": {
+    "raw_reported": 29158,
+    "published_entries": 19811,
+    "truncated_reports": 189,
+    "unique_problem_count": null
+  },
+  "timings": {
+    "acquisition_seconds": {
+      "measured_sources": 0,
+      "unmeasured_sources": 3824,
+      "total": null,
+      "p50": null,
+      "p95": null,
+      "maximum": null
+    },
+    "analysis_seconds": {
+      "measured_sources": 0,
+      "unmeasured_sources": 3824,
+      "total": null,
+      "p50": null,
+      "p95": null,
+      "maximum": null
+    }
+  },
+  "limitations": [
+    "Catalog listings and selected roots are different populations.",
+    "Reason counts overlap: one source can have several limitations.",
+    "Legacy errors and findings are capped; cause counts are lower bounds.",
+    "Missing acquisition/analysis durations cannot be recovered from publication timestamps.",
+    "Truncated legacy findings cannot establish the exact number of unique problems."
+  ],
+  "history": [
+    {
+      "from": "9eca1e18df877a0bfa6094a8af87bbfd8971a163",
+      "to": "6e8e8552a71f9d1a848758f5ea20d3f24f7ce8d1",
+      "unchanged_cached_report": 2800,
+      "unchanged_cached_report_incomplete": 1981,
+      "new_report": 1024
+    },
+    {
+      "from": "6c2123f10f9346df8e7cb5eae691b054fed1006a",
+      "to": "9eca1e18df877a0bfa6094a8af87bbfd8971a163",
+      "unchanged_cached_report": 2005,
+      "unchanged_cached_report_incomplete": 1369,
+      "new_report": 1024
+    },
+    {
+      "from": "bba617bd0be89955720d61b9fe4305eca639929e",
+      "to": "6c2123f10f9346df8e7cb5eae691b054fed1006a",
+      "unchanged_cached_report": 995,
+      "unchanged_cached_report_incomplete": 657,
+      "new_report": 1024
+    }
+  ]
+}
