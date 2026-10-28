@@ -1,0 +1,214 @@
+name: SkillSpector static reports
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "registry/skillspector-selection.json"
+      - "registry/index.json"
+      - "schemas/skillspector-*.schema.json"
+      - "scripts/*skillspector*.py"
+      - "scripts/build_bridges.py"
+      - "scripts/build_discovery_index.py"
+      - "scripts/discovery_checkpoint.py"
+      - "tests/test_skillspector*.py"
+      - ".github/workflows/skillspector-reports.yml"
+  schedule:
+    - cron: "19 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      discovery_pages:
+        description: "Catalog pages (1 for a small integration check, 50 for normal coverage)"
+        type: choice
+        options: ["50", "1"]
+        default: "50"
+      maximum_attempts:
+        description: "Maximum fresh scan attempts per partition"
+        type: choice
+        options: ["128", "8"]
+        default: "128"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skillspector-static-reports-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == '777genius/universal-agent-plugins-registry' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Test discovery, scanner and publication boundaries
+        run: python3 -m unittest tests.test_skillspector_reports tests.test_skillspector_publication tests.test_skillspector_discovery tests.test_skillspector_coverage
+      - name: Read the previous immutable report snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m scripts.publish_skillspector_coverage previous \
+            --output-dir "${RUNNER_TEMP}/skillspector-plan/previous"
+      - name: Discover immutable skills from the catalog and plugin registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          DISCOVERY_PAGES: ${{ inputs.discovery_pages || '50' }}
+        run: |
+          python3 -m scripts.discover_skillspector_sources \
+            --source-commit "${SOURCE_COMMIT}" \
+            --previous-selection "${RUNNER_TEMP}/skillspector-plan/previous/selection.json" \
+            --previous-summary "${RUNNER_TEMP}/skillspector-plan/previous/coverage.json" \
+            --max-pages "${DISCOVERY_PAGES}" --workers 8 --budget-seconds 1200 \
+            --output "${RUNNER_TEMP}/skillspector-plan/selection.json" \
+            --summary "${RUNNER_TEMP}/skillspector-plan/coverage.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-plan
+          path: ${{ runner.temp }}/skillspector-plan
+          if-no-files-found: error
+          retention-days: 7
+
+  scan:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        partition: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035 # v2.13.1
+          persist-credentials: false
+          path: scanner
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned tooling and locked scanner
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4 cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: skillspector-plan
+          path: ${{ runner.temp }}/skillspector-plan
+      - name: Scan a bounded portion without LLMs
+        working-directory: source
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          PARTITION: ${{ matrix.partition }}
+          MAXIMUM_ATTEMPTS: ${{ inputs.maximum_attempts || '128' }}
+        run: |
+          python3 -m scripts.skillspector_coverage scan \
+            --selection "${RUNNER_TEMP}/skillspector-plan/selection.json" \
+            --scanner "${GITHUB_WORKSPACE}/scanner/.venv/bin/skillspector" \
+            --previous-dir "${RUNNER_TEMP}/skillspector-plan/previous" \
+            --source-commit "${SOURCE_COMMIT}" \
+            --partition-index "${PARTITION}" --partition-count 8 \
+            --maximum-attempts "${MAXIMUM_ATTEMPTS}" --budget-seconds 2100 \
+            --output "${RUNNER_TEMP}/worker-${PARTITION}.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-worker-${{ matrix.partition }}
+          path: ${{ runner.temp }}/worker-${{ matrix.partition }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    needs: [prepare, scan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: skillspector-plan
+          path: ${{ runner.temp }}/skillspector-plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: skillspector-worker-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/skillspector-workers
+      - name: Assemble all partitions and validate the report set
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m scripts.skillspector_coverage merge \
+            --selection "${RUNNER_TEMP}/skillspector-plan/selection.json" \
+            --discovery-summary "${RUNNER_TEMP}/skillspector-plan/coverage.json" \
+            --previous-dir "${RUNNER_TEMP}/skillspector-plan/previous" \
+            --source-commit "${SOURCE_COMMIT}" \
+            --workers "${RUNNER_TEMP}"/skillspector-workers/worker-*.json \
+            --output-dir "${RUNNER_TEMP}/skillspector-report"
+          python3 -m scripts.publish_skillspector_coverage check \
+            --report-dir "${RUNNER_TEMP}/skillspector-report" --source-commit "${SOURCE_COMMIT}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-static-report-v2
+          path: ${{ runner.temp }}/skillspector-report
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: assemble
+    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: skillspector-static-report-v2
+          path: ${{ runner.temp }}/skillspector-report
+      - name: Validate the exact artifact before enabling write credentials
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m scripts.publish_skillspector_coverage check \
+            --report-dir "${RUNNER_TEMP}/skillspector-report" --source-commit "${SOURCE_COMMIT}"
+      - name: Atomically publish display data and bounded progress
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m scripts.publish_skillspector_coverage publish \
+            --report-dir "${RUNNER_TEMP}/skillspector-report" --source-commit "${SOURCE_COMMIT}"
