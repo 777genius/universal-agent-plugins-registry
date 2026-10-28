@@ -1051,7 +1051,11 @@ def main():
             "source_commit": None, "snapshot_digest": None, "packages": None, "available_packages": None, "expected_skills": None,
             "package_identities": {}}
     plugins = merge_plugin_sources(plugins, community_plugins)
-    listings, catalog = browse_catalog(budget, max_pages=args.max_pages)
+    crawl_budget = budget
+    if community_plugins:
+        crawl_budget = WorkBudget(max(.001, (budget.deadline - budget.monotonic()) / 4), monotonic=budget.monotonic)
+        crawl_budget.deadline = min(crawl_budget.deadline, budget.deadline)
+    listings, catalog = browse_catalog(crawl_budget, max_pages=args.max_pages)
     catalog["directory"] = directory
     catalog["community"] = community
     previous_summary = read_json(args.previous_summary, max_bytes=16 << 20) if args.previous_summary and args.previous_summary.exists() else None

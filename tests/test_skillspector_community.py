@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -104,6 +105,33 @@ class CommunityFeedTests(unittest.TestCase):
 
 
 class CommunityInventoryTests(unittest.TestCase):
+    def test_crawl_subdeadline_leaves_time_for_community_inventory(self):
+        clock, acquired = [0], []
+        plugins = [plugin()]
+        def work_budget(seconds, *, monotonic=None):
+            return WorkBudget(seconds, monotonic=monotonic or (lambda: clock[0]))
+        def crawl(budget, **_kwargs):
+            self.assertEqual(budget.deadline, 300)
+            clock[0] = budget.deadline + .1
+            return [], {'complete': False, 'pages': 0, 'provider_total': None, 'error': 'catalog_budget_exhausted'}
+        def acquire(*_args, **kwargs):
+            acquired.append(kwargs['work_budget'].remaining())
+            return mock.Mock()
+        with tempfile.TemporaryDirectory() as temporary, \
+             mock.patch.object(sys, 'argv', ['discover', '--source-commit', COMMIT, '--output', temporary + '/selection.json',
+                                             '--summary', temporary + '/coverage.json']), \
+             mock.patch.object(discovery, 'WorkBudget', side_effect=work_budget), \
+             mock.patch.object(discovery, 'load_published_plugins', return_value=([], {'state': 'resolved'})), \
+             mock.patch.object(discovery, 'load_published_community_plugins', return_value=(plugins, metadata(plugins)['community'])), \
+             mock.patch.object(discovery, 'browse_catalog', side_effect=crawl), \
+             mock.patch.object(discovery, 'load_sources', return_value=[]), \
+             mock.patch.object(discovery, 'GitHubAPI'), mock.patch.object(discovery, 'PinnedRepository', side_effect=acquire), \
+             mock.patch.object(discovery, 'skill_documents', side_effect=documents), mock.patch('builtins.print'):
+            self.assertEqual(discovery.main(), 0)
+            written = json.loads((Path(temporary) / 'selection.json').read_bytes())
+        self.assertEqual(len(written['sources']), 1)
+        self.assertGreater(acquired[0], 800)
+
     def test_grouped_cold_inventory_reuses_only_complete_pins_and_signed_metadata(self):
         plugins = [plugin(path='packages/one'), plugin(path='packages/two')]
         with mock.patch.object(discovery, 'PinnedRepository') as pinned, \
