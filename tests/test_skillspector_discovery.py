@@ -9,7 +9,7 @@ from unittest import mock
 
 from scripts import discover_skillspector_sources as discovery
 from scripts.discovery_checkpoint import WorkBudget
-from scripts.skillspector_coverage import validate_discovery_summary, validate_selection
+from scripts.skillspector_coverage_v3 import validate_discovery_summary, validate_selection
 from scripts.directory_publication import PublicationError
 from tests.test_skillspector_reports import fixture_repository, git, item
 
@@ -643,11 +643,8 @@ class DiscoveryTests(unittest.TestCase):
              mock.patch.object(discovery, "resolve_listings", return_value=([tail, popular, reviewed], [], {})):
             selection, _ = self.run_discovery(rows, reviewed=[old])
             self.assertEqual(selection["sources"], [reviewed, popular, tail])
-            with mock.patch.object(discovery, "MAX_ROOTS", 2):
-                capped, summary = self.run_discovery(rows, reviewed=[old])
-        self.assertEqual(capped["sources"], [reviewed, popular])
-        self.assertTrue(summary["selection_truncated"])
-        self.assertNotIn("owner/repo", summary["resolution_cache"])
+            with mock.patch.object(discovery, "MAX_ROOTS", 2), self.assertRaisesRegex(discovery.DiscoveryError, "3 roots > 2"):
+                self.run_discovery(rows, reviewed=[old])
 
 
 if __name__ == "__main__":

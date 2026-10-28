@@ -8,12 +8,15 @@ on:
       - "registry/index.json"
       - "registry/directory.json"
       - "registry/publication/trusted-keys.json"
+      - "registry/discovery/trusted-keys.json"
+      - "schemas/discovery-*.schema.json"
       - "docs/skillspector/controlled-sources-*.json"
       - "schemas/skillspector-*.schema.json"
       - "scripts/*skillspector*.py"
       - "scripts/build_bridges.py"
       - "scripts/build_discovery_index.py"
       - "scripts/discovery_checkpoint.py"
+      - "scripts/discovery_publication.py"
       - "tests/test_skillspector*.py"
       - ".github/workflows/skillspector-reports.yml"
   schedule:
@@ -65,7 +68,7 @@ jobs:
           python-version: "3.12"
       - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
       - name: Test discovery, scanner and publication boundaries
-        run: python3 -m unittest tests.test_skillspector_acquisition tests.test_skillspector_contract tests.test_skillspector_coverage tests.test_skillspector_coverage_v3 tests.test_skillspector_discovery tests.test_skillspector_exceptions tests.test_skillspector_profile_measurement tests.test_skillspector_publication tests.test_skillspector_publication_transport tests.test_skillspector_records_v3 tests.test_skillspector_reports tests.test_skillspector_workflow_v3
+        run: python3 -m unittest tests.test_skillspector_acquisition tests.test_skillspector_community tests.test_skillspector_contract tests.test_skillspector_coverage tests.test_skillspector_coverage_v3 tests.test_skillspector_discovery tests.test_skillspector_exceptions tests.test_skillspector_profile_measurement tests.test_skillspector_publication tests.test_skillspector_publication_transport tests.test_skillspector_records_v3 tests.test_skillspector_reports tests.test_skillspector_workflow_v3
       - name: Read the previous immutable report snapshot
         if: inputs.corpus != 'controlled'
         env:
@@ -73,7 +76,7 @@ jobs:
         run: |
           python3 -m scripts.publish_skillspector_coverage_v3 previous \
             --output-dir "${RUNNER_TEMP}/skillspector-plan/previous"
-      - name: Discover immutable skills from the catalog and plugin registry
+      - name: Discover immutable skills from the catalog and signed plugin feeds
         if: inputs.corpus != 'controlled'
         env:
           GITHUB_TOKEN: ${{ github.token }}
