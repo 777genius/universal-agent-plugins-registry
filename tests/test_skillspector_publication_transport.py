@@ -147,6 +147,29 @@ class TreeTests(unittest.TestCase):
                 with self.assertRaises(PublicationError):
                     transport.create_filtered_tree(github, {"x": "a" * 40})
 
+    def test_malformed_response_shapes_fail_before_any_further_api_write(self):
+        def missing_tree(value):
+            del value["tree"]
+            return value
+        changes = [lambda _value: [], lambda _value: "unexpected", lambda _value: None,
+                   missing_tree, lambda value: {**value, "tree": {}},
+                   lambda value: {**value, "tree": [None]},
+                   lambda value: {**value, "tree": [{}]}]
+        for field in ("path", "mode", "type", "sha"):
+            changes.append(lambda value, field=field: {**value,
+                "tree": [{key: item for key, item in value["tree"][0].items() if key != field}]})
+            changes.append(lambda value, field=field: {**value,
+                "tree": [{**value["tree"][0], field: ["invalid"]}]})
+        for index, change in enumerate(changes):
+            with self.subTest(shape=index), tempfile.TemporaryDirectory() as directory:
+                github = FakeGitHub(Path(directory) / "git")
+                original = github.request
+                github.request = lambda *args, **kwargs: change(original(*args, **kwargs))
+                with self.assertRaisesRegex(PublicationError, "uploaded publication tree identity differs"):
+                    transport.create_filtered_tree(github, {"nested/file": "a" * 40})
+                self.assertEqual(len(github.calls), 1)
+                self.assertEqual(github.calls[0][:2], ("POST", "git/trees"))
+
 
 class Response(io.BytesIO):
     def __enter__(self): return self

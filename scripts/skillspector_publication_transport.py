@@ -76,8 +76,11 @@ def create_filtered_tree(github, files, *, known_trees=None):
             prefix.extend(chunk)
             expected_prefix = git_tree_sha(prefix)
             created = github.request("POST", "git/trees", payload)
-            require(created is not None and created.get("sha") == expected_prefix and
-                    created.get("truncated") is False, "uploaded publication tree identity differs")
+            fields = ("path", "mode", "type", "sha")
+            require(isinstance(created, dict) and created.get("sha") == expected_prefix and
+                    created.get("truncated") is False and isinstance(created.get("tree"), list) and
+                    all(isinstance(entry, dict) and all(isinstance(entry.get(field), str) for field in fields)
+                        for entry in created["tree"]), "uploaded publication tree identity differs")
             actual = {(entry["path"], entry["mode"], entry["type"], entry["sha"]) for entry in created["tree"]}
             wanted = {(entry["path"], entry["mode"], entry["type"], entry["sha"]) for entry in prefix}
             require(actual == wanted and len(created["tree"]) == len(prefix), "uploaded publication tree entries differ")
