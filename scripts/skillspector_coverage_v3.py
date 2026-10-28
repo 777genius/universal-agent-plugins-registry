@@ -382,7 +382,10 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
             code, body = scanner.run_scanner_v3(executable, ["scan", str(root), *profile["arguments"]], home, timeout, profile_id)
             record["execution"]["analysis_seconds"] = round(time.monotonic() - analysis_started, 6)
             require(directory_tree_digest(root) == digest, "source bytes changed during scan")
-            return scanner.normalize_report_v3(record, body, code, root)
+            # Normalize transactionally: a malformed/oversized upstream report
+            # must not leave legacy-shaped or half-validated findings on the
+            # error record and make the entire worker artifact unpublishable.
+            return scanner.normalize_report_v3(copy.deepcopy(record), body, code, root)
     except subprocess.TimeoutExpired:
         fail(record, "scan_timeout", "The bounded static analysis deadline was reached.")
     except CheckpointYield:

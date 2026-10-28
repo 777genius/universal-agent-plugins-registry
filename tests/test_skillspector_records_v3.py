@@ -5,12 +5,14 @@ import json
 import math
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 import jsonschema
 
 from scripts import skillspector_reports as reports
+from scripts import skillspector_contract as contract
 from scripts.directory_publication import PublicationError, canonical_json
 from tests.test_skillspector_reports import item, upstream_report
 
@@ -124,6 +126,50 @@ class V3NormalizationTests(unittest.TestCase):
         self.assertEqual(output['status'],'partial')
         self.assertIn('normalization_truncated',[v['code'] for v in output['coverage']['reasons']])
         self.assertLessEqual(len(reports.report_json(output)),(200-128) << 10)
+
+    def test_many_small_groups_truncate_with_bounded_full_encodes_and_keep_coverage(self):
+        raw = upstream_report()
+        severities = ('LOW', 'HIGH', 'INFO', 'CRITICAL', 'MEDIUM')
+        signals = [finding(finding_id=f'signal-{index}', severity=severities[index % len(severities)],
+            evidence={'distinct': index, 'context': 'Unicode evidence: ✓'}) for index in range(1024)]
+        limitation = finding(id='AE1', tags=['coverage', 'reference'], evidence={
+            'target_path': 'helper.py', 'reasons': [{'reason_code': 'static_parse_limit',
+                'message': 'Expression exceeds parser bound.'}]})
+        raw['issues'] = [limitation, *signals, signals[0] | {'finding_id': 'same-signal'}]
+        full = self.normalize(raw)
+        # Keep the input valid while making the publication projection overflow.
+        # A small scaled byte cap exercises the same boundary as production's 8MiB.
+        byte_limit = len(json.dumps(raw).encode()) + 4096
+        publication_budget = byte_limit - (128 << 10)
+        full_encodes = 0
+        encode = reports.report_json
+
+        def bounded_encode(value):
+            nonlocal full_encodes
+            if isinstance(value, dict) and 'findings' in value and 'execution' in value:
+                full_encodes += 1
+                self.assertLessEqual(full_encodes, 3, 'Truncation re-encoded the full record per group')
+            return encode(value)
+
+        with mock.patch.object(reports, 'MAX_REPORT_BYTES', byte_limit), \
+                mock.patch.object(reports, 'report_json', side_effect=bounded_encode):
+            output = self.normalize(raw)
+        self.assertEqual(full_encodes, 3)
+        self.assertGreater(len(output['findings']), 0)
+        self.assertLess(len(output['findings']), len(full['findings']))
+        self.assertEqual(output['findings'], full['findings'][:len(output['findings'])])
+        self.assertEqual((output['raw_finding_count'], output['finding_count'], output['finding_group_count']),
+            (1026, 1025, 1024))
+        self.assertEqual(output['coverage']['original_findings'], [limitation])
+        self.assertEqual(output['coverage']['analyzers'], full['coverage']['analyzers'])
+        self.assertEqual(output['status'], 'partial')
+        self.assertEqual(output['coverage']['status'], 'partial')
+        self.assertFalse(output['coverage']['grouping_complete'])
+        self.assertTrue(output['findings_truncated'])
+        self.assertTrue({'static_parse_limit', 'normalization_truncated'} <=
+            {reason['code'] for reason in output['coverage']['reasons']})
+        self.assertLessEqual(len(encode(output)), publication_budget)
+        contract.validate_record(output, item(), datetime.now(timezone.utc))
 
     def test_analyzer_results_and_specific_limitation_reasons_survive(self):
         raw=upstream_report()

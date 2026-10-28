@@ -380,14 +380,19 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
             record["status"] = "partial"
         record["findings"] = []
         remaining = publication_budget - len(report_json(record))
+        require(remaining >= 0, "SkillSpector coverage evidence exceeds publication budget")
         # Compute each group's encoded size once. Re-encoding the full record
         # after every removal would make adversarial high-volume output quadratic.
-        for group in normalized:
-            size = len(report_json(group)) - 1 + bool(record["findings"])
-            if size > remaining:
+        # report_json includes one terminal newline; array elements do not.
+        # Retain a prefix so the severity order and whole occurrences survive.
+        prefix_bytes = retained = 0
+        for index, group in enumerate(normalized):
+            size = len(report_json(group)) - 1 + bool(index)
+            if prefix_bytes + size > remaining:
                 break
-            record["findings"].append(group)
-            remaining -= size
+            prefix_bytes += size
+            retained = index + 1
+        record["findings"] = normalized[:retained]
         require(len(report_json(record)) <= publication_budget,
                 "SkillSpector coverage evidence exceeds publication budget")
     return record

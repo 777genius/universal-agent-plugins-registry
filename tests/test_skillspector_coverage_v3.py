@@ -276,6 +276,24 @@ class QueueTests(unittest.TestCase):
             self.assertGreater(execution["acquisition_seconds"], 0)
             self.assertGreater(execution["analysis_seconds"], 0)
 
+    def test_malformed_analyzer_output_is_a_publishable_source_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mirrors, selection = fixture_repository(root)
+            raw = upstream_report()
+            raw["issues"] = [{"id": "E4", "severity": "HIGH", "explanation": "Fixture signal",
+                              "location": {"file": "SKILL.md", "start_line": 1}}]
+            raw["analysis_completeness"]["analyzer_statuses"] = []
+            result = coverage.scan_partition(selection, fake_scanner(root, raw), None,
+                source_commit=COMMIT, partition_count=1, mirror_root=mirrors)
+            coverage.validate_worker(result, selection, COMMIT)
+            value = result["attempts"][0]["record"]
+            self.assertEqual(value["status"], "error")
+            self.assertEqual(value["findings"], [])
+            self.assertEqual(value["coverage"]["reasons"][0]["code"], "scan_failed")
+            coverage.merge_reports(selection, None, [result], source_commit=COMMIT, output_dir=root / "report")
+            self.assertEqual(coverage.read_bundle(root / "report")["manifest"]["coverage"]["error"], 1)
+
 
 class PublicationTests(unittest.TestCase):
     def test_previous_download_keeps_float_confidence_and_exact_digest(self):
