@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -352,33 +353,66 @@ def fail(record, code, message):
     return record
 
 
+class WorkerDeferred(Exception):
+    """The worker cannot supply a whole attempt; the source remains queued."""
+
+
+def profile_timeout(budget, profile):
+    timeout = profile["timeout_seconds"]
+    try:
+        remaining = budget.remaining()
+    except CheckpointYield as error:
+        raise WorkerDeferred("worker deadline reached before analysis") from error
+    if remaining < timeout:
+        raise WorkerDeferred("worker cannot provide the full analysis profile")
+    return timeout
+
+
+@contextmanager
+def preparation_budget(budget, profile):
+    # Reserve the process's full declared allowance. A worker tail must not
+    # masquerade as a source deadline or consume a retry with a smaller profile.
+    timeout = profile_timeout(budget, profile)
+    available = budget.deadline - budget.monotonic() - timeout
+    if available <= 0:
+        raise WorkerDeferred("worker cannot prepare a full analysis attempt")
+    preparation = WorkBudget(PREPARATION_SECONDS, monotonic=budget.monotonic)
+    worker_limited = budget.deadline - timeout < preparation.deadline
+    preparation.deadline = min(preparation.deadline, budget.deadline - timeout)
+    try:
+        yield preparation
+    except CheckpointYield as error:
+        if worker_limited:
+            raise WorkerDeferred("worker preparation allowance reached") from error
+        raise
+
+
 def scan_selected(executable, item, pinned, budget, *, profile_id="static-standard-v3"):
     record = scanner.empty_record_v3(item, profile_id)
     profile = scanner.PROFILE_DOCUMENTS[profile_id]
     record["execution"]["started_at"] = scanner.now()
     started, analysis_started = time.monotonic(), None
     try:
-        pinned.work_budget = WorkBudget(min(PREPARATION_SECONDS, budget.remaining()))
-        files = bounded_package_files(pinned, item["path"], max_files=profile["max_files"],
-            max_file_bytes=profile["max_tree_bytes"], max_tree_bytes=profile["max_tree_bytes"])
-        require(any(path == "SKILL.md" for path, _, _ in files), "selected root has no SKILL.md")
         with tempfile.TemporaryDirectory(prefix="uap-skillspector-v3-") as directory:
             home, root = Path(directory), Path(directory) / "content"
             root.mkdir()
-            materialize_package(files, root, pinned.work_budget)
-            digest = directory_tree_digest(root)
-            record["source"]["content_digest"] = digest
-            document = (root / "SKILL.md").read_text(encoding="utf-8")
-            if document.startswith("---\n") and "\n---" in document[4:]:
-                header = document[4:].split("\n---", 1)[0]
-                require(len(header.encode()) <= 65536, "skill frontmatter exceeds limit")
-                frontmatter = yaml.safe_load(header)
-                if isinstance(frontmatter, dict) and isinstance(frontmatter.get("name"), str):
-                    record["skill_name"] = scanner.clean(frontmatter["name"], 200) or None
+            with preparation_budget(budget, profile) as pinned.work_budget:
+                files = bounded_package_files(pinned, item["path"], max_files=profile["max_files"],
+                    max_file_bytes=profile["max_tree_bytes"], max_tree_bytes=profile["max_tree_bytes"])
+                require(any(path == "SKILL.md" for path, _, _ in files), "selected root has no SKILL.md")
+                materialize_package(files, root, pinned.work_budget)
+                digest = directory_tree_digest(root)
+                record["source"]["content_digest"] = digest
+                document = (root / "SKILL.md").read_text(encoding="utf-8")
+                if document.startswith("---\n") and "\n---" in document[4:]:
+                    header = document[4:].split("\n---", 1)[0]
+                    require(len(header.encode()) <= 65536, "skill frontmatter exceeds limit")
+                    frontmatter = yaml.safe_load(header)
+                    if isinstance(frontmatter, dict) and isinstance(frontmatter.get("name"), str):
+                        record["skill_name"] = scanner.clean(frontmatter["name"], 200) or None
             record["scanned_at"] = scanner.now()
             record["execution"]["acquisition_seconds"] = round(time.monotonic() - started, 6)
-            timeout = min(profile["timeout_seconds"], budget.remaining())
-            require(timeout > 1, "scan budget exhausted during preparation")
+            timeout = profile_timeout(budget, profile)
             analysis_started = time.monotonic()
             code, body = scanner.run_scanner_v3(executable, ["scan", str(root), *profile["arguments"]], home, timeout, profile_id)
             record["execution"]["analysis_seconds"] = round(time.monotonic() - analysis_started, 6)
@@ -428,24 +462,24 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
     outcomes, pins = [], {}
     try:
         for item in chosen:
-            try:
-                if budget.remaining() < 2:
-                    break
-            except CheckpointYield:
-                break
             old = old_attempts.get(item["id"])
             profile_id = old["next_profile"] if old else scanner.STANDARD_PROFILE["id"]
+            profile = scanner.PROFILE_DOCUMENTS[profile_id]
             key = (item["repository"], item["revision"])
             acquisition_started = time.monotonic()
             acquisition_seconds = 0
             try:
+                profile_timeout(budget, profile)
                 if key not in pins:
-                    pins[key] = PinnedRepository(*key, mirror_root,
-                        github_token=os.environ.get("GITHUB_TOKEN") if mirror_root is None else None,
-                        work_budget=WorkBudget(min(PREPARATION_SECONDS, budget.remaining())))
+                    with preparation_budget(budget, profile) as acquisition_budget:
+                        pins[key] = PinnedRepository(*key, mirror_root,
+                            github_token=os.environ.get("GITHUB_TOKEN") if mirror_root is None else None,
+                            work_budget=acquisition_budget)
                     acquisition_seconds = time.monotonic() - acquisition_started
                 record = scan_selected(executable, item, pins[key], budget, profile_id=profile_id)
                 record["execution"]["acquisition_seconds"] = round(record["execution"]["acquisition_seconds"] + acquisition_seconds, 6)
+            except WorkerDeferred:
+                break  # No outcome: retain prior evidence, retry identity and attempt count.
             except (BridgeError, OSError, subprocess.SubprocessError, CheckpointYield):
                 record = fail(scanner.empty_record_v3(item, profile_id), "acquisition_failed", "The immutable repository could not be acquired.")
                 record["execution"]["acquisition_seconds"] = round(time.monotonic() - acquisition_started, 6)

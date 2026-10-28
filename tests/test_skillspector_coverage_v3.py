@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -295,6 +296,166 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(coverage.read_bundle(root / "report")["manifest"]["coverage"]["error"], 1)
 
 
+class WorkerBudgetTests(unittest.TestCase):
+    def run_worker(self, selection, previous, *, budget_seconds=2100,
+                   acquisition_seconds=0, package_seconds=0,
+                   materialization_seconds=0, scan_seconds=0, scan_timeout=False):
+        """Exercise real admission, materialization, normalization and history with a fake clock."""
+        elapsed, calls = [0.0], []
+        pinned = mock.Mock()
+        materialize = coverage.materialize_package
+
+        def prepare(seconds, budget):
+            elapsed[0] += min(seconds, budget.remaining())
+            budget.check()
+
+        def acquire(*args, work_budget, **kwargs):
+            prepare(acquisition_seconds, work_budget)
+            return pinned
+
+        def package(*args, **kwargs):
+            prepare(package_seconds, pinned.work_budget)
+            return [("SKILL.md", 0o644, b"---\nname: fixture\n---\nStatic fixture.\n")]
+
+        def materialize_with_elapsed_time(files, root, budget):
+            materialize(files, root, budget)
+            # A final local write/digest can consume time after its last budget
+            # checkpoint. The caller must check again before admitting analysis.
+            elapsed[0] += materialization_seconds
+
+        def analyze(executable, arguments, home, timeout, profile_id):
+            environment = scanner.environment_v3(home, profile_id, timeout)
+            calls.append({"profile": profile_id, "timeout": timeout,
+                "workflow": float(environment["SKILLSPECTOR_MAX_WORKFLOW_SECONDS"]),
+                "artifact": float(environment["SKILLSPECTOR_MAX_STATIC_ANALYSIS_SECONDS_PER_ARTIFACT"])})
+            elapsed[0] += timeout if scan_timeout else scan_seconds
+            if scan_timeout:
+                raise subprocess.TimeoutExpired("fake-static-scan", timeout)
+            return 0, json.dumps(upstream_report()).encode()
+
+        with mock.patch.object(coverage.time, "monotonic", side_effect=lambda: elapsed[0]), \
+             mock.patch.object(scanner, "verify_scanner"), \
+             mock.patch.object(coverage, "PinnedRepository", side_effect=acquire) as acquisition, \
+             mock.patch.object(coverage, "bounded_package_files", side_effect=package), \
+             mock.patch.object(coverage, "materialize_package", side_effect=materialize_with_elapsed_time), \
+             mock.patch.object(scanner, "run_scanner_v3", side_effect=analyze):
+            result = coverage.scan_partition(selection, Path("/unused-scanner"), previous,
+                source_commit=COMMIT, partition_count=1, budget_seconds=budget_seconds)
+        coverage.validate_worker(result, selection, COMMIT)
+        return result, calls, acquisition.call_count, pinned.close.call_count, elapsed[0]
+
+    def assert_deferred(self, root, selection, previous, result):
+        self.assertEqual(result["attempts"], [])
+        coverage.merge_reports(selection, previous, [result], source_commit=COMMIT, output_dir=root)
+        merged = coverage.read_bundle(root)
+        self.assertEqual(merged["attempts"], (previous or {}).get("attempts", {}))
+        self.assertEqual(merged["records"], (previous or {}).get("records", {}))
+        self.assertEqual(coverage.plan_attempts(selection, merged, 0, 1, 128), selection["sources"])
+        return merged
+
+    def test_worker_tail_defers_standard_and_extended_without_consuming_attempts(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        for profile_id in scanner.PROFILE_DOCUMENTS:
+            with self.subTest(profile=profile_id), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                previous = (bundle(root / "prior", selection, [record(subject, "partial", "runtime_limit")])
+                    if profile_id == "static-extended-v3" else None)
+                result, calls, acquired, _, _ = self.run_worker(selection, previous, budget_seconds=20)
+                self.assertEqual((calls, acquired), ([], 0))
+                preserved = self.assert_deferred(root / "deferred", selection, previous, result)
+                resumed, calls, _, closed, _ = self.run_worker(selection, preserved)
+                profile = scanner.PROFILE_DOCUMENTS[profile_id]
+                self.assertEqual(calls, [{"profile": profile_id, "timeout": profile["timeout_seconds"],
+                    "workflow": profile["workflow_seconds"], "artifact": profile["static_artifact_seconds"]}])
+                self.assertEqual(closed, 1)
+                attempt = resumed["attempts"][0]["attempt"]
+                self.assertEqual(attempt["attempt_count"], 2 if previous else 1)
+                self.assertEqual(attempt["disposition"], "none")
+                self.assertEqual(len(attempt["history"]), attempt["attempt_count"])
+
+    def test_worker_limited_repository_and_package_acquisition_are_deferred(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        for profile_id in scanner.PROFILE_DOCUMENTS:
+            for phase in ("acquisition_seconds", "package_seconds"):
+                with self.subTest(profile=profile_id, phase=phase), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    previous = (bundle(root / "prior", selection, [record(subject, "partial", "runtime_limit")])
+                        if profile_id == "static-extended-v3" else None)
+                    timeout = scanner.PROFILE_DOCUMENTS[profile_id]["timeout_seconds"]
+                    result, calls, _, closed, elapsed = self.run_worker(selection, previous,
+                        budget_seconds=timeout + 10, **{phase: 20})
+                    self.assertEqual(calls, [])
+                    self.assertEqual(elapsed, 10)
+                    self.assertEqual(closed, 1 if phase == "package_seconds" else 0)
+                    self.assert_deferred(root / "deferred", selection, previous, result)
+
+    def test_admission_is_rechecked_after_materialization(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        for profile_id in scanner.PROFILE_DOCUMENTS:
+            with self.subTest(profile=profile_id), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                previous = (bundle(root / "prior", selection, [record(subject, "partial", "runtime_limit")])
+                    if profile_id == "static-extended-v3" else None)
+                timeout = scanner.PROFILE_DOCUMENTS[profile_id]["timeout_seconds"]
+                result, calls, acquired, closed, _ = self.run_worker(selection, previous,
+                    budget_seconds=timeout + 10, materialization_seconds=11)
+                self.assertEqual((calls, acquired, closed), ([], 1, 1))
+                self.assert_deferred(root / "deferred", selection, previous, result)
+
+    def test_full_source_preparation_deadline_remains_a_real_attempt(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        for phase, reason in (("acquisition_seconds", "acquisition_failed"),
+                              ("package_seconds", "preparation_timeout")):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                previous = bundle(Path(directory), selection, [record(subject, "partial", "runtime_limit")])
+                result, calls, _, _, elapsed = self.run_worker(selection, previous,
+                    **{phase: coverage.PREPARATION_SECONDS + 1})
+                self.assertEqual(calls, [])
+                self.assertEqual(elapsed, coverage.PREPARATION_SECONDS)
+                outcome = result["attempts"][0]
+                self.assertEqual(outcome["record"]["coverage"]["reasons"][0]["code"], reason)
+                self.assertEqual(outcome["attempt"]["attempt_count"], 2)
+                self.assertEqual(outcome["attempt"]["disposition"], "scheduled")
+                self.assertEqual(outcome["attempt"]["reason"], "transient_source_failure")
+
+    def test_full_profile_timeout_still_escalates_or_exhausts(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        for profile_id in scanner.PROFILE_DOCUMENTS:
+            with self.subTest(profile=profile_id), tempfile.TemporaryDirectory() as directory:
+                previous = (bundle(Path(directory), selection, [record(subject, "partial", "runtime_limit")])
+                    if profile_id == "static-extended-v3" else None)
+                result, calls, _, closed, elapsed = self.run_worker(selection, previous, scan_timeout=True)
+                timeout = scanner.PROFILE_DOCUMENTS[profile_id]["timeout_seconds"]
+                self.assertEqual(calls[0]["timeout"], timeout)
+                self.assertEqual((elapsed, closed), (timeout, 1))
+                outcome = result["attempts"][0]
+                self.assertEqual(outcome["record"]["execution"]["analysis_seconds"], timeout)
+                self.assertEqual(outcome["attempt"]["attempt_count"], 2 if previous else 1)
+                self.assertEqual(outcome["attempt"]["reason"],
+                    "extended_budget_exhausted" if previous else "extended_profile_required")
+                self.assertEqual(outcome["attempt"]["disposition"], "exhausted" if previous else "scheduled")
+
+    def test_deferral_keeps_prior_completed_work_and_next_source_queued(self):
+        sources = [item(id=f"fixture/{name}", path=f"skills/{name}") for name in ("first", "second")]
+        selection = {"schema_version": 1, "sources": sources}
+        result, calls, acquired, closed, _ = self.run_worker(selection, None, budget_seconds=65, scan_seconds=45)
+        self.assertEqual((len(calls), acquired, closed), (1, 1, 1))
+        self.assertEqual([outcome["attempt"]["id"] for outcome in result["attempts"]], [sources[0]["id"]])
+        with tempfile.TemporaryDirectory() as directory:
+            coverage.merge_reports(selection, None, [result], source_commit=COMMIT, output_dir=Path(directory))
+            previous = coverage.read_bundle(Path(directory))
+            self.assertEqual(coverage.plan_attempts(selection, previous, 0, 1, 128), [sources[1]])
+            resumed, calls, _, _, _ = self.run_worker(selection, previous)
+            self.assertEqual(calls[0]["timeout"], scanner.PROFILE_DOCUMENTS["static-standard-v3"]["timeout_seconds"])
+            self.assertEqual(resumed["attempts"][0]["attempt"]["id"], sources[1]["id"])
+            self.assertEqual(resumed["attempts"][0]["attempt"]["attempt_count"], 1)
+
+
 class PublicationTests(unittest.TestCase):
     def test_previous_download_keeps_float_confidence_and_exact_digest(self):
         source = item()
@@ -333,28 +494,46 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaises(PublicationError):
                 publisher.previous(github, root / "bad", fetch=lambda *args, **kwargs: b"{}")
 
+    def test_many_small_shards_bound_inline_tree_cardinality_below_byte_limit(self):
+        from tests.test_skillspector_publication_transport import FakeGitHub
+        sources = [item(id=f"fixture/{index}", repository=f"owner/repo{index}") for index in range(128)]
+        selection = {"schema_version": 1, "sources": sources}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            bundle(root, selection, [record(source) for source in sources])
+            github = FakeGitHub(Path(directory) / "git")
+            publisher.publish(github, root, COMMIT)
+            inline = [data for method, path, data in github.calls if (method, path) == ("POST", "git/trees")
+                      and any("content" in entry for entry in data["tree"])]
+            self.assertEqual(len(inline), 2)
+            self.assertEqual(len(inline[0]["tree"]), 128)
+            self.assertTrue(all(len(data["tree"]) <= 128 for data in inline))
+            self.assertLess(sum(len(publisher.canonical_json(data)) for data in inline), publisher.MAX_TREE_UPLOAD_BYTES)
+            commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
+            self.assertEqual(len(github.store.flatten(commit["tree"])), 131)
+
     def test_atomic_publisher_preserves_legacy_bytes_and_refuses_obsolete_main(self):
-        from tests.test_skillspector_coverage import FakeGitHub
+        from tests.test_skillspector_publication_transport import FakeGitHub
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "reports"
             bundle(root, selection, [record(source)])
             legacy_paths = [publisher.LEGACY_PATH, publisher.v2.PREFIX + "index.json",
                 publisher.v2.PREFIX + "attempts.json", publisher.v2.PREFIX + "selection.json",
                 publisher.v2.PREFIX + "shards/" + "d" * 64 + ".json"]
             tree = [{"path": path, "mode": "100644", "type": "blob", "sha": "d" * 40} for path in legacy_paths]
             tree.append({"path": "unrelated.py", "mode": "100644", "type": "blob", "sha": "e" * 40})
-            github = FakeGitHub(old={"tree": tree})
+            github = FakeGitHub(Path(directory) / "git", old={"tree": tree})
             result = publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
             self.assertEqual(len(result), 40)
-            payload = next(data for method, path, data in github.calls if path == "git/trees" and
-                           all("sha" in entry for entry in data["tree"]))
-            entries = {entry["path"]: entry["sha"] for entry in payload["tree"]}
+            commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
+            entries = github.store.flatten(commit["tree"])
             self.assertTrue(all(entries[path] == "d" * 40 for path in legacy_paths))
             self.assertNotIn("unrelated.py", entries)
             self.assertEqual(github.calls[-1], ("PATCH", "git/refs/heads/skillspector-reports", {"sha": result, "force": False}))
-            for github in (FakeGitHub(main="f" * 40), FakeGitHub(main_changed=True)):
+            for github in (FakeGitHub(Path(directory) / "git-obsolete", main="f" * 40),
+                           FakeGitHub(Path(directory) / "git-race", main_changed=True)):
                 with self.assertRaises(PublicationError):
                     publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
                 self.assertFalse(any(method == "PATCH" for method, _, _ in github.calls))

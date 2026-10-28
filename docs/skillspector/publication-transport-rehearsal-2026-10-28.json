@@ -1,0 +1,47 @@
+{
+  "artifact_manifest_sha256": "51a6e6631377544208bb77513dbecb70c7b27569fa25649376d6867fcfab0852",
+  "assembly_entry_counts": [
+    128,
+    128,
+    128,
+    128,
+    108,
+    5,
+    3,
+    1,
+    1
+  ],
+  "assembly_max_request_bytes": 20546,
+  "assembly_writes": 9,
+  "baseline_commit": "6e8e8552a71f9d1a848758f5ea20d3f24f7ce8d1",
+  "elapsed_seconds": 44.427945,
+  "fresh_base_tree_writes": 4,
+  "legacy_files": 673,
+  "main_revision_checks": 2,
+  "nonforce_ref_updates": 1,
+  "root_tree": "6d0b750dacc3599b04b4e3720356a91fc88f8806",
+  "scope": "offline exact artifact publisher rehearsal; native git mktree/ls-tree oracle; no network/ref mutation",
+  "source_commit": "29550c9fc0b5703a7f241187cae2ae2592bdc823",
+  "source_sha256": {
+    "scripts/publish_skillspector_coverage_v3.py": "dfd81b22abe94a968e9dc012588e0b9998fad599b1662c18b532f4083227804b",
+    "scripts/skillspector_publication_transport.py": "5fcd9ea06247fcd0884d51c31fe315d04b079621e2aa3dd4df90148fbae49156",
+    "tests/fixtures/skillspector-publication-tree-2026-10-28.json": "d7cb53c4d978c7067701a674831b60d84c0c109e993878a3728a851cf3caf115",
+    "tests/test_skillspector_publication_transport.py": "0c5cbafd28425b21e4c4867b847e67deea1209dd0cddf25380672a0ac11ff740"
+  },
+  "staging_entry_counts": [
+    3,
+    45,
+    96,
+    112,
+    97,
+    128,
+    128,
+    15
+  ],
+  "staging_max_request_bytes": 8388404,
+  "staging_writes": 8,
+  "success": true,
+  "total_files": 1297,
+  "v3_shards_tree": "7d3263f92c0608d0aad7b6ea181a6323c65fb7ed",
+  "v3_tree": "f83133cc8502d4f414b84d7fbb7684276bbedf49"
+}

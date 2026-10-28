@@ -1,0 +1,254 @@
+"""Git's own tree encoder is the oracle; no network or report scanning occurs."""
+from __future__ import annotations
+
+import copy
+import hashlib
+import io
+import json
+import subprocess
+import tempfile
+import unittest
+import urllib.error
+from contextlib import redirect_stderr
+from pathlib import Path
+
+from scripts import skillspector_publication_transport as transport
+from scripts.directory_publication import PublicationError, canonical_json
+from tests.test_skillspector_coverage import FakeGitHub as LegacyFakeGitHub
+
+
+FIXTURE = Path(__file__).parent / "fixtures/skillspector-publication-tree-2026-10-28.json"
+
+
+class GitTreeStore:
+    def __init__(self, root):
+        self.root, self.entries = Path(root), {}
+        subprocess.run(["git", "init", "--bare", "--quiet", str(self.root)], check=True)
+
+    def write(self, entries):
+        body = b"".join(f"{row['mode']} {row['type']} {row['sha']}\t{row['path']}".encode() + b"\0"
+                        for row in entries)
+        sha = subprocess.check_output(["git", "-C", str(self.root), "mktree", "--missing", "-z"], input=body).decode().strip()
+        self.entries[sha] = copy.deepcopy(entries)
+        return sha
+
+    def build(self, files):
+        node = {}
+        for path, sha in files.items():
+            parent = node
+            parts = path.split("/")
+            for part in parts[:-1]:
+                parent = parent.setdefault(part, {})
+            parent[parts[-1]] = sha
+        def tree(children):
+            return self.write([{"path": name, "mode": "040000" if isinstance(value, dict) else "100644",
+                "type": "tree" if isinstance(value, dict) else "blob",
+                "sha": tree(value) if isinstance(value, dict) else value} for name, value in children.items()])
+        return tree(node)
+
+    def flatten(self, sha):
+        output = subprocess.check_output(["git", "-C", str(self.root), "ls-tree", "-r", "-z", sha])
+        files = {}
+        for row in output.split(b"\0"):
+            if row:
+                header, path = row.split(b"\t")
+                mode, kind, oid = header.split()
+                if mode != b"100644" or kind != b"blob":
+                    raise AssertionError("unexpected final tree entry")
+                files[path.decode()] = oid.decode()
+        return files
+
+
+class FakeGitHub(LegacyFakeGitHub):
+    """The publication API contract backed by independent native Git objects."""
+    def __init__(self, root, **kwargs):
+        super().__init__(**kwargs)
+        self.store = GitTreeStore(root)
+        self.created = set()
+        self.assembly_calls = []
+
+    def request(self, method, path, data=None):
+        if (method, path) != ("POST", "git/trees"):
+            return super().request(method, path, data)
+        self.calls.append((method, path, copy.deepcopy(data)))
+        inline = any("content" in row for row in data["tree"])
+        assert len(data["tree"]) <= transport.MAX_TREE_ENTRIES
+        if not inline:
+            assert len(canonical_json(data)) <= transport.MAX_TREE_REQUEST_BYTES
+            assert all("/" not in row["path"] for row in data["tree"])
+            self.assembly_calls.append(copy.deepcopy(data))
+        entries = {}
+        if "base_tree" in data:
+            assert data["base_tree"] in self.created, "base must be a newly created prefix"
+            entries.update({row["path"]: row for row in self.store.entries[data["base_tree"]]})
+        for row in data["tree"]:
+            row = dict(row)
+            if "content" in row:
+                body = row.pop("content").encode()
+                row["sha"] = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
+            entries[row["path"]] = row
+        rows = list(entries.values())
+        sha = self.store.write(rows)
+        self.created.add(sha)
+        return {"sha": sha, "truncated": False, "tree": rows}
+
+
+class TreeTests(unittest.TestCase):
+    def test_exact_real_1297_file_artifact_preserves_all_673_legacy_files(self):
+        fixture = json.loads(FIXTURE.read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git")
+            legacy = {path: sha for path, sha in fixture["files"].items() if "/v3/" not in path}
+            github.store.build(legacy)
+            result = transport.create_filtered_tree(github, fixture["files"], known_trees=fixture["known_trees"])
+            self.assertEqual(result["sha"], fixture["expected_root"])
+            self.assertEqual(github.store.flatten(result["sha"]), fixture["files"])
+            self.assertEqual(len(legacy), 673)
+            self.assertEqual(len(fixture["files"]), 1297)
+            self.assertIn(fixture["expected_v3"], github.created)
+            self.assertIn(fixture["expected_shards"], github.created)
+            self.assertFalse(set(fixture["known_trees"].values()) & github.created)
+            self.assertEqual(len(github.assembly_calls), 9)
+            self.assertEqual(sum("base_tree" in call for call in github.assembly_calls), 4)
+            self.assertEqual(max(len(call["tree"]) for call in github.assembly_calls), 128)
+
+    def test_known_tree_only_reused_for_exact_filtered_identity(self):
+        files = {"folder/file": "a" * 40}
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git")
+            old = github.store.build({**files, "folder/unrelated": "b" * 40})
+            result = transport.create_filtered_tree(github, files, known_trees={"": old})
+            self.assertNotEqual(result["sha"], old)
+            self.assertEqual(github.store.flatten(result["sha"]), files)
+            self.assertTrue(all("base_tree" not in call for call in github.assembly_calls))
+
+    def test_invalid_paths_and_file_directory_conflicts_fail_before_write(self):
+        for files in ({"/absolute": "a" * 40}, {"x/../y": "a" * 40}, {"a": "a" * 40, "a/b": "b" * 40},
+                      {"x//y": "a" * 40}, {"x\\y": "a" * 40}, {".git/config": "a" * 40}, {"x": "wrong"}):
+            with self.subTest(files=files), tempfile.TemporaryDirectory() as directory:
+                github = FakeGitHub(Path(directory) / "git")
+                with self.assertRaises(PublicationError):
+                    transport.create_filtered_tree(github, files)
+                self.assertEqual(github.calls, [])
+
+    def test_bad_hash_mode_missing_entry_and_truncation_fail_closed(self):
+        for corrupt in (lambda value: value.update(sha="f" * 40),
+                        lambda value: value.update(truncated=True),
+                        lambda value: value["tree"][0].update(mode="100755"),
+                        lambda value: value["tree"].clear()):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as directory:
+                github = FakeGitHub(Path(directory) / "git")
+                original = github.request
+                def request(*args, **kwargs):
+                    value = original(*args, **kwargs)
+                    corrupt(value)
+                    return value
+                github.request = request
+                with self.assertRaises(PublicationError):
+                    transport.create_filtered_tree(github, {"x": "a" * 40})
+
+    def test_malformed_response_shapes_fail_before_any_further_api_write(self):
+        def missing_tree(value):
+            del value["tree"]
+            return value
+        changes = [lambda _value: [], lambda _value: "unexpected", lambda _value: None,
+                   missing_tree, lambda value: {**value, "tree": {}},
+                   lambda value: {**value, "tree": [None]},
+                   lambda value: {**value, "tree": [{}]}]
+        for field in ("path", "mode", "type", "sha"):
+            changes.append(lambda value, field=field: {**value,
+                "tree": [{key: item for key, item in value["tree"][0].items() if key != field}]})
+            changes.append(lambda value, field=field: {**value,
+                "tree": [{**value["tree"][0], field: ["invalid"]}]})
+        for index, change in enumerate(changes):
+            with self.subTest(shape=index), tempfile.TemporaryDirectory() as directory:
+                github = FakeGitHub(Path(directory) / "git")
+                original = github.request
+                github.request = lambda *args, **kwargs: change(original(*args, **kwargs))
+                with self.assertRaisesRegex(PublicationError, "uploaded publication tree identity differs"):
+                    transport.create_filtered_tree(github, {"nested/file": "a" * 40})
+                self.assertEqual(len(github.calls), 1)
+                self.assertEqual(github.calls[0][:2], ("POST", "git/trees"))
+
+
+class Response(io.BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *_args): self.close()
+
+
+class Clock:
+    def __init__(self): self.now, self.sleeps = 0, []
+    def __call__(self): return self.now
+    def sleep(self, seconds): self.sleeps.append(seconds); self.now += seconds
+
+
+def http_error(status, headers=None, body=b"response body must never be printed"):
+    return urllib.error.HTTPError("https://api.github.com", status, "failure", headers or {}, io.BytesIO(body))
+
+
+class TransportTests(unittest.TestCase):
+    def client(self, events, **kwargs):
+        self.clock, self.requests = Clock(), []
+        def opener(request, timeout):
+            self.requests.append((request, timeout))
+            value = events.pop(0)
+            if isinstance(value, Exception): raise value
+            return Response(json.dumps(value).encode())
+        return transport.GitHub("secret-token", opener=opener, clock=self.clock,
+                                sleeper=self.clock.sleep, **kwargs)
+
+    def test_tree_502_retries_with_sanitized_diagnostics_and_same_payload(self):
+        client = self.client([http_error(502, {"X-GitHub-Request-Id": "ABCD:1234"}), {"sha": "a" * 40}])
+        output = io.StringIO()
+        with redirect_stderr(output):
+            result = client.request("POST", "git/trees", {"tree": []})
+        self.assertEqual(result["sha"], "a" * 40)
+        self.assertEqual(self.clock.sleeps, [1])
+        self.assertEqual(self.requests[0][0].data, self.requests[1][0].data)
+        self.assertIn("method=POST path=git/trees status=502 request_id=ABCD:1234", output.getvalue())
+        self.assertNotIn("secret-token", output.getvalue())
+        self.assertNotIn("response body", output.getvalue())
+
+    def test_only_three_safe_retries_and_strict_global_budget(self):
+        client = self.client([http_error(503) for _ in range(3)])
+        with redirect_stderr(io.StringIO()), self.assertRaisesRegex(PublicationError, "attempt=3/3"):
+            client.request("GET", "git/ref/heads/main")
+        self.assertEqual(len(self.requests), 3)
+        self.assertEqual(self.clock.sleeps, [1, 2])
+        client = self.client([http_error(502)], budget_seconds=1)
+        with self.assertRaises(PublicationError): client.request("POST", "git/trees", {"tree": []})
+        self.assertEqual(self.clock.sleeps, [])
+        self.assertEqual(self.requests[0][1], 1)
+
+    def test_commit_ref_writes_and_permanent_errors_are_never_retried(self):
+        for method, path, failure in (("POST", "git/commits", http_error(502)),
+            ("PATCH", "git/refs/heads/skillspector-reports", TimeoutError()),
+            ("POST", "git/refs", http_error(503)), ("POST", "git/trees", http_error(422)),
+            ("GET", "git/ref/heads/main", http_error(403)),
+            ("GET", "git/ref/heads/main", urllib.error.URLError("certificate verification failed"))):
+            with self.subTest(method=method, path=path):
+                client = self.client([failure])
+                with self.assertRaises(PublicationError): client.request(method, path, {})
+                self.assertEqual(len(self.requests), 1)
+                self.assertEqual(self.clock.sleeps, [])
+
+    def test_transient_read_failure_retries_and_missing_read_returns_none(self):
+        client = self.client([urllib.error.URLError(TimeoutError()), {"ok": True}])
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(client.request("GET", "git/ref/heads/main"), {"ok": True})
+        self.assertEqual(len(self.requests), 2)
+        client = self.client([http_error(404)])
+        self.assertIsNone(client.request("GET", "git/ref/heads/missing"))
+
+    def test_incomplete_forbidden_body_preserves_http_diagnostic(self):
+        error = http_error(403, {"X-GitHub-Request-Id": "SAFE:123"})
+        def broken_read(*_args): raise TimeoutError()
+        error.read = broken_read
+        client = self.client([error])
+        with self.assertRaisesRegex(PublicationError, "status=403 request_id=SAFE:123"):
+            client.request("GET", "git/ref/heads/main")
+        self.assertEqual(len(self.requests), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
