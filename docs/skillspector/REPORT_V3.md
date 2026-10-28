@@ -79,7 +79,10 @@ evidence. A legacy marker cannot bypass current coverage checks.
 Catalog resolution (`catalog_coverage`, `source_states`, `plugin_states`) is
 separate from analysis. An explicitly skill-free plugin is `not_applicable`.
 Unresolved names retain candidates; unavailable sources retain historical
-evidence without inventing a current revision.
+evidence without inventing a current revision. A previously verified exact
+`SKILL.md` path that disappears at a newly inspected revision is `skill_removed`;
+its original report remains historical. An inaccessible repository alone is
+never evidence of deletion.
 
 For a selected analysis population:
 
@@ -95,7 +98,7 @@ plugin; a plugin with three completed and ten partial skills displays 3 of 13.
 
 ## Queue and execution rollout
 
-The next stage persists bounded attempt history, explicit next attempts and
+The queue persists bounded attempt history, explicit next attempts and
 separate new/retry/changed lanes. Content, scanner or profile changes create a
 new scan identity. Complete matching results are reused without a seven-day
 expiration; partial results are classified by cause.
@@ -107,6 +110,9 @@ below the workflow limit, which remains below the actual remaining process
 deadline. Controlled measurements and exception-specific evidence accompany
 activation; raising a deadline does not claim to fix parser or missing-file
 limitations.
+
+The real two-round CLI run, including automatic extended retries and byte-exact
+reuse of the other records, is documented in `CLI_E2E_2026-10-28.md`.
 
 This work excludes Cisco, removal of Cloudflare, and changes to any plugin's
 functionality. It adds no broad network or credential-rule suppression.
