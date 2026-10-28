@@ -58,18 +58,37 @@ def import_legacy(record, *, profile=None, scanner_identity=None):
     return converted
 
 
-def validate_record(record, item, generated, *, scheduled=False):
+def same_repository(left, right, target_revision, repository_aliases=()):
+    """Compare only exact identities or a verified alias at this target pin.
+
+    Do not follow chains or reuse a rename proof for a newer target revision:
+    GitHub can later allow an unrelated repository to reuse the old name.
+    """
+    left, right = left.casefold(), right.casefold()
+    if left == right:
+        return True
+    aliases = {alias["repository"].casefold(): alias["canonical_repository"].casefold()
+               for alias in repository_aliases if alias["revision"] == target_revision}
+    return aliases.get(left, left) == aliases.get(right, right)
+
+
+def validate_record(record, item, generated, *, scheduled=False, allowed_profiles=None, scanner_identity=None,
+                    repository_aliases=()):
     v2.schema(record, RECORD_SCHEMA)
     require(record["id"] == item["id"] and record["kind"] == item["kind"] and
             record["plugin_path"] == item["plugin_path"], "record selection identity differs")
-    require(record["source"]["repository"].lower() == item["repository"].lower() and
-            record["source"]["path"] == item["path"], "record source identity differs")
     historical = record.get("freshness") == "historical"
+    identical_repository = record["source"]["repository"].casefold() == item["repository"].casefold()
+    require(record["source"]["path"] == item["path"] and (identical_repository or historical and
+            same_repository(record["source"]["repository"], item["repository"], item["revision"], repository_aliases)),
+            "record source identity differs")
     if "legacy_format" in record:
         require(historical and record["profile"] in (v2.PROFILE, scanner.PROFILE),
                 "legacy evidence must retain its historical profile")
     require(historical or record["source"]["revision"] == item["revision"], "current record revision differs")
-    require(historical or known_profile(record), "current report uses an obsolete scanner/profile")
+    matching_profile = known_profile(record) if allowed_profiles is None else (
+        record["profile"] in allowed_profiles and record["scanner"] == scanner_identity)
+    require(historical or matching_profile, "current report uses an undeclared scanner/profile")
     if scheduled:
         require(all(key in record for key in ("freshness", "target_revision", "retry", "attempt_history")),
                 "scheduled report lacks queue state")
@@ -94,7 +113,8 @@ def validate_record(record, item, generated, *, scheduled=False):
         for location in [finding, *finding["occurrences"]]:
             path = location["path"]
             require(not Path(path).is_absolute() and "\\" not in path and
-                    all(part not in {"", ".", ".."} for part in path.split("/")), "finding location escapes source")
+                    bool(path.removesuffix("/")) and
+                    all(part not in {"", ".", ".."} for part in path.removesuffix("/").split("/")), "finding location escapes source")
         require(finding["review_status"] == "unreviewed", "automated scan cannot claim human confirmation")
     if record["status"] == "complete" and "legacy_format" not in record:
         require(record["execution"]["state"] == "completed" and record["execution"]["exit_code"] in (0, 1) and

@@ -467,10 +467,13 @@ def write_bounded(path, document, maximum):
 
 def validate_discovery_summary(summary, selection, source_commit):
     """The resolution cache is data, and must describe exactly this selection."""
-    exact(summary, ("schema_version", "source_commit", "generated_at", "scope", "catalog", "bounds",
+    base_fields = ("schema_version", "source_commit", "generated_at", "scope", "catalog", "bounds",
         "listings_observed", "repositories_observed", "repositories_resolved", "repositories_retained",
         "selected_roots", "selection_digest", "complete", "selection_truncated", "diagnostic_counts",
-        "diagnostics", "diagnostics_truncated", "resolution_cache"), "discovery summary")
+        "diagnostics", "diagnostics_truncated", "resolution_cache")
+    outcome_fields = ("source_states", "plugin_states", "repository_aliases", "catalog_coverage")
+    extended = isinstance(summary, dict) and any(field in summary for field in outcome_fields)
+    exact(summary, base_fields + outcome_fields if extended else base_fields, "discovery summary")
     require(summary["schema_version"] == 1 and summary["source_commit"] == source_commit and
         summary["scope"] == "bounded_catalog_and_reviewed_sources" and
         summary["selection_digest"] == sha256_digest(canonical_json(selection)) and
@@ -486,17 +489,40 @@ def validate_discovery_summary(summary, selection, source_commit):
         bounds["listings"] == MAX_SOURCES and bounds["roots"] == MAX_SOURCES, "unsupported discovery bounds")
     require(isinstance(summary["catalog"], dict) and type(summary["catalog"].get("complete")) is bool,
         "invalid catalog diagnostics")
+    if "directory" in summary["catalog"]:
+        directory = summary["catalog"]["directory"]
+        exact(directory, ("state", "reason", "sequence", "source_commit", "snapshot_digest"), "Directory acquisition identity")
+        require(directory["state"] in {"resolved", "unavailable"}, "invalid Directory acquisition state")
+        if directory["state"] == "resolved":
+            require(directory["reason"] is None and type(directory["sequence"]) is int and
+                1 <= directory["sequence"] < 2**53 and isinstance(directory["source_commit"], str) and
+                SHA.fullmatch(directory["source_commit"]) is not None and isinstance(directory["snapshot_digest"], str) and
+                re.fullmatch(r"sha256:[0-9a-f]{64}", directory["snapshot_digest"]) is not None, "invalid Directory snapshot identity")
+        else:
+            require(directory["reason"] == "directory_acquisition_failed" and
+                all(directory[key] is None for key in ("sequence", "source_commit", "snapshot_digest")) and
+                not summary["complete"], "unavailable Directory cannot claim complete discovery")
     require(isinstance(summary["diagnostic_counts"], dict) and all(isinstance(k, str) and
         type(v) is int and v >= 0 for k, v in summary["diagnostic_counts"].items()), "invalid diagnostic counts")
 
     def diagnostics(values):
         require(isinstance(values, list) and len(values) <= 256, "invalid discovery diagnostics")
         for value in values:
-            require(isinstance(value, dict) and set(value) <= {"code", "repository", "id", "count"} and
+            require(isinstance(value, dict) and set(value) <= {"code", "repository", "id", "count", "path", "candidates"} and
                 isinstance(value.get("code"), str) and 0 < len(value["code"]) <= 200, "invalid discovery diagnostic")
-            require(all(isinstance(v, str) and len(v) <= 1000 for k, v in value.items() if k != "count"),
+            require(all(isinstance(v, str) and len(v) <= (1025 if k == "id" else 1000) and
+                not any(ord(char) < 32 or ord(char) == 127 for char in v)
+                for k, v in value.items() if k not in {"count", "candidates"}),
                 "invalid diagnostic text")
             require("count" not in value or type(value["count"]) is int and value["count"] >= 0, "invalid diagnostic count")
+            if "candidates" in value:
+                require(isinstance(value["candidates"], list) and len(value["candidates"]) <= 64 and
+                    all(isinstance(path, str) and len(path) <= 1000 and
+                        re.fullmatch(r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?", path) is not None and
+                        not any(part in {".", ".."} for part in path.split("/")) for path in value["candidates"]) and
+                    len(set(value["candidates"])) == len(value["candidates"]) and
+                    type(value.get("count")) is int and value["count"] >= len(value["candidates"]),
+                    "invalid discovery candidate paths")
 
     diagnostics(summary["diagnostics"])
     cache = summary["resolution_cache"]
@@ -515,6 +541,98 @@ def validate_discovery_summary(summary, selection, source_commit):
             require(item is not None and item["repository"].lower() == repository.lower() and
                 item["revision"] == entry["revision"], "cached subject differs from selection")
         diagnostics(entry["diagnostics"])
+    if extended:
+        def text(value, maximum=200):
+            return isinstance(value, str) and 0 < len(value) <= maximum and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+        def path(value):
+            return isinstance(value, str) and len(value) <= 1000 and \
+                re.fullmatch(r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?", value) is not None and \
+                not any(part in {".", ".."} for part in value.split("/"))
+
+        def revision(value):
+            return value is None or isinstance(value, str) and SHA.fullmatch(value) is not None
+
+        def identities(values):
+            require(isinstance(values, list) and len(values) <= MAX_SOURCES and
+                all(isinstance(identifier, str) and identifier in subjects for identifier in values) and
+                len(set(values)) == len(values), "invalid resolved selection IDs")
+
+        source_states = summary["source_states"]
+        require(isinstance(source_states, list) and summary["listings_observed"] <= len(source_states) <= 2 * MAX_SOURCES,
+            "invalid source resolution states")
+        observed_ids = set()
+        for state in source_states:
+            exact(state, ("id", "repository", "state", "current", "reason", "revision", "path", "selected_ids", "candidates"),
+                "source resolution state")
+            require(text(state["id"], 1025) and state["id"] not in observed_ids and text(state["repository"], 512),
+                "invalid source resolution identity")
+            observed_ids.add(state["id"])
+            require(state["state"] in {"resolved", "historical", "unresolved", "unavailable", "unsupported"} and
+                type(state["current"]) is bool and state["current"] == (state["state"] == "resolved") and
+                (state["reason"] is None if state["current"] else text(state["reason"])), "invalid source resolution status")
+            require(revision(state["revision"]) and (state["path"] is None or path(state["path"])),
+                "invalid resolved source identity")
+            identities(state["selected_ids"])
+            require(bool(state["selected_ids"]) == (state["state"] in {"resolved", "historical"}),
+                "source resolution does not match selected subjects")
+            if state["current"]:
+                require(state["revision"] is not None and state["path"] is not None and
+                    all(subjects[identifier]["revision"] == state["revision"] and
+                        subjects[identifier]["repository"].casefold() == state["repository"].casefold() and
+                        subjects[identifier]["path"] == state["path"] for identifier in state["selected_ids"]),
+                    "current resolution differs from immutable subject")
+            require(isinstance(state["candidates"], list) and len(state["candidates"]) <= 64 and
+                all(path(candidate) for candidate in state["candidates"]) and
+                len(set(state["candidates"])) == len(state["candidates"]), "invalid source resolution candidates")
+
+        coverage = summary["catalog_coverage"]
+        kinds = ("resolved", "historical", "unresolved", "unavailable", "unsupported")
+        exact(coverage, ("observed", *kinds), "catalog coverage")
+        require(all(type(count) is int and 0 <= count <= MAX_SOURCES for count in coverage.values()) and
+            coverage["observed"] == summary["listings_observed"] and
+            sum(coverage[kind] for kind in kinds) == coverage["observed"] and
+            all(coverage[kind] == sum(state["state"] == kind for state in source_states[:coverage["observed"]])
+                for kind in kinds), "catalog coverage differs from source outcomes")
+
+        plugin_states = summary["plugin_states"]
+        require(isinstance(plugin_states, list) and len(plugin_states) <= MAX_SOURCES, "invalid plugin resolution states")
+        plugin_ids = set()
+        for state in plugin_states:
+            exact(state, ("id", "repository", "plugin_path", "revision", "state", "reason", "skills_total", "selected_ids"),
+                "plugin resolution state")
+            require(text(state["id"]) and state["id"] not in plugin_ids and text(state["repository"]) and
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*", state["repository"]) is not None and
+                path(state["plugin_path"]) and revision(state["revision"]), "invalid plugin resolution identity")
+            plugin_ids.add(state["id"])
+            require(state["state"] in {"resolved", "not_applicable", "unresolved", "unavailable"} and
+                (state["reason"] is None if state["state"] == "resolved" else text(state["reason"])) and
+                (state["skills_total"] is None or type(state["skills_total"]) is int and 0 <= state["skills_total"] <= MAX_SOURCES),
+                "invalid plugin resolution status")
+            identities(state["selected_ids"])
+            require(all(subjects[identifier]["kind"] == "plugin_skill" and
+                subjects[identifier]["repository"].casefold() == state["repository"].casefold() and
+                subjects[identifier]["plugin_path"] == state["plugin_path"] for identifier in state["selected_ids"]),
+                "plugin resolution differs from selected subjects")
+            if state["state"] == "resolved":
+                require(state["revision"] is not None and bool(state["selected_ids"]) and
+                    len(state["selected_ids"]) == state["skills_total"] and
+                    all(subjects[identifier]["revision"] == state["revision"] for identifier in state["selected_ids"]),
+                    "resolved plugin inventory is incomplete")
+            if state["state"] == "not_applicable":
+                require(state["skills_total"] == 0 and not state["selected_ids"], "non-skill plugin has scan subjects")
+
+        aliases = summary["repository_aliases"]
+        require(isinstance(aliases, list) and len(aliases) <= MAX_SOURCES, "invalid repository aliases")
+        alias_ids = set()
+        for alias in aliases:
+            exact(alias, ("repository", "canonical_repository", "revision"), "repository alias")
+            require(all(text(alias[key]) and
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*", alias[key]) is not None
+                for key in ("repository", "canonical_repository")) and alias["repository"] not in alias_ids and
+                alias["repository"].casefold() != alias["canonical_repository"].casefold() and
+                alias["revision"] is not None and revision(alias["revision"]), "invalid verified repository alias")
+            alias_ids.add(alias["repository"])
     return summary
 
 
