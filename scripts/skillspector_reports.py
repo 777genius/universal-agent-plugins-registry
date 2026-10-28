@@ -75,7 +75,7 @@ EXTENDED_PROFILE = PROFILES[EXTENDED_PROFILE_DOCUMENT["id"]]
 # missing-reference and unsupported-format limitations do not become retryable
 # merely because the scanner emitted them with a high severity.
 RETRYABLE_REASONS = frozenset({"scan_timeout", "preparation_timeout", "acquisition_failed",
-    "runtime_limit", "archive_time_limit", "size_limit", "input_limit_exceeded",
+    "runtime_limit", "archive_time_limit", "size_limit", "input_limit_exceeded", "acquisition_transfer_limit",
     "total_bytes_limit", "artifact_count_limit", "network_error", "network_timeout",
     "osv_request_failed", "osv_timeout"})
 DISABLED_STATIC_ANALYZERS = frozenset({"semantic_developer_intent", "semantic_quality_policy",

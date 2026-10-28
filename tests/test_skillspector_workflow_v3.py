@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / '.github/workflows/skillspector-reports.yml'
 
 
-def gate(expression: str, *, repository='777genius/universal-agent-plugins-registry',
-         ref='refs/heads/main', selected_corpus='catalog'):
+def expression_value(expression: str, *, repository='777genius/universal-agent-plugins-registry',
+                     ref='refs/heads/main', selected_corpus='catalog'):
     """Evaluate this workflow's simple publication condition as a truth table.
 
     Reject new expression features so changes to the publication boundary must
@@ -36,8 +36,12 @@ def gate(expression: str, *, repository='777genius/universal-agent-plugins-regis
                ast.Name, ast.Constant, ast.Load)
     if any(not isinstance(node, allowed) for node in ast.walk(tree)):
         raise AssertionError('Publication condition needs an explicit test update')
-    return bool(eval(compile(tree, '<workflow publication gate>', 'eval'), {'__builtins__': {}},
-        {'repository': repository, 'ref': ref, 'selected_corpus': selected_corpus}))
+    return eval(compile(tree, '<workflow bounded expression>', 'eval'), {'__builtins__': {}},
+        {'repository': repository, 'ref': ref, 'selected_corpus': selected_corpus})
+
+
+def gate(expression, **context):
+    return bool(expression_value(expression, **context))
 
 
 class SkillSpectorWorkflowV3Tests(unittest.TestCase):
@@ -82,6 +86,20 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         self.assertTrue(gate(corpus_step['if'], selected_corpus='controlled'))
         self.assertFalse(gate(corpus_step['if'], selected_corpus='catalog'))
 
+    def test_controlled_corpus_uses_one_complete_partition_and_catalog_keeps_eight(self):
+        outputs = self.workflow['jobs']['prepare']['outputs']
+        for selected in ('controlled', 'catalog', ''):
+            with self.subTest(corpus=selected):
+                count = int(expression_value(outputs['partition_count'], selected_corpus=selected))
+                partitions = json.loads(expression_value(outputs['partitions'], selected_corpus=selected))
+                self.assertEqual(count, 1 if selected == 'controlled' else 8)
+                self.assertEqual(partitions, list(range(count)))
+        scan = self.workflow['jobs']['scan']
+        self.assertEqual(scan['strategy']['matrix']['partition'], '${{ fromJSON(needs.prepare.outputs.partitions) }}')
+        step = next(s for s in scan['steps'] if 'scripts.skillspector_coverage_v3 scan' in s.get('run', ''))
+        self.assertEqual(step['env']['PARTITION_COUNT'], '${{ needs.prepare.outputs.partition_count }}')
+        self.assertIn('--partition-count "${PARTITION_COUNT}"', step['run'])
+
     def test_scanner_is_immutable_and_locked_with_no_write_credentials(self):
         scan = self.workflow['jobs']['scan']
         checkout = next(s for s in scan['steps'] if s.get('with',{}).get('repository') == 'NVIDIA/SkillSpector')
@@ -98,8 +116,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         scan_step = next(s for s in scan['steps'] if 'scripts.skillspector_coverage_v3 scan' in s.get('run',''))
         self.assertNotIn('GITHUB_TOKEN', scan_step.get('env',{}))
         self.assertIn('--discovery-summary', scan_step['run'])
-        self.assertIn('--partition-count 8', scan_step['run'])
-        self.assertEqual(scan['strategy']['matrix']['partition'], [str(n) for n in range(8)])
+        self.assertIn('--partition-count "${PARTITION_COUNT}"', scan_step['run'])
 
     def test_v3_artifact_is_checked_before_publication_credentials(self):
         assemble = self.workflow['jobs']['assemble']

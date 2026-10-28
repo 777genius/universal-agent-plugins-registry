@@ -52,6 +52,9 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: read
+    outputs:
+      partitions: ${{ inputs.corpus == 'controlled' && '[0]' || '[0,1,2,3,4,5,6,7]' }}
+      partition_count: ${{ inputs.corpus == 'controlled' && '1' || '8' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,7 +65,7 @@ jobs:
           python-version: "3.12"
       - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
       - name: Test discovery, scanner and publication boundaries
-        run: python3 -m unittest tests.test_skillspector_contract tests.test_skillspector_coverage tests.test_skillspector_coverage_v3 tests.test_skillspector_discovery tests.test_skillspector_exceptions tests.test_skillspector_profile_measurement tests.test_skillspector_publication tests.test_skillspector_records_v3 tests.test_skillspector_reports tests.test_skillspector_workflow_v3
+        run: python3 -m unittest tests.test_skillspector_acquisition tests.test_skillspector_contract tests.test_skillspector_coverage tests.test_skillspector_coverage_v3 tests.test_skillspector_discovery tests.test_skillspector_exceptions tests.test_skillspector_profile_measurement tests.test_skillspector_publication tests.test_skillspector_records_v3 tests.test_skillspector_reports tests.test_skillspector_workflow_v3
       - name: Read the previous immutable report snapshot
         if: inputs.corpus != 'controlled'
         env:
@@ -110,7 +113,7 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix:
-        partition: [0, 1, 2, 3, 4, 5, 6, 7]
+        partition: ${{ fromJSON(needs.prepare.outputs.partitions) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -139,6 +142,7 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ github.sha }}
           PARTITION: ${{ matrix.partition }}
+          PARTITION_COUNT: ${{ needs.prepare.outputs.partition_count }}
           MAXIMUM_ATTEMPTS: ${{ inputs.maximum_attempts || '128' }}
         run: |
           python3 -m scripts.skillspector_coverage_v3 scan \
@@ -147,7 +151,7 @@ jobs:
             --previous-dir "${RUNNER_TEMP}/skillspector-plan/previous" \
             --discovery-summary "${RUNNER_TEMP}/skillspector-plan/coverage.json" \
             --source-commit "${SOURCE_COMMIT}" \
-            --partition-index "${PARTITION}" --partition-count 8 \
+            --partition-index "${PARTITION}" --partition-count "${PARTITION_COUNT}" \
             --maximum-attempts "${MAXIMUM_ATTEMPTS}" --budget-seconds 2100 \
             --output "${RUNNER_TEMP}/worker-${PARTITION}.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
