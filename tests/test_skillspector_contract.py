@@ -54,6 +54,57 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(PublicationError):
             contract.validate_record(record, source, datetime.now(timezone.utc))
 
+    def test_reference_bundle_is_optional_but_cannot_hide_missing_rows_or_claim_complete(self):
+        from tests.test_skillspector_records_v3 import reference
+        source, record = self.fresh_record()
+        fields = ('references', 'ledger_exceptions', 'references_total', 'ledger_exceptions_total',
+                  'reference_evidence_truncated')
+        previous_format = copy.deepcopy(record)
+        for key in fields:
+            previous_format['coverage'].pop(key)
+        contract.validate_record(previous_format, source, datetime.now(timezone.utc))
+        for key in fields:
+            missing = copy.deepcopy(record)
+            missing['coverage'].pop(key)
+            with self.subTest(missing=key), self.assertRaises(PublicationError):
+                contract.validate_record(missing, source, datetime.now(timezone.utc))
+        record['coverage'].update(references=[reference()], references_total=1)
+        with self.assertRaises(PublicationError):
+            contract.validate_record(record, source, datetime.now(timezone.utc))
+        record['status'] = record['coverage']['status'] = 'partial'
+        scanner.add_coverage_reason(record, 'reference_missing', scanner.REFERENCE_MESSAGES['missing'])
+        contract.validate_record(record, source, datetime.now(timezone.utc))
+        record['coverage']['references_total'] = 2
+        with self.assertRaises(PublicationError):
+            contract.validate_record(record, source, datetime.now(timezone.utc))
+        record['coverage']['reference_evidence_truncated'] = True
+        with self.assertRaises(PublicationError):
+            contract.validate_record(record, source, datetime.now(timezone.utc))
+        scanner.add_coverage_reason(record, 'normalization_truncated', 'Reference context exceeded its bound.')
+        contract.validate_record(record, source, datetime.now(timezone.utc))
+        self.assertFalse(record['findings_truncated'])
+        self.assertTrue(record['coverage']['grouping_complete'])
+
+    def test_reference_and_ledger_locations_are_checked_after_publication(self):
+        from tests.test_skillspector_records_v3 import reference, ledger_exception
+        source, record = self.fresh_record()
+        record['status'] = record['coverage']['status'] = 'partial'
+        record['coverage'].update(references=[reference()], references_total=1,
+            ledger_exceptions=[ledger_exception()], ledger_exceptions_total=1)
+        scanner.add_coverage_reason(record, 'reference_missing', scanner.REFERENCE_MESSAGES['missing'])
+        contract.validate_record(record, source, datetime.now(timezone.utc))
+        for changes in ({'source_path': '../private'}, {'source_path': '/private'},
+                        {'target_path': 'helper.py'}, {'column': 0}, {'unknown': 'field'}):
+            changed = copy.deepcopy(record)
+            changed['coverage']['references'][0].update(changes)
+            with self.subTest(reference=changes), self.assertRaises(PublicationError):
+                contract.validate_record(changed, source, datetime.now(timezone.utc))
+        for changes in ({'path': '../private'}, {'start_line': 30, 'end_line': 29}, {'fatal': 'no'}):
+            changed = copy.deepcopy(record)
+            changed['coverage']['ledger_exceptions'][0].update(changes)
+            with self.subTest(ledger=changes), self.assertRaises(PublicationError):
+                contract.validate_record(changed, source, datetime.now(timezone.utc))
+
     def test_import_never_promotes_legacy_partial_or_invents_evidence(self):
         source = item()
         legacy = scanner.empty_record(source)

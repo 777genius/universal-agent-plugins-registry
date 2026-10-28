@@ -636,6 +636,30 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 1000
+                  },
+                  "start_line": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "end_line": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }
@@ -656,7 +680,222 @@
             },
             "grouping_complete": {
               "type": "boolean"
+            },
+            "references": {
+              "type": "array",
+              "maxItems": 1024,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source_path",
+                  "line",
+                  "column",
+                  "evidence",
+                  "target_path",
+                  "status",
+                  "disposition",
+                  "reference_kind"
+                ],
+                "properties": {
+                  "source_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "column": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "maxLength": 8388608
+                  },
+                  "target_path": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "resolved",
+                      "missing",
+                      "ambiguous",
+                      "rejected"
+                    ]
+                  },
+                  "disposition": {
+                    "enum": [
+                      "analyzed",
+                      "partial",
+                      "failed",
+                      "out_of_scope"
+                    ]
+                  },
+                  "reference_kind": {
+                    "enum": [
+                      "markdown_image",
+                      "documentation_image",
+                      "markdown_link",
+                      "inline_command",
+                      "quoted_or_code",
+                      "plain_path"
+                    ]
+                  },
+                  "source_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              }
+            },
+            "ledger_exceptions": {
+              "type": "array",
+              "maxItems": 100000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reason_code",
+                  "message"
+                ],
+                "properties": {
+                  "reason_code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8388608
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
+                  },
+                  "start_line": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "end_line": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outcome": {
+                    "enum": [
+                      "completed",
+                      "partial",
+                      "failed",
+                      "skipped",
+                      "out_of_scope"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "error_class": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "scope": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "analyzers": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "fatal": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "references_total": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "ledger_exceptions_total": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "reference_evidence_truncated": {
+              "type": "boolean"
             }
+          },
+          "dependentRequired": {
+            "references": [
+              "ledger_exceptions",
+              "references_total",
+              "ledger_exceptions_total",
+              "reference_evidence_truncated"
+            ],
+            "ledger_exceptions": [
+              "references",
+              "references_total",
+              "ledger_exceptions_total",
+              "reference_evidence_truncated"
+            ],
+            "references_total": [
+              "references",
+              "ledger_exceptions",
+              "ledger_exceptions_total",
+              "reference_evidence_truncated"
+            ],
+            "ledger_exceptions_total": [
+              "references",
+              "ledger_exceptions",
+              "references_total",
+              "reference_evidence_truncated"
+            ],
+            "reference_evidence_truncated": [
+              "references",
+              "ledger_exceptions",
+              "references_total",
+              "ledger_exceptions_total"
+            ]
           }
         },
         "raw_finding_count": {

@@ -57,6 +57,23 @@ process state, exit code and measured acquisition/analysis durations.
 the original upstream coverage findings. Execution failures are separate from
 signals about the skill's contents.
 
+Coverage also retains the scanner's reference entries and public ledger
+diagnostics: source paths and positions, reference targets, evidence snippets,
+reference status, and analyzer context. These additive arrays are optional for
+earlier v3 fixtures and legacy records. A missing reference can point to a file
+created by the skill, a dependency installed later, or a file in the caller's
+project. Absence from the inspected tree alone does not establish which case
+applies. The source excerpt remains available for review; the publisher does
+not infer a safe runtime-generated file or a defective package from absence.
+Bounded evidence truncation is explicit and keeps the report partial.
+
+`reference-evidence-reprojection-2026-10-28.json` verifies the additive contract
+against 18 retained full scanner reports: all 394 reference entries and 1,297
+ledger entries survive, including their positions and snippets. Source,
+scanner, profile, finding counts, grouping and the 3 complete / 15 partial
+statuses stay unchanged. Planned external references remain inert context;
+they do not turn a completed static scope into a failed inspection.
+
 `raw_finding_count` counts upstream occurrences including coverage signals.
 `finding_count` counts content signals; `finding_group_count` counts displayed
 content groups. A group retains IDs, the full match fingerprint, evidence,
@@ -113,6 +130,12 @@ limitations.
 
 The real two-round CLI run, including automatic extended retries and byte-exact
 reuse of the other records, is documented in `CLI_E2E_2026-10-28.md`.
+
+Cold Git acquisition is measured separately in
+`COLD_ACQUISITION_2026-10-28.md`. Validated object IDs are fetched in bounded
+batches before local byte and identity checks, preserving the whole analysis
+root and the original preparation deadline. Discovery uses the same bounded
+reader only for its validated `SKILL.md` candidates.
 
 This work excludes Cisco, removal of Cloudflare, and changes to any plugin's
 functionality. It adds no broad network or credential-rule suppression.

@@ -28,6 +28,18 @@ def finding(**changes):
                          "start_column": 1, "end_column": 15}} | changes
 
 
+def reference(**changes):
+    return {"source_path": "SKILL.md", "line": 29, "column": 12,
+            "evidence": "1. Author `.asc/workflow.json`.", "target_path": None,
+            "status": "missing", "disposition": "partial", "reference_kind": "quoted_or_code"} | changes
+
+
+def ledger_exception(**changes):
+    return {"outcome": "partial", "phase": "reference_resolution", "reason_code": "reference_missing",
+            "message": reports.REFERENCE_MESSAGES["missing"], "path": "SKILL.md", "start_line": 29,
+            "end_line": 29, "fatal": False} | changes
+
+
 class V3NormalizationTests(unittest.TestCase):
     def normalize(self, raw):
         record = reports.empty_record_v3(item())
@@ -179,6 +191,125 @@ class V3NormalizationTests(unittest.TestCase):
         self.assertEqual(output['coverage']['analyzers'],raw['analysis_completeness']['analyzer_statuses'])
         self.assertTrue(output['coverage']['reasons'][0]['retryable'])
         self.assertEqual(output['coverage']['reasons'][0]['analyzer_id'],'static_patterns_prompt_injection')
+
+    def test_missing_reference_context_and_distinct_positions_remain_coverage(self):
+        raw = upstream_report()
+        # Measured ASC authoring instructions and two caller-project Vite
+        # examples: an absent bundled file does not prove a broken package.
+        references = [reference(), reference(line=159, column=11,
+            evidence='| Vite | `vite.config.js`, `vite.config.ts` |'),
+            reference(line=159, column=29, evidence='| Vite | `vite.config.js`, `vite.config.ts` |')]
+        ledger = [ledger_exception(), ledger_exception(start_line=159, end_line=159,
+            analyzers=['artifact_integrity', 'reference_resolver'], scope='source')]
+        raw['analysis_completeness'].update(references=references, ledger_exceptions=ledger)
+        output = self.normalize(raw)
+        coverage = output['coverage']
+        self.assertEqual(coverage['references'], references)
+        self.assertEqual(coverage['ledger_exceptions'], ledger)
+        self.assertEqual((coverage['references_total'], coverage['ledger_exceptions_total']), (3, 2))
+        self.assertFalse(coverage['reference_evidence_truncated'])
+        self.assertEqual((output['status'], coverage['status']), ('partial', 'partial'))
+        self.assertEqual((output['raw_finding_count'], output['finding_count'], output['finding_group_count']), (0, 0, 0))
+        self.assertEqual(len(coverage['reasons']), 2)  # Aggregate text; exact locations stay in the evidence arrays.
+        self.assertTrue(all('start_line' not in reason for reason in coverage['reasons']))
+        self.assertTrue(all(not reason['retryable'] for reason in coverage['reasons']))
+        self.assertTrue(coverage['grouping_complete'])
+        from scripts.skillspector_coverage_v3 import make_attempt
+        attempt = make_attempt(item(), output)
+        self.assertEqual((attempt['disposition'], attempt['reason']), ('blocked', 'reference_missing'))
+        self.assertIsNone(attempt['next_profile'])
+
+    def test_resolved_reference_provenance_and_inert_rejected_context_survive(self):
+        raw = upstream_report()
+        raw['analysis_completeness']['references'] = [reference(source_path='/tmp/content/SKILL.md',
+            target_path='/tmp/content/diagram.jpg', status='resolved', disposition='analyzed',
+            reference_kind='documentation_image', source_sha256='a' * 64),
+            reference(status='rejected', disposition='out_of_scope', evidence='<script>external context</script>\x00')]
+        output = self.normalize(raw)
+        references = output['coverage']['references']
+        self.assertEqual((references[0]['source_path'], references[0]['target_path']), ('SKILL.md', 'diagram.jpg'))
+        self.assertEqual(references[0]['source_sha256'], 'a' * 64)
+        self.assertEqual(references[1]['evidence'], '<script>external context</script>')
+        self.assertEqual(output['status'], 'complete')
+        contract.validate_record(output, item(), datetime.now(timezone.utc))
+
+    def test_reference_context_byte_limit_keeps_counts_without_truncating_content_groups(self):
+        raw = upstream_report()
+        raw['issues'] = [finding()]
+        raw['analysis_completeness'].update(
+            references=[reference(line=i + 1, evidence='Context ' + 'x' * 1800) for i in range(100)],
+            ledger_exceptions=[ledger_exception(start_line=i + 1, end_line=i + 1) for i in range(20)])
+        with mock.patch.object(reports, 'MAX_REPORT_BYTES', 500 << 10):
+            output = self.normalize(raw)
+        coverage = output['coverage']
+        self.assertEqual((coverage['references_total'], coverage['ledger_exceptions_total']), (100, 20))
+        self.assertLess(len(coverage['references']), 100)
+        self.assertTrue(coverage['reference_evidence_truncated'])
+        self.assertEqual((output['status'], coverage['status']), ('partial', 'partial'))
+        self.assertIn('normalization_truncated', [reason['code'] for reason in coverage['reasons']])
+        self.assertEqual((output['raw_finding_count'], output['finding_count'], output['finding_group_count']), (1, 1, 1))
+        self.assertEqual(len(output['findings']), 1)
+        self.assertFalse(output['findings_truncated'])
+        self.assertTrue(coverage['grouping_complete'])
+        self.assertLessEqual(len(reports.report_json(output)), (500 - 128) << 10)
+        contract.validate_record(output, item(), datetime.now(timezone.utc))
+
+    def test_reference_count_limit_and_malformed_rows_beyond_cap_fail_honestly(self):
+        raw = upstream_report()
+        raw['analysis_completeness']['references'] = [reference(line=i + 1, target_path='helper.py',
+            status='resolved', disposition='analyzed') for i in range(1025)]
+        output = self.normalize(raw)
+        self.assertEqual(output['coverage']['references_total'], 1025)
+        self.assertEqual(len(output['coverage']['references']), 1024)
+        self.assertTrue(output['coverage']['reference_evidence_truncated'])
+        self.assertEqual(output['status'], 'partial')
+        self.assertFalse(output['findings_truncated'])
+        for changes in ({'source_path': '../private'}, {'source_path': 'SKILL\x00.md'},
+                        {'column': 0}, {'status': []}, {'unexpected': 'unverified'}):
+            raw['analysis_completeness']['references'] = [reference(), reference(**changes)]
+            with self.subTest(changes=changes), mock.patch.object(reports, 'MAX_REFERENCE_EVIDENCE_BYTES', 1):
+                with self.assertRaises(PublicationError):
+                    self.normalize(raw)
+
+    def test_reference_evidence_shrinks_when_analyzer_context_uses_record_budget(self):
+        raw = upstream_report()
+        raw['analysis_completeness']['analyzer_statuses'][0]['context'] = 'x' * (335 << 10)
+        raw['analysis_completeness']['references'] = [reference(line=i + 1, evidence='x' * 1000,
+            status='resolved', disposition='analyzed', target_path='helper.py') for i in range(100)]
+        with mock.patch.object(reports, 'MAX_REPORT_BYTES', 500 << 10):
+            output = self.normalize(raw)
+        coverage = output['coverage']
+        self.assertEqual(coverage['references_total'], 100)
+        self.assertGreater(len(coverage['references']), 0)
+        self.assertLess(len(coverage['references']), 50)
+        self.assertTrue(coverage['reference_evidence_truncated'])
+        self.assertEqual(output['status'], 'partial')
+        self.assertEqual(output['finding_group_count'], 0)
+        self.assertFalse(output['findings_truncated'])
+        self.assertTrue(coverage['grouping_complete'])
+        self.assertLessEqual(len(reports.report_json(output)), (500 - 128) << 10)
+        contract.validate_record(output, item(), datetime.now(timezone.utc))
+
+    def test_many_ledger_locations_keep_aggregated_reasons_without_linear_membership(self):
+        class NoLinearMembership(list):
+            def __contains__(self, value):
+                raise AssertionError('normalization linearly searched every previous reason')
+
+        raw = upstream_report()
+        raw['analysis_completeness']['ledger_exceptions'] = [ledger_exception(start_line=i + 1, end_line=i + 1)
+            for i in range(5000)]
+        record = reports.empty_record_v3(item())
+        record['source']['content_digest'] = 'sha256:' + 'b' * 64
+        record['scanned_at'] = reports.now()
+        record['coverage']['reasons'] = NoLinearMembership()
+        output = reports.normalize_report_v3(record, json.dumps(raw).encode(), 1, Path('/tmp/content'))
+        coverage = output['coverage']
+        self.assertEqual(coverage['ledger_exceptions_total'], 5000)
+        self.assertLessEqual(len(coverage['reasons']), 2)
+        self.assertTrue(coverage['reference_evidence_truncated'])
+        self.assertEqual(output['status'], 'partial')
+        self.assertEqual(output['finding_group_count'], 0)
+        contract.validate_record(output, item(), datetime.now(timezone.utc))
 
     def test_escaping_occurrences_and_sanitizer_key_collisions_fail_closed(self):
         raw=upstream_report();raw['issues']=[finding(occurrences=[{'file':'../private','start_line':1}])]

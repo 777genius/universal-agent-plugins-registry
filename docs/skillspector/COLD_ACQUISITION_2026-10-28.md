@@ -42,6 +42,16 @@ The actual `skillspector_coverage_v3.scan_selected` caller was verified to refer
 
 Root separately reported **164 focused SkillSpector tests passing in 18.141 s**. This test-suite result is distinct from the one real scanner execution measured here. No reports were published by these experiments.
 
+## Hosted controlled gate
+
+[Run 40680891575](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/40680891575), at code commit `f10b72bca0a7519881d8fa7f0c918a80375b193b`, completed preparation, the single 15-source worker and assembly successfully. Publication was correctly skipped. Independent publisher validation of the downloaded artifact passed with that exact source commit.
+
+All 15 records are current and have completed execution: **3 complete, 12 partial, 0 errors**. Cloudflare contributes 13 records: **3 complete and 10 partial**. The main Cloudflare root was acquired in **4.300903 s**, retained the same whole-root digest, and ran analysis for 47.456786 s. Its 486 upstream signals contain 481 content occurrences grouped into 261 groups; both exact Upload Session annotations are retained.
+
+The resulting queue has 11 blocked permanent limitations, 3 complete results requiring no attempt, and one scheduled extended attempt for the main Cloudflare root. React Native now has only its five parser limitations and is blocked instead of repeated without a useful change. The complete set contains 634 upstream occurrences, 615 content occurrences and 365 displayed groups; these are signal groups, not independently confirmed vulnerabilities.
+
+The [hosted evidence JSON](hosted-controlled-2026-10-28.json) binds every source, status, timing and queue decision to the artifact hashes. This gate predates the additive reference and ledger evidence projection. That later projection does not change the source acquisition, scanner or analysis profile; its validation against retained full raw reports is recorded separately.
+
 ## Transport and reproducibility
 
 This workspace cannot resolve GitHub from the production helper's sanitized environment without its approved proxy. The measurement harness added only the environment's proxy keys and Git Trace2 instrumentation to the Git transport. It did not change deadlines, file limits, source identities, package bytes, or scanner arguments. No proxy values, GitHub credentials, or HTTP headers were recorded. The scanner kept its production environment allowlist.
