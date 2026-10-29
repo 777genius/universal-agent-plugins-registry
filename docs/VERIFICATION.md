@@ -61,9 +61,9 @@ activation, authentication, or authenticated provider operations. The earlier
 dependency list above remains the historical 2026-09-05 observation.
 
 The 2026-10-29 security follow-up updates the current community Context7 root to
-`4.4.4` and Firebase to `15.34.2`, and retains HubSpot `8.15.0` with a new exact
-security closure. Each complete lock reports zero known vulnerabilities in its
-fresh metadata-only audit. The [new source record](../registry/upstream-promotion-audit/runtime-dependencies/2026-10-29/remediation-candidates.json)
+`@upstash/context7-mcp@4.4.4` and Firebase to `firebase-tools@15.34.2`, and retains
+HubSpot `8.15.0` with a new exact security closure. Each complete lock reports zero
+known vulnerabilities in its fresh metadata-only audit. The [new source record](../registry/upstream-promotion-audit/runtime-dependencies/2026-10-29/remediation-candidates.json)
 binds the package, manifest, lock, and expected MCP identities. The
 [qualification workflow](runtime-security-qualification.md) checks cold runtime
 materialization, tools, installed audits, and signatures for those exact bytes;

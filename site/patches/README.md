@@ -62,3 +62,23 @@ Move the generated `nitro-glob.js` to the edit directory's
 the existing full Pages CI gates. Remove this patch only when a maintained
 upstream release removes the vulnerable path and passes the same behavior and
 site gates.
+
+## Site-local Rollup defaults clone
+
+`@rollup__plugin-node-resolve@16.0.3.patch` removes deepmerge from the pinned
+Rollup resolver's ESM and CommonJS entrypoints. Its only use copies the static
+`defaults` object before recursively freezing the exported `DEFAULTS`. That
+object contains five arrays of strings and two booleans; Node's
+`structuredClone` preserves the values and independent arrays. User-supplied
+resolver options are handled separately and keep their existing behavior.
+
+The version-scoped pnpm override removes the unused dependency edge, addressing
+[GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4), for
+which no patched deepmerge release is available. Node 22, already required by
+the site, supplies `structuredClone`. The audit retains its existing low
+severity threshold without exceptions.
+
+Tests cover the exact recursively frozen exported defaults and actual Rollup
+resolution with default and custom extensions through both entrypoints.
+Remove this patch and its override together when an upstream release removes
+the vulnerable dependency and passes these tests and the existing Pages gates.
