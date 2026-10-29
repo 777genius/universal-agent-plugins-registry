@@ -20,7 +20,7 @@ from scripts import discovery_publication as publication
 from scripts import skillspector_coverage as v2
 from scripts import skillspector_coverage_v3 as v3
 from scripts.directory_publication import PublicationError, canonical_json
-from scripts.discovery_checkpoint import WorkBudget
+from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
 from tests.test_discovery_index import candidate_record
 from tests.test_skillspector_reports import item
 from tests.test_skillspector_coverage_v3 import worker
@@ -233,8 +233,8 @@ class CommunityInventoryTests(unittest.TestCase):
             selection, summary = discovery.discover([listing], metadata(plugins), api, budget,
                 source_commit=COMMIT, plugins=plugins, workers=1)
 
-        self.assertEqual(request.call_count, 5)
-        self.assertEqual(clock[0], 600)
+        self.assertEqual(request.call_count, 10)
+        self.assertEqual(clock[0], 1200)
         self.assertEqual(acquired, [600])
         self.assertIs(api.work_budget, budget)
         self.assertEqual(len(selection['sources']), 1)
@@ -243,6 +243,96 @@ class CommunityInventoryTests(unittest.TestCase):
         self.assertEqual(summary['source_states'][0]['state'], 'unavailable')
         self.assertFalse(summary['complete'])
         v3.validate_discovery_summary(summary, selection, COMMIT)
+
+    def test_graphql_retry_longer_than_remaining_budget_preserves_completed_plugin_inventory(self):
+        clock, acquired = [0], []
+        budget = WorkBudget(90, monotonic=lambda: clock[0])
+        api = discovery.GitHubAPI('fixture-token', work_budget=budget)
+        plugins = [plugin()]
+        listing = {'source': 'owner/catalog', 'skillId': 'demo', 'name': 'demo'}
+
+        def rate_limited(*_args, **_kwargs):
+            raise urllib.error.HTTPError('https://api.github.com/graphql', 403, 'rate limited',
+                {'Retry-After': '120'}, io.BytesIO(b'secondary rate limit'))
+
+        def acquire(*_args, **kwargs):
+            acquired.append(kwargs['work_budget'].remaining())
+            return mock.Mock()
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        with mock.patch.object(api.opener, 'open', side_effect=rate_limited) as request, \
+             mock.patch('scripts.build_discovery_index.time.sleep', side_effect=advance) as sleep, \
+             mock.patch.object(discovery, 'PinnedRepository', side_effect=acquire), \
+             mock.patch.object(discovery, 'skill_documents', side_effect=documents):
+            selection, summary = discovery.discover([listing], metadata(plugins), api, budget,
+                source_commit=COMMIT, plugins=plugins, workers=1)
+
+        self.assertEqual(acquired, [45])
+        self.assertEqual(request.call_count, 1)
+        sleep.assert_called_once_with(120)
+        self.assertEqual(clock[0], 120)  # Preserve the server's full backoff.
+        self.assertIs(api.work_budget, budget)
+        self.assertEqual(len(selection['sources']), 1)
+        self.assertEqual(summary['plugin_states'][0]['state'], 'resolved')
+        self.assertEqual(summary['catalog']['community']['resolution_attempted'], [['owner/repo', 'a' * 40]])
+        self.assertEqual(summary['source_states'][0]['state'], 'unavailable')
+        v3.validate_discovery_summary(summary, selection, COMMIT)
+
+    def test_plugin_half_window_exhaustion_leaves_standalone_resolution_time(self):
+        clock, events = [0], []
+        budget = WorkBudget(120, monotonic=lambda: clock[0])
+        api = mock.Mock(token=None, work_budget=budget)
+        plugins = [plugin()]
+        listing = {'source': 'owner/catalog', 'skillId': 'demo', 'name': 'demo'}
+
+        def acquire(repository, *_args, **kwargs):
+            remaining = kwargs['work_budget'].remaining()
+            events.append((repository, remaining))
+            if repository == 'owner/repo':
+                clock[0] = kwargs['work_budget'].deadline
+                raise CheckpointYield('simulated acquisition used its entire allowance')
+            return mock.Mock()
+
+        def states(_api, repositories, *, work_budget):
+            events.append(('graphql', work_budget.remaining()))
+            return {repository: {'available': True, 'repository': repository, 'revision': 'a' * 40}
+                    for repository in repositories}
+
+        with mock.patch.object(discovery, 'repository_states', side_effect=states), \
+             mock.patch.object(discovery, 'PinnedRepository', side_effect=acquire), \
+             mock.patch.object(discovery, 'skill_documents', return_value=({'demo': ['skills/demo']}, [])):
+            selection, summary = discovery.discover([listing], metadata(plugins), api, budget,
+                source_commit=COMMIT, plugins=plugins, workers=1)
+
+        self.assertEqual(events, [('owner/repo', 60), ('graphql', 60), ('owner/catalog', 60)])
+        self.assertEqual([source['kind'] for source in selection['sources']], ['standalone_skill'])
+        self.assertEqual(summary['source_states'][0]['state'], 'resolved')
+        self.assertEqual(summary['plugin_states'][0]['reason'], 'plugin_discovery_budget_exhausted')
+        self.assertIs(api.work_budget, budget)
+        v3.validate_discovery_summary(summary, selection, COMMIT)
+
+    def test_directory_only_inventory_retains_standalone_first_order(self):
+        events = []
+        directory = plugin() | {'name': 'reviewed/demo'}
+        listing = {'source': 'owner/catalog', 'skillId': 'demo', 'name': 'demo'}
+        budget = WorkBudget(10)
+
+        def states(_api, _repositories, *, work_budget):
+            events.append('standalone')
+            return {'owner/catalog': {'available': False, 'repository': 'owner/catalog'}}
+
+        def inventories(_plugins, _previous, _summary, _api, inventory_budget, _workers, _mirror_root):
+            events.append('plugins')
+            self.assertIs(inventory_budget, budget)
+            return [], []
+
+        with mock.patch.object(discovery, 'repository_states', side_effect=states), \
+             mock.patch.object(discovery, 'resolve_plugin_inventory', side_effect=inventories):
+            discovery.discover([listing], metadata([]), mock.Mock(token=None), budget,
+                source_commit=COMMIT, plugins=[directory], workers=1)
+        self.assertEqual(events, ['standalone', 'plugins'])
 
     def test_crawl_subdeadline_leaves_time_for_community_inventory(self):
         clock, acquired = [0], []
@@ -269,7 +359,8 @@ class CommunityInventoryTests(unittest.TestCase):
             self.assertEqual(discovery.main(), 0)
             written = json.loads((Path(temporary) / 'selection.json').read_bytes())
         self.assertEqual(len(written['sources']), 1)
-        self.assertGreater(acquired[0], 800)
+        self.assertGreater(acquired[0], 400)
+        self.assertLessEqual(acquired[0], 450)
 
     def test_grouped_cold_inventory_reuses_only_complete_pins_and_signed_metadata(self):
         plugins = [plugin(path='packages/one'), plugin(path='packages/two')]

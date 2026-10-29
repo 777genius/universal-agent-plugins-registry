@@ -150,11 +150,13 @@ uses at most eight acquisition workers. Only the package's immediate
 acquires each complete skill subtree, including its helpers. Successful full
 inventories can be reused at the same pin and resolver version; community
 reuse also requires the same signed skill count, package tree digest and
-manifest digest. Failed and incomplete inventories are retried. Half of the
-remaining discovery window is reserved for plugin inventory when community
-packages are present. Actually started cold groups are persisted so untouched
-groups run before the previous round's failures on the next round. This keeps
-a repeatedly failing repository from monopolizing every discovery deadline.
+manifest digest. Failed and incomplete inventories are retried. When community
+packages are present, plugin inventory runs first within half the remaining
+discovery window, leaving the rest for standalone resolution. A later API
+backoff cannot erase completed inventories. Actually started cold groups are
+persisted so untouched groups run before the previous round's failures on the
+next round. This keeps a repeatedly failing repository from monopolizing every
+discovery deadline.
 
 `coverage.json` records the exact community publication identity, expected
 signed skill count, resolved/unresolved/unavailable package counts, selected

@@ -709,15 +709,20 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
     prior_resolved, prior_removed = previous_existence_proofs(previous, previous_summary)
     removed_by_id = {}
     overall_budget = budget
+    inventories = None
     if any(plugin["name"].startswith("community:") for plugin in plugins):
-        # Reserve discovery time for the community inventory. A changing or
-        # failing standalone provider must not consume every new scope's turn.
-        budget = WorkBudget(max(.001, (overall_budget.deadline - overall_budget.monotonic()) / 2), monotonic=overall_budget.monotonic)
-        budget.deadline = min(budget.deadline, overall_budget.deadline)
+        # Inventory is independent of standalone resolution. Complete its bounded
+        # half-window first: an API retry must honor its full server delay even
+        # when that delay crosses a slice boundary. Leave the rest for catalog
+        # resolution, and retain completed inventory if a later wait exhausts it.
+        inventory_budget = WorkBudget(max(.001, (overall_budget.deadline - overall_budget.monotonic()) / 2),
+                                      monotonic=overall_budget.monotonic)
+        inventory_budget.deadline = min(inventory_budget.deadline, overall_budget.deadline)
+        inventories, attempted_repositories = resolve_plugin_inventory(
+            plugins, previous, previous_summary, api, inventory_budget, workers, mirror_root)
     # Resolve in bounded batches. A transient batch failure must not erase old
     # immutable subjects, and other batches can still make progress.
-    # The API's internal retries must use this same subdeadline, rather than
-    # consuming the overall window reserved for plugin inventory.
+    # API retries share the remaining overall budget; server backoff is unchanged.
     previous_api_budget = getattr(api, "work_budget", None)
     api.work_budget = budget
     try:
@@ -870,8 +875,9 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                     source["repository"].casefold() == state["repository"].casefold() and source["plugin_path"] == state["plugin_path"])
     # Current signed Directory and community packages share the same inert
     # acquisition boundary. Complete inventories are reused only at exact pins.
-    inventories, attempted_repositories = resolve_plugin_inventory(
-        plugins, previous, previous_summary, api, overall_budget, workers, mirror_root)
+    if inventories is None:
+        inventories, attempted_repositories = resolve_plugin_inventory(
+            plugins, previous, previous_summary, api, overall_budget, workers, mirror_root)
     catalog["plugin_inventory_version"] = PLUGIN_RESOLVER_VERSION
     if "community" in catalog:
         catalog["community"]["resolution_attempted"] = attempted_repositories

@@ -21,16 +21,28 @@ budget. Repeated HTTP 403 responses with `Retry-After: 120` could consume the
 entire 1,200-second window before community acquisition began. No cold plugin
 group was recorded as attempted, so the next run could repeat the starvation.
 
-Scope the API's existing work budget to the standalone batch loop and restore
-the caller's budget in `finally`. The API retry policy and backoff remain the
-same. The community acquisition phase retains the overall discovery budget.
+The initial correction scoped the API's existing work budget to the standalone
+batch loop and restored the caller's budget in `finally`. Its API retry policy
+and backoff remained unchanged.
 
 The new regression uses the real API request/retry implementation, a fake
 HTTP opener and clock, and inert plugin acquisition. Before the correction it
 fails with ten GraphQL requests, 1,200 elapsed seconds and no community
-acquisition. Afterward it stops at five requests and 600 seconds, acquires the
-plugin with 600 seconds remaining, emits its verified current skill root, and
-retains the standalone unavailable state. The caller's API budget is restored.
+acquisition. That correction stopped at five requests and 600 seconds, acquired
+the plugin with 600 seconds remaining, emitted its verified current skill root,
+and retained the standalone unavailable state. Those measurements describe the
+initial correction, not the final execution order below.
+
+Follow-up review reproduced a remaining boundary: `WorkBudget.wait` deliberately
+honors the complete server delay before checking its deadline. With 90 seconds
+remaining, one `Retry-After: 120` crossed both the standalone half-window and
+the overall deadline, leaving no plugin acquisition despite the scoped API
+budget. The final correction runs independent plugin inventory first, within
+half the remaining window, then gives standalone resolution the remaining
+overall budget. Completed inventory and its attempted-group history survive a
+later API backoff. A plugin that consumes its half-window leaves the other half
+for standalone progress. Directory-only ordering and shared backoff semantics
+remain unchanged. Regression tests cover both directions and the 90/120 case.
 
 Independent review also reproduced a combined-feed boundary: 10,000 community
 packages plus one distinct Directory package can emit 10,001 plugin states,
@@ -58,6 +70,13 @@ corrections, the same complete workflow suite passed **209 tests** in 49.652
 seconds. Its community suite independently passed **16 tests** in 38.204
 seconds. Both diff checks passed. The test environment is the pinned publication
 virtualenv prepared for this repair.
+
+After the final plugin-first half-window correction, the same complete workflow
+suite passed **212 tests** in 39.958 seconds. The new regressions first failed
+against the prior implementation, then verified completed plugin progress across
+a 90-second/120-second backoff boundary, standalone progress after plugin budget
+exhaustion, and unchanged Directory-only order. Independent review accepted the
+producer and regression changes; `git diff --check` passed.
 
 ## Rollout acceptance
 
