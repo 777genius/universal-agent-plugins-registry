@@ -3,6 +3,6 @@
   "package": "@hubspot/cli",
   "version": "8.15.0",
   "entrypoint": "node_modules/@hubspot/cli/bin/hs.js",
-  "package_lock_sha256": "sha256:5e2a940bfb5024ba2f4fb59dd9a0d977bd58ea952f95260dd779aa30095f1b92",
+  "package_lock_sha256": "sha256:5c4dd31b25d2cb8061d6b5128e1ebb658026b8f329463f80c79b4b2d5d31fe60",
   "omit_optional": false
 }

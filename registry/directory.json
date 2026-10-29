@@ -3244,12 +3244,29 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
-            "revision": null,
+            "revision": "70813b60f87d0022457189efae5365d7c17cd3a1",
             "path": "plugins/context7"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:c93ccad9f56c7dd53eb712ddee9252d9b4209fb298434b001a42489283748e2f",
           "manifest_digest": "sha256:e2cdec52bf8949e49aa28b0772d44f0d53dc99f4cc24d86a16abcff5d523ab23",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 6,
+          "package_version": "0.2.4",
+          "manifest_name": "context7",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/context7"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:f24e91e8635bf0ab455e5e0fa7504292621e6e9c8815cf3c84b009272b1724f8",
+          "manifest_digest": "sha256:f69113fb2f1efbae8b66541476eb8db43f9b73dbf18fa474d3a6d827f336b373",
           "components": [
             "mcp"
           ]
@@ -3482,7 +3499,7 @@
         },
         {
           "release_sequence": 4,
-          "status": "active",
+          "status": "superseded",
           "minimum_installer_version": "0.1.26",
           "targets": [
             {
@@ -3570,6 +3587,118 @@
         },
         {
           "release_sequence": 5,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "not_required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 6,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
@@ -4069,12 +4198,29 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
-            "revision": null,
+            "revision": "70813b60f87d0022457189efae5365d7c17cd3a1",
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:685949b123f14739cefee527a3db4723f7444407c4b718023513f25af03d7523",
           "manifest_digest": "sha256:ddf8c3ef2689d58aa8f6b78fd36af1d8733d2a56a9bad8ee19b1a78c10ec01b4",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 7,
+          "package_version": "0.2.5",
+          "manifest_name": "firebase",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/firebase"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:54db4f001002190ef47800795229bb8674409ba44b6ef05a7f07aacad43e5eaa",
+          "manifest_digest": "sha256:d7673ee02e5ffdd6efa929ce437c769f56afb4a85fb9fdb2e5cb7f6179813019",
           "components": [
             "mcp"
           ]
@@ -4355,7 +4501,7 @@
         },
         {
           "release_sequence": 5,
-          "status": "active",
+          "status": "superseded",
           "minimum_installer_version": "0.1.26",
           "targets": [
             {
@@ -4443,6 +4589,118 @@
         },
         {
           "release_sequence": 6,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 7,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [
@@ -5704,12 +5962,29 @@
           "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
           "package_source": {
             "repository": "777genius/universal-agent-plugins-registry",
-            "revision": null,
+            "revision": "70813b60f87d0022457189efae5365d7c17cd3a1",
             "path": "plugins/hubspot-developer"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
           "tree_digest": "sha256:adce739e6b82b4f5af698fc5bc370c499e5c724a6c259795f0e35ecb79b2f30d",
           "manifest_digest": "sha256:593ea107aebd40c7c0846b468b8c0e9006de627ed6c22905b3a33b75134e7ef1",
+          "components": [
+            "mcp"
+          ]
+        },
+        {
+          "sequence": 7,
+          "package_version": "0.2.5",
+          "manifest_name": "hubspot-developer",
+          "agent_plugins_schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          "package_source": {
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": null,
+            "path": "plugins/hubspot-developer"
+          },
+          "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
+          "tree_digest": "sha256:0ee6eb05bfa3cd12f9941083f26a168171cb6153dad91e1a30e0f440c8bcad44",
+          "manifest_digest": "sha256:576d16b414c308abca787d8d5ef7b6b51b02910d22d12967c17f93c469a90227",
           "components": [
             "mcp"
           ]
@@ -5990,7 +6265,7 @@
         },
         {
           "release_sequence": 5,
-          "status": "active",
+          "status": "superseded",
           "minimum_installer_version": "0.1.26",
           "targets": [
             {
@@ -6078,6 +6353,118 @@
         },
         {
           "release_sequence": 6,
+          "status": "superseded",
+          "minimum_installer_version": "0.1.26",
+          "targets": [
+            {
+              "client": "codex",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cursor",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "kiro",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "claude",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "gemini",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "opencode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "cline",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "windsurf",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
+              "client": "grok",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "kimi",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
+              "client": "qoder",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            }
+          ],
+          "current_evidence": []
+        },
+        {
+          "release_sequence": 7,
           "status": "active",
           "minimum_installer_version": "0.1.26",
           "targets": [

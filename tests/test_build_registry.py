@@ -23,6 +23,7 @@ SPEC = importlib.util.spec_from_file_location("build_registry", MODULE_PATH)
 assert SPEC and SPEC.loader
 registry = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(registry)
+HISTORICAL_RUNTIME_CANDIDATES = registry.ROOT / "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates"
 
 CANONICAL_PRODUCT_IDS = {
     "agent-code-navigator",
@@ -1097,9 +1098,9 @@ class DirectoryDomainTests(unittest.TestCase):
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
-                expected_sequences = [1, 2, 3, 4, 5, 6]
+                expected_sequences = [1, 2, 3, 4, 5, 6, 7]
             elif distribution["id"] == "777genius/context7":
-                expected_sequences = [1, 2, 3, 4, 5]
+                expected_sequences = [1, 2, 3, 4, 5, 6]
             elif distribution["id"] in {
                 "777genius/cloudflare-docs-bridge", "777genius/github-bridge",
                 "777genius/playwright-bridge",
@@ -1239,13 +1240,13 @@ class DirectoryDomainTests(unittest.TestCase):
         all_clients = registry.resolve_directory(source, "context7", context7_clients)
         self.assertEqual((all_clients["distribution_id"], all_clients["release_sequence"]), ("upstash/context7", 1))
         bridge = registry.resolve_directory(source, "777genius/context7", context7_clients)
-        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 5))
+        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 6))
 
         context7 = next(
             product for product in registry.directory_preview(source)["products"]
             if product["id"] == "context7"
         )
-        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 5)
+        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 6)
         self.assertEqual(
             [item["client"] for item in local["eligible_targets"]],
             ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"],
@@ -1467,14 +1468,62 @@ class DirectoryDomainTests(unittest.TestCase):
                 f"historical runtime policy must remain available for {historical}",
             )
 
-    def test_firebase_locked_runtime_is_active_at_sequence_six(self) -> None:
+    def test_security_closure_policy_preserves_same_root_historical_overrides(self) -> None:
+        historical = registry.ROOT / "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30/candidates/hubspot-developer"
+        current = registry.ROOT / "plugins/hubspot-developer"
+        registry.validate_locked_npm_runtime(historical)
+        registry.validate_locked_npm_runtime(current)
+        runtime_path = registry.LOCKED_NPM_RUNTIME_PATH
+        old = json.loads((historical / runtime_path / "package.json").read_text())
+        new = json.loads((current / runtime_path / "package.json").read_text())
+        self.assertEqual(old["dependencies"], new["dependencies"])
+        self.assertEqual(old["overrides"]["qs"], "6.16.0")
+        self.assertEqual(new["overrides"]["qs"], "6.16.1")
+
+    def test_security_closure_policy_cannot_be_reused_for_different_lock_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "hubspot"
+            shutil.copytree(registry.ROOT / "plugins/hubspot-developer", package)
+            runtime = package / registry.LOCKED_NPM_RUNTIME_PATH
+            lock_path = runtime / "package-lock.json"
+            lock = json.loads(lock_path.read_text())
+            lock["packages"]["node_modules/qs"]["version"] = "6.16.0"
+            lock_path.write_text(json.dumps(lock))
+            config_path = runtime / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "runtime security overrides differ"):
+                registry.validate_locked_npm_runtime(package)
+
+    def test_security_closure_without_historical_policy_cannot_drop_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "context7"
+            shutil.copytree(registry.ROOT / "plugins/context7", package)
+            runtime = package / registry.LOCKED_NPM_RUNTIME_PATH
+            package_path = runtime / "package.json"
+            manifest = json.loads(package_path.read_text())
+            manifest.pop("overrides")
+            package_path.write_text(json.dumps(manifest))
+            lock_path = runtime / "package-lock.json"
+            lock = json.loads(lock_path.read_text())
+            lock["packages"]["node_modules/qs"]["version"] = "6.16.0"
+            lock_path.write_text(json.dumps(lock))
+            config_path = runtime / "runtime.json"
+            config = json.loads(config_path.read_text())
+            config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(registry.RegistryError, "runtime lock does not match a reviewed security closure"):
+                registry.validate_locked_npm_runtime(package)
+
+    def test_firebase_security_runtime_is_active_at_sequence_seven(self) -> None:
         package = registry.ROOT / "plugins" / "firebase"
         registry.validate_locked_npm_runtime(package)
         runtime_root = package / registry.LOCKED_NPM_RUNTIME_PATH
         runtime = json.loads((runtime_root / "runtime.json").read_text())
         package_json = json.loads((runtime_root / "package.json").read_text())
         package_lock = json.loads((runtime_root / "package-lock.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.32.0"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.34.2"))
         self.assertNotIn("stream-json", package_json["overrides"])
         self.assertEqual(
             package_lock["packages"]["node_modules/stream-json"]["version"],
@@ -1488,15 +1537,16 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(distribution["status"], "active")
         self.assertEqual(
             [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
-            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"), (5, "active"), (6, "active")],
+            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"),
+             (5, "superseded"), (6, "superseded"), (7, "active")],
         )
         resolution = registry.resolve_directory(source, "firebase", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/firebase", 6),
+            ("777genius/firebase", 7),
         )
 
-    def test_hubspot_locked_runtime_is_active_at_sequence_six(self) -> None:
+    def test_hubspot_security_runtime_is_active_at_sequence_seven(self) -> None:
         package = registry.ROOT / "plugins" / "hubspot-developer"
         registry.validate_locked_npm_runtime(package)
         runtime = json.loads((package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json").read_text())
@@ -1516,14 +1566,15 @@ class DirectoryDomainTests(unittest.TestCase):
                 (2, "revoked", "0.1.13"),
                 (3, "superseded", "0.1.26"),
                 (4, "superseded", "0.1.26"),
-                (5, "active", "0.1.26"),
-                (6, "active", "0.1.26"),
+                (5, "superseded", "0.1.26"),
+                (6, "superseded", "0.1.26"),
+                (7, "active", "0.1.26"),
             ],
         )
         resolution = registry.resolve_directory(source, "hubspot-developer", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/hubspot-developer", 6),
+            ("777genius/hubspot-developer", 7),
         )
 
     def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:
@@ -1552,7 +1603,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_locked_npm_runtime_binds_ignored_install_script_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "firebase"
-            shutil.copytree(registry.ROOT / "plugins" / "firebase", package)
+            shutil.copytree(HISTORICAL_RUNTIME_CANDIDATES / "firebase", package)
             lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
             lock = json.loads(lock_path.read_text())
             protobuf = lock["packages"]["node_modules/protobufjs"]
@@ -1568,7 +1619,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_locked_npm_runtime_binds_optional_install_script_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "hubspot-developer"
-            shutil.copytree(registry.ROOT / "plugins" / "hubspot-developer", package)
+            shutil.copytree(HISTORICAL_RUNTIME_CANDIDATES / "hubspot-developer", package)
             lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
             lock = json.loads(lock_path.read_text())
             fsevents = lock["packages"]["node_modules/fsevents"]
@@ -1595,7 +1646,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_locked_npm_runtime_requires_override_at_every_lockfile_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "hubspot-developer"
-            shutil.copytree(registry.ROOT / "plugins" / "hubspot-developer", package)
+            shutil.copytree(HISTORICAL_RUNTIME_CANDIDATES / "hubspot-developer", package)
             lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
             lock = json.loads(lock_path.read_text())
             lock["packages"]["node_modules/@sentry/node"]["version"] = "10.70.0"
@@ -1610,7 +1661,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_locked_npm_runtime_rejects_malformed_override_entry_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "hubspot-developer"
-            shutil.copytree(registry.ROOT / "plugins" / "hubspot-developer", package)
+            shutil.copytree(HISTORICAL_RUNTIME_CANDIDATES / "hubspot-developer", package)
             lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
             lock = json.loads(lock_path.read_text())
             lock["packages"]["node_modules/@sentry/node"] = None
@@ -1663,7 +1714,7 @@ class DirectoryDomainTests(unittest.TestCase):
     def test_locked_npm_runtime_rejects_tampered_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "context7"
-            shutil.copytree(registry.ROOT / "plugins" / "context7", package)
+            shutil.copytree(HISTORICAL_RUNTIME_CANDIDATES / "context7", package)
             lock_path = package / registry.LOCKED_NPM_RUNTIME_PATH / "package-lock.json"
             lock = json.loads(lock_path.read_text())
             dependency = next(value for key, value in lock["packages"].items() if key)

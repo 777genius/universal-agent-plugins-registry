@@ -45,7 +45,7 @@ the explicit preview exception and is not represented as stable:
 - `firebase-tools@15.29.0`
 - `@hubspot/cli@8.14.0`
 
-Current runtime remediation (2026-09-30):
+Historical runtime remediation (2026-09-30):
 
 - Context7 community distribution: `@upstash/context7-mcp@4.1.1`
 - Firebase: `firebase-tools@15.32.0`
@@ -59,6 +59,15 @@ passed cold launcher bootstrap, credential-free MCP `initialize` and
 No provider tools were called; this does not prove client
 activation, authentication, or authenticated provider operations. The earlier
 dependency list above remains the historical 2026-09-05 observation.
+
+The 2026-10-29 security follow-up updates the current community Context7 root to
+`@upstash/context7-mcp@4.4.4` and Firebase to `firebase-tools@15.34.2`, and retains
+HubSpot `8.15.0` with a new exact security closure. Each complete lock reports zero
+known vulnerabilities in its fresh metadata-only audit. The [new source record](../registry/upstream-promotion-audit/runtime-dependencies/2026-10-29/remediation-candidates.json)
+binds the package, manifest, lock, and expected MCP identities. The
+[qualification workflow](runtime-security-qualification.md) checks cold runtime
+materialization, tools, installed audits, and signatures for those exact bytes;
+the September run above is historical evidence only.
 
 The Docker Hub package is pinned to the multi-architecture OCI digest recorded
 in `plugins/docker-hub/mcp.json`.
