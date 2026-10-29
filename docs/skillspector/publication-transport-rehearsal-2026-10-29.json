@@ -1,0 +1,91 @@
+{
+  "actual_github_nonrecursive_prefix_read": {
+    "all_expected_entry_tuples_match": true,
+    "entries": 1024,
+    "native_mktree_sha_matches": true,
+    "response_sha256": "42ecb2fe0a858eb4aa49e4190f1f2406fd655d62ea6f472b687e17a1875aef11",
+    "sha": "d4c2926c2ed7aa9334b6cae9da5fd2c14418cdab",
+    "truncated": false
+  },
+  "artifact_files": 792,
+  "artifact_id": 12878984700,
+  "artifact_manifest_sha256": "0e91c921dd9a2f64ca4171dce085d5a86fa14c269a6f408604a8e1771bdb7f64",
+  "artifact_zip_sha256": "2102fe01526e94ae45ee4360aceb94ade8a66d0bc79939aab0ffad6aef2aa03d",
+  "assembly_entry_counts": [
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    63,
+    5,
+    3,
+    1,
+    1
+  ],
+  "assembly_max_request_bytes": 20546,
+  "assembly_writes": 13,
+  "baseline_commit": "a0e74bc1ba3eccc928b4a313a5f7900356ef44c2",
+  "create_response_limit_simulated": 1000,
+  "elapsed_seconds": 50.286041,
+  "final_v3_shards": 1087,
+  "fresh_base_tree_writes": 8,
+  "generated_at": "2026-10-29T07:03:16Z",
+  "legacy_files": 673,
+  "main_revision_checks": 2,
+  "nonforce_ref_updates": 1,
+  "nonrecursive_verification_reads": 13,
+  "original_failed_post_response_available": false,
+  "pre_fix_simulated_failure": {
+    "assembly_write": 8,
+    "message": "uploaded publication tree identity differs",
+    "native_sha_equal": true,
+    "prefix_entries": 1024,
+    "response_entries": 1000,
+    "response_truncated": true,
+    "returned_sha": "d4c2926c2ed7aa9334b6cae9da5fd2c14418cdab"
+  },
+  "prior_tree_response_sha256": "551510a946f35bfae8caa7a68feb9638b1c4db2a7ea0d11c33aae049e8a8944e",
+  "retained_prior_v3_shards": 720,
+  "root_tree": "49ab122f1dc89faeb4f06cc965aa5d556c96b473",
+  "run_id": 40829961888,
+  "scope": "offline exact failed-artifact publisher replay; native git hash-object/mktree/ls-tree oracle; no network or remote ref changes",
+  "source_commit": "4c62a514b3802b51635b1803f058c93eea12002b",
+  "source_sha256": {
+    "scripts/publish_skillspector_coverage_v3.py": "dfd81b22abe94a968e9dc012588e0b9998fad599b1662c18b532f4083227804b",
+    "scripts/skillspector_publication_transport.py": "f2cccdf82a0c63f50952f1b8da48d57586b7b589500e03d8f508c467a00de158",
+    "tests/test_skillspector_publication_transport.py": "39873f2cca2109690e20794c17d7443d07777cdc0b8ab5a35e41380389ca3f0d"
+  },
+  "staging_entry_counts": [
+    2,
+    1,
+    35,
+    44,
+    42,
+    38,
+    29,
+    34,
+    39,
+    64,
+    43
+  ],
+  "staging_max_request_bytes": 8380014,
+  "staging_writes": 11,
+  "success": true,
+  "tests": {
+    "focused": {
+      "seconds": 4.134,
+      "success": true,
+      "tests": 46
+    },
+    "workflow_suite": {
+      "seconds": 15.129,
+      "success": true,
+      "tests": 192
+    }
+  },
+  "total_files": 1764
+}

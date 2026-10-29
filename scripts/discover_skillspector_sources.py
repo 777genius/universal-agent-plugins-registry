@@ -716,15 +716,22 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         budget.deadline = min(budget.deadline, overall_budget.deadline)
     # Resolve in bounded batches. A transient batch failure must not erase old
     # immutable subjects, and other batches can still make progress.
-    for offset in range(0, len(grouped), 50):
-        batch = sorted(grouped)[offset:offset + 50]
-        try:
-            budget.check()
-            states.update(repository_states(api, batch, work_budget=budget))
-        except (DiscoveryError, CheckpointYield, OSError, ValueError) as error:
-            diagnostics.extend({"code": "repository_resolution_failed", "repository": repo} for repo in batch)
-            if isinstance(error, CheckpointYield):
-                break
+    # The API's internal retries must use this same subdeadline, rather than
+    # consuming the overall window reserved for plugin inventory.
+    previous_api_budget = getattr(api, "work_budget", None)
+    api.work_budget = budget
+    try:
+        for offset in range(0, len(grouped), 50):
+            batch = sorted(grouped)[offset:offset + 50]
+            try:
+                budget.check()
+                states.update(repository_states(api, batch, work_budget=budget))
+            except (DiscoveryError, CheckpointYield, OSError, ValueError) as error:
+                diagnostics.extend({"code": "repository_resolution_failed", "repository": repo} for repo in batch)
+                if isinstance(error, CheckpointYield):
+                    break
+    finally:
+        api.work_budget = previous_api_budget
 
     def confirm_removed(repo, revision, sources, issues, entry):
         # The current resolver proved an exact path absent. Establish that the

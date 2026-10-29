@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import copy
+import io
 import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -105,6 +107,42 @@ class CommunityFeedTests(unittest.TestCase):
 
 
 class CommunityInventoryTests(unittest.TestCase):
+    def test_graphql_rate_limit_retries_preserve_the_plugin_inventory_window(self):
+        clock, acquired = [0], []
+        budget = WorkBudget(1200, monotonic=lambda: clock[0])
+        api = discovery.GitHubAPI('fixture-token', work_budget=budget)
+        plugins = [plugin()]
+        listing = {'source': 'owner/catalog', 'skillId': 'demo', 'name': 'demo'}
+
+        def rate_limited(*_args, **_kwargs):
+            raise urllib.error.HTTPError('https://api.github.com/graphql', 403, 'rate limited',
+                {'Retry-After': '120'}, io.BytesIO(b'secondary rate limit'))
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        def acquire(*_args, **kwargs):
+            acquired.append(kwargs['work_budget'].remaining())
+            return mock.Mock()
+
+        with mock.patch.object(api.opener, 'open', side_effect=rate_limited) as request, \
+             mock.patch('scripts.build_discovery_index.time.sleep', side_effect=advance), \
+             mock.patch.object(discovery, 'PinnedRepository', side_effect=acquire), \
+             mock.patch.object(discovery, 'skill_documents', side_effect=documents):
+            selection, summary = discovery.discover([listing], metadata(plugins), api, budget,
+                source_commit=COMMIT, plugins=plugins, workers=1)
+
+        self.assertEqual(request.call_count, 5)
+        self.assertEqual(clock[0], 600)
+        self.assertEqual(acquired, [600])
+        self.assertIs(api.work_budget, budget)
+        self.assertEqual(len(selection['sources']), 1)
+        self.assertEqual(summary['plugin_states'][0]['state'], 'resolved')
+        self.assertEqual(summary['catalog']['community']['resolution_attempted'], [['owner/repo', 'a' * 40]])
+        self.assertEqual(summary['source_states'][0]['state'], 'unavailable')
+        self.assertFalse(summary['complete'])
+        v3.validate_discovery_summary(summary, selection, COMMIT)
+
     def test_crawl_subdeadline_leaves_time_for_community_inventory(self):
         clock, acquired = [0], []
         plugins = [plugin()]
