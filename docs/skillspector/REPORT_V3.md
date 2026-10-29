@@ -93,9 +93,9 @@ evidence. A legacy marker cannot bypass current coverage checks.
 
 ### Public text redaction
 
-Source examples can contain credential-shaped text. Public v3 findings,
-reference evidence and diagnostics replace recognized Stripe secret and
-restricted keys with `[REDACTED Stripe key]`. This projection happens
+Source examples can contain credential-shaped text. Public v3 skill display
+names, findings, reference evidence and diagnostics replace recognized Stripe
+secret and restricted keys with `[REDACTED Stripe key]`. This projection happens
 after finding identities and exception matching, before worker artifacts are
 written, and again for all reused records before public shard bytes are hashed.
 It preserves source and raw-report digests, finding IDs, grouping, positions,

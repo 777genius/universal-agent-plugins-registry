@@ -58,7 +58,7 @@ def measure(item, profile_id, scanner, mirror_root, output_dir):
                           "content_digest": digest, "scanned_at": record["scanned_at"]}
             (target / "invocation.json").write_bytes(reports.report_json(invocation))
             record["execution"].update(acquisition_seconds=acquisition, analysis_seconds=analysis)
-            reports.normalize_report_v3(record, body, code, root)
+            record = reports.normalize_report_v3(record, body, code, root)
             require(directory_tree_digest(root) == digest, "selected bytes changed during scan")
         normalized = reports.report_json(record)
         (target / "record.json").write_bytes(normalized)

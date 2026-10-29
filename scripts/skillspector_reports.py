@@ -140,7 +140,7 @@ def redact_public_record(record: dict[str, Any]) -> dict[str, Any]:
         return value
 
     result = copy.deepcopy(record)
-    for key in ("findings", "coverage", "errors"):
+    for key in ("skill_name", "findings", "coverage", "errors"):
         if key in result:
             result[key] = redact(result[key])
     require(not has_public_credentials(result), "Credential-shaped text remains in structural SkillSpector data")

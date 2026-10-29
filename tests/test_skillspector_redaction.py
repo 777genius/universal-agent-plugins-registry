@@ -14,7 +14,9 @@ from scripts import skillspector_reports as scanner
 from scripts.directory_publication import PublicationError
 from tests.test_skillspector_coverage_v3 import COMMIT, bundle, record, worker
 from tests.test_skillspector_records_v3 import finding, ledger_exception, reference
-from tests.test_skillspector_reports import item, upstream_report
+from tests.test_skillspector_reports import (
+    fixture_repository, git, item, scanner as fake_scanner, upstream_report,
+)
 
 
 def synthetic_key(kind="sk", mode="live", character="A", length=16):
@@ -125,6 +127,61 @@ class PublicRedactionTests(unittest.TestCase):
         self.assertEqual(scanner.report_json(public), scanner.report_json(plain))
         self.assertIsNot(public, plain)
         self.assertIsNot(public["source"], plain["source"])
+
+    def test_normalizer_returns_public_copy_with_display_name_and_original_identities(self):
+        token = synthetic_key()
+        value = scanner.empty_record_v3(item())
+        value["skill_name"] = "Example " + token
+        value["source"]["content_digest"] = "sha256:" + "b" * 64
+        value["scanned_at"] = value["execution"]["started_at"] = scanner.now()
+        public = scanner.normalize_report_v3(value, json.dumps(self.raw_with_key(token)).encode(),
+            1, Path("/source"))
+        self.assertIsNot(public, value)
+        self.assertIsNot(public["findings"], value["findings"])
+        self.assertTrue(scanner.has_public_credentials(value), "Normalizer input no longer proves the copy boundary")
+        self.assert_secret_free(public, token)
+        self.assertEqual(public["skill_name"], "Example " + scanner.REDACTED_CREDENTIAL)
+        for key in ("source", "id", "kind", "plugin_path", "report_digest", "scanner", "profile",
+                    "status", "execution", "raw_finding_count", "finding_count", "finding_group_count"):
+            self.assertEqual(public[key], value[key])
+        for key in ("id", "match_fingerprint", "finding_ids", "occurrences", "raw_count", "path", "line"):
+            self.assertEqual(public["findings"][0][key], value["findings"][0][key])
+        self.assertEqual(coverage.make_attempt(item(), public, at="2026-10-29T00:00:00Z"),
+            coverage.make_attempt(item(), value, at="2026-10-29T00:00:00Z"))
+
+    def test_skill_display_name_does_not_abort_successful_or_failed_worker(self):
+        token = synthetic_key()
+        for successful in (True, False):
+            with self.subTest(successful=successful), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                mirrors, selected = fixture_repository(root)
+                source = root / "source"
+                skill = source / "skills/demo/SKILL.md"
+                skill.write_text("---\nname: Example " + token + "\ndescription: Fixture skill\n---\n# Demo\n")
+                git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                    "commit", "-qam", "display name fixture")
+                selected["sources"][0]["revision"] = git(source, "rev-parse", "HEAD")
+                git(source, "push", "--quiet", str(mirrors / "owner/repo.git"), "HEAD:refs/heads/display-name")
+                raw = self.raw_with_key(token) if successful else {"invalid_fixture_report": True}
+                executable = fake_scanner(root, raw)
+                output = coverage.scan_partition(selected, executable, None, source_commit=COMMIT,
+                    partition_count=1, mirror_root=mirrors)
+                self.assert_secret_free(output, token)
+                self.assertEqual(len(output["attempts"]), 1)
+                outcome = output["attempts"][0]
+                public = outcome["record"]
+                self.assertEqual(public["skill_name"], "Example " + scanner.REDACTED_CREDENTIAL)
+                self.assertEqual(public["status"], "complete" if successful else "error")
+                self.assertEqual(public["source"]["revision"], selected["sources"][0]["revision"])
+                self.assertEqual(public["profile"], scanner.STANDARD_PROFILE)
+                self.assertEqual(outcome["attempt"]["fingerprint"],
+                    coverage.make_attempt(selected["sources"][0], public)["fingerprint"])
+                if successful:
+                    self.assertEqual(public["report_digest"], coverage.sha256_digest(
+                        (json.dumps(raw) + "\n").encode()))
+                else:
+                    self.assertEqual(public["errors"][0]["code"], "scan_failed")
+                coverage.validate_worker(output, selected, COMMIT)
 
     def test_structural_credentials_and_redacted_key_collisions_fail_closed(self):
         token, another = synthetic_key(), synthetic_key(character="B")
