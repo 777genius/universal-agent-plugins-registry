@@ -561,7 +561,7 @@ def resolve_plugin_inventory(plugins, previous, previous_summary, api, budget, w
                 all(re.fullmatch(r"sha256:[0-9a-f]{64}", str(entry[key])) is not None for key in ("tree_digest", "manifest_digest")),
                 "invalid cached immutable package identity")
         history = community.get("resolution_attempted", [])
-        require(isinstance(history, list) and len(history) <= MAX_LISTINGS and all(
+        require(isinstance(history, list) and len(history) <= MAX_ROOTS and all(
             isinstance(key, list) and len(key) == 2 and isinstance(key[0], str) and
             REPOSITORY_RE.fullmatch(key[0]) is not None and SHA_RE.fullmatch(str(key[1])) is not None for key in history),
             "invalid plugin discovery scheduling history")
@@ -617,7 +617,7 @@ def resolve_plugin_inventory(plugins, previous, previous_summary, api, budget, w
                                      if path.startswith(prefix) and "/" not in path[len(prefix):].removesuffix("/SKILL.md")}
                     total = len(valid_paths | invalid_paths)
                     mismatch = "expected_skills" in plugin and total != plugin["expected_skills"]
-                    state.update(skills_total=plugin.get("expected_skills", total),
+                    state.update(skills_total=max(plugin.get("expected_skills", total), total),
                         state="resolved" if valid_paths and not invalid_paths and not mismatch else "unresolved",
                         reason="plugin_inventory_count_mismatch" if mismatch else "invalid_skill_documents" if invalid_paths else
                                None if valid_paths else "plugin_skills_not_found")

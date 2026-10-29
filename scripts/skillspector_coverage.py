@@ -597,7 +597,7 @@ def validate_discovery_summary(summary, selection, source_commit, *, maximum_sou
                 for kind in kinds), "catalog coverage differs from source outcomes")
 
         plugin_states = summary["plugin_states"]
-        require(isinstance(plugin_states, list) and len(plugin_states) <= MAX_SOURCES, "invalid plugin resolution states")
+        require(isinstance(plugin_states, list) and len(plugin_states) <= maximum_sources, "invalid plugin resolution states")
         plugin_ids = set()
         for state in plugin_states:
             exact(state, ("id", "repository", "plugin_path", "revision", "state", "reason", "skills_total", "selected_ids"),

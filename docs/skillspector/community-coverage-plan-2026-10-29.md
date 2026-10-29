@@ -32,6 +32,19 @@ acquisition. Afterward it stops at five requests and 600 seconds, acquires the
 plugin with 600 seconds remaining, emits its verified current skill root, and
 retains the standalone unavailable state. The caller's API budget is restored.
 
+Independent review also reproduced a combined-feed boundary: 10,000 community
+packages plus one distinct Directory package can emit 10,001 plugin states,
+and one Skill in each package can emit 10,001 plugin coverage rows. V3 now
+bounds both arrays and persisted cold-group scheduling history at the existing
+20,000-root inventory capacity. Legacy v2 keeps its 10,000 limits. Per-package
+inventory, shard/file counts and byte limits keep their separate bounds.
+
+When enumeration finds more Skill documents than the signed expected count,
+the plugin denominator retains the larger count. A fixture with one valid
+Skill and one invalid Skill document therefore retains two total Skills and
+one selected root, with the inventory mismatch reason. Finishing the valid
+root cannot make the uninspected second Skill disappear from the denominator.
+
 Validation in the isolated worktree:
 
 ```sh
@@ -39,18 +52,24 @@ python -m unittest tests.test_skillspector_acquisition tests.test_skillspector_c
 git diff --check
 ```
 
-All **200 tests passed** in 16.498 seconds; the diff check passed. The test
-environment is the pinned publication virtualenv prepared for this repair.
+The initial retry correction passed all **200 tests** in 16.498 seconds.
+After integrating the publication repair and the independent boundary/count
+corrections, the same complete workflow suite passed **209 tests** in 49.652
+seconds. Its community suite independently passed **16 tests** in 38.204
+seconds. Both diff checks passed. The test environment is the pinned publication
+virtualenv prepared for this repair.
 
 ## Rollout acceptance
 
-1. Repair publication transport, then independently review and validate the
-   exact integrated community-coverage head. Merge through the repository's
+1. Independently review and validate the exact integrated publication and
+   community-coverage head. Merge through the repository's
    required checks and ordinary protected workflow.
-2. Confirm the deployed v3 consumer accepts 20,000 inventory roots and 30,000
-   source states. Consumer [PR 554](https://github.com/777genius/universal-agent-plugins/pull/554)
-   already merged matching bounds. Per-package, shard, aggregate byte and
-   request limits stay independent.
+2. Deploy the paired v3 consumer before producer publication: 20,000 inventory
+   roots, 30,000 source states, and 20,000 plugin state/coverage rows. Consumer
+   [PR 554](https://github.com/777genius/universal-agent-plugins/pull/554) already
+   supplied the root/source bounds; the paired correction adds the combined
+   package-array bounds. Per-package, shard, aggregate byte and request limits
+   stay independent.
 3. A trusted main run must acquire the signed community feed, publish its
    exact community sequence/digest and explicit package inventory outcomes,
    complete all eight workers and assembly, and atomically publish the exact

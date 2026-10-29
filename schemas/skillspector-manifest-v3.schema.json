@@ -306,7 +306,7 @@
     },
     "plugin_states": {
       "type": "array",
-      "maxItems": 10000,
+      "maxItems": 20000,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -422,7 +422,7 @@
     },
     "plugin_coverage": {
       "type": "array",
-      "maxItems": 10000,
+      "maxItems": 20000,
       "items": {
         "type": "object",
         "additionalProperties": false,

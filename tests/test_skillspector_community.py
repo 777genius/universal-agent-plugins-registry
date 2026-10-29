@@ -23,6 +23,7 @@ from scripts.directory_publication import PublicationError, canonical_json
 from scripts.discovery_checkpoint import WorkBudget
 from tests.test_discovery_index import candidate_record
 from tests.test_skillspector_reports import item
+from tests.test_skillspector_coverage_v3 import worker
 
 
 COMMIT = 'b' * 40
@@ -107,6 +108,106 @@ class CommunityFeedTests(unittest.TestCase):
 
 
 class CommunityInventoryTests(unittest.TestCase):
+    def test_skill_bearing_package_union_emits_over_10k_coverage_rows(self):
+        community = [plugin(path=f'packages/community-{index}') for index in range(10_000)]
+        directory = [{'name': 'reviewed/demo', 'components': ['skills'],
+                      'source': {'repository': 'owner/repo', 'revision': 'a' * 40, 'path': 'packages/demo'}}]
+        plugins = discovery.merge_plugin_sources(directory, community)
+        with mock.patch.object(discovery, 'PinnedRepository'), \
+             mock.patch.object(discovery, 'skill_documents', side_effect=documents):
+            inventories, attempted = discovery.resolve_plugin_inventory(
+                plugins, [], None, mock.Mock(token=None), WorkBudget(30), 1, None)
+        sources = [source for _state, roots, _superseded in inventories for source in roots]
+        selection = {'schema_version': 1, 'sources': sources}
+        _, summary = discover([])
+        summary['catalog'] = metadata(community) | {'plugin_inventory_version': discovery.PLUGIN_RESOLVER_VERSION}
+        summary['catalog']['community']['resolution_attempted'] = attempted
+        summary.update(selected_roots=len(sources), selection_digest=v3.sha256_digest(canonical_json(selection)),
+            plugin_states=[state | {'selected_ids': [source['id'] for source in roots]}
+                           for state, roots, _superseded in inventories],
+            source_states=[{'id': source['id'], 'repository': source['repository'], 'state': 'resolved', 'current': True,
+                'reason': None, 'revision': source['revision'], 'path': source['path'],
+                'selected_ids': [source['id']], 'candidates': []} for source in sources])
+        self.assertEqual(len(sources), 10_001)
+        v3.validate_selection(selection)
+        v3.validate_discovery_summary(summary, selection, COMMIT)
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = v3.merge_reports(selection, None, [worker(selection) | {'source_commit': COMMIT}], source_commit=COMMIT,
+                output_dir=Path(temporary), discovery_summary=summary)
+        self.assertEqual(len(manifest['plugin_coverage']), 10_001)
+        self.assertEqual(manifest['coverage']['pending'], 10_001)
+        self.assertEqual(manifest['shards'], [])
+
+    def test_plugin_coverage_capacity_is_v3_only_and_bounded(self):
+        selection = {'schema_version': 1, 'sources': []}
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = v3.merge_reports(selection, None, [worker(selection) | {'source_commit': COMMIT}], source_commit=COMMIT,
+                output_dir=Path(temporary))
+        manifest['coverage'].update(selected=20_000, pending=20_000)
+        manifest['plugin_coverage'] = [{'repository': 'owner/repo', 'plugin_path': f'packages/{index}',
+            **(manifest['coverage'] | {'selected': 1, 'pending': 1})} for index in range(20_000)]
+        v3.validate_manifest(manifest)
+        manifest['plugin_coverage'].append(manifest['plugin_coverage'][-1] | {'plugin_path': 'packages/extra'})
+        with self.assertRaises(PublicationError):
+            v3.validate_manifest(manifest)
+        legacy = {key: manifest[key] for key in ('source_commit', 'generated_at', 'scope', 'scanner', 'selection_digest', 'shards')}
+        legacy.update(schema_version=2, profile=v2.PROFILE, coverage={'selected': 10_000, 'reported': 0, 'pending': 10_000},
+            plugin_coverage=[{key: row[key] for key in ('repository', 'plugin_path', 'selected', 'reported', 'pending')}
+                             for row in manifest['plugin_coverage'][:10_000]])
+        v2.validate_manifest(legacy)
+        legacy['plugin_coverage'].append(legacy['plugin_coverage'][-1] | {'plugin_path': 'packages/extra'})
+        with self.assertRaises(PublicationError):
+            v2.validate_manifest(legacy)
+
+    def test_directory_and_10k_community_packages_merge_and_publish_without_skills(self):
+        community = [plugin(path=f'packages/community-{index}', components=[], expected_skills=0)
+                     for index in range(10_000)]
+        directory = [{'name': 'reviewed/demo', 'components': [],
+                      'source': {'repository': 'reviewed/repo', 'revision': 'c' * 40, 'path': 'packages/demo'}}]
+        plugins = discovery.merge_plugin_sources(directory, community)
+        with mock.patch.object(discovery, 'PinnedRepository') as pinned:
+            selection, summary = discovery.discover([], metadata(community), mock.Mock(token=None), WorkBudget(30),
+                source_commit=COMMIT, plugins=plugins, workers=1)
+            pinned.assert_not_called()
+        self.assertEqual(selection['sources'], [])
+        self.assertEqual(len(summary['plugin_states']), 10_001)
+        self.assertTrue(all(state['state'] == 'not_applicable' for state in summary['plugin_states']))
+        v3.validate_discovery_summary(summary, selection, COMMIT)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            manifest = v3.merge_reports(selection, None, [worker(selection) | {'source_commit': COMMIT}], source_commit=COMMIT,
+                output_dir=output, discovery_summary=summary)
+            restored = v3.read_bundle(output)
+        self.assertEqual(len(manifest['plugin_states']), 10_001)
+        self.assertEqual(restored['manifest']['plugin_states'], summary['plugin_states'])
+
+    def test_v3_plugin_states_are_bounded_at_20k_while_v2_stays_at_10k(self):
+        selection, summary = discover([])
+        state = {'id': 'reviewed/0', 'repository': 'owner/repo', 'plugin_path': 'packages/0',
+                 'revision': 'a' * 40, 'state': 'not_applicable', 'reason': 'plugin_has_no_skills',
+                 'skills_total': 0, 'selected_ids': []}
+        summary['plugin_states'] = [state | {'id': f'reviewed/{index}', 'plugin_path': f'packages/{index}'}
+                                    for index in range(20_000)]
+        v3.validate_discovery_summary(summary, selection, COMMIT)
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = v3.merge_reports(selection, None, [worker(selection) | {'source_commit': COMMIT}], source_commit=COMMIT,
+                output_dir=Path(temporary), discovery_summary=summary)
+        self.assertEqual(len(manifest['plugin_states']), 20_000)
+        extra = state | {'id': 'reviewed/extra', 'plugin_path': 'packages/extra'}
+        summary['plugin_states'].append(extra)
+        with self.assertRaisesRegex(PublicationError, 'plugin resolution states'):
+            v3.validate_discovery_summary(summary, selection, COMMIT)
+        manifest['plugin_states'].append(extra)
+        with self.assertRaises(PublicationError):
+            v3.validate_manifest(manifest)
+        legacy = copy.deepcopy(summary)
+        legacy['bounds']['roots'] = 10_000
+        legacy['plugin_states'] = legacy['plugin_states'][:10_000]
+        v2.validate_discovery_summary(legacy, selection, COMMIT)
+        legacy['plugin_states'].append(extra)
+        with self.assertRaisesRegex(PublicationError, 'plugin resolution states'):
+            v2.validate_discovery_summary(legacy, selection, COMMIT)
+
     def test_graphql_rate_limit_retries_preserve_the_plugin_inventory_window(self):
         clock, acquired = [0], []
         budget = WorkBudget(1200, monotonic=lambda: clock[0])
@@ -199,6 +300,35 @@ class CommunityInventoryTests(unittest.TestCase):
                 selected, _ = discover(plugins, previous=first['sources'], previous_summary=altered)
                 self.assertEqual(selected, first)
                 self.assertEqual(pinned.call_count, 1)
+
+    def test_combined_cold_group_history_over_10k_retains_valid_cached_inventory(self):
+        plugins = [plugin()]
+        with mock.patch.object(discovery, 'PinnedRepository'), mock.patch.object(discovery, 'skill_documents', side_effect=documents):
+            previous, summary = discover(plugins)
+        history = [[f'owner/repo-{index}', 'a' * 40] for index in range(20_001)]
+        for count in (10_001, 20_000, 20_001):
+            prior = copy.deepcopy(summary)
+            prior['catalog']['community']['resolution_attempted'] = history[:count]
+            with self.subTest(groups=count), mock.patch.object(discovery, 'PinnedRepository') as pinned, \
+                 mock.patch.object(discovery, 'skill_documents', side_effect=documents):
+                selected, _ = discover(plugins, previous=previous['sources'], previous_summary=prior)
+                self.assertEqual(selected, previous)
+                self.assertEqual(pinned.call_count, int(count > 20_000))
+
+    def test_extra_invalid_skill_keeps_the_inventory_denominator_incomplete(self):
+        plugins = [plugin(expected_skills=1)]
+        with mock.patch.object(discovery, 'PinnedRepository'), mock.patch.object(discovery, 'skill_documents',
+                return_value=({'demo': ['packages/demo/skills/demo']}, ['packages/demo/skills/invalid/SKILL.md'])):
+            selection, summary = discover(plugins)
+        state = summary['plugin_states'][0]
+        self.assertEqual(state['state'], 'unresolved')
+        self.assertEqual(state['reason'], 'plugin_inventory_count_mismatch')
+        self.assertEqual(state['skills_total'], 2)
+        self.assertEqual(len(state['selected_ids']), 1)
+        self.assertEqual(summary['catalog']['community']['expected_skills'], 1)
+        self.assertTrue(summary['source_states'][0]['current'])
+        self.assertFalse(summary['complete'])
+        v3.validate_discovery_summary(summary, selection, COMMIT)
 
     def test_deadline_persists_actual_attempts_and_prioritizes_untouched_group(self):
         plugins = [plugin(repository='a/repo'), plugin(repository='m/repo'), plugin(repository='z/repo')]

@@ -136,6 +136,14 @@ at 10,000. Each normal run still uses eight partitions, at most 128 attempts
 per partition and 2,100 seconds per worker, and the automatic schedule remains
 every six hours. A pending root is queued work, not a completed analysis.
 
+The combined Directory/community inventory also bounds plugin states, plugin
+coverage rows and persisted cold-group scheduling history at 20,000. These
+counts can exceed a single feed's 10,000-package limit. Per-package Skill,
+shard, file and byte limits remain independent. If enumeration finds more
+Skill documents than the signed expected count, the plugin denominator keeps
+the larger count and the mismatch reason; unselected invalid documents remain
+visible as incomplete inventory.
+
 Cold plugin discovery groups packages by repository and exact revision and
 uses at most eight acquisition workers. Only the package's immediate
 `skills/*/SKILL.md` documents are inventoried. The subsequent scanner still
