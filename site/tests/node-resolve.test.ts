@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 
-const expectedDefaults = {
+const expectedDefaults: Record<string, string[] | boolean> = {
   dedupe: [],
   extensions: ['.mjs', '.js', '.json', '.node'],
   resolveOnly: [],
