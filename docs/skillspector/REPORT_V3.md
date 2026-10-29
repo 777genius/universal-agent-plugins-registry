@@ -91,6 +91,23 @@ Old reports retain their actual status and original scanner/profile. They are
 historical during the v3 refresh, with unknown timing and incomplete grouping
 evidence. A legacy marker cannot bypass current coverage checks.
 
+### Public text redaction
+
+Source examples can contain credential-shaped text. Public v3 findings,
+reference evidence and diagnostics replace recognized Stripe secret and
+restricted keys with `[REDACTED Stripe key]`. This projection happens
+after finding identities and exception matching, before worker artifacts are
+written, and again for all reused records before public shard bytes are hashed.
+It preserves source and raw-report digests, finding IDs, grouping, positions,
+analysis status, coverage counts and retry history. Redaction is display policy,
+not a new scan, a suppressed finding or evidence truncation.
+
+Structural source paths and identities are never rewritten. A recognized
+credential in those fields fails closed, as does an unredacted recognized
+credential in a publication artifact. Existing content-bound exception checks
+remain required. The rule covers the observed Stripe formats, not every possible
+secret; GitHub repository protection remains enabled for other formats.
+
 ## Independent counters
 
 Catalog resolution (`catalog_coverage`, `source_states`, `plugin_states`) is

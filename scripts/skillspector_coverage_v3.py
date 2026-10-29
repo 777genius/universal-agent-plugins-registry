@@ -490,7 +490,7 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
                 record = fail(scanner.empty_record_v3(item, profile_id), "acquisition_failed", "The immutable repository could not be acquired.")
                 record["execution"]["acquisition_seconds"] = round(time.monotonic() - acquisition_started, 6)
             attempt = make_attempt(item, record, old, old_records.get(item["id"]))
-            outcome = {"attempt": attempt, "record": record}
+            outcome = {"attempt": attempt, "record": scanner.redact_public_record(record)}
             if len(report_json(outcomes)) + len(report_json(outcome)) + 4096 > MAX_WORKER_BYTES:
                 break  # Completed prior work remains publishable; unpersisted work is still queued.
             outcomes.append(outcome)
@@ -586,7 +586,10 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     output_dir.mkdir(parents=True, exist_ok=True)
     grouped = defaultdict(list)
     for record in sorted(records.values(), key=lambda value: value["id"]):
-        grouped[expected[record["id"]]["repository"]].append(record)
+        # Cached, historical and useful fallback records cross the same public
+        # text boundary as new scanner results, before shard bytes are hashed.
+        public = scanner.redact_public_record(record)
+        grouped[expected[record["id"]]["repository"]].append(public)
     descriptors = []
     for repository, group in sorted(grouped.items()):
         parts, pending = [], []
