@@ -6,6 +6,10 @@
       "text": "agent code navigator route code discovery across exact search, semantic search, lsp navigation, and call-graph analysis. agent-code-navigator agent-plugins code-intelligence code-search codegraph codex lsp"
     },
     {
+      "product_id": "agent-notifications",
+      "text": "agent notifications desktop notifications for coding agents. get a native alert the moment a task finishes, needs your input, or fails. agent-notifications agent-plugins ai-agents mcp notifications"
+    },
+    {
       "product_id": "atlassian",
       "text": "atlassian community package for the official atlassian rovo mcp plugin for jira, confluence, and compass workflows through atlassian's hosted remote mcp service. atlassian agent-plugins ai-agents atlassian collaboration compass confluence jira mcp planning plugins"
     },
@@ -71,7 +75,7 @@
     },
     {
       "product_id": "hubspot-crm",
-      "text": "hubspot crm community package for the official hubspot remote mcp integration for beta, read-only crm object access through hubspot's hosted mcp server. hubspot-crm agent-plugins ai-agents crm hubspot mcp plugins sales"
+      "text": "hubspot crm community package for the official hubspot remote mcp integration for beta, read-only crm object access through hubspot's hosted mcp server. hubspot-crm agent-plugins ai-agents crm hubspot marketing mcp plugins sales"
     },
     {
       "product_id": "hubspot-developer",
@@ -80,6 +84,10 @@
     {
       "product_id": "linear",
       "text": "linear community package for the official linear mcp integration for workspace management, issues, and project workflows. linear agent-plugins ai-agents issues linear mcp plugins project-management"
+    },
+    {
+      "product_id": "marketing-kit",
+      "text": "marketing kit plan campaigns using notion content, hubspot crm context and playwright landing-page checks. uap installs the three integrations as dependencies; account sign-in remains separate. marketing-kit campaigns content crm marketing"
     },
     {
       "product_id": "neon",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ClientID } from '~/types/registry'
-import { authenticationLabel, deliveryLabel, evidenceLabel, githubSourceUrl, resolveDistribution, targetAuthenticationLabel, validationLabel } from '~/utils/registry'
+import { authenticationLabel, deliveryLabel, evidenceLabel, githubSourceUrl, isRetiredPlugin, resolveDistribution, targetAuthenticationLabel, validationLabel, vendorInstaller } from '~/utils/registry'
 const route = useRoute()
 const registry = useRegistry()
 const { current, expired, published } = useDirectoryStatus()
@@ -18,6 +18,8 @@ const iconURL = pluginIcon(plugin)
 const resolution = computed(() => resolveDistribution(plugin, targets.value))
 const installCandidate = computed(() => current.value && !autoDetect.value ? resolution.value.distribution : undefined)
 const authLabel = computed(() => authenticationLabel(installCandidate.value, targets.value, plugin.authentication))
+const retired = isRetiredPlugin(plugin)
+const installerOverride = vendorInstaller(plugin)
 
 const canonical = `${useRuntimeConfig().public.siteUrl}/plugins/${plugin.name}`
 useSeoMeta({
@@ -52,6 +54,8 @@ useHead({ link: [{ rel: 'canonical', href: canonical }] })
         <p v-if="expired">This signed Directory snapshot is stale. Install-candidate claims and commands are disabled; the entries below remain available as product history.</p>
         <p v-else-if="!published">This is unresolved review data, not installation authority. Install-candidate claims and commands are disabled; production uses a published signed Directory snapshot.</p>
         <p v-else-if="!autoDetect && !installCandidate">{{ resolution.unavailable_reason }} The entries below are product history, not install candidates.</p>
+        <p v-if="retired"><strong>Retired product.</strong> Every release policy is revoked, so this entry is hidden from the catalog and kept as product history. Existing installs can only be removed.</p>
+        <p v-if="installerOverride && !installCandidate"><strong>Installed with its own installer.</strong> This product ships platform binaries that the universal installer does not deliver, so it is not installed by the Directory CLI. Use the <a :href="installerOverride.url" target="_blank" rel="noreferrer">{{ installerOverride.label }} ↗</a>.</p>
         <div v-if="installCandidate" class="plugin-profile__section"><h2>Install candidate components</h2><ul class="badge-list"><li v-for="component in installCandidate.components" :key="component">{{ component }}</li></ul></div>
         <div v-if="plugin.categories.length" class="plugin-profile__section"><h2>Categories</h2><ul class="tag-list"><li v-for="category in plugin.categories" :key="category">{{ category }}</li></ul></div>
         <div class="plugin-profile__section">

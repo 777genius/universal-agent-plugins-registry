@@ -10,8 +10,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: discovery-publication-liveness
-  cancel-in-progress: true
+  group: discovery-publication-liveness-${{ github.event_name }}-${{ github.event_name == 'schedule' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'schedule' }}
 
 jobs:
   detect:

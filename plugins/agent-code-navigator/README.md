@@ -3,11 +3,9 @@
 Route code discovery across exact search, semantic search, LSP navigation, and call-graph analysis.
 
 <!-- agentplugins-install:start -->
-## Install
+## Installation unavailable
 
-```bash
-npx universal-agent-plugins add agent-code-navigator --target codex
-```
+> Installation is currently unavailable because the Directory has no eligible release target.
 <!-- agentplugins-install:end -->
 
 This is an independent community package for [Agent Plugins 1.0](https://agent-plugins.org/specification). It is not an endorsement or an official package from Agent Code Navigator.

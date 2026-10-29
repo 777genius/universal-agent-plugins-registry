@@ -22,6 +22,7 @@ on:
       - "scripts/publication_trust_policy.py"
       - "scripts/sign_directory_publication.py"
       - "scripts/catalog_publication_readiness.py"
+      - "scripts/catalog_managed_readiness.py"
       - ".github/workflows/catalog-publication-readiness.yml"
   schedule:
     - cron: "17 4 * * 1"
@@ -1212,8 +1213,8 @@ jobs:
           done
       - name: Prove compatibility with the exact released CLI
         env:
-          AGENTPLUGINS_COMMIT: aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c
-          AGENTPLUGINS_VERSION: 0.1.51
+          AGENTPLUGINS_COMMIT: 36b2dd824d56523613b0c773ff89eb5107934584
+          AGENTPLUGINS_VERSION: 0.1.89
           EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
           EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
           EXPECTED_LEDGER_HEAD: ${{ needs.materialize_site.outputs.ledger_commit }}
@@ -1228,9 +1229,9 @@ jobs:
           binary="${release_dir}/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
           chmod +x "${binary}"
           cd "${release_dir}"
-          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = bc2b5e546394eb176eebd97226972eec9c60f8f1518bc7981ead6ea752c57a53
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = ca47809c05bb5a409232d81e72284cd007c0a88bef6a6c2d416c9e1795d798f3
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = a602e493cc911af64b33a9f572c8925c719b6416e5672c744c0e6673159856b4
+          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = 41bb941b8cd583588759748ad77d01f0a3ad015a779231ed1dd5e0c7f40a6134
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 24b4d4047396eb2dba0403198438c4d7db7920858efc0c6da24464e6c136d075
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 6fc4c8d232a75b9ba332f4237c51607f93bc0a310dcace027f43aa88782ccb49
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib
@@ -1253,8 +1254,16 @@ jobs:
           run_root="${RUNNER_TEMP}/released-cli-directory"
           mkdir -p "${run_root}"/{home,state,config,cache,tmp,workspace,evidence}
           mkdir -p "${run_root}/home/.cursor"
+          # Since 0.1.87 a client is selectable only through an editor binary or
+          # desktop application surface; a config directory alone is ambient
+          # evidence and cannot satisfy preflight. Stub the editor on the
+          # fixture PATH exactly as the client detector's own tests do; the
+          # dry-run gate never executes the stub.
+          mkdir -p "${run_root}/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${run_root}/bin/cursor"
+          chmod +x "${run_root}/bin/cursor"
           origin="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${EXPECTED_LEDGER_HEAD}/registry/schemas/1/"
-          isolated=(env -i PATH="${PATH}" LANG=C.UTF-8 HOME="${run_root}/home" USERPROFILE="${run_root}/home" \
+          isolated=(env -i PATH="${run_root}/bin:${PATH}" LANG=C.UTF-8 HOME="${run_root}/home" USERPROFILE="${run_root}/home" \
             XDG_CONFIG_HOME="${run_root}/config" XDG_CACHE_HOME="${run_root}/cache" \
             AGENTPLUGINS_HOME="${run_root}/state" AGENTPLUGINS_DIRECTORY_ORIGIN="${origin}" \
             TMPDIR="${run_root}/tmp" GIT_CONFIG_GLOBAL="${run_root}/home/.gitconfig" \

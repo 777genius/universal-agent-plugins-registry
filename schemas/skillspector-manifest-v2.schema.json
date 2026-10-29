@@ -1,0 +1,184 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_commit",
+    "generated_at",
+    "scope",
+    "scanner",
+    "profile",
+    "selection_digest",
+    "coverage",
+    "shards",
+    "plugin_coverage"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "scope": {
+      "const": "selected_sources"
+    },
+    "scanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "const": "skillspector"
+        },
+        "version": {
+          "const": "2.13.1"
+        },
+        "revision": {
+          "const": "f3b25697d76256998ca9d42c198d256258d4c035"
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "const": "static-only-v2"
+        },
+        "digest": {
+          "const": "sha256:f8844756e3a56036425059aa70d57acd9c823f5054be2960838e38c2ce945731"
+        }
+      }
+    },
+    "selection_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selected",
+        "reported",
+        "pending"
+      ],
+      "properties": {
+        "selected": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "reported": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      }
+    },
+    "shards": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repository",
+          "path",
+          "digest",
+          "bytes",
+          "record_count"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "maxLength": 200
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^shards/[0-9a-f]{64}\\.json$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8388608
+          },
+          "record_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          }
+        }
+      }
+    },
+    "plugin_coverage": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repository",
+          "plugin_path",
+          "selected",
+          "reported",
+          "pending"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "maxLength": 200
+          },
+          "plugin_path": {
+            "type": "string",
+            "maxLength": 1000,
+            "pattern": "^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$"
+          },
+          "selected": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "reported": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://universal-agent-plugins.com/schemas/skillspector-manifest-v2.schema.json",
+  "title": "Display-only automatic SkillSpector skillspector-manifest-v2"
+}

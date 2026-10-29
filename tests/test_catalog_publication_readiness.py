@@ -56,7 +56,7 @@ class CatalogContractTests(unittest.TestCase):
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
-        self.assertEqual(len(artifact["rows"]), 303)
+        self.assertEqual(len(artifact["rows"]), 380)
         self.assertEqual(len(artifact["static_metadata"]), 2)
         self.assertEqual(len(artifact["mcp_probes"]), 4)
         chrome = [row for row in artifact["rows"] if row["selector"] == "chrome-devtools"]
@@ -124,7 +124,7 @@ class CatalogContractTests(unittest.TestCase):
         source = selection["package_source"]
         data = {
             "plugin": selection["product_id"],
-            "source": f"{source['repository']}//{source['path']}",
+            "source": gate.public_source(source),
             "revision": source["revision"],
             "tree_digest": selection["tree_digest"],
             "manifest_digest": selection["manifest_digest"],
@@ -150,7 +150,7 @@ class CatalogContractTests(unittest.TestCase):
         source = selection["package_source"]
         data = {
             "plugin": selection["product_id"],
-            "source": f"{source['repository']}//{source['path']}",
+            "source": gate.public_source(source),
             "revision": source["revision"],
             "tree_digest": selection["tree_digest"],
             "manifest_digest": selection["manifest_digest"],
@@ -167,6 +167,45 @@ class CatalogContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "wrong version"):
             gate.check_identity(data, selection, self.identity)
+
+    def test_identity_source_matches_the_pinned_cli_public_repository_path(self):
+        # The released CLI renders add's source as repository/subpath
+        # (publicRepositoryPath at the pinned commit). The harness once demanded
+        # a repository//subpath string the released CLI never emits, so every
+        # real add failed validate_add with "CLI selected wrong source".
+        selection = gate.selected(self.snapshot, "context7", gate.CORE)
+        source = selection["package_source"]
+        repository, subpath = source["repository"].strip("/"), source["path"].strip("/")
+        rendered = repository if not subpath else repository + "/" + subpath
+        self.assertEqual(gate.public_source(source), rendered)
+        self.assertNotIn("//", rendered)
+        data = {
+            "plugin": selection["product_id"],
+            "version": selection["package_version"],
+            "source": rendered,
+            "revision": source["revision"],
+            "tree_digest": selection["tree_digest"],
+            "manifest_digest": selection["manifest_digest"],
+            "directory": {
+                "product_id": selection["product_id"],
+                "distribution_id": selection["distribution_id"],
+                "distribution_kind": selection["distribution_kind"],
+                "desired_release_sequence": selection["release_sequence"],
+                "snapshot_schema": 1,
+                "snapshot_sequence": self.identity["sequence"],
+                "snapshot_digest": self.identity["snapshot_digest"],
+            },
+        }
+        gate.check_identity(data, selection, self.identity)
+        for wrong in (repository + "//" + subpath, rendered + "/extra",
+                      repository.upper() + "/" + subpath, "local"):
+            with self.subTest(wrong=wrong), self.assertRaisesRegex(ValueError, "wrong source"):
+                gate.check_identity({**data, "source": wrong}, selection, self.identity)
+        self.assertEqual(gate.public_source({"repository": "/example/repo/", "path": "/"}), "example/repo")
+        self.assertEqual(gate.public_source({"repository": "r/", "path": "/plugins/context7/"}), "r/plugins/context7")
+        for missing in ({"repository": "//", "path": "pkg"}, {"repository": "  ", "path": "pkg"}):
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "repository missing"):
+                gate.public_source(missing)
 
     def test_new_uncovered_target_policy_fails_closed(self):
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
@@ -201,6 +240,28 @@ class CatalogContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered"):
             self.expected()
 
+    def test_new_client_claims_only_land_where_the_fixed_matrix_resolves_them(self):
+        # Regression: the thirteen-client widening once reached shadowed active
+        # policies (whose own target set resolves to a newer release), claiming
+        # installs the readiness matrix can never exercise.  Against a
+        # pre-widening baseline those claims were unprovable and staged
+        # publication failed closed with "uncovered target policy change".
+        stripped = copy.deepcopy(self.snapshot)
+        for distribution in stripped["distributions"]:
+            for policy in distribution["release_policies"]:
+                policy["targets"] = [target for target in policy["targets"]
+                                     if target["client"] not in ("grok", "kimi", "qoder")]
+        self.baseline = stripped
+        self.expected()
+
+        firebase = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/firebase")
+        active = sorted((policy for policy in firebase["release_policies"] if policy["status"] == "active"),
+                        key=lambda policy: policy["release_sequence"])
+        self.assertGreaterEqual(len(active), 2)
+        active[0]["targets"] = copy.deepcopy(active[-1]["targets"])
+        with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/firebase:(grok|kimi|qoder)"):
+            self.expected()
+
     def test_authentication_tightening_is_not_account_runtime_expansion(self):
         for snapshot, authentication in ((self.baseline, "not_required"), (self.snapshot, "required")):
             distribution = next(item for item in snapshot["distributions"] if item["id"] == "777genius/cloudflare")
@@ -215,8 +276,9 @@ class CatalogContractTests(unittest.TestCase):
     def test_new_cli_floor_and_missing_alias_fail(self):
         selected = gate.selected(self.snapshot, "chrome-devtools", gate.CHROME)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == selected["distribution_id"])
+        major, minor, patch = (int(part) for part in gate.CLI["version"].split("."))
         for policy in distribution["release_policies"]:
-            policy["minimum_installer_version"] = "0.1.52"
+            policy["minimum_installer_version"] = "%d.%d.%d" % (major, minor, patch + 1)
         with self.assertRaisesRegex(ValueError, "newer CLI"):
             gate.plan(self.snapshot)
         self.snapshot = catalog()
@@ -274,6 +336,204 @@ class CatalogContractTests(unittest.TestCase):
             self.assertFalse({"GH_TOKEN", "OPENAI_API_KEY", "AGENTPLUGINS_DIRECTORY_SNAPSHOT"} & env.keys())
             self.assertEqual(env["AGENTPLUGINS_DIRECTORY_ORIGIN"], self.args.directory_origin)
 
+    def test_add_invokes_the_released_cli_with_no_save(self):
+        # 0.1.88's add distinguishes manifest saving; the readiness add step must
+        # install without saving portable dependency intent.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "claude", "copilot", "npx"):
+                (tools / name).write_bytes(b"fixture only; never executed")
+            args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
+                                      copilot=tools / "copilot", npx=tools / "npx",
+                                      inspector=None, opencode=None)
+            invocations = []
+            def stop_at_add(binary, argv, env, cwd, *, root, readonly):
+                invocations.append(argv)
+                raise ValueError("fixture stops at the add step")
+            selection = gate.selected(self.snapshot, "context7", gate.CORE)
+            with patch.object(gate, "command", side_effect=stop_at_add):
+                with self.assertRaisesRegex(ValueError, "fixture stops"):
+                    gate.run_lifecycle(args, root / "case", selection, gate.CORE, vars(self.args))
+            self.assertEqual(invocations, [["add", "context7", "--target", "codex,cursor,kiro", "--no-save"]])
+
+    def test_isolated_environment_seeds_grok_kimi_qoder_roots_and_path_stubs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            roots, env = gate.isolated_environment(root, self.args.directory_origin, ())
+            for name in (".grok", ".kimi-code", ".qoder"):
+                self.assertTrue((roots["home"] / name).is_dir(), f"missing {name} config root")
+            tool_bin = root / "bin"
+            self.assertEqual(env["PATH"].split(os.pathsep)[0], str(tool_bin))
+            for name in ("grok", "kimi", "qoder"):
+                stub = tool_bin / name
+                self.assertTrue(stub.is_file(), f"missing {name} stub")
+                self.assertTrue(os.access(stub, os.X_OK), f"{name} stub is not executable")
+
+    def test_grok_kimi_qoder_stubs_answer_the_cli_projection_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            roots, env = gate.isolated_environment(root, self.args.directory_origin, ())
+            self.assertTrue(all((root / "bin" / name).is_file() for name in ("grok", "kimi", "qoder")))
+            def stub(name, *argv):
+                return subprocess.run([str(root / "bin" / name), *argv], env=env,
+                                      capture_output=True, text=True, check=False)
+            self.assertEqual(stub("kimi", "--version").stdout.strip(), "1.0.0")
+            package = root / "projected"
+            for manifest in (".grok-plugin", ".qoder-plugin"):
+                (package / manifest).mkdir(parents=True)
+                (package / manifest / "plugin.json").write_text(
+                    json.dumps({"name": "chrome-devtools", "version": "1.7.0"}, indent=2))
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout), [])
+            self.assertEqual(stub("grok", "plugin", "install", "--trust", str(package)).returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
+                             [{"name": "chrome-devtools", "status": "installed", "source": str(package),
+                               "version": "1.7.0"}])
+            self.assertEqual(stub("grok", "plugin", "uninstall", "--confirm", "chrome-devtools").returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout), [])
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout), [])
+            self.assertEqual(stub("qoder", "plugins", "install", str(package), "--scope", "user").returncode, 0)
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout),
+                             [{"id": "chrome-devtools@local", "version": "1.7.0"}])
+            self.assertEqual(stub("qoder", "plugins", "uninstall", "chrome-devtools").returncode, 0)
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout), [])
+
+    def test_stub_state_drops_exact_names_and_rejects_corrupting_source_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            roots, env = gate.isolated_environment(root, self.args.directory_origin, ())
+            def stub(name, *argv):
+                return subprocess.run([str(root / "bin" / name), *argv], env=env,
+                                      capture_output=True, text=True, check=False)
+            def package(dirname, manifest_name, manifest):
+                pkg = root / dirname
+                (pkg / manifest).mkdir(parents=True)
+                (pkg / manifest / "plugin.json").write_text(
+                    json.dumps({"name": manifest_name, "version": "1.7.0"}, indent=2))
+                return pkg
+            # A numeric-looking name must not collide with a different name in
+            # the state registry: "7" must never drop the "007" entry.
+            numeric = package("numeric", "007", ".grok-plugin")
+            self.assertEqual(stub("grok", "plugin", "install", "--trust", str(numeric)).returncode, 0)
+            self.assertEqual(stub("grok", "plugin", "uninstall", "--confirm", "7").returncode, 0)
+            self.assertEqual([item["name"] for item in json.loads(stub("grok", "plugin", "list", "--json").stdout)],
+                             ["007"])
+            qnumeric = package("qnumeric", "007", ".qoder-plugin")
+            self.assertEqual(stub("qoder", "plugins", "install", str(qnumeric), "--scope", "user").returncode, 0)
+            self.assertEqual(stub("qoder", "plugins", "uninstall", "7").returncode, 0)
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout),
+                             [{"id": "007@local", "version": "1.7.0"}])
+            # A source path with a pipe must be rejected: writing it into the
+            # pipe-delimited registry would corrupt the list --json emission.
+            weird = package("pa|ckage", "chrome-devtools", ".grok-plugin")
+            self.assertNotEqual(stub("grok", "plugin", "install", "--trust", str(weird)).returncode, 0)
+            qweird = package("qpa|ckage", "chrome-devtools", ".qoder-plugin")
+            self.assertNotEqual(stub("qoder", "plugins", "install", str(qweird), "--scope", "user").returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
+                             [{"name": "007", "status": "installed", "source": str(numeric), "version": "1.7.0"}])
+            self.assertEqual(json.loads(stub("qoder", "plugins", "list", "--json").stdout),
+                             [{"id": "007@local", "version": "1.7.0"}])
+            # Ordinary extract paths with plus signs stay installable.
+            plussed = package("pkg-1.7.0+build", "cloudflare-docs", ".grok-plugin")
+            self.assertEqual(stub("grok", "plugin", "install", "--trust", str(plussed)).returncode, 0)
+            self.assertEqual(json.loads(stub("grok", "plugin", "list", "--json").stdout),
+                             [{"name": "007", "status": "installed", "source": str(numeric), "version": "1.7.0"},
+                              {"name": "cloudflare-docs", "status": "installed", "source": str(plussed),
+                               "version": "1.7.0"}])
+
+    def test_stub_seeding_refuses_to_shadow_a_linked_tool_fixture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            tool_bin = Path(temporary) / "bin"
+            tool_bin.mkdir()
+            fixture = tool_bin / "real-tool"
+            fixture.write_bytes(b"fixture bytes")
+            (tool_bin / "grok").symlink_to(fixture)
+            with self.assertRaisesRegex(ValueError, "refusing to shadow"):
+                gate.seed_client_stubs(tool_bin)
+            self.assertEqual(fixture.read_bytes(), b"fixture bytes")
+            self.assertTrue((tool_bin / "grok").is_symlink())
+
+    def test_only_verified_active_activation_counts_for_stub_backed_clients(self):
+        def target(name, activation):
+            return {"target": name, "output": {"result": {"activation": activation}}}
+        active = {"activation": "active", "verification": "installation_verified"}
+        gate.require_verified_activation([target("grok", active), target("kimi", active), target("qoder", active)])
+        for broken in ({"activation": "manual_activation_required", "verification": "installation_verified"},
+                       {"activation": "active", "verification": "not_run"},
+                       {"activation": "prepared", "verification": "package_validated"},
+                       None,
+                       "active"):
+            with self.assertRaisesRegex(ValueError, "not verified"):
+                gate.require_verified_activation([target("kimi", broken)])
+        with self.assertRaises(KeyError):
+            gate.require_verified_activation([{"target": "grok", "output": {"result": {}}}])
+        # Clients outside the stub-backed set keep their documented outcomes.
+        gate.require_verified_activation([target("vscode", {"activation": "manual_activation_required",
+                                                            "verification": "not_run"})])
+
+    def test_produce_parser_and_lifecycle_expose_the_native_opencode_fixture(self):
+        # OpenCode preflight verifies native executable bytes and rejects
+        # shell/npm shims, so the producer must receive a Go fixture and the
+        # lifecycle must expose it on the case PATH as `opencode`.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "claude", "copilot", "npx", "opencode"):
+                (tools / name).write_bytes(b"fixture only; never executed")
+            argv = ["produce", "--feed", str(root / "feed"), "--trusted-keys", str(root / "keys"),
+                    "--baseline-feed", str(root / "base")]
+            for name, value in vars(self.args).items():
+                argv += ["--" + name.replace("_", "-"), str(value)]
+            argv += ["--binary", str(tools / "agentplugins"), "--claude", str(tools / "claude"),
+                     "--copilot", str(tools / "copilot"), "--sandbox", str(root / "sandbox"),
+                     "--output", str(root / "out.json"), "--opencode", str(tools / "opencode")]
+            self.assertEqual(gate.parser().parse_args(argv).opencode, tools / "opencode")
+            args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
+                                      copilot=tools / "copilot", npx=tools / "npx",
+                                      inspector=None, opencode=tools / "opencode")
+            def stop_at_add(binary, argv, env, cwd, *, root, readonly):
+                raise ValueError("fixture stops at the add step")
+            selection = gate.selected(self.snapshot, "context7", gate.CORE)
+            with patch.object(gate, "command", side_effect=stop_at_add):
+                with self.assertRaisesRegex(ValueError, "fixture stops"):
+                    gate.run_lifecycle(args, root / "case", selection, gate.CORE, vars(self.args))
+            exposed = root / "case" / "bin" / "opencode"
+            self.assertTrue(exposed.exists(), "opencode fixture missing from the lifecycle PATH")
+            self.assertEqual(exposed.resolve(), (tools / "opencode").resolve())
+            self.assertIn((tools / "opencode").resolve().parent, gate.tool_paths(args))
+
+    @unittest.skipUnless(shutil.which("go"), "Go toolchain required to build the native fixture")
+    def test_opencode_fixture_is_native_and_answers_only_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            binary = root / "opencode"
+            env = dict(os.environ, CGO_ENABLED="0", GO111MODULE="off", GOENV="off",
+                       GOTOOLCHAIN="local", GOFLAGS="", GOPATH=str(root / "go-path"),
+                       GOCACHE=str(root / "go-cache"), GOMODCACHE=str(root / "go-mod-cache"))
+            build = subprocess.run(["go", "build", "-trimpath", "-o", str(binary),
+                                    str(ROOT / "tests/fixtures/opencode-fixture.go")],
+                                   env=env, capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            self.assertFalse(binary.read_bytes().startswith(b"#!"), "fixture is a script shim")
+            self.assertIn(binary.read_bytes()[:4], (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
+                                                    b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
+                                                    b"\xca\xfe\xba\xbe", b"MZ"),
+                          "fixture is not native executable bytes")
+            version = subprocess.run([str(binary), "--version"], capture_output=True, text=True)
+            self.assertEqual(version.returncode, 0, version.stderr)
+            self.assertEqual(version.stdout.strip(), "1.18.34")
+            self.assertNotEqual(subprocess.run([str(binary), "--help"], capture_output=True).returncode, 0)
+            home, sandbox = root / "home", root / "sandbox"
+            home.mkdir(); sandbox.mkdir()
+            tree = lambda: sorted(str(p.relative_to(root)) for base in (home, sandbox) for p in base.rglob("*"))
+            before = tree()
+            run = subprocess.run([str(binary), "--version"], cwd=sandbox,
+                                 env={"PATH": "/usr/bin:/bin", "HOME": str(home)}, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(tree(), before, "fixture wrote to HOME or cwd at runtime")
+
     def test_acquired_root_mcp_override_does_not_use_repository_plugin(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -325,10 +585,11 @@ class CatalogContractTests(unittest.TestCase):
                 parent = Path(temporary).resolve()
                 tools = parent / "tools"
                 tools.mkdir()
-                for name in ("agentplugins", "claude", "copilot", "npx"):
+                for name in ("agentplugins", "claude", "copilot", "npx", "opencode"):
                     (tools / name).write_bytes(b"fixture only; not executed")
                 args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
-                                          copilot=tools / "copilot", npx=tools / "npx", inspector=None)
+                                          copilot=tools / "copilot", npx=tools / "npx", inspector=None,
+                                          opencode=tools / "opencode")
                 def child(argv, **_):
                     name = Path(argv[0]).name
                     self.assertEqual(argv[1:], ["--version"])
@@ -369,7 +630,7 @@ class CatalogContractTests(unittest.TestCase):
         self.assertEqual(events[0], ("remove", "chrome-devtools", "--target", "copilot,vscode"))
         self.assertEqual(events[1], "native_absent")
         self.assertEqual(events[2], ("remove", "chrome-devtools", "--target",
-                                    "codex,cursor,kiro,claude,gemini,opencode,cline,windsurf",
+                                    "codex,cursor,kiro,claude,gemini,opencode,cline,windsurf,grok,kimi,qoder",
                                     "--external-uninstalled", "--purge-data"))
 
     def test_shared_native_failure_does_not_proceed_to_purge(self):
@@ -584,18 +845,19 @@ class CatalogContractTests(unittest.TestCase):
 
         Released c78c79 service.go stores plan.ActivePath as TargetLocator;
         planner.go joins the physical artifact ID and stager.go materializes a
-        managed_package_directory, including for skills-only agent-code-navigator.
+        managed_package_directory, including for skills-only packages.
         """
         tools = parent / "tools"
         tools.mkdir()
-        for name in ("agentplugins", "claude", "copilot", "npx"):
+        for name in ("agentplugins", "claude", "copilot", "npx", "opencode"):
             (tools / name).write_bytes(b"fixture only; never executed")
         args = argparse.Namespace(binary=tools / "agentplugins", claude=tools / "claude",
-                                  copilot=tools / "copilot", npx=tools / "npx", inspector=None)
+                                  copilot=tools / "copilot", npx=tools / "npx", inspector=None,
+                                  opencode=tools / "opencode")
         root = parent / "case"
-        selection = gate.selected(self.snapshot, "agent-code-navigator", gate.CORE)
+        selection = gate.selected(self.snapshot, "context7", gate.CORE)
         package_revision = {key: selection[key] for key in ("tree_digest", "manifest_digest")}
-        owned = {client: root / "state" / "managed" / client / "agent-code-navigator-fixture" for client in gate.CORE}
+        owned = {client: root / "state" / "managed" / client / "context7-fixture" for client in gate.CORE}
         clients = {client: {"client_id": client, "target_locator": str(path),
                             "affected_surfaces": [client], "package_revision": package_revision}
                    for client, path in owned.items()}
@@ -607,7 +869,7 @@ class CatalogContractTests(unittest.TestCase):
         calls = []
 
         def targets():
-            physical_id = None if mutation == "missing_physical_id" else "agent-code-navigator-fixture"
+            physical_id = None if mutation == "missing_physical_id" else "context7-fixture"
             return {"succeeded": 3, "failed": 0, "targets": [
                 {"target": client, "status": "external_completed", "output": {"result": {
                     "installation_id": "fixture-installation", "no_change": True, "mutated": False,
@@ -634,7 +896,7 @@ class CatalogContractTests(unittest.TestCase):
                                "fetched": True, "validated": True}
                 data = {**targets(), **package_revision, "plugin": selection["product_id"],
                         "version": selection["package_version"],
-                        "source": selection["package_source"]["repository"] + "//" + selection["package_source"]["path"],
+                        "source": gate.public_source(selection["package_source"]),
                         "revision": selection["package_source"]["revision"], "acquisition": acquisition,
                         "target_outcomes": {client: {**acquisition, "outcome": "passed"} for client in gate.CORE},
                         "directory": {"product_id": selection["product_id"], "distribution_id": selection["distribution_id"],
@@ -693,7 +955,7 @@ class CatalogContractTests(unittest.TestCase):
             args, calls, error = self.run_first_package_fixture(root)
             self.assertIsNone(error)
             self.assertEqual(calls, ["add", "info", "update", "remove", "list", "doctor"])
-            self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:complete")
+            self.assertEqual(args.failure_phase, "lifecycle:context7:complete")
             self.assertEqual(gate.read_json(root / "case/state/state-v2.json")["installations"], [])
             self.assertFalse(any(path.is_file() or path.is_symlink() for path in (root / "case/state/managed").rglob("*")))
 
@@ -703,14 +965,14 @@ class CatalogContractTests(unittest.TestCase):
                 args, calls, error = self.run_first_package_fixture(Path(temporary).resolve(), mutation)
                 self.assertIsInstance(error, ValueError)
                 self.assertEqual(calls, ["add", "info", "update"])
-                self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:snapshot_after_update")
+                self.assertEqual(args.failure_phase, "lifecycle:context7:snapshot_after_update")
 
     def test_file_locator_is_rejected_not_silently_dropped_from_snapshot(self):
         with tempfile.TemporaryDirectory() as temporary:
             args, calls, error = self.run_first_package_fixture(Path(temporary).resolve(), "file_locator")
             self.assertIsInstance(error, gate.EvidenceError)
             self.assertEqual(calls, ["add", "info"])
-            self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:snapshot_before_update")
+            self.assertEqual(args.failure_phase, "lifecycle:context7:snapshot_before_update")
 
     def test_missing_physical_artifact_id_fails_before_identity_hashing(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -718,7 +980,7 @@ class CatalogContractTests(unittest.TestCase):
             self.assertIsInstance(error, ValueError)
             self.assertIn("valid physical artifact", str(error))
             self.assertEqual(calls, ["add"])
-            self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:validate_add")
+            self.assertEqual(args.failure_phase, "lifecycle:context7:validate_add")
 
     def test_doctor_wrong_command_findings_mutation_and_open_operation_fail_precisely(self):
         for mutation, phase in (("wrong_command", "doctor"), ("doctor_findings", "validate_doctor"),
@@ -727,10 +989,10 @@ class CatalogContractTests(unittest.TestCase):
                 args, calls, error = self.run_first_package_fixture(Path(temporary).resolve(), mutation)
                 self.assertIsNotNone(error)
                 self.assertEqual(calls[-1], "doctor")
-                self.assertEqual(args.failure_phase, "lifecycle:agent-code-navigator:" + phase)
+                self.assertEqual(args.failure_phase, "lifecycle:context7:" + phase)
 
     def test_diagnostic_steps_reject_unbounded_input(self):
-        for selector, step in (("/private/path", "add"), ("agent-code-navigator", "raw log secret")):
+        for selector, step in (("/private/path", "add"), ("context7", "raw log secret")):
             with self.assertRaisesRegex(ValueError, "unknown lifecycle"):
                 gate.lifecycle_step(argparse.Namespace(), selector, step)
 
@@ -759,16 +1021,19 @@ class CatalogContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
-                                      claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None)
+                                      claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
+                                      opencode=Path("opencode"))
             args.binary.write_bytes(b"fixture binary")
             with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                    patch.object(gate.managed, "run") as managed_run, \
                     patch.object(gate, "run_lifecycle") as lifecycle, \
                     patch.object(gate, "acquired_package", return_value=root) as acquire, \
                     patch.object(gate, "check_static_package") as static, \
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                self.assertEqual(lifecycle.call_count, 31)
+                managed_run.assert_called_once()
+                self.assertEqual(lifecycle.call_count, 30)
                 default_call = next(call for call in lifecycle.call_args_list
                                     if call.args[2]["selector"] == "github/github")
                 self.assertEqual(default_call.args[1].name, "default-github")
@@ -780,13 +1045,15 @@ class CatalogContractTests(unittest.TestCase):
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 
     def test_failed_cli_mcp_static_or_cleanup_never_emits_success(self):
-        for failing in ("run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
+        for failing in ("managed", "run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
             with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
-                                          claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None)
+                                          claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
+                                          opencode=Path("opencode"))
                 args.binary.write_bytes(b"fixture binary")
                 with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                        patch.object(gate.managed, "run") as managed_run, \
                         patch.object(gate, "run_lifecycle") as lifecycle, \
                         patch.object(gate, "acquired_package", return_value=root), \
                         patch.object(gate, "check_static_package") as static, \
@@ -797,7 +1064,7 @@ class CatalogContractTests(unittest.TestCase):
                             with self.assertRaises(OSError):
                                 gate.produce(args, self.snapshot, expected)
                     else:
-                        {"run_lifecycle": lifecycle, "inspector_check": probe, "check_static_package": static}[failing].side_effect = ValueError("fixture phase failure")
+                        {"managed": managed_run, "run_lifecycle": lifecycle, "inspector_check": probe, "check_static_package": static}[failing].side_effect = ValueError("fixture phase failure")
                         with self.assertRaises(ValueError):
                             gate.produce(args, self.snapshot, expected)
                         self.assertFalse(args.sandbox.exists())

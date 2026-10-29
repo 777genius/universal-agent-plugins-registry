@@ -1,0 +1,1230 @@
+{
+  "assertions": [
+    "All 18 real scanner reports passed current v3 JSON Schema and contract validation.",
+    "Source, scanner, profile, raw/content/group counts and findings_truncated were identical to each retained previous projection.",
+    "All 394 references and all 1,297 ledger entries retain exactly the original parsed JSON values; no evidence field, line, column, target or disposition was dropped.",
+    "All 73 ledger entries with known positions retained their exact start/end lines.",
+    "All 3 complete reports remained complete, including 82 rejected/out_of_scope external references.",
+    "Both narrow Upload Session exceptions remained bound to the exact source/profile/scanner evidence in the extended Cloudflare sample. The older standard sample emitted no E4 signals; it correctly gains no annotations."
+  ],
+  "code_base_commit": "f10b72bca0a7519881d8fa7f0c918a80375b193b",
+  "code_state": "Base commit plus the exact working source hashes below; hashes were unchanged throughout validation.",
+  "generated_at": "2026-10-28T11:54:45Z",
+  "ledger_exception_count": 1297,
+  "method": "Re-normalized retained real scanner output; no scanner execution or source acquisition",
+  "positioned_diagnostics_preserved": 73,
+  "profiles": {
+    "static-extended-v3": {
+      "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+      "id": "static-extended-v3"
+    },
+    "static-standard-v3": {
+      "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+      "id": "static-standard-v3"
+    }
+  },
+  "raw_reference_and_ledger_equality": true,
+  "reference_count": 394,
+  "reference_evidence_truncated": false,
+  "reference_statuses": {
+    "missing": 89,
+    "rejected": 187,
+    "resolved": 118
+  },
+  "reports": 18,
+  "samples": [
+    {
+      "counts_after": {
+        "finding_count": 4,
+        "finding_group_count": 4,
+        "raw_finding_count": 6
+      },
+      "counts_before": {
+        "finding_count": 4,
+        "finding_group_count": 4,
+        "raw_finding_count": 6
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/agents-sdk",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 18,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 18
+        },
+        "input_count": 4,
+        "output_count": 4,
+        "positioned_diagnostics_preserved": 2
+      },
+      "normalized_record_sha256": "sha256:f828fa99c273628415f55c07830cdacade53ffa40142343362635613188f46ff",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__agents-sdk__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:8f863b2fbbf656f616625ef325e8beff1d37d5495924ad895c0f5c625fdc93e7",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 35,
+          "disposition": "out_of_scope",
+          "evidence": "| Getting started | [Quick start](https://developers.cloudflare.com/agents/getting-started/quick-start/) | First agent, project setup |",
+          "line": 16,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 74,
+        "output_count": 74,
+        "statuses": {
+          "missing": 2,
+          "rejected": 34,
+          "resolved": 38
+        }
+      },
+      "sample": "registry__agents-sdk__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:b50a4f98140d72e717dcd426d88d05c703554e8472db7a9215a2714d58092ec1",
+        "path": "plugins/cloudflare/skills/agents-sdk",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 26,
+        "finding_group_count": 18,
+        "raw_finding_count": 28
+      },
+      "counts_before": {
+        "finding_count": 26,
+        "finding_group_count": 18,
+        "raw_finding_count": 28
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/cloudflare-email-service",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 21,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 21
+        },
+        "input_count": 5,
+        "output_count": 5,
+        "positioned_diagnostics_preserved": 4
+      },
+      "normalized_record_sha256": "sha256:1e5d924933c51b8cca11269431d4463aeb6e45c82bd3621d7766947b75612be2",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__cloudflare-email-service__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:82011f78e2eaab2bf5856c722f3a0828673667a7953ea00ba81560eacb9bd531",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 28,
+          "disposition": "partial",
+          "evidence": "| Agents SDK docs | Fetch `docs/email.md` from `https://github.com/cloudflare/agents/tree/main/docs` | Email handling in Agents SDK |",
+          "line": 21,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 26,
+        "output_count": 26,
+        "statuses": {
+          "missing": 4,
+          "rejected": 1,
+          "resolved": 21
+        }
+      },
+      "sample": "registry__cloudflare-email-service__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:2b4953ab08ff3be8eead0988bd8091f9e74aa080f65e7a4fbf3c3381b089172b",
+        "path": "plugins/cloudflare/skills/cloudflare-email-service",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/cloudflare-one-migrations",
+      "ledger_exceptions": {
+        "example": null,
+        "input_count": 0,
+        "output_count": 0,
+        "positioned_diagnostics_preserved": 0
+      },
+      "normalized_record_sha256": "sha256:18f073b19d6b22459de1e47505b633fbf11e6808a09660f2c791781df9371906",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__cloudflare-one-migrations__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:bca94595fc3cd2038f484567d5aacd3362058982b0a4c5c1d6b7ed3aa141b781",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 47,
+          "disposition": "out_of_scope",
+          "evidence": "5. Create dependencies first: identity/[SCIM](https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/scim/), connectors/on-ramps, routes/DNS,",
+          "line": 16,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 17,
+        "output_count": 17,
+        "statuses": {
+          "rejected": 17
+        }
+      },
+      "sample": "registry__cloudflare-one-migrations__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:327a8062cbf164accb71da1a5ef132bd06bdcde223d5f33c904491ece59b6ae1",
+        "path": "plugins/cloudflare/skills/cloudflare-one-migrations",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "complete",
+      "status_before": "complete"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/cloudflare-one",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 104,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 104
+        },
+        "input_count": 2,
+        "output_count": 2,
+        "positioned_diagnostics_preserved": 2
+      },
+      "normalized_record_sha256": "sha256:ff9c70abcd308790e89817e7b38ee861b354733860d2c6c58ef04293a5606d0e",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__cloudflare-one__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:66a88729c70a729c4bd271ce86109c59894a47ce7b0c4e12822046a5408f1768",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 138,
+          "disposition": "out_of_scope",
+          "evidence": " or exact UI paths, retrieve current information from the [Cloudflare One docs](https://developers.cloudflare.com/cloudflare-one/), the Cloudflare docs MCP serv",
+          "line": 8,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 39,
+        "output_count": 39,
+        "statuses": {
+          "missing": 3,
+          "rejected": 36
+        }
+      },
+      "sample": "registry__cloudflare-one__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:c2ea06e0293f7054c87c869b5da81c258e0295410f93ec9091adc9965e072b07",
+        "path": "plugins/cloudflare/skills/cloudflare-one",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 498,
+        "finding_group_count": 278,
+        "raw_finding_count": 503
+      },
+      "counts_before": {
+        "finding_count": 498,
+        "finding_group_count": 278,
+        "raw_finding_count": 503
+      },
+      "exception_annotations": [
+        {
+          "id": "cloudflare-upload-session-heading-v1",
+          "line": 93,
+          "match_fingerprint": "d4f64bba95c41458d45421eebf46825971fb8098c1cd89a407143ab54d19206a",
+          "path": "references/workers-for-platforms/api.md",
+          "profile_digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+          "rule": "E4",
+          "snippet_digest": "sha256:c188fd7050d743b445fc087519d6fcd33a0a8b25ebba4ef93910e47c5d65b754",
+          "source_content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d"
+        },
+        {
+          "id": "cloudflare-upload-session-validity-v1",
+          "line": 110,
+          "match_fingerprint": "fdcf74bb61343ce2f2d1b6553c77e65339da98c0a7cd0d551f800df6468ba150",
+          "path": "references/workers-for-platforms/gotchas.md",
+          "profile_digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+          "rule": "E4",
+          "snippet_digest": "sha256:cf0cc64aa91db29ea06a9d9acdaea8b3ad912f1b444cffb65b2945b8eccbeca7",
+          "source_content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d"
+        }
+      ],
+      "false_positive_groups": 2,
+      "id": "registry/cloudflare",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 32,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 32
+        },
+        "input_count": 458,
+        "output_count": 458,
+        "positioned_diagnostics_preserved": 1
+      },
+      "normalized_record_sha256": "sha256:44a5dd9920784232ed1181d1097ab4df1cd10dd0a66d6515a07d32a05ab9ea75",
+      "profile": {
+        "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+        "id": "static-extended-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__cloudflare__static-extended-v3/raw.json",
+      "raw_sha256": "sha256:c27a09408503e8c63cf68d8037cece4fbac013f8ad74c27547d4ebc45583380d",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 29,
+          "disposition": "partial",
+          "evidence": "| Wrangler config schema | `node_modules/wrangler/config-schema.json` | Config fields, binding shapes, allowed values |",
+          "line": 32,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 6,
+        "output_count": 6,
+        "statuses": {
+          "missing": 1,
+          "resolved": 5
+        }
+      },
+      "sample": "registry__cloudflare__static-extended-v3",
+      "source": {
+        "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+        "path": "plugins/cloudflare/skills/cloudflare",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "annotation_note": "No E4 issues were emitted by this older limited standard scan; no annotation was invented.",
+      "counts_after": {
+        "finding_count": 412,
+        "finding_group_count": 192,
+        "raw_finding_count": 417
+      },
+      "counts_before": {
+        "finding_count": 412,
+        "finding_group_count": 192,
+        "raw_finding_count": 417
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/cloudflare",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 32,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 32
+        },
+        "input_count": 664,
+        "output_count": 664,
+        "positioned_diagnostics_preserved": 1
+      },
+      "normalized_record_sha256": "sha256:3210dec0e6b72e0a8cb07f895eb5f79e499e864dcf773bf66bca4c73542c362f",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__cloudflare__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:13019b7328954b15a264f6f061c12115bce457246675f897fcefc26aefa47a55",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 29,
+          "disposition": "partial",
+          "evidence": "| Wrangler config schema | `node_modules/wrangler/config-schema.json` | Config fields, binding shapes, allowed values |",
+          "line": 32,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 6,
+        "output_count": 6,
+        "statuses": {
+          "missing": 1,
+          "resolved": 5
+        }
+      },
+      "sample": "registry__cloudflare__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+        "path": "plugins/cloudflare/skills/cloudflare",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 6,
+        "finding_group_count": 5,
+        "raw_finding_count": 7
+      },
+      "counts_before": {
+        "finding_count": 6,
+        "finding_group_count": 5,
+        "raw_finding_count": 7
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/durable-objects",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 38,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 38
+        },
+        "input_count": 2,
+        "output_count": 2,
+        "positioned_diagnostics_preserved": 1
+      },
+      "normalized_record_sha256": "sha256:387807edf7b266c490c4ddbb1aae8247239fc651947c023b6f0ce23a4cfa61de",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__durable-objects__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:1950ed2084f246f1a81c8af12b6af7089e9760daa5bea9d55bb7e54f2d6fcc42",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 74,
+          "disposition": "partial",
+          "evidence": "Search: `blockConcurrencyWhile`, `idFromName`, `getByName`, `setAlarm`, `sql.exec`",
+          "line": 38,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 4,
+        "output_count": 4,
+        "statuses": {
+          "missing": 1,
+          "resolved": 3
+        }
+      },
+      "sample": "registry__durable-objects__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:62934e1b8e470a7e2588aaafc7d3bc07251b313f4ef6c5948f47f962119fcc80",
+        "path": "plugins/cloudflare/skills/durable-objects",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 1,
+        "finding_group_count": 1,
+        "raw_finding_count": 1
+      },
+      "counts_before": {
+        "finding_count": 1,
+        "finding_group_count": 1,
+        "raw_finding_count": 1
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/sandbox-migrate-to-next",
+      "ledger_exceptions": {
+        "example": null,
+        "input_count": 0,
+        "output_count": 0,
+        "positioned_diagnostics_preserved": 0
+      },
+      "normalized_record_sha256": "sha256:a9d10393bf8cfff5d4f0d01ed57d06bd00e9490b956d012d7ec538e32c2c0945",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__sandbox-migrate-to-next__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:d6f2fee2d795113f187f8c60ef6252340755bfa5aa483bf0353d2f59423e0d51",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 24,
+          "disposition": "out_of_scope",
+          "evidence": "Human guide: [Migrate](https://developers.cloudflare.com/sandbox/1-0-preview/migrate/) \u00b7 [1.0 preview](https://developers.cloudflare.com/sandbox/1-0-preview/)",
+          "line": 10,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 16,
+        "output_count": 16,
+        "statuses": {
+          "rejected": 16
+        }
+      },
+      "sample": "registry__sandbox-migrate-to-next__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:de4c259eb7e0f2bf8443fa607e7d02a42884b2eebbe34b647572d62a863e0959",
+        "path": "plugins/cloudflare/skills/sandbox-migrate-to-next",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "complete",
+      "status_before": "complete"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/sandbox-next",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 81,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 81
+        },
+        "input_count": 1,
+        "output_count": 1,
+        "positioned_diagnostics_preserved": 1
+      },
+      "normalized_record_sha256": "sha256:00d8715c80140828f7f5f9dbcf0c723df350faff2a310c8af91cf685ea48d551",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__sandbox-next__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:2e1d3c7998273a001ca72429b2d7005ce85dc29710bf6e1a1f335ec9ead0bc8f",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 56,
+          "disposition": "out_of_scope",
+          "evidence": "Isolated Linux environments on [Cloudflare Containers](https://developers.cloudflare.com/containers/), driven from Workers.",
+          "line": 8,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 35,
+        "output_count": 35,
+        "statuses": {
+          "missing": 1,
+          "rejected": 30,
+          "resolved": 4
+        }
+      },
+      "sample": "registry__sandbox-next__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:e9ec3cba1c5840d330d39653e9344d5475d90fa74c4f8b7ad14315b494ec0ed9",
+        "path": "plugins/cloudflare/skills/sandbox-next",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/sandbox-stable",
+      "ledger_exceptions": {
+        "example": null,
+        "input_count": 0,
+        "output_count": 0,
+        "positioned_diagnostics_preserved": 0
+      },
+      "normalized_record_sha256": "sha256:0088d544c641bf78a0ca38e1f6ca0873f5fa4142c96366b2c878f75e10974851",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__sandbox-stable__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:1a5e7018abca53a11ff6a4b5922a1f8bf28f9376897cb3ec86e59d6b95af7d5b",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 56,
+          "disposition": "out_of_scope",
+          "evidence": "Isolated Linux environments on [Cloudflare Containers](https://developers.cloudflare.com/containers/), driven from Workers.",
+          "line": 8,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 49,
+        "output_count": 49,
+        "statuses": {
+          "rejected": 49
+        }
+      },
+      "sample": "registry__sandbox-stable__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:348aa8bc08796bc30fcfce2fadc878e84b7080db7a08ceaf3569fb0984636dac",
+        "path": "plugins/cloudflare/skills/sandbox-stable",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "complete",
+      "status_before": "complete"
+    },
+    {
+      "counts_after": {
+        "finding_count": 41,
+        "finding_group_count": 40,
+        "raw_finding_count": 50
+      },
+      "counts_before": {
+        "finding_count": 41,
+        "finding_group_count": 40,
+        "raw_finding_count": 50
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/turnstile-spin",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 48,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 48
+        },
+        "input_count": 11,
+        "output_count": 11,
+        "positioned_diagnostics_preserved": 8
+      },
+      "normalized_record_sha256": "sha256:e5245b251e894ba3885c1f18ea26a6d2a27d4fc5f979a222b4fb4d0d20fee32b",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__turnstile-spin__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:2c44b4753d2371a2b220f86d7f50699f7415da58ad7172c2579237be63d948ca",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 116,
+          "disposition": "out_of_scope",
+          "evidence": "readable behavior. Product requirements come from the [Turnstile documentation](https://developers.cloudflare.com/turnstile/), and the hosted prompt must mirror",
+          "line": 14,
+          "reference_kind": "markdown_link",
+          "source_path": "SKILL.md",
+          "status": "rejected",
+          "target_path": null
+        },
+        "input_count": 36,
+        "output_count": 36,
+        "statuses": {
+          "missing": 14,
+          "rejected": 3,
+          "resolved": 19
+        }
+      },
+      "sample": "registry__turnstile-spin__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:989704c37d7721dfa5a8ed0af7bd0727c26edd1eb7256e17a4af0ba108fc3a89",
+        "path": "plugins/cloudflare/skills/turnstile-spin",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/web-perf",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 158,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 158
+        },
+        "input_count": 11,
+        "output_count": 11,
+        "positioned_diagnostics_preserved": 11
+      },
+      "normalized_record_sha256": "sha256:0ace0c9fed85c0b99ba09a16e0c2f115cf8d28a1b4832a9dfaafb5da9418abdf",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__web-perf__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:d8de42cf56fbd93f3a372970ab5f09fa23ea1c2a6c3349a385f32cb969568283",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 14,
+          "disposition": "partial",
+          "evidence": "| Webpack | `webpack.config.js`, `webpack.*.js` |",
+          "line": 158,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 15,
+        "output_count": 15,
+        "statuses": {
+          "missing": 15
+        }
+      },
+      "sample": "registry__web-perf__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:599ec25088c3d0b76f5a137e5afe65366edf3ac633333f46ae1673b32897f91c",
+        "path": "plugins/cloudflare/skills/web-perf",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 17,
+        "finding_group_count": 15,
+        "raw_finding_count": 17
+      },
+      "counts_before": {
+        "finding_count": 17,
+        "finding_group_count": 15,
+        "raw_finding_count": 17
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/workers-best-practices",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 16,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 16
+        },
+        "input_count": 3,
+        "output_count": 3,
+        "positioned_diagnostics_preserved": 3
+      },
+      "normalized_record_sha256": "sha256:7c2e07220073d82ce449c0ccc8dd5f6e27b016b3145c43fb7879d242da59ef61",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__workers-best-practices__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:0a18d3225c5172850deb8f401491e7b9db6938fe1f6f7007cab4d20669a9fba6",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 29,
+          "disposition": "partial",
+          "evidence": "| Wrangler config schema | `node_modules/wrangler/config-schema.json` | Config fields, binding shapes, allowed values |",
+          "line": 16,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 11,
+        "output_count": 11,
+        "statuses": {
+          "missing": 5,
+          "rejected": 1,
+          "resolved": 5
+        }
+      },
+      "sample": "registry__workers-best-practices__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:ff9317103e220459daa932050dcf6d030da327e39ab7e76d66265ffc2ce8d249",
+        "path": "plugins/cloudflare/skills/workers-best-practices",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 3,
+        "finding_group_count": 3,
+        "raw_finding_count": 3
+      },
+      "counts_before": {
+        "finding_count": 3,
+        "finding_group_count": 3,
+        "raw_finding_count": 3
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "registry/wrangler",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 17,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 17
+        },
+        "input_count": 23,
+        "output_count": 23,
+        "positioned_diagnostics_preserved": 23
+      },
+      "normalized_record_sha256": "sha256:53ea8b41739bcb9360edaf717ab82fd9bdc74d63200828bd1e40939348055d16",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/registry__wrangler__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:6f9e36594378495794766f4637e36cb7cfd956cdad65e5f072909dea9e9c26be",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 29,
+          "disposition": "partial",
+          "evidence": "| Wrangler config schema | `node_modules/wrangler/config-schema.json` | Config fields, binding shapes, allowed values |",
+          "line": 17,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 26,
+        "output_count": 26,
+        "statuses": {
+          "missing": 26
+        }
+      },
+      "sample": "registry__wrangler__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:dd2dacdd67de17642bd9b1722a3d403c041f3dc94098e189906147d5a8868cec",
+        "path": "plugins/cloudflare/skills/wrangler",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "rorkai/app-store-connect-cli-skills/asc-workflow",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 3,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 3
+        },
+        "input_count": 9,
+        "output_count": 9,
+        "positioned_diagnostics_preserved": 8
+      },
+      "normalized_record_sha256": "sha256:97166212ee7eb11685aeafcd2f65ebecf71d54e6497c545e5a39f49f5932f786",
+      "profile": {
+        "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+        "id": "static-extended-v3"
+      },
+      "raw_report_path": "controlled-scan/rorkai__app-store-connect-cli-skills__asc-workflow__static-extended-v3/raw.json",
+      "raw_sha256": "sha256:2902038b0b75f5275d6554c14cf01fa3760793be4316d527c336826200db4a46",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 122,
+          "disposition": "partial",
+          "evidence": "e, and audit repo-local multi-step automations with current `asc workflow` and `.asc/workflow.json`, including step outputs and safe release/TestFlight workflow",
+          "line": 3,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 8,
+        "output_count": 8,
+        "statuses": {
+          "missing": 8
+        }
+      },
+      "sample": "rorkai__app-store-connect-cli-skills__asc-workflow__static-extended-v3",
+      "source": {
+        "content_digest": "sha256:52bdae4c013cd392b2848747d2c6afffc002009d5528b8ef14d8859f8f933e9d",
+        "path": "skills/asc-workflow",
+        "repository": "rorkai/app-store-connect-cli-skills",
+        "revision": "7de1ef7cc831f62d205dfa589063f3831f66391b"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "counts_before": {
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "raw_finding_count": 0
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "rorkai/app-store-connect-cli-skills/asc-workflow",
+      "ledger_exceptions": {
+        "example": {
+          "end_line": 3,
+          "fatal": false,
+          "message": "A local path-like reference does not match any bundled artifact, such as a file the skill writes at runtime.",
+          "outcome": "partial",
+          "path": "SKILL.md",
+          "phase": "reference_resolution",
+          "reason_code": "reference_missing",
+          "start_line": 3
+        },
+        "input_count": 9,
+        "output_count": 9,
+        "positioned_diagnostics_preserved": 8
+      },
+      "normalized_record_sha256": "sha256:0fac841fab0cf93ee30e8f8f05d7351d609a7ca0c784f6f1d304b22a13f072ac",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/rorkai__app-store-connect-cli-skills__asc-workflow__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:43e1a1a5315255dca733f528c4eccf02c3ab6b61a9e8a3b5d5c279a1aa7df2d7",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 122,
+          "disposition": "partial",
+          "evidence": "e, and audit repo-local multi-step automations with current `asc workflow` and `.asc/workflow.json`, including step outputs and safe release/TestFlight workflow",
+          "line": 3,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "missing",
+          "target_path": null
+        },
+        "input_count": 8,
+        "output_count": 8,
+        "statuses": {
+          "missing": 8
+        }
+      },
+      "sample": "rorkai__app-store-connect-cli-skills__asc-workflow__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:52bdae4c013cd392b2848747d2c6afffc002009d5528b8ef14d8859f8f933e9d",
+        "path": "skills/asc-workflow",
+        "repository": "rorkai/app-store-connect-cli-skills",
+        "revision": "7de1ef7cc831f62d205dfa589063f3831f66391b"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 36,
+        "finding_group_count": 18,
+        "raw_finding_count": 36
+      },
+      "counts_before": {
+        "finding_count": 36,
+        "finding_group_count": 18,
+        "raw_finding_count": 36
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "software-mansion-labs/skills/react-native-best-practices",
+      "ledger_exceptions": {
+        "example": {
+          "analyzers": [
+            "static_patterns_tool_misuse"
+          ],
+          "end_line": null,
+          "fatal": false,
+          "message": "A security-relevant expression exceeded a bounded static parser's span limit.",
+          "outcome": "partial",
+          "path": "references/animations/animation-functions.md",
+          "phase": "static",
+          "reason_code": "static_parse_limit",
+          "start_line": null
+        },
+        "input_count": 5,
+        "output_count": 5,
+        "positioned_diagnostics_preserved": 0
+      },
+      "normalized_record_sha256": "sha256:a55cd75188af81f869c8c804a717a1c640aa88ce77d0e35af9aa69a7eb99e03e",
+      "profile": {
+        "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+        "id": "static-extended-v3"
+      },
+      "raw_report_path": "controlled-scan/software-mansion-labs__skills__react-native-best-practices__static-extended-v3/raw.json",
+      "raw_sha256": "sha256:25a8ca2e1deffe8c9b99dbce07606e5e6a26f3f7d9b5bf0864f48e9bd809c4cc",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 4,
+          "disposition": "analyzed",
+          "evidence": "| `references/animations/SKILL.md` | CSS transitions, CSS animations, CSS pseudo-selectors and callbacks, shared value animations, GPU shader animations (WebGPU",
+          "line": 17,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "resolved",
+          "target_path": "references/animations/SKILL.md"
+        },
+        "input_count": 9,
+        "output_count": 9,
+        "statuses": {
+          "resolved": 9
+        }
+      },
+      "sample": "software-mansion-labs__skills__react-native-best-practices__static-extended-v3",
+      "source": {
+        "content_digest": "sha256:5c25068d398a8ade192d4e03ea854299973845828367c0024e490f19a2b88a3d",
+        "path": "skills/react-native-best-practices",
+        "repository": "software-mansion-labs/skills",
+        "revision": "58afa0a09b01dc47819af8fd48bb062561414108"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    },
+    {
+      "counts_after": {
+        "finding_count": 32,
+        "finding_group_count": 14,
+        "raw_finding_count": 41
+      },
+      "counts_before": {
+        "finding_count": 32,
+        "finding_group_count": 14,
+        "raw_finding_count": 41
+      },
+      "exception_annotations": [],
+      "false_positive_groups": 0,
+      "id": "software-mansion-labs/skills/react-native-best-practices",
+      "ledger_exceptions": {
+        "example": {
+          "analyzers": [
+            "static_patterns_supply_chain_dependency_source_runtime_limit",
+            "static_patterns_tool_misuse",
+            "static_yara"
+          ],
+          "end_line": null,
+          "fatal": false,
+          "message": "Inspection reached its configured runtime limit.",
+          "outcome": "partial",
+          "path": "README.md",
+          "phase": "static",
+          "reason_code": "runtime_limit",
+          "start_line": null
+        },
+        "input_count": 90,
+        "output_count": 90,
+        "positioned_diagnostics_preserved": 0
+      },
+      "normalized_record_sha256": "sha256:b11a3bbb3fa5377e84553ff7bc8b634a6b76e0fd2b65a456f9b20e8176cb8838",
+      "profile": {
+        "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+        "id": "static-standard-v3"
+      },
+      "raw_report_path": "controlled-scan/software-mansion-labs__skills__react-native-best-practices__static-standard-v3/raw.json",
+      "raw_sha256": "sha256:85983fe0be50da15adc99511896865ba0d1d1c75d79c0b12792ea4ff0931e08d",
+      "reference_evidence_truncated": false,
+      "references": {
+        "example": {
+          "column": 4,
+          "disposition": "analyzed",
+          "evidence": "| `references/animations/SKILL.md` | CSS transitions, CSS animations, CSS pseudo-selectors and callbacks, shared value animations, GPU shader animations (WebGPU",
+          "line": 17,
+          "reference_kind": "quoted_or_code",
+          "source_path": "SKILL.md",
+          "status": "resolved",
+          "target_path": "references/animations/SKILL.md"
+        },
+        "input_count": 9,
+        "output_count": 9,
+        "statuses": {
+          "resolved": 9
+        }
+      },
+      "sample": "software-mansion-labs__skills__react-native-best-practices__static-standard-v3",
+      "source": {
+        "content_digest": "sha256:5c25068d398a8ade192d4e03ea854299973845828367c0024e490f19a2b88a3d",
+        "path": "skills/react-native-best-practices",
+        "repository": "software-mansion-labs/skills",
+        "revision": "58afa0a09b01dc47819af8fd48bb062561414108"
+      },
+      "status_after": "partial",
+      "status_before": "partial"
+    }
+  ],
+  "scanner": {
+    "id": "skillspector",
+    "revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+    "version": "2.13.1"
+  },
+  "schema_version": 1,
+  "statuses_after": {
+    "complete": 3,
+    "partial": 15
+  },
+  "statuses_before": {
+    "complete": 3,
+    "partial": 15
+  },
+  "unchanged_source_scanner_profile_and_finding_counts": true,
+  "validation_command": "/workspace/scratch/d2014e5db798/registry-venv/bin/python /workspace/scratch/d2014e5db798/check-real-reference-reprojection.py",
+  "validation_script_sha256": "sha256:6e172f21088f45bb16bb954fc9ea7776e3f9de2d09436c0b6557d58e6b4fbd21",
+  "working_source_sha256": {
+    "schemas/skillspector-record-v3.schema.json": "sha256:a78204d784438da814c3d983b2f1758008371634ee83d4c7a62832cded6afbd9",
+    "schemas/skillspector-shard-v3.schema.json": "sha256:ac47816d49cfd074374829d66736cbd11107b202fce595944104db09ac21298f",
+    "scripts/skillspector_contract.py": "sha256:1b4ec303bae9333a92fd45223c6d417df0f4fb49097515b1c1ea73748f689510",
+    "scripts/skillspector_exceptions.py": "sha256:20a4f16c94cdb90f7c32dd9673f1ac671cba7fb6a5db6e2ee0280158c90af214",
+    "scripts/skillspector_reports.py": "sha256:a8ab26509fd76c256aca893548787db5cde86d6d4b37d4ae0f17e8ed3f4e596a"
+  }
+}

@@ -196,6 +196,9 @@ test('keeps each plugin selector compact above a two-line command', async ({ pag
 test('operates combobox and select catalog filters entirely by keyboard', async ({ page }) => {
   const failures = observeFailures(page)
   await page.goto('plugins')
+  const policy = page.locator('meta[http-equiv="Content-Security-Policy"]')
+  const finalizedPolicy = await policy.getAttribute('content')
+  expect(finalizedPolicy).toContain("'sha256-0sLsI2a+NIcumVvBF9zD/ArGqlZR2xfnxsALPmK7nj8='")
 
   const category = page.getByRole('combobox', { name: 'Filter by category' })
   await expect(category).toHaveAttribute('data-hydrated', 'true')
@@ -220,6 +223,7 @@ test('operates combobox and select catalog filters entirely by keyboard', async 
   await source.press('Space')
   await page.getByRole('option', { name: /^Community bridges/ }).press('Enter')
   await expect(source).toContainText('Community bridges')
+  await expect(policy).toHaveAttribute('content', finalizedPolicy!)
 
   const cards = page.locator('.plugin-card')
   await expect(cards).toHaveCount(1)
@@ -236,7 +240,7 @@ test('keeps bridge alternatives on one product page', async ({ page }) => {
   expect(failures).toEqual([])
 })
 
-test('renders target authentication only inside an opened installer', async ({ page }) => {
+test('shows authentication on collapsed cards and explains the resolved target on touch and keyboard', async ({ page, isMobile }) => {
   const failures = observeFailures(page)
   await page.goto('plugins')
   await expect(page.getByText(/2 community packages found on GitHub/)).toBeVisible()
@@ -244,14 +248,59 @@ test('renders target authentication only inside an opened installer', async ({ p
   const search = page.getByRole('searchbox', { name: 'Search plugins' })
   await search.fill('portable-demo')
   const portable = page.locator('.plugin-card').filter({ hasText: 'portable-demo' })
-  await expect(portable.locator('.plugin-card__auth')).toHaveCount(0)
+  const indicator = portable.getByRole('button', { name: 'Authentication requirements unknown', exact: true })
+  await expect(indicator).toBeVisible()
+  if (isMobile) await indicator.tap()
+  else await indicator.click()
+  await expect(page.locator('.authentication-indicator__content')).toContainText('Select agents in Install')
+  await expect(page.locator('.authentication-indicator__content')).toBeInViewport({ ratio: 1 })
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.authentication-indicator__content')).toHaveCount(0)
+  await expect(indicator).toBeFocused()
+  await page.waitForTimeout(180)
+  await expect(page.locator('.authentication-indicator__content')).toHaveCount(0)
+  if (!isMobile) {
+    await page.mouse.move(0, 0)
+    await indicator.hover()
+    await expect(page.locator('.authentication-indicator__content')).toBeVisible()
+    await page.mouse.move(0, 0)
+    await expect(page.locator('.authentication-indicator__content')).toHaveCount(0)
+  }
   await openCardInstaller(portable)
   await portable.getByRole('button', { name: /Choose clients for portable-demo:/ }).click()
   await expect(page.locator('.app-multiselect__content')).toBeInViewport({ ratio: 1 })
   await page.getByRole('checkbox', { name: /Codex/ }).click()
   await page.keyboard.press('Escape')
   await expect(portable.locator('.plugin-card__auth')).toHaveText('Authentication required')
+  const required = portable.getByRole('button', { name: 'Authentication required', exact: true })
+  await expect(required).toHaveAttribute('data-authentication', 'required')
+  await required.focus()
+  await page.mouse.move(0, 0)
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.authentication-indicator__content')).toContainText('codex: authentication required')
+  await expect(page.getByRole('dialog')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.authentication-indicator__content')).toHaveCount(0)
   await expect(portable.getByRole('button', { name: /Choose clients for portable-demo: Codex/ })).toBeVisible()
+
+  const noAuthFixture = makeDiscoveryFixture('not_required')
+  await page.route('**/discovery/**', async (route) => {
+    const body = noAuthFixture.get(new URL(route.request().url()).pathname.split('/discovery/')[1] ?? '')
+    await route.fulfill(body ? { body: Buffer.from(body), contentType: 'application/json' } : { status: 404, body: 'missing' })
+  })
+  await page.evaluate(() => caches.delete('uap-discovery-v1'))
+  await page.reload()
+  await expect(page.getByText(/2 community packages found on GitHub/)).toBeVisible()
+  await search.fill('portable-demo')
+  await openCardInstaller(portable)
+  await portable.getByRole('button', { name: /Choose clients for portable-demo:/ }).click()
+  await page.getByRole('checkbox', { name: /Codex/ }).click()
+  await page.keyboard.press('Escape')
+  const noAuth = portable.getByRole('button', { name: 'No authentication required', exact: true })
+  await expect(noAuth).toHaveAttribute('data-authentication', 'not_required')
+  await noAuth.click()
+  await expect(page.locator('.authentication-indicator__content')).toContainText('codex: no authentication required')
+  await page.keyboard.press('Escape')
 
   await page.goto('plugins/atlassian')
   await expect(page.locator('.distribution-list')).toContainText('codex — Managed install; Authentication required')
@@ -338,7 +387,7 @@ test('fails closed for an unavailable discovered package and renders the generat
   await expect(page.getByRole('heading', { name: /Page not found/i })).toBeVisible()
 })
 
-function makeDiscoveryFixture() {
+function makeDiscoveryFixture(authentication: 'required' | 'not_required' = 'required') {
   const encoder = new TextEncoder()
   const canonical = (value: unknown) => {
     const sort = (item: unknown): unknown => Array.isArray(item)
@@ -355,7 +404,7 @@ function makeDiscoveryFixture() {
   const generatedAt = generated.toISOString().replace('.000Z', 'Z')
   const expiresAt = expires.toISOString().replace('.000Z', 'Z')
   const compact = {
-    slug: 'discovery:example/portable//agent-plugin', name: 'portable-demo', description: 'Portable test package', owner: 'example', repository: 'example/portable', package_path: 'agent-plugin', revision: 'a'.repeat(40), version: '1.2.3', license: 'Apache-2.0', schema_version: '1.0.0', components: { extensions: 0, mcp: 1, skills: 1 }, mcp_transports: ['stdio'], compatible_clients: ['codex', 'cursor'], authentication: 'required', status: 'conformant_unreviewed', runtime_reviewed: false, tree_digest: `sha256:${'1'.repeat(64)}`, manifest_digest: `sha256:${'2'.repeat(64)}`, stars: 412, repository_updated_at: generatedAt, reviewed_distribution_id: null, availability: 'available',
+    slug: 'discovery:example/portable//agent-plugin', name: 'portable-demo', description: 'Portable test package', owner: 'example', repository: 'example/portable', package_path: 'agent-plugin', revision: 'a'.repeat(40), version: '1.2.3', license: 'Apache-2.0', schema_version: '1.0.0', components: { extensions: 0, mcp: 1, skills: 1 }, mcp_transports: ['stdio'], compatible_clients: ['codex', 'cursor'], authentication, status: 'conformant_unreviewed', runtime_reviewed: false, tree_digest: `sha256:${'1'.repeat(64)}`, manifest_digest: `sha256:${'2'.repeat(64)}`, stars: 412, repository_updated_at: generatedAt, reviewed_distribution_id: null, availability: 'available',
   }
   const unavailable = { ...compact, slug: 'discovery:example/unavailable//agent-plugin', name: 'unavailable-demo', repository: 'example/unavailable', revision: 'c'.repeat(40), availability: 'unavailable' }
   const compactRecords = [compact, unavailable]

@@ -1,0 +1,352 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scanner",
+    "profile",
+    "repository",
+    "records"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "scanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "const": "skillspector"
+        },
+        "version": {
+          "const": "2.13.1"
+        },
+        "revision": {
+          "const": "f3b25697d76256998ca9d42c198d256258d4c035"
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "const": "static-only-v2"
+        },
+        "digest": {
+          "const": "sha256:f8844756e3a56036425059aa70d57acd9c823f5054be2960838e38c2ce945731"
+        }
+      }
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "maxLength": 200
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "plugin_path",
+          "skill_name",
+          "source",
+          "scanned_at",
+          "status",
+          "finding_count",
+          "findings_truncated",
+          "findings",
+          "errors"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "kind": {
+            "enum": [
+              "plugin_skill",
+              "standalone_skill"
+            ]
+          },
+          "plugin_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000,
+                "pattern": "^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repository",
+              "revision",
+              "path",
+              "content_digest"
+            ],
+            "properties": {
+              "repository": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "maxLength": 200
+              },
+              "revision": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 1000,
+                "pattern": "^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$"
+              },
+              "content_digest": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "agentplugins-tree-sha256-v1 digest of the entire selected skill subtree, including paths and executable modes; null if acquisition failed."
+              }
+            }
+          },
+          "scanned_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "partial",
+              "error"
+            ]
+          },
+          "finding_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "findings_truncated": {
+            "type": "boolean"
+          },
+          "findings": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "severity",
+                "message",
+                "path"
+              ],
+              "properties": {
+                "rule": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "severity": {
+                  "enum": [
+                    "INFO",
+                    "LOW",
+                    "MEDIUM",
+                    "HIGH",
+                    "CRITICAL"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "code",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              }
+            }
+          },
+          "report_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "complete",
+                    "partial"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "report_digest"
+              ],
+              "properties": {
+                "scanned_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+                },
+                "source": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "repository",
+                    "revision",
+                    "path",
+                    "content_digest"
+                  ],
+                  "properties": {
+                    "repository": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+                      "maxLength": 200
+                    },
+                    "revision": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$"
+                    },
+                    "path": {
+                      "type": "string",
+                      "maxLength": 1000,
+                      "pattern": "^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$"
+                    },
+                    "content_digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "complete"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "errors": {
+                  "maxItems": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "plugin_skill"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "plugin_path": {
+                  "type": "string",
+                  "maxLength": 1000,
+                  "pattern": "^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "plugin_path": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://universal-agent-plugins.com/schemas/skillspector-shard-v2.schema.json",
+  "title": "Display-only automatic SkillSpector skillspector-shard-v2"
+}

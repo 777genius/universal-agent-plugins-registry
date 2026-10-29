@@ -4,7 +4,8 @@
 -->
 <script setup lang="ts">
 import type { RegistryPlugin } from '~/types/registry'
-import { authenticationLabel, deliveryLabel, expectedDistribution, githubSourceUrl, resolveDistribution } from '~/utils/registry'
+import { deliveryLabel, expectedDistribution, githubSourceUrl, resolveDistribution, vendorInstaller } from '~/utils/registry'
+import { authenticationIndicator } from '~/utils/authentication'
 import { pluginCommands } from '~/utils/commands'
 
 const props = defineProps<{ plugin: RegistryPlugin }>()
@@ -18,6 +19,8 @@ const autoDetect = ref(true)
 const installExpanded = ref(false)
 const installPanelId = `plugin-install-${props.plugin.install_source.replace(/[^a-z0-9_-]+/gi, '-')}`
 const resolution = computed(() => resolveDistribution(props.plugin, targets.value))
+const installerOverride = computed(() => vendorInstaller(props.plugin))
+const installerAvailable = computed(() => Boolean(installerOverride.value && current.value))
 const selectedDistribution = computed(() => isDiscovered.value || current.value ? resolution.value.distribution : undefined)
 const canInstall = computed(() => isDiscovered.value
   ? props.plugin.installable && (autoDetect.value || Boolean(selectedDistribution.value))
@@ -44,8 +47,9 @@ const targetOptions = computed(() => clients.map(client => ({
     return target ? deliveryLabel(target.delivery) : 'Not installable from an active release'
   })(),
 })))
-const authLabel = computed(() => authenticationLabel(resolution.value.distribution, targets.value, props.plugin.authentication))
-const showAuthentication = computed(() => !autoDetect.value && authLabel.value !== 'No account required')
+const authIndicator = computed(() => authenticationIndicator(selectedDistribution.value, targets.value, autoDetect.value))
+const authLabel = computed(() => authIndicator.value.label)
+const showAuthentication = computed(() => !autoDetect.value && authIndicator.value.state !== 'not_required')
 const repositoryStars = computed(() => new Intl.NumberFormat('en', {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -79,7 +83,7 @@ function updateAutoDetect(value: boolean) {
 
 <template>
   <article class="plugin-card" :class="{ 'plugin-card--expanded': installExpanded }">
-    <span v-if="!isDiscovered" class="plugin-card__ribbon" :class="{ 'plugin-card__ribbon--muted': !canInstall }">{{ canInstall ? 'Reviewed plugin' : expired ? 'Temporarily paused' : !published ? 'Preview only' : 'Not available' }}</span>
+    <span v-if="!isDiscovered" class="plugin-card__ribbon" :class="{ 'plugin-card__ribbon--muted': !canInstall && !installerAvailable }">{{ canInstall || installerAvailable ? 'Reviewed plugin' : expired ? 'Temporarily paused' : !published ? 'Preview only' : 'Not available' }}</span>
     <div class="plugin-card__identity" :class="{ 'plugin-card__identity--no-icon': !iconURL, 'plugin-card__identity--with-ribbon': !isDiscovered }">
       <span v-if="iconURL" class="plugin-card__icon"><img :src="iconURL" alt="" width="32" height="32" loading="lazy" /></span>
       <div class="plugin-card__identity-copy">
@@ -97,6 +101,8 @@ function updateAutoDetect(value: boolean) {
     ><span aria-hidden="true">{{ plugin.security.outcome === 'blocking_findings' ? '!' : plugin.security.outcome === 'warnings' ? '△' : '✓' }}</span> {{ securityLabel }}</p>
     <p class="plugin-card__description">{{ plugin.description }}</p>
     <div class="plugin-card__bottom">
+      <div class="plugin-card__actions">
+      <AuthenticationIndicator :indicator="authIndicator" />
       <button
         v-if="canInstall"
         type="button"
@@ -108,7 +114,9 @@ function updateAutoDetect(value: boolean) {
       >
         Install
       </button>
-      <span v-else class="plugin-card__unavailable">{{ isDiscovered ? 'Unavailable at its indexed source; no install command is generated.' : expired ? 'Commands disabled because the Directory is temporarily stale.' : !published ? 'Commands disabled in preview.' : resolution.unavailable_reason }}</span>
+      <span v-else class="plugin-card__unavailable">{{ isDiscovered ? 'Unavailable at its indexed source; no install command is generated.' : expired ? 'Commands disabled because the Directory is temporarily stale.' : !published ? 'Commands disabled in preview.' : installerOverride ? 'Installs with its own installer; no universal CLI command is generated.' : resolution.unavailable_reason }}</span>
+      <a v-if="installerOverride && !canInstall && !isDiscovered" class="plugin-card__vendor-install" :href="installerOverride.url" target="_blank" rel="noreferrer">{{ installerOverride.label }} ↗</a>
+      </div>
       <Transition name="plugin-install">
         <div v-if="installExpanded && canInstall" :id="installPanelId" class="plugin-card__install-panel">
           <p v-if="!autoDetect && selectedDistribution" class="plugin-card__author">By {{ selectedDistribution.publisher }} · <a :href="isDiscovered ? provenanceURL : githubSourceUrl(plugin, selectedDistribution)" target="_blank" rel="noreferrer">View source <span class="sr-only">for {{ plugin.name }}</span></a></p>

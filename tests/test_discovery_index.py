@@ -24,6 +24,7 @@ from scripts.build_discovery_index import (
     CODE_SEARCH_REQUEST_INTERVAL_SECONDS,
     DISCOVERY_PACKAGE_PATH_RE,
     DiscoveryError,
+    DiscoveryInputLimitError,
     GitHubAPI,
     GitHubHTTPError,
     MAX_GITHUB_REQUEST_ATTEMPTS,
@@ -127,20 +128,22 @@ class SearchFixtureAPI(FixtureAPI):
 class DiscoveryAcquisitionTests(unittest.TestCase):
     def test_oversized_package_tree_is_invalid_before_any_blob_lookup(self) -> None:
         # Red if a known-invalid 5,001-file package spends its slice fetching
-        # blob sizes instead of producing a deterministic package outcome.
-        repository = mock.Mock(root=Path("/tmp/inert-mirror"), revision="a" * 40)
-        tree = b"".join(b"100644 blob " + b"b" * 40 + f"\tplugins/demo/file-{index:05d}.txt\0".encode()
-                        for index in range(5001))
-        calls = []
-        def tree_only(root, *arguments, **options):
-            calls.append(arguments[0])
-            if arguments[0] != "ls-tree":
-                raise AssertionError("invalid tree triggered a blob lookup")
-            return tree
-        with mock.patch("scripts.build_discovery_index.git", side_effect=tree_only):
-            with self.assertRaisesRegex(DiscoveryError, "package tree exceeds 5000 files"):
-                bounded_package_files(repository, "plugins/demo")
-        self.assertEqual(calls, ["ls-tree"])
+        # blob sizes. Custom limits must keep the same typed refusal boundary.
+        for maximum in (5000, 1):
+            with self.subTest(max_files=maximum):
+                repository = mock.Mock(root=Path("/tmp/inert-mirror"), revision="a" * 40, work_budget=None)
+                tree = b"".join(b"100644 blob " + b"b" * 40 + f"\tplugins/demo/file-{index:05d}.txt\0".encode()
+                                for index in range(maximum + 1))
+                calls = []
+                def tree_only(root, *arguments, **options):
+                    calls.append(arguments[0])
+                    if arguments[0] != "ls-tree":
+                        raise AssertionError("invalid tree triggered a blob lookup")
+                    return tree
+                with mock.patch("scripts.build_discovery_index.git", side_effect=tree_only):
+                    with self.assertRaisesRegex(DiscoveryInputLimitError, f"package tree exceeds {maximum} files"):
+                        bounded_package_files(repository, "plugins/demo", **({"max_files": maximum} if maximum != 5000 else {}))
+                self.assertEqual(calls, ["ls-tree"])
 
     def test_nonportable_git_path_is_package_invalid_not_scan_incomplete(self) -> None:
         repository = mock.Mock(root=Path("/tmp/inert-mirror"), revision="a" * 40)

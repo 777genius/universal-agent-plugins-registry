@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: signed-feed-freshness
-  cancel-in-progress: true
+  group: signed-feed-freshness-${{ github.event_name }}-${{ github.event_name == 'schedule' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'schedule' }}
 
 jobs:
   verify:

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { ClientID } from '~/types/registry'
 import { pluginCommands } from '~/utils/commands'
+import { catalogVisiblePlugins } from '~/utils/filter'
 import { deliveryLabel, expectedDistribution, resolveDistribution } from '~/utils/registry'
 
 const registry = useRegistry()
-const reviewedCount = computed(() => registry.plugins.filter(plugin => plugin.trust_state !== 'conformant_unreviewed').length)
-const discoveryCount = computed(() => registry.plugins.length - reviewedCount.value)
+const visiblePlugins = computed(() => catalogVisiblePlugins(registry.plugins))
+const reviewedCount = computed(() => visiblePlugins.value.filter(plugin => plugin.trust_state !== 'conformant_unreviewed').length)
+const discoveryCount = computed(() => visiblePlugins.value.length - reviewedCount.value)
 const { current, expired, published } = useDirectoryStatus()
 const { asset, repositoryUrl } = useSite()
 const preferredDemoNames = ['chrome-devtools', 'context7', 'cloudflare-docs', 'agent-code-navigator']
@@ -102,7 +104,7 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
           <h1>One plugin.<br /><em>All your agents</em></h1>
           <p class="hero__lead">One command finds your installed agents and lets you confirm where to set up an Agent Plugins 1.0 package. You can also choose agents manually, then inspect, update, repair, switch, or remove the plugin with the same CLI.</p>
           <div class="hero__actions">
-            <NuxtLink class="button button--primary" to="/plugins">Explore {{ registry.plugins.length }} plugins <span aria-hidden="true">→</span></NuxtLink>
+            <NuxtLink class="button button--primary" to="/plugins">Explore {{ visiblePlugins.length }} plugins <span aria-hidden="true">→</span></NuxtLink>
             <a class="button button--secondary" :href="`${repositoryUrl}/blob/main/registry/README.md#submit-an-external-package`" target="_blank" rel="noreferrer">Add a plugin</a>
           </div>
           <p class="hero__fine-print">Open source · No tracking · Review before enabling</p>
@@ -186,8 +188,8 @@ useHead({ link: [{ rel: 'canonical', href: `${useRuntimeConfig().public.siteUrl}
 
     <div class="container catalog-wrap">
       <PluginCatalog
-        :plugins="registry.plugins"
-        :heading="`Explore ${registry.plugins.length} plugins`"
+        :plugins="visiblePlugins"
+        :heading="`Explore ${visiblePlugins.length} plugins`"
         :intro="`${reviewedCount} reviewed plugins${discoveryCount ? ` plus ${discoveryCount} community packages found on GitHub` : ''}. Choose a plugin, select your agents, and copy one command.`"
       />
     </div>

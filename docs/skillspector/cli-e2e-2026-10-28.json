@@ -1,0 +1,1154 @@
+{
+  "experiment": "final_v3_cli_queue_e2e",
+  "full_evidence_sha256": "sha256:1ab4f224806fea46405259d0fe3b1adbbdd150b1f077170b794ec2eec2bd6e9a",
+  "inputs": {
+    "code_archive_sha256": "sha256:e757948be5fcc0f466d7ce1573e8b6ac939cd9676a0a816274e964f459dbbb72",
+    "code_commit": "de0cea99179469b140684e23066957b0a3e5cb13",
+    "code_files": {
+      ".github/workflows/skillspector-reports.yml": "sha256:ed1dae25d64005d2944bf3d82c4895f19b578c5c36be7c5cee6dfe54fe1aacf3",
+      "schemas/skillspector-auto-selection-v1.schema.json": "sha256:86c4971e2d5325fa243c98424922b9bbbe8e13a563745510a2cdf0e64a7f3877",
+      "schemas/skillspector-manifest-v2.schema.json": "sha256:141ea6e7d168826e16c01eb4106327a14149827151eddf626f1156e9a703fc1f",
+      "schemas/skillspector-manifest-v3.schema.json": "sha256:d8a97d5db071c8d60cf1a32b0cacd0d1d3d541f4a93ccdb53ba1e83d44e4f6c5",
+      "schemas/skillspector-record-v3.schema.json": "sha256:16a67836b226a1c9b686cccc13f7cb6230475eb06ffb7a9dd86d0671625c6934",
+      "schemas/skillspector-reports-v1.schema.json": "sha256:f68f46d75db39ca87c5dfe3bd141368e6c261ca9b7a5939dc7b5a07a1d20b462",
+      "schemas/skillspector-selection-v1.schema.json": "sha256:c42168ee8defd688f4de342d0f8b1dfe6b603421d282c5ae84d38cf8ccc1d48e",
+      "schemas/skillspector-shard-v2.schema.json": "sha256:32df02a18ed794a0deacaa854a8a79372c26797435ec46bc6dcead0fc6c2c08a",
+      "schemas/skillspector-shard-v3.schema.json": "sha256:90fc8334049f82f5b7d42712ff818c8a4b999cd6293ae2b7bf3a98e74385e89f",
+      "scripts/discover_skillspector_sources.py": "sha256:8d4ea2a81676ed21be6cee193486fd669aaad32a55652b1e80fdde4481b02471",
+      "scripts/measure_skillspector_coverage.py": "sha256:72dcb65d996189da666e40ad05db0822aaeaeb4bb519114f93e08c5de592077f",
+      "scripts/measure_skillspector_profiles.py": "sha256:52e00dab5f286fb25f3ba4902e27f755c9289c7450d7deba6be0c81ec0358da8",
+      "scripts/prepare_skillspector_corpus.py": "sha256:f62e8f19156558128fe3a5a2a835ef70fe4959b1a9e056cd02638dbdf7e3c2b0",
+      "scripts/publish_skillspector_coverage.py": "sha256:b718165e809544ac156231df7b3ace466dc9116eb84a5837d415bd9fe0aa65de",
+      "scripts/publish_skillspector_coverage_v3.py": "sha256:66598ad0c16a355efe54cbc0b728ff223ece21dceb34d8bc218e8b83920fd9ce",
+      "scripts/publish_skillspector_reports.py": "sha256:91dadb93f616d3a203f853527c110cc6ea3391ad53f1212c52e2a3ec7169b72a",
+      "scripts/skillspector_contract.py": "sha256:c924d931cc4b1efc1d2aa10bf93394977ed2685e1e64259a0a4dcde4cbaa203f",
+      "scripts/skillspector_coverage.py": "sha256:cb4b7e39f97be70c5303e99c1988dfa420f38227c16a05f0e85268c9d517006e",
+      "scripts/skillspector_coverage_v3.py": "sha256:0af06e6c9e677ceaab8cefb874e370e9204e37bb20e6a8d94b3df5d220c586d3",
+      "scripts/skillspector_exceptions.py": "sha256:20a4f16c94cdb90f7c32dd9673f1ac671cba7fb6a5db6e2ee0280158c90af214",
+      "scripts/skillspector_reports.py": "sha256:72ec12632e5e346bef63e85a280a18b294a2252066e63ca8d6ed9b31c72ecd8a"
+    },
+    "scanner_lock_sha256": "sha256:be67af98205cee9b517a154c7a74dbde2944a4af55f54f58718350bb48a22b37",
+    "scanner_revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+    "selection_file_sha256": "sha256:691a7a8d9944255b1c941edce3f9912c0334116195b8f0eb896f46bf82ef8791",
+    "source_count": 15,
+    "source_pins": [
+      {
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      },
+      {
+        "repository": "rorkai/app-store-connect-cli-skills",
+        "revision": "7de1ef7cc831f62d205dfa589063f3831f66391b"
+      },
+      {
+        "repository": "software-mansion-labs/skills",
+        "revision": "58afa0a09b01dc47819af8fd48bb062561414108"
+      }
+    ]
+  },
+  "limitations": [
+    "Pinned local mirrors measure acquisition from cached Git objects, not network download performance.",
+    "One local sequential process and 15 selected roots do not measure complete catalog coverage or hosted runner capacity.",
+    "Reason counters count emitted diagnostic entries; observed finding groups do not reconstruct the older 603-signal sample."
+  ],
+  "next_due_ids": [],
+  "policy": {
+    "digest": "sha256:b056d791aec06105f7e29df50ed52835868a9cd17179add2a283690711ff44fa",
+    "id": "static-policy-v3"
+  },
+  "profile_identities": {
+    "static-extended-v3": {
+      "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+      "id": "static-extended-v3"
+    },
+    "static-standard-v3": {
+      "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+      "id": "static-standard-v3"
+    }
+  },
+  "profiles": {
+    "static-extended-v3": {
+      "arguments": [
+        "--no-llm",
+        "--format",
+        "json",
+        "--fail-on-incomplete"
+      ],
+      "author_baselines": false,
+      "cache_max_age_seconds": null,
+      "exception_set_digest": "sha256:c9334dd7da799dd369b5d357ea8e327c780b7b2d00790925825a0051581e34b7",
+      "id": "static-extended-v3",
+      "max_files": 2048,
+      "max_tree_bytes": 16777216,
+      "network": "scanner-default-no-transitive",
+      "normalization_version": 3,
+      "osv_timeout_seconds": 3,
+      "static_artifact_seconds": 90,
+      "timeout_seconds": 180,
+      "transitive": false,
+      "workflow_seconds": 150
+    },
+    "static-standard-v3": {
+      "arguments": [
+        "--no-llm",
+        "--format",
+        "json",
+        "--fail-on-incomplete"
+      ],
+      "author_baselines": false,
+      "cache_max_age_seconds": null,
+      "exception_set_digest": "sha256:c9334dd7da799dd369b5d357ea8e327c780b7b2d00790925825a0051581e34b7",
+      "id": "static-standard-v3",
+      "max_files": 512,
+      "max_tree_bytes": 4194304,
+      "network": "scanner-default-no-transitive",
+      "normalization_version": 3,
+      "osv_timeout_seconds": 3,
+      "static_artifact_seconds": 30,
+      "timeout_seconds": 60,
+      "transitive": false,
+      "workflow_seconds": 45
+    }
+  },
+  "publication_performed": false,
+  "rounds": [
+    {
+      "acquisition_seconds": 3.964968,
+      "analysis_seconds": 194.676616,
+      "artifacts": {
+        "round-1/attempts.json": "sha256:e9d469786c6f7108c858ffc16fa5a5a96ebc18685af19eca42cb8661bfd49331",
+        "round-1/coverage.json": "sha256:88c5bdb9ea8f1033d6501f6c27fdf7f6255362e2ed8a1ebe0c53b09f51dcfc45",
+        "round-1/index.json": "sha256:d05a3a703ebf0abcb2ada700d1654db40de7f6714b8ffba93cea80f3fc2746d9",
+        "round-1/selection.json": "sha256:691a7a8d9944255b1c941edce3f9912c0334116195b8f0eb896f46bf82ef8791",
+        "round-1/shards/17efff1856c4ce593b35167f45ff8eee3b8b4edd84ce42b7820ca1e8f4e8e278.json": "sha256:17efff1856c4ce593b35167f45ff8eee3b8b4edd84ce42b7820ca1e8f4e8e278",
+        "round-1/shards/71d66d2db7da306c85781546502e459a6779de22266b0e244e87626d114b46c0.json": "sha256:71d66d2db7da306c85781546502e459a6779de22266b0e244e87626d114b46c0",
+        "round-1/shards/875b4c3b833f8a14b934bbccabccae7bafecf1d64ac6ecf2aafab5bf77fa6895.json": "sha256:875b4c3b833f8a14b934bbccabccae7bafecf1d64ac6ecf2aafab5bf77fa6895"
+      },
+      "attempted_ids": [
+        "registry/agents-sdk",
+        "registry/cloudflare",
+        "registry/cloudflare-email-service",
+        "registry/cloudflare-one",
+        "registry/cloudflare-one-migrations",
+        "registry/durable-objects",
+        "registry/sandbox-migrate-to-next",
+        "registry/sandbox-next",
+        "registry/sandbox-stable",
+        "registry/turnstile-spin",
+        "registry/web-perf",
+        "registry/workers-best-practices",
+        "registry/wrangler",
+        "rorkai/app-store-connect-cli-skills/asc-workflow",
+        "software-mansion-labs/skills/react-native-best-practices"
+      ],
+      "coverage": {
+        "complete": 3,
+        "error": 0,
+        "partial": 12,
+        "pending": 0,
+        "reported": 15,
+        "selected": 15,
+        "stale": 0
+      },
+      "profile_counts": {
+        "static-standard-v3": 15
+      },
+      "queue_dispositions": {
+        "blocked": 10,
+        "none": 3,
+        "scheduled": 2
+      },
+      "queue_reasons": {
+        "complete": 3,
+        "extended_profile_required": 2,
+        "reference_missing": 10
+      },
+      "worker_attempts": 15,
+      "worker_sha256": "sha256:2cf7c680666f98908cc6c28ad656011041a27eefc2e7c9df704e62a6bce26d83"
+    },
+    {
+      "acquisition_seconds": 4.065979,
+      "analysis_seconds": 258.336625,
+      "artifacts": {
+        "round-2/attempts.json": "sha256:0c39c28c35ca53b18d214bf19d86d72126c0c6a10d1e14d66d83139164d2e2c6",
+        "round-2/coverage.json": "sha256:88c5bdb9ea8f1033d6501f6c27fdf7f6255362e2ed8a1ebe0c53b09f51dcfc45",
+        "round-2/index.json": "sha256:487af9b67f258deb94886c9edee37447de47c450d6dd7d763c2eba665f7e839e",
+        "round-2/selection.json": "sha256:691a7a8d9944255b1c941edce3f9912c0334116195b8f0eb896f46bf82ef8791",
+        "round-2/shards/59319809b2441f1a7f53cbd2ee029e90f09ba1782b23c667048e9a63a544ce8f.json": "sha256:59319809b2441f1a7f53cbd2ee029e90f09ba1782b23c667048e9a63a544ce8f",
+        "round-2/shards/71d66d2db7da306c85781546502e459a6779de22266b0e244e87626d114b46c0.json": "sha256:71d66d2db7da306c85781546502e459a6779de22266b0e244e87626d114b46c0",
+        "round-2/shards/c028674c2bbe0bf6fbe5f4418337fb236697bc695c923c36e0b984f339de676a.json": "sha256:c028674c2bbe0bf6fbe5f4418337fb236697bc695c923c36e0b984f339de676a"
+      },
+      "attempted_ids": [
+        "registry/cloudflare",
+        "software-mansion-labs/skills/react-native-best-practices"
+      ],
+      "coverage": {
+        "complete": 3,
+        "error": 0,
+        "partial": 12,
+        "pending": 0,
+        "reported": 15,
+        "selected": 15,
+        "stale": 0
+      },
+      "profile_counts": {
+        "static-extended-v3": 2
+      },
+      "queue_dispositions": {
+        "blocked": 11,
+        "exhausted": 1,
+        "none": 3
+      },
+      "queue_reasons": {
+        "complete": 3,
+        "extended_budget_exhausted": 1,
+        "reference_missing": 10,
+        "static_parse_limit": 1
+      },
+      "worker_attempts": 2,
+      "worker_sha256": "sha256:8f7e26c6cab49522acaebdeb5fd19f6e06c7eb770fa99355f722e1065ff60557"
+    }
+  ],
+  "scanner": {
+    "id": "skillspector",
+    "revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+    "version": "2.13.1"
+  },
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "registry/agents-sdk",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.62589,
+          "analysis_seconds": 10.484369,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:30:46Z",
+          "started_at": "2026-10-28T10:30:35Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 4,
+        "finding_group_count": 4,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 4,
+        "raw_finding_count": 6,
+        "reason_counts": {
+          "analyzer_incomplete": 1,
+          "limitations": 1,
+          "reference_missing": 1,
+          "static_parse_limit": 4
+        },
+        "record_sha256": "sha256:998c25dba1a9d8ea9c2bb44e60ab2dc9028a8f353c4990c05dd21126d1b44b36",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:0853e2a489ce1fe0d59cdda788194aff7860eed80c14767619ecb8a917df7a45",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:b50a4f98140d72e717dcd426d88d05c703554e8472db7a9215a2714d58092ec1",
+        "path": "plugins/cloudflare/skills/agents-sdk",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/cloudflare",
+      "retained_unchanged": false,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 2.322574,
+          "analysis_seconds": 50.356735,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:31:39Z",
+          "started_at": "2026-10-28T10:30:46Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 2,
+        "finding_count": 473,
+        "finding_group_count": 253,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 253,
+        "raw_finding_count": 478,
+        "reason_counts": {
+          "analyzer_incomplete": 15,
+          "limitations": 16,
+          "reference_missing": 1,
+          "runtime_limit": 650
+        },
+        "record_sha256": "sha256:05a2b5937ba62a978569bbaadb68045c9938b3ae900297d851a31cf90731cdb4",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "scheduled",
+          "fingerprint": "sha256:ed75b1cd3e167e60306e939323162e739f64edb9a127de0ced3c592d1e0fecc2",
+          "next_attempt_at": "2026-10-28T10:31:39Z",
+          "next_profile": "static-extended-v3",
+          "reason": "extended_profile_required"
+        },
+        "status": "partial"
+      },
+      "round_2": {
+        "execution": {
+          "acquisition_seconds": 3.012834,
+          "analysis_seconds": 154.743474,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:36:39Z",
+          "started_at": "2026-10-28T10:34:01Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 2,
+        "finding_count": 514,
+        "finding_group_count": 293,
+        "profile": {
+          "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+          "id": "static-extended-v3"
+        },
+        "published_group_count": 293,
+        "raw_finding_count": 518,
+        "reason_counts": {
+          "analyzer_incomplete": 3,
+          "limitations": 3,
+          "reference_missing": 1,
+          "runtime_limit": 358,
+          "static_parse_limit": 17
+        },
+        "record_sha256": "sha256:d9c9bb7f5466c01192f62348124a8912550c106dd26582bfae6c4086b5bdfca1",
+        "retry": {
+          "attempt_count": 2,
+          "disposition": "exhausted",
+          "fingerprint": "sha256:cc31052c08b1a39abb78446601b34daaac74ce97cf56fde28b11c7d28fe2d9f6",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "extended_budget_exhausted"
+        },
+        "status": "partial"
+      },
+      "source": {
+        "content_digest": "sha256:3fc80ceeefbdc9ac0184a6188d6bb8fc1cba8133f92c854e3ad2d52c7f610d6d",
+        "path": "plugins/cloudflare/skills/cloudflare",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/cloudflare-email-service",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.105029,
+          "analysis_seconds": 11.187672,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:31:50Z",
+          "started_at": "2026-10-28T10:31:39Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 26,
+        "finding_group_count": 18,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 18,
+        "raw_finding_count": 28,
+        "reason_counts": {
+          "analyzer_incomplete": 1,
+          "limitations": 1,
+          "reference_missing": 1,
+          "static_parse_limit": 2
+        },
+        "record_sha256": "sha256:f7c19d3e64ee010409cc833f63df8e0985947973a15f8d5b1aff5d5fe080d336",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:2e83fd1031db44835cc519bd9775966902313c635fe48c090431f58bf0e17013",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:2b4953ab08ff3be8eead0988bd8091f9e74aa080f65e7a4fbf3c3381b089172b",
+        "path": "plugins/cloudflare/skills/cloudflare-email-service",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/cloudflare-one",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.014332,
+          "analysis_seconds": 5.420224,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:31:56Z",
+          "started_at": "2026-10-28T10:31:50Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 0,
+        "raw_finding_count": 0,
+        "reason_counts": {
+          "reference_missing": 1
+        },
+        "record_sha256": "sha256:9ed2ec7bde5507bb3705346bd8f1f843b4c3211bc961f7065dadc2c752449652",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:cca09fec93dbd247840d5de4c4200b72ed5aa70df982baf4164fc400fdc63f7e",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:c2ea06e0293f7054c87c869b5da81c258e0295410f93ec9091adc9965e072b07",
+        "path": "plugins/cloudflare/skills/cloudflare-one",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/cloudflare-one-migrations",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.014465,
+          "analysis_seconds": 4.594648,
+          "exit_code": 0,
+          "finished_at": "2026-10-28T10:32:00Z",
+          "started_at": "2026-10-28T10:31:56Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 0,
+        "raw_finding_count": 0,
+        "reason_counts": {},
+        "record_sha256": "sha256:2d8bf6c19c5ee54995af1b0f483b4c2caf358ba7cce771e8ba13d2c6d604e8e6",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "none",
+          "fingerprint": "sha256:fbd3dceb55fe2c3009eb511bece63a0e2e12b0b3a486db340039312c6dd27148",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "complete"
+        },
+        "status": "complete"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:327a8062cbf164accb71da1a5ef132bd06bdcde223d5f33c904491ece59b6ae1",
+        "path": "plugins/cloudflare/skills/cloudflare-one-migrations",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/durable-objects",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.028821,
+          "analysis_seconds": 5.563085,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:32:06Z",
+          "started_at": "2026-10-28T10:32:00Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 6,
+        "finding_group_count": 5,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 5,
+        "raw_finding_count": 7,
+        "reason_counts": {
+          "analyzer_incomplete": 1,
+          "limitations": 1,
+          "reference_missing": 1,
+          "static_parse_limit": 2
+        },
+        "record_sha256": "sha256:302ea9cdf8144284a012da27948d5abbcf032b9a93835e7c921e7b6d96e8044e",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:9831a1602207077004181a638e3d967e80e5f297f93a4a98b0e894c0d29b25c5",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:62934e1b8e470a7e2588aaafc7d3bc07251b313f4ef6c5948f47f962119fcc80",
+        "path": "plugins/cloudflare/skills/durable-objects",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/sandbox-migrate-to-next",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.012971,
+          "analysis_seconds": 5.701492,
+          "exit_code": 0,
+          "finished_at": "2026-10-28T10:32:12Z",
+          "started_at": "2026-10-28T10:32:06Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 1,
+        "finding_group_count": 1,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 1,
+        "raw_finding_count": 1,
+        "reason_counts": {},
+        "record_sha256": "sha256:24958924de80c9285a3648f8601cd7f5ebee276caabf04dce43ae01c592e67e5",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "none",
+          "fingerprint": "sha256:62a3202ddb3112a8ce801bcf52f8db79f0dec8e89dbb9850b523540ba3ae596d",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "complete"
+        },
+        "status": "complete"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:de4c259eb7e0f2bf8443fa607e7d02a42884b2eebbe34b647572d62a863e0959",
+        "path": "plugins/cloudflare/skills/sandbox-migrate-to-next",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/sandbox-next",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.05081,
+          "analysis_seconds": 4.69744,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:32:16Z",
+          "started_at": "2026-10-28T10:32:12Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 0,
+        "raw_finding_count": 0,
+        "reason_counts": {
+          "reference_missing": 1
+        },
+        "record_sha256": "sha256:10cfa87861def1f8142d6be8bbbc715cd98fbe5aa79f0f1d18b95a57efa9d28e",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:da7c4b6f2e92d8bd952a1120d67517e19851bb29043cfd42b5ca5ee8b681e03e",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:e9ec3cba1c5840d330d39653e9344d5475d90fa74c4f8b7ad14315b494ec0ed9",
+        "path": "plugins/cloudflare/skills/sandbox-next",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/sandbox-stable",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.012327,
+          "analysis_seconds": 4.076172,
+          "exit_code": 0,
+          "finished_at": "2026-10-28T10:32:21Z",
+          "started_at": "2026-10-28T10:32:16Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 0,
+        "raw_finding_count": 0,
+        "reason_counts": {},
+        "record_sha256": "sha256:cd736c718be01352844f921700426f86984f9c15be5d36fc834804fc914617e1",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "none",
+          "fingerprint": "sha256:a3ca8e2b457e0c8440c3e70eb35787623c4733d785d49c1fe8826bce2b1a755b",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "complete"
+        },
+        "status": "complete"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:348aa8bc08796bc30fcfce2fadc878e84b7080db7a08ceaf3569fb0984636dac",
+        "path": "plugins/cloudflare/skills/sandbox-stable",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/turnstile-spin",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.100781,
+          "analysis_seconds": 16.238057,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:32:37Z",
+          "started_at": "2026-10-28T10:32:21Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 41,
+        "finding_group_count": 40,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 40,
+        "raw_finding_count": 50,
+        "reason_counts": {
+          "analyzer_incomplete": 1,
+          "limitations": 1,
+          "reference_missing": 1,
+          "static_parse_limit": 5
+        },
+        "record_sha256": "sha256:6b76ed92bc19c57e8ca7596ee6298dd2bd0ef40dc554ba7b3b69064e6bc147b4",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:0dc65111eb693c17c6350a3ae30efd1ddaa9cb29891b65d41f83a71626cecd0c",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:989704c37d7721dfa5a8ed0af7bd0727c26edd1eb7256e17a4af0ba108fc3a89",
+        "path": "plugins/cloudflare/skills/turnstile-spin",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/web-perf",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.015204,
+          "analysis_seconds": 4.135975,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:32:41Z",
+          "started_at": "2026-10-28T10:32:37Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 0,
+        "raw_finding_count": 0,
+        "reason_counts": {
+          "reference_missing": 1
+        },
+        "record_sha256": "sha256:4d1de7706ccc33c9532e81a7e8a14a74a600108f1f1e6bb500e549bfe835b04f",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:d53ef0ae8d192ae23e95711120622175d6d7550bd11dc0339a961d8532b9a9a0",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:599ec25088c3d0b76f5a137e5afe65366edf3ac633333f46ae1673b32897f91c",
+        "path": "plugins/cloudflare/skills/web-perf",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/workers-best-practices",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.046379,
+          "analysis_seconds": 9.142593,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:32:50Z",
+          "started_at": "2026-10-28T10:32:41Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 17,
+        "finding_group_count": 15,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 15,
+        "raw_finding_count": 17,
+        "reason_counts": {
+          "reference_missing": 1
+        },
+        "record_sha256": "sha256:2b079c7e91942afd845f976e91026cdc130fa48a6d8e7ad8f4f970ec885389b3",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:d34d37e704671838da6f0a3af5631ff97c3c374fd5a1f77688e416e98e692ea2",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:ff9317103e220459daa932050dcf6d030da327e39ab7e76d66265ffc2ce8d249",
+        "path": "plugins/cloudflare/skills/workers-best-practices",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "registry/wrangler",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.01974,
+          "analysis_seconds": 6.596079,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:32:57Z",
+          "started_at": "2026-10-28T10:32:50Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 3,
+        "finding_group_count": 3,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 3,
+        "raw_finding_count": 3,
+        "reason_counts": {
+          "reference_missing": 1
+        },
+        "record_sha256": "sha256:a69436b8d1512d7aa1b6f61ea6bff71158dac21d55dfc73c8718b9f20c4641dd",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:1010003557b1689c7e06aae5ad5d814d300f4bdb9ef8acf160b6053c52205af1",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:dd2dacdd67de17642bd9b1722a3d403c041f3dc94098e189906147d5a8868cec",
+        "path": "plugins/cloudflare/skills/wrangler",
+        "repository": "777genius/universal-agent-plugins-registry",
+        "revision": "4d7d8e075e1b0d899965496bacf2811be5d94091"
+      }
+    },
+    {
+      "id": "rorkai/app-store-connect-cli-skills/asc-workflow",
+      "retained_unchanged": true,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.073616,
+          "analysis_seconds": 3.895819,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:33:01Z",
+          "started_at": "2026-10-28T10:32:57Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 0,
+        "finding_group_count": 0,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 0,
+        "raw_finding_count": 0,
+        "reason_counts": {
+          "analyzer_incomplete": 1,
+          "limitations": 1,
+          "reference_missing": 1,
+          "static_parse_limit": 1
+        },
+        "record_sha256": "sha256:38a22a69d48b0641b0044c696a3b6fcacf030d1edd19528154e3d65f433c2885",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "blocked",
+          "fingerprint": "sha256:4e92846df1082c5332ec2c1deaa8ad54cc97ef6cbafb9db5b7a62503bf3ddf85",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "reference_missing"
+        },
+        "status": "partial"
+      },
+      "round_2": null,
+      "source": {
+        "content_digest": "sha256:52bdae4c013cd392b2848747d2c6afffc002009d5528b8ef14d8859f8f933e9d",
+        "path": "skills/asc-workflow",
+        "repository": "rorkai/app-store-connect-cli-skills",
+        "revision": "7de1ef7cc831f62d205dfa589063f3831f66391b"
+      }
+    },
+    {
+      "id": "software-mansion-labs/skills/react-native-best-practices",
+      "retained_unchanged": false,
+      "round_1": {
+        "execution": {
+          "acquisition_seconds": 0.522029,
+          "analysis_seconds": 52.586256,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:33:54Z",
+          "started_at": "2026-10-28T10:33:01Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 32,
+        "finding_group_count": 14,
+        "profile": {
+          "digest": "sha256:a73e7c4a9fa0ac563a885c541d207e90dde2e248ca426f7824cf429d725db921",
+          "id": "static-standard-v3"
+        },
+        "published_group_count": 14,
+        "raw_finding_count": 41,
+        "reason_counts": {
+          "analyzer_incomplete": 12,
+          "limitations": 13,
+          "runtime_limit": 84,
+          "static_parse_limit": 1
+        },
+        "record_sha256": "sha256:330d4c611ca6ffe17982a134bde3ba0fa1f01ce08e6c824a7c08e162e30f0c42",
+        "retry": {
+          "attempt_count": 1,
+          "disposition": "scheduled",
+          "fingerprint": "sha256:2313374f504292e5d2fd295f6a2e9271534c538766059e69c0d357bae7f61886",
+          "next_attempt_at": "2026-10-28T10:33:54Z",
+          "next_profile": "static-extended-v3",
+          "reason": "extended_profile_required"
+        },
+        "status": "partial"
+      },
+      "round_2": {
+        "execution": {
+          "acquisition_seconds": 1.053145,
+          "analysis_seconds": 103.593151,
+          "exit_code": 1,
+          "finished_at": "2026-10-28T10:38:24Z",
+          "started_at": "2026-10-28T10:36:39Z",
+          "state": "completed"
+        },
+        "false_positive_groups": 0,
+        "finding_count": 36,
+        "finding_group_count": 18,
+        "profile": {
+          "digest": "sha256:6dff52b5c0f60a670827c3fdaf08a7d8c14778a84900e4a1c961913c0d480407",
+          "id": "static-extended-v3"
+        },
+        "published_group_count": 18,
+        "raw_finding_count": 36,
+        "reason_counts": {
+          "analyzer_incomplete": 1,
+          "limitations": 1,
+          "static_parse_limit": 5
+        },
+        "record_sha256": "sha256:71af7b7d8ad12072452b816a0a2ed694db0cc3854a3e43e7cd810f00fcd38910",
+        "retry": {
+          "attempt_count": 2,
+          "disposition": "blocked",
+          "fingerprint": "sha256:3fae6db51c5e1aa42eb2534595182fa866636358c989a59ac57f63c1ef7a58af",
+          "next_attempt_at": null,
+          "next_profile": null,
+          "reason": "static_parse_limit"
+        },
+        "status": "partial"
+      },
+      "source": {
+        "content_digest": "sha256:5c25068d398a8ade192d4e03ea854299973845828367c0024e490f19a2b88a3d",
+        "path": "skills/react-native-best-practices",
+        "repository": "software-mansion-labs/skills",
+        "revision": "58afa0a09b01dc47819af8fd48bb062561414108"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.prepare_skillspector_corpus",
+        "--selection",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/code/docs/skillspector/controlled-sources-2026-10-28.json",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13",
+        "--output-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan"
+      ],
+      "elapsed_seconds": 0.344399,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:30:30.653078+00:00",
+      "log": "prepare.log",
+      "log_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "prepare",
+      "started_at": "2026-10-28T10:30:30.308703+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    },
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.skillspector_coverage_v3",
+        "scan",
+        "--selection",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/selection.json",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13",
+        "--discovery-summary",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/coverage.json",
+        "--scanner",
+        "/workspace/scratch/d2014e5db798/skillspector-upstream/.venv/bin/skillspector",
+        "--mirror-root",
+        "/workspace/scratch/d2014e5db798/controlled-scan/mirrors",
+        "--partition-index",
+        "0",
+        "--partition-count",
+        "1",
+        "--maximum-attempts",
+        "128",
+        "--budget-seconds",
+        "2100",
+        "--output",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-1-worker.json"
+      ],
+      "elapsed_seconds": 204.349996,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:33:55.003017+00:00",
+      "log": "scan-1.log",
+      "log_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "scan-1",
+      "started_at": "2026-10-28T10:30:30.653498+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    },
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.skillspector_coverage_v3",
+        "merge",
+        "--selection",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/selection.json",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13",
+        "--discovery-summary",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/coverage.json",
+        "--workers",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-1-worker.json",
+        "--output-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-1"
+      ],
+      "elapsed_seconds": 0.94463,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:33:55.954828+00:00",
+      "log": "merge-1.log",
+      "log_sha256": "sha256:856e3f062c49d40c33869281f7816dd9dbafee0ec73704981bee70f08f501724",
+      "name": "merge-1",
+      "started_at": "2026-10-28T10:33:55.010246+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    },
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.publish_skillspector_coverage_v3",
+        "check",
+        "--report-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-1",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13"
+      ],
+      "elapsed_seconds": 0.563353,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:33:56.519180+00:00",
+      "log": "check-1.log",
+      "log_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "check-1",
+      "started_at": "2026-10-28T10:33:55.955848+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    },
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.skillspector_coverage_v3",
+        "scan",
+        "--selection",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/selection.json",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13",
+        "--discovery-summary",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/coverage.json",
+        "--previous-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-1",
+        "--scanner",
+        "/workspace/scratch/d2014e5db798/skillspector-upstream/.venv/bin/skillspector",
+        "--mirror-root",
+        "/workspace/scratch/d2014e5db798/controlled-scan/mirrors",
+        "--partition-index",
+        "0",
+        "--partition-count",
+        "1",
+        "--maximum-attempts",
+        "128",
+        "--budget-seconds",
+        "2100",
+        "--output",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-2-worker.json"
+      ],
+      "elapsed_seconds": 267.402777,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:38:24.670704+00:00",
+      "log": "scan-2.log",
+      "log_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "scan-2",
+      "started_at": "2026-10-28T10:33:57.268341+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    },
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.skillspector_coverage_v3",
+        "merge",
+        "--selection",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/selection.json",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13",
+        "--discovery-summary",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/plan/coverage.json",
+        "--previous-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-1",
+        "--workers",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-2-worker.json",
+        "--output-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-2"
+      ],
+      "elapsed_seconds": 1.351866,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:38:26.032677+00:00",
+      "log": "merge-2.log",
+      "log_sha256": "sha256:856e3f062c49d40c33869281f7816dd9dbafee0ec73704981bee70f08f501724",
+      "name": "merge-2",
+      "started_at": "2026-10-28T10:38:24.680837+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    },
+    {
+      "command": [
+        "/workspace/scratch/d2014e5db798/registry-venv/bin/python",
+        "-m",
+        "scripts.publish_skillspector_coverage_v3",
+        "check",
+        "--report-dir",
+        "/workspace/scratch/d2014e5db798/final-cli-e2e/round-2",
+        "--source-commit",
+        "de0cea99179469b140684e23066957b0a3e5cb13"
+      ],
+      "elapsed_seconds": 0.691927,
+      "exit_code": 0,
+      "finished_at": "2026-10-28T10:38:26.725959+00:00",
+      "log": "check-2.log",
+      "log_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "check-2",
+      "started_at": "2026-10-28T10:38:26.034056+00:00",
+      "working_directory": "/workspace/scratch/d2014e5db798/final-cli-e2e/code"
+    }
+  ],
+  "unchanged_useful_record_ids": [
+    "registry/agents-sdk",
+    "registry/cloudflare-email-service",
+    "registry/cloudflare-one",
+    "registry/cloudflare-one-migrations",
+    "registry/durable-objects",
+    "registry/sandbox-migrate-to-next",
+    "registry/sandbox-next",
+    "registry/sandbox-stable",
+    "registry/turnstile-spin",
+    "registry/web-perf",
+    "registry/workers-best-practices",
+    "registry/wrangler",
+    "rorkai/app-store-connect-cli-skills/asc-workflow"
+  ]
+}

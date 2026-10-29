@@ -226,7 +226,7 @@ class WorkflowContractTests(unittest.TestCase):
         producer = load(CATALOG_READINESS)["jobs"]["produce"]
         portable = load(VALIDATE)["jobs"]["portable-catalog"]
         self.assertEqual(producer["runs-on"], "ubuntu-24.04")
-        self.assertEqual(portable["runs-on"], producer["runs-on"])
+        self.assertEqual(portable["runs-on"], "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}")
         for job in (producer, portable):
             install = next(step for step in job["steps"] if step.get("name") == "Install the current stable Ubuntu bubblewrap package and record namespace policy")
             preflight = next(step for step in job["steps"] if step.get("name", "").startswith("Require Linux child confinement"))
@@ -260,32 +260,52 @@ module=types.ModuleType('catalog_process_isolation')
 def isolated(argv, **kwargs):
     root=Path(os.environ['TOOLS_ROOT']).resolve()
     assert kwargs['writable_root'] == kwargs['cwd'] == root
-    assert kwargs['timeout'] == 600
+    assert kwargs['timeout'] == (60 if argv[1] == '--version' else 600)
     assert 'GITHUB_TOKEN' not in kwargs['env']
     assert kwargs['env']['HOME'] == str(root/'home')
     assert kwargs['env']['NPM_CONFIG_CACHE'] == str(root/'npm-cache')
     assert kwargs['read_only_paths'] == (Path('/usr'),)
     if argv[1] == 'install':
-        for name,key in (('@anthropic-ai/claude-code','CLAUDE_CODE_VERSION'),('@github/copilot','COPILOT_VERSION'),('@modelcontextprotocol/inspector','INSPECTOR_VERSION')):
+        lock = {}
+        for name,key,integrity in (('@openai/codex','CODEX_VERSION','CODEX_NPM_INTEGRITY'),('@anthropic-ai/claude-code','CLAUDE_CODE_VERSION','CLAUDE_CODE_NPM_INTEGRITY'),('@github/copilot','COPILOT_VERSION','COPILOT_NPM_INTEGRITY'),('@modelcontextprotocol/inspector','INSPECTOR_VERSION','INSPECTOR_NPM_INTEGRITY')):
             path=root/'node_modules'/name/'package.json'
             path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text(json.dumps({'version':os.environ[key]}))
+            lock['node_modules/'+name] = {'version':os.environ[key], 'integrity':os.environ[integrity]}
+        if os.environ['FAIL_PHASE'] == 'integrity': lock['node_modules/@openai/codex']['integrity'] = 'wrong'
+        (root/'package-lock.json').write_text(json.dumps({'packages':lock}))
     with (root/'calls').open('a') as stream: stream.write(argv[1]+'\\n')
-    return subprocess.CompletedProcess(argv, 1 if os.environ['FAIL_PHASE']==argv[1] else 0, '', '')
+    return subprocess.CompletedProcess(argv, 1 if os.environ['FAIL_PHASE']==argv[1] else 0, ('codex-cli '+os.environ['CODEX_VERSION'] if argv[1]=='--version' else ''), '')
 module.run_isolated=isolated
 sys.modules['catalog_process_isolation']=module
 '''
-        for phase, expected in (("none", True), ("install", False), ("audit", False)):
+        for phase, expected in (("none", True), ("install", False), ("audit", False), ("integrity", False), ("--version", False)):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory) / "tools"
                 environment = {
                     "PATH": os.environ["PATH"], "TOOLS_ROOT": str(root), "FAIL_PHASE": phase,
                     "GITHUB_TOKEN": "fixture-must-not-reach-child",
+                    "CODEX_VERSION": "0.164.0", "CODEX_NPM_INTEGRITY": "fixture-codex",
+                    "CLAUDE_CODE_NPM_INTEGRITY": "fixture-claude", "COPILOT_NPM_INTEGRITY": "fixture-copilot", "INSPECTOR_NPM_INTEGRITY": "fixture-inspector",
                     "CLAUDE_CODE_VERSION": "2.1.251", "COPILOT_VERSION": "1.0.82", "INSPECTOR_VERSION": "2.1.0",
                 }
                 result = subprocess.run(["python3", "-c", prelude + code], cwd=directory, env=environment, capture_output=True)
                 self.assertEqual(result.returncode == 0, expected, result.stderr.decode())
-                self.assertEqual((root / "calls").read_text(), "install\n" if phase == "install" else "install\naudit\n")
+                self.assertEqual((root / "calls").read_text(), "install\n" if phase == "install" else "install\naudit\n" + ("--version\n" if phase in ("none", "--version") else ""))
+
+    def test_opencode_fixture_build_is_native_hermetic_and_wired_before_the_matrix_proof(self) -> None:
+        producer = load(CATALOG_READINESS)["jobs"]["produce"]
+        fixture = next(step for step in producer["steps"] if step.get("name") == "Build the native OpenCode fixture")
+        proof = next(step for step in producer["steps"] if step.get("name") == "Prove the exact catalog matrix in fresh credential-free roots")
+        self.assertLess(producer["steps"].index(fixture), producer["steps"].index(proof))
+        self.assertEqual(fixture["env"]["GOTELEMETRY"], "off")
+        self.assertIn("catalog-tools/fixture-home", fixture["env"]["HOME"])
+        for hardening in ("CGO_ENABLED=0", "GO111MODULE=off", "GOENV=off", "GOTOOLCHAIN=local", "GOFLAGS=''", "-trimpath"):
+            self.assertIn(hardening, fixture["run"])
+        self.assertIn("tests/fixtures/opencode-fixture.go", fixture["run"])
+        built = re.search(r'-o "\$\{TOOLS_ROOT\}/([^"]+)"', fixture["run"])
+        self.assertIsNotNone(built)
+        self.assertIn('--opencode "$RUNNER_TEMP/catalog-tools/%s"' % built.group(1), proof["run"])
 
     def test_every_full_python_suite_consumer_prepares_mandatory_linux_isolation(self) -> None:
         producer = load(CATALOG_READINESS)["jobs"]["produce"]
@@ -300,7 +320,8 @@ sys.modules['catalog_process_isolation']=module
                         continue
                     consumers.add((path.name, name))
                     with self.subTest(workflow=path.name, job=name):
-                        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+                        expected_runner = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}" if path.name in {"validate.yml", "pages.yml"} else "ubuntu-24.04"
+                        self.assertEqual(job["runs-on"], expected_runner)
                         install = next((item for item in steps[:suite_index] if item.get("name") == install_name), None)
                         self.assertIsNotNone(install, "full discovery requires bubblewrap setup before the suite")
                         self.assertEqual(install["run"], required_install)
@@ -365,8 +386,8 @@ sys.modules['catalog_process_isolation']=module
         self.assertNotIn("continue-on-error", policy)
         self.assertIn("--schema-version 2", policy["run"])
         self.assertIn("run_source_policy_conformance.py", policy["run"])
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.51")
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "aa9e03e4e6bc9eb044aedde8be1d1ff4ea514a2c")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.89")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "36b2dd824d56523613b0c773ff89eb5107934584")
         readiness_tree = ast.parse((ROOT / "scripts/catalog_publication_readiness.py").read_text())
         readiness_cli = ast.literal_eval(next(
             node.value for node in readiness_tree.body
@@ -377,6 +398,15 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(readiness_cli["tag"], f"agentplugins-v{workflow['env']['AGENTPLUGINS_VERSION']}")
         self.assertEqual(readiness_cli["commit"], workflow["env"]["AGENTPLUGINS_COMMIT"])
         self.assertIn(readiness_cli["binary_digest"].removeprefix("sha256:"), commands(producer))
+        compat_job = load(DIRECTORY_PUBLICATION)["jobs"]["gate_exact_staged_publication"]
+        compat = next(step for step in compat_job["steps"]
+                      if step.get("name") == "Prove compatibility with the exact released CLI")
+        self.assertEqual(compat["env"]["AGENTPLUGINS_VERSION"], workflow["env"]["AGENTPLUGINS_VERSION"])
+        self.assertEqual(compat["env"]["AGENTPLUGINS_COMMIT"], workflow["env"]["AGENTPLUGINS_COMMIT"])
+        compat_digests = re.findall(r"\b[0-9a-f]{64}\b", compat["run"])
+        self.assertGreaterEqual(len(compat_digests), 3)
+        for digest in compat_digests:
+            self.assertIn(digest, commands(producer))
         self.assertEqual(workflow["env"]["SOURCE_POLICY_AGENTPLUGINS_VERSION"], "0.1.24")
         self.assertEqual(workflow["env"]["SOURCE_POLICY_AGENTPLUGINS_COMMIT"], "c78c79e44efd5ad07083d63436d9170b107df6cb")
         self.assertIn('ref: c78c79e44efd5ad07083d63436d9170b107df6cb', CATALOG_READINESS.read_text())
@@ -2765,6 +2795,8 @@ console.log(JSON.stringify(files));
         self.assertIn('--sequence "${EXPECTED_SEQUENCE}"', compatibility["run"])
         self.assertIn('--snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}"', compatibility["run"])
         self.assertIn("--product-id context7", compatibility["run"])
+        self.assertIn('"${run_root}/bin/cursor"', compatibility["run"])
+        self.assertIn('PATH="${run_root}/bin:${PATH}"', compatibility["run"])
         self.assertNotIn('item["distribution_id"] == "777genius/context7"', compatibility["run"])
         self.assertNotIn('result["revision"] == expected_source["revision"]', compatibility["run"])
         intent = workflow["jobs"]["promotion_intent"]
