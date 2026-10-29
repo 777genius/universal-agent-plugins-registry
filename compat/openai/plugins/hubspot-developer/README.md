@@ -20,6 +20,6 @@ This is an independent community package for [Agent Plugins 1.0](https://agent-p
 - Upstream documentation: https://developers.hubspot.com/mcp
 - Privacy: HubSpot CLI usage tracking is disabled by default
 - Authentication: Uses the local HubSpot CLI session selected by the user.
-- Security audit (2026-09-30): the exact lockfile reported 0 known vulnerabilities with reviewed Sentry, qs, js-yaml, and moment overrides
+- Security: dependency versions and tarball integrity are pinned in the bundled lockfile; security fixes ship as new plugin versions
 
 Review the server's tools, scopes, and write capabilities before enabling it. Agent Plugins 1.0 standardizes packaging, not permissions or sandboxing.

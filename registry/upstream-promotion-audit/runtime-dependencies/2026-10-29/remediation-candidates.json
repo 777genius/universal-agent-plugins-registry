@@ -1,0 +1,147 @@
+{
+  "format_version": 2,
+  "prepared_at": "2026-10-29T21:23:21Z",
+  "status": "source_for_platform_qualification",
+  "base_commit": "0b29e3d9522157af0a773958d189c8507d3ecebf",
+  "published_baseline": {
+    "marker_commit": "ef3c0967fb6e5924b8f26da2c5cacdf16f3d6618",
+    "snapshot_sequence": 42,
+    "signature_verification": "passed"
+  },
+  "scope": "Current source identities and reviewed MCP expectations. Metadata-only advisory audits do not prove installed runtime, registry signatures, client activation, authenticated service operations, or publication.",
+  "candidates": [
+    {
+      "product_id": "context7",
+      "distribution_id": "777genius/context7",
+      "published_sequence": 5,
+      "published_package_version": "0.2.3",
+      "published_source_revision": "70813b60f87d0022457189efae5365d7c17cd3a1",
+      "published_tree_digest": "sha256:c93ccad9f56c7dd53eb712ddee9252d9b4209fb298434b001a42489283748e2f",
+      "proposed_release_sequence": 6,
+      "candidate_package_version": "0.2.4",
+      "candidate_path": "plugins/context7",
+      "candidate_tree_digest": "sha256:f24e91e8635bf0ab455e5e0fa7504292621e6e9c8815cf3c84b009272b1724f8",
+      "candidate_manifest_digest": "sha256:f69113fb2f1efbae8b66541476eb8db43f9b73dbf18fa474d3a6d827f336b373",
+      "runtime": {
+        "schema_version": 1,
+        "package": "@upstash/context7-mcp",
+        "version": "4.4.4",
+        "entrypoint": "node_modules/@upstash/context7-mcp/dist/index.js",
+        "package_lock_sha256": "sha256:f5fc9787228b00165aeb4573bd48f2d96d9d72b82bb3a2dd3badf95bfcb36313",
+        "omit_optional": false
+      },
+      "npm_root_integrity": "sha512-T2DkjhweDnC2mRAclDiTrPG3KI1zYKhhjgY2SMKD9PVrbEaGD8x35VsIOqpwwDc2qiKBvfYCF/jqr+jQMu5PUA==",
+      "expected_mcp": {
+        "serverInfo": {
+          "name": "Context7",
+          "version": "4.4.4"
+        },
+        "toolNames": [
+          "resolve-library-id",
+          "query-docs"
+        ]
+      }
+    },
+    {
+      "product_id": "firebase",
+      "distribution_id": "777genius/firebase",
+      "published_sequence": 6,
+      "published_package_version": "0.2.4",
+      "published_source_revision": "70813b60f87d0022457189efae5365d7c17cd3a1",
+      "published_tree_digest": "sha256:685949b123f14739cefee527a3db4723f7444407c4b718023513f25af03d7523",
+      "proposed_release_sequence": 7,
+      "candidate_package_version": "0.2.5",
+      "candidate_path": "plugins/firebase",
+      "candidate_tree_digest": "sha256:54db4f001002190ef47800795229bb8674409ba44b6ef05a7f07aacad43e5eaa",
+      "candidate_manifest_digest": "sha256:d7673ee02e5ffdd6efa929ce437c769f56afb4a85fb9fdb2e5cb7f6179813019",
+      "runtime": {
+        "schema_version": 1,
+        "package": "firebase-tools",
+        "version": "15.34.2",
+        "entrypoint": "node_modules/firebase-tools/lib/bin/firebase.js",
+        "package_lock_sha256": "sha256:ec383d8f3864d18b8e31787bd45a7a35adf0918fc0c18d26d9c95e16177c7f76",
+        "omit_optional": true
+      },
+      "npm_root_integrity": "sha512-Xo010+PZAj5sL6hn33p19egXDmVlowPZknbs2Rf4nxd6Ulx6gLCd76qHd9XT2lV3B0u7yi0iO0BU5qrLeY8Y+g==",
+      "expected_mcp": {
+        "serverInfo": {
+          "name": "firebase",
+          "version": "0.3.0"
+        },
+        "toolNames": [
+          "firebase_login",
+          "firebase_logout",
+          "firebase_get_project",
+          "firebase_list_apps",
+          "firebase_list_projects",
+          "firebase_get_sdk_config",
+          "firebase_create_project",
+          "firebase_create_app",
+          "firebase_create_android_sha",
+          "firebase_get_environment",
+          "firebase_update_environment",
+          "firebase_init",
+          "firebase_get_security_rules",
+          "firebase_read_resources",
+          "firebase_deploy",
+          "firebase_deploy_status",
+          "developerknowledge_search_documents",
+          "developerknowledge_answer_query",
+          "developerknowledge_get_documents"
+        ]
+      }
+    },
+    {
+      "product_id": "hubspot-developer",
+      "distribution_id": "777genius/hubspot-developer",
+      "published_sequence": 6,
+      "published_package_version": "0.2.4",
+      "published_source_revision": "70813b60f87d0022457189efae5365d7c17cd3a1",
+      "published_tree_digest": "sha256:adce739e6b82b4f5af698fc5bc370c499e5c724a6c259795f0e35ecb79b2f30d",
+      "proposed_release_sequence": 7,
+      "candidate_package_version": "0.2.5",
+      "candidate_path": "plugins/hubspot-developer",
+      "candidate_tree_digest": "sha256:0ee6eb05bfa3cd12f9941083f26a168171cb6153dad91e1a30e0f440c8bcad44",
+      "candidate_manifest_digest": "sha256:576d16b414c308abca787d8d5ef7b6b51b02910d22d12967c17f93c469a90227",
+      "runtime": {
+        "schema_version": 1,
+        "package": "@hubspot/cli",
+        "version": "8.15.0",
+        "entrypoint": "node_modules/@hubspot/cli/bin/hs.js",
+        "package_lock_sha256": "sha256:5c4dd31b25d2cb8061d6b5128e1ebb658026b8f329463f80c79b4b2d5d31fe60",
+        "omit_optional": false
+      },
+      "npm_root_integrity": "sha512-NE6Xt+NBNb3yx7i1waFs7u4iZ6hF7uKLPUpSFDCjQjdmrHTJoHPwXFmHXA0I9QmJeulAOE1Es/cF5ftzjGil4g==",
+      "expected_mcp": {
+        "serverInfo": {
+          "name": "HubSpot CLI MCP Server",
+          "version": "0.0.1"
+        },
+        "toolNames": [
+          "upload-project",
+          "create-project",
+          "guided-walkthrough-cli",
+          "create-test-account",
+          "deploy-project",
+          "add-feature-to-project",
+          "validate-project",
+          "get-feature-config-schema",
+          "search-docs",
+          "fetch-doc",
+          "get-api-usage-patterns-by-app-id",
+          "get-apps-info",
+          "get-build-logs",
+          "get-build-status",
+          "find-projects",
+          "auth-account",
+          "list-cms-remote-contents",
+          "create-cms-module",
+          "create-cms-template",
+          "create-cms-function",
+          "list-cms-serverless-functions",
+          "get-cms-serverless-function-logs"
+        ]
+      }
+    }
+  ]
+}

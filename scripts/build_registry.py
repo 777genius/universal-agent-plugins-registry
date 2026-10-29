@@ -195,6 +195,39 @@ LOCKED_NPM_SECURITY_OVERRIDES = {
         "gaxios": "8.0.0",
     },
 }
+# A security revision can retain the root version while changing its overrides.
+# Bind such policy to exact reviewed lock bytes instead of rewriting the policy
+# that validates already-published historical packages.
+LOCKED_NPM_REVIEWED_CLOSURES = {
+    (
+        "@upstash/context7-mcp", "4.4.4",
+        "sha256:f5fc9787228b00165aeb4573bd48f2d96d9d72b82bb3a2dd3badf95bfcb36313",
+    ): {
+        "overrides": {"qs": "6.16.1", "@hono/node-server": "2.1.3"},
+        "ignored_install_scripts": frozenset(),
+        "optional_install_scripts": frozenset(),
+    },
+    (
+        "firebase-tools", "15.34.2",
+        "sha256:ec383d8f3864d18b8e31787bd45a7a35adf0918fc0c18d26d9c95e16177c7f76",
+    ): {
+        "overrides": {"@google-cloud/pubsub": "6.0.1", "gaxios": "8.0.0", "qs": "6.16.1"},
+        "ignored_install_scripts": LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST[("firebase-tools", "15.32.0")],
+        "optional_install_scripts": frozenset(),
+    },
+    (
+        "@hubspot/cli", "8.15.0",
+        "sha256:5c4dd31b25d2cb8061d6b5128e1ebb658026b8f329463f80c79b4b2d5d31fe60",
+    ): {
+        "overrides": {
+            "@sentry/node": "10.71.0", "qs": "6.16.1", "js-yaml": "4.3.2",
+            "moment": "2.31.0", "axios": "1.20.0",
+            "@modelcontextprotocol/sdk": "1.32.1", "vite": "6.4.5",
+        },
+        "ignored_install_scripts": LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST[("@hubspot/cli", "8.15.0")],
+        "optional_install_scripts": LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST[("@hubspot/cli", "8.15.0")],
+    },
+}
 
 
 class RegistryError(Exception):
@@ -1311,7 +1344,30 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
         and version and not any(token in version for token in ("*", "^", "~", ">", "<", "||", " ")),
         f"{package_path}: runtime dependency must use one exact npm version",
     )
-    expected_overrides = LOCKED_NPM_SECURITY_OVERRIDES.get((dependency, version), {})
+    policy_key = (dependency, version)
+    reviewed = LOCKED_NPM_REVIEWED_CLOSURES.get(
+        (dependency, version, digest_bytes(lock_body)),
+    )
+    if reviewed is None:
+        has_historical_policy = any(policy_key in policies for policies in (
+            LOCKED_NPM_SECURITY_OVERRIDES,
+            LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST,
+            LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST,
+        ))
+        require(
+            has_historical_policy or not any(key[:2] == policy_key for key in LOCKED_NPM_REVIEWED_CLOSURES),
+            f"{lock_path}: runtime lock does not match a reviewed security closure",
+        )
+        reviewed = {
+            "overrides": LOCKED_NPM_SECURITY_OVERRIDES.get((dependency, version), {}),
+            "ignored_install_scripts": LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST.get(
+                (dependency, version), frozenset(),
+            ),
+            "optional_install_scripts": LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST.get(
+                (dependency, version), frozenset(),
+            ),
+        }
+    expected_overrides = reviewed["overrides"]
     expected_package_fields = {"name", "version", "private", "dependencies"}
     if expected_overrides:
         expected_package_fields.add("overrides")
@@ -1396,17 +1452,13 @@ def validate_locked_npm_runtime(package_root: Path) -> None:
             else:
                 ignored_install_scripts.add(script)
 
-    allowed_install_scripts = LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST.get(
-        (dependency, version), frozenset(),
-    )
+    allowed_install_scripts = reviewed["ignored_install_scripts"]
     require(
         ignored_install_scripts == allowed_install_scripts,
         f"{lock_path}: ignored install scripts differ from the exact reviewed allowlist: "
         f"{sorted(ignored_install_scripts)!r}",
     )
-    allowed_optional_install_scripts = LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST.get(
-        (dependency, version), frozenset(),
-    )
+    allowed_optional_install_scripts = reviewed["optional_install_scripts"]
     require(
         optional_install_scripts == allowed_optional_install_scripts,
         f"{lock_path}: optional install scripts differ from the exact reviewed allowlist: "
