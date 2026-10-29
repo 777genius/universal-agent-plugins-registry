@@ -63,7 +63,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
@@ -99,7 +99,7 @@ jobs:
             --selection docs/skillspector/controlled-sources-2026-10-28.json \
             --source-commit "${SOURCE_COMMIT}" \
             --output-dir "${RUNNER_TEMP}/skillspector-plan"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: skillspector-plan
           path: ${{ runner.temp }}/skillspector-plan
@@ -129,14 +129,14 @@ jobs:
           ref: f3b25697d76256998ca9d42c198d256258d4c035 # v2.13.1
           persist-credentials: false
           path: scanner
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install pinned tooling and locked scanner
         run: |
           python3 -m pip install --disable-pip-version-check uv==0.13.4 cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
           uv sync --directory scanner --frozen --no-dev --python 3.12
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: skillspector-plan
           path: ${{ runner.temp }}/skillspector-plan
@@ -157,7 +157,7 @@ jobs:
             --partition-index "${PARTITION}" --partition-count "${PARTITION_COUNT}" \
             --maximum-attempts "${MAXIMUM_ATTEMPTS}" --budget-seconds 2100 \
             --output "${RUNNER_TEMP}/worker-${PARTITION}.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: skillspector-worker-${{ matrix.partition }}
           path: ${{ runner.temp }}/worker-${{ matrix.partition }}.json
@@ -175,15 +175,15 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: skillspector-plan
           path: ${{ runner.temp }}/skillspector-plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: skillspector-worker-*
           merge-multiple: true
@@ -201,7 +201,7 @@ jobs:
             --output-dir "${RUNNER_TEMP}/skillspector-report"
           python3 -m scripts.publish_skillspector_coverage_v3 check \
             --report-dir "${RUNNER_TEMP}/skillspector-report" --source-commit "${SOURCE_COMMIT}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: skillspector-static-report-v3
           path: ${{ runner.temp }}/skillspector-report
@@ -220,11 +220,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: skillspector-static-report-v3
           path: ${{ runner.temp }}/skillspector-report

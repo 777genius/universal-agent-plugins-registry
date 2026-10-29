@@ -49,7 +49,7 @@ jobs:
     steps:
       - name: Request exact publisher capability
         id: publisher
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
           private-key: ${{ secrets.DISCOVERY_PUBLISHER_APP_PRIVATE_KEY }}
@@ -62,7 +62,7 @@ jobs:
         run: |
           mkdir publisher-identity
           python3 -c 'import json,os; app_id=int(os.environ["PUBLISHER_APP_ID"]); assert app_id > 0; json.dump({"app_id": app_id}, open("publisher-identity/installation.json", "w"))'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: discovery-publisher-identity-${{ github.run_id }}
           path: publisher-identity/installation.json
@@ -99,7 +99,7 @@ jobs:
           path: ledger
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - name: Install pinned validation dependencies
@@ -159,7 +159,7 @@ jobs:
         run: |
           id="$(gh api --paginate --slurp "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" | jq -r --arg prefix "discovery-acquisition-${RUN_ID}-" --argjson attempt "${ATTEMPT}" '[.[].artifacts[] | select(.expired == false) | select(.name | startswith($prefix)) | . + {suffix: (.name | ltrimstr($prefix))} | select(.suffix | test("^[0-9]+-[0-9]+$")) | . + (.suffix | capture("^(?<attempt>[0-9]+)-(?<slice>[0-9]+)$") | with_entries(.value |= tonumber)) | select(.attempt > 0 and .attempt < $attempt and .slice >= 1 and .slice <= 10)] | sort_by(.attempt, .slice) | last | .id // empty')"
           echo "artifact_id=${id}" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.resume.outputs.artifact_id != ''
         with:
           artifact-ids: ${{ steps.resume.outputs.artifact_id }}
@@ -177,7 +177,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint01
         if: always() && steps.slice01.outcome != 'skipped'
         with:
@@ -198,7 +198,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint02
         if: always() && steps.slice02.outcome != 'skipped'
         with:
@@ -219,7 +219,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint03
         if: always() && steps.slice03.outcome != 'skipped'
         with:
@@ -240,7 +240,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint04
         if: always() && steps.slice04.outcome != 'skipped'
         with:
@@ -261,7 +261,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint05
         if: always() && steps.slice05.outcome != 'skipped'
         with:
@@ -282,7 +282,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint06
         if: always() && steps.slice06.outcome != 'skipped'
         with:
@@ -303,7 +303,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint07
         if: always() && steps.slice07.outcome != 'skipped'
         with:
@@ -324,7 +324,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint08
         if: always() && steps.slice08.outcome != 'skipped'
         with:
@@ -345,7 +345,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint09
         if: always() && steps.slice09.outcome != 'skipped'
         with:
@@ -366,7 +366,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ steps.ledger.outputs.path }}
           PHASE_BUDGET_MINUTES: ${{ steps.mode.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh acquire
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint10
         if: always() && steps.slice10.outcome != 'skipped'
         with:
@@ -413,7 +413,7 @@ jobs:
           path: ledger
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - name: Install pinned validation dependencies
@@ -426,7 +426,7 @@ jobs:
               --feed "../ledger/${FEED_PATH}" \
               --trusted-keys registry/discovery/trusted-keys.json
           fi
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.acquire.outputs.artifact_id }}
           path: checkpoint
@@ -441,7 +441,7 @@ jobs:
         run: |
           id="$(gh api --paginate --slurp "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" | jq -r --arg prefix "discovery-validation-${RUN_ID}-" --argjson attempt "${ATTEMPT}" '[.[].artifacts[] | select(.expired == false) | select(.name | startswith($prefix)) | . + {suffix: (.name | ltrimstr($prefix))} | select(.suffix | test("^[0-9]+-[0-9]+$")) | . + (.suffix | capture("^(?<attempt>[0-9]+)-(?<slice>[0-9]+)$") | with_entries(.value |= tonumber)) | select(.attempt > 0 and .attempt < $attempt and .slice >= 1 and .slice <= 10)] | sort_by(.attempt, .slice) | last | .id // empty')"
           echo "artifact_id=${id}" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.resume.outputs.artifact_id != ''
         with:
           artifact-ids: ${{ steps.resume.outputs.artifact_id }}
@@ -459,7 +459,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint01
         if: always() && steps.slice01.outcome != 'skipped'
         with:
@@ -480,7 +480,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint02
         if: always() && steps.slice02.outcome != 'skipped'
         with:
@@ -501,7 +501,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint03
         if: always() && steps.slice03.outcome != 'skipped'
         with:
@@ -522,7 +522,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint04
         if: always() && steps.slice04.outcome != 'skipped'
         with:
@@ -543,7 +543,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint05
         if: always() && steps.slice05.outcome != 'skipped'
         with:
@@ -564,7 +564,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint06
         if: always() && steps.slice06.outcome != 'skipped'
         with:
@@ -585,7 +585,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint07
         if: always() && steps.slice07.outcome != 'skipped'
         with:
@@ -606,7 +606,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint08
         if: always() && steps.slice08.outcome != 'skipped'
         with:
@@ -627,7 +627,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint09
         if: always() && steps.slice09.outcome != 'skipped'
         with:
@@ -648,7 +648,7 @@ jobs:
           PREVIOUS_SNAPSHOT: ${{ needs.acquire.outputs.previous_snapshot }}
           PHASE_BUDGET_MINUTES: ${{ needs.acquire.outputs.timeout_minutes }}
         run: bash scripts/run_discovery_slice.sh validate
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: checkpoint10
         if: always() && steps.slice10.outcome != 'skipped'
         with:
@@ -666,7 +666,7 @@ jobs:
           test "${DISCOVERY_PHASE_FINISHED}" = true
           echo "complete=${DISCOVERY_CANDIDATE_COMPLETE}" >> "$GITHUB_OUTPUT"
           echo "candidate_digest=${DISCOVERY_CANDIDATE_DIGEST}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: candidate
         with:
           name: discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -702,11 +702,11 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.scan.outputs.artifact_id }}
           path: candidate
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - name: Install pinned signer dependencies
@@ -843,7 +843,7 @@ jobs:
           git commit -m "chore(discovery): publish sequence ${SEQUENCE}"
       - name: Acquire dedicated publisher token
         id: publisher
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.DISCOVERY_PUBLISHER_APP_ID }}
           private-key: ${{ secrets.DISCOVERY_PUBLISHER_APP_PRIVATE_KEY }}
@@ -907,7 +907,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - name: Install pinned verification dependencies
@@ -921,7 +921,7 @@ jobs:
             --trusted-keys registry/discovery/trusted-keys.json \
             --minimum-sequence "${EXPECTED_SEQUENCE}" \
             --output "$RUNNER_TEMP/discovery-observation.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: discovery-production-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/discovery-observation.json
