@@ -68,23 +68,25 @@ binding is required.
 
 ## Dependency pins
 
-Context7 community, Firebase, and HubSpot Developer pins were refreshed and
-qualified on 2026-09-30. The other pins retain their 2026-09-06 verification
+Context7 community, Firebase, and HubSpot Developer security closures were
+refreshed on 2026-10-29. The other pins retain their 2026-09-06 verification
 record. All listed npm pins are stable releases:
 
 | Runtime dependency | Pin |
 | --- | --- |
 | `chrome-devtools-mcp` | `1.8.0` |
 | `@playwright/mcp` | `0.0.80` |
-| `@upstash/context7-mcp` | `4.1.1` |
-| `firebase-tools` | `15.32.0` |
+| `@upstash/context7-mcp` | `4.4.4` |
+| `firebase-tools` | `15.34.2` |
 | `@hubspot/cli` | `8.15.0` |
 | `mcp/dockerhub` | OCI digest `sha256:76454af…d4248` |
 
-The three updated closures passed cold bootstrap, MCP `initialize` and
-`tools/list`, npm audits/signatures, and locked runtime materialization on Linux,
-macOS, and Windows. This does not prove client activation or authenticated
-provider operations; see the dated [verification record](VERIFICATION.md).
+The exact current closures are bound to the
+[runtime qualification record](runtime-security-qualification.md) and its
+Linux, macOS, and Windows checks. The dated [verification record](VERIFICATION.md)
+separates historical runtime evidence from current source and advisory audits.
+Credential-free qualification does not prove client activation or authenticated
+provider operations.
 The Context7 pin is for `777genius/context7`; the `upstash/context7` default
 distribution is unchanged.
 

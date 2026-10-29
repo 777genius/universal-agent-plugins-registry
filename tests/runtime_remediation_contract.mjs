@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { mcpSmoke, stopTree, capturedProcess, recordNpmAudit } from "../scripts/qualify_runtime_remediation.mjs";
 
 async function contract(root) {
-const prior = { serverInfo: { name: "inert-contract", version: "1.0.0" }, toolNames: ["inert"] };
+const expected = { serverInfo: { name: "inert-contract", version: "1.0.0" }, toolNames: ["inert"] };
 const env = { PATH: process.env.PATH, HOME: root, USERPROFILE: root };
 for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "SystemDrive"]) {
   const key = Object.keys(process.env).find((key) => key.toLowerCase() === name.toLowerCase());
@@ -32,20 +32,35 @@ const fixture = (mode) => `
   setInterval(()=>{},1000);
 `;
 const good = {};
-await mcpSmoke(["-e", fixture("eof-noise")], env, root, prior, good);
+await mcpSmoke(["-e", fixture("eof-noise")], env, root, expected, good);
 assert.equal(good.tools.count, 1);
 assert.equal(good.exit.controlled_termination, true);
 assert.equal(good.termination.dispatched, true);
 assert.equal(good.exit.signal, process.platform === "win32" ? null : "SIGKILL");
 console.log("PASS completed proof stops owned tree without manufacturing EOF stdout");
 
+// Reviewed expectations are inputs, not proof: a healthy process must still
+// fail if its server identity or complete tool set differs from the record.
+for (const [field, mismatch] of [
+  ["server name", { ...expected, serverInfo: { ...expected.serverInfo, name: "different-server" } }],
+  ["server version", { ...expected, serverInfo: { ...expected.serverInfo, version: "2.0.0" } }],
+  ["tool names", { ...expected, toolNames: ["different-tool"] }],
+  ["missing tool", { ...expected, toolNames: ["inert", "additional-tool"] }],
+]) {
+  const rejected = {};
+  await assert.rejects(mcpSmoke(["-e", fixture("eof-noise")], env, root, mismatch, rejected), /differs from reviewed expectation/);
+  assert.equal(rejected.exit.controlled_termination, false);
+  assert.equal(rejected.termination.dispatched, true);
+  console.log(`PASS differing reviewed ${field} fails and closes the owned process`);
+}
+
 const malformed = {};
-await assert.rejects(mcpSmoke(["-e", fixture("malformed")], env, root, prior, malformed), /invalid MCP stdout/);
+await assert.rejects(mcpSmoke(["-e", fixture("malformed")], env, root, expected, malformed), /invalid MCP stdout/);
 assert.equal(malformed.exit.controlled_termination, false);
 console.log("PASS pre-proof malformed stdout remains failure");
 
 const dead = {};
-await assert.rejects(mcpSmoke(["-e", fixture("unexpected-death")], env, root, prior, dead), /exited before MCP proof/);
+await assert.rejects(mcpSmoke(["-e", fixture("unexpected-death")], env, root, expected, dead), /exited before MCP proof/);
 if (process.platform === "win32") assert.notEqual(dead.exit.code, 0);
 else assert.equal(dead.exit.signal, "SIGKILL");
 assert.equal(dead.exit.controlled_termination, false);
@@ -54,7 +69,7 @@ assert.equal(dead.termination.already_closed, true);
 assert.equal(dead.termination.dispatched, false);
 
 const earlyExit = {};
-await assert.rejects(mcpSmoke(["-e", "process.exit(7)"], env, root, prior, earlyExit), /exited before MCP proof/);
+await assert.rejects(mcpSmoke(["-e", "process.exit(7)"], env, root, expected, earlyExit), /exited before MCP proof/);
 assert.equal(earlyExit.exit.code, 7);
 assert.equal(earlyExit.exit.controlled_termination, false);
 assert.equal(earlyExit.termination.already_closed, true);
@@ -115,7 +130,7 @@ process.kill = (pid, ...args) => {
 };
 try {
   const proofCleanupFailed = {};
-  await assert.rejects(mcpSmoke(["-e", fixture("eof-noise")], env, root, prior, proofCleanupFailed), /EPERM/);
+  await assert.rejects(mcpSmoke(["-e", fixture("eof-noise")], env, root, expected, proofCleanupFailed), /EPERM/);
   assert.equal(proofCleanupFailed.tools.count, 1);
   assert.equal(proofCleanupFailed.termination.dispatched, false);
   assert.equal(proofCleanupFailed.termination.direct_pid_fallback, "dispatched");

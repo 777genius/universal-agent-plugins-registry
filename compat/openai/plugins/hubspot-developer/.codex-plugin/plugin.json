@@ -1,6 +1,6 @@
 {
   "name": "hubspot-developer",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.15.0.",
   "author": {
     "name": "777genius",

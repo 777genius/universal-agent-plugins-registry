@@ -1,0 +1,27 @@
+{
+  "observed_at": "2026-10-29T21:23:21Z",
+  "scope": "metadata-only npm advisory audit of this exact lock; scripts disabled; no runtime or signatures executed",
+  "package_lock_sha256": "sha256:ec383d8f3864d18b8e31787bd45a7a35adf0918fc0c18d26d9c95e16177c7f76",
+  "audit": {
+    "auditReportVersion": 2,
+    "vulnerabilities": {},
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 603,
+        "dev": 0,
+        "optional": 18,
+        "peer": 0,
+        "peerOptional": 0,
+        "total": 620
+      }
+    }
+  }
+}
