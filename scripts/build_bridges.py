@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -93,7 +94,7 @@ def portable_path(value: str, field: str) -> PurePosixPath:
 
 
 def git(directory: Path, *args: str, input_bytes: bytes | None = None,
-        extra_env: dict[str, str] | None = None) -> bytes:
+        extra_env: dict[str, str] | None = None, work_budget=None) -> bytes:
     environment = {
         "PATH": os.environ.get("PATH", ""),
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -105,13 +106,38 @@ def git(directory: Path, *args: str, input_bytes: bytes | None = None,
     }
     if extra_env:
         environment.update(extra_env)
+    timeout = min(120, work_budget.remaining()) if work_budget else 120
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=directory, env=environment, input=input_bytes,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=120,
-        )
+        if work_budget:
+            # Fetch helpers inherit Git's process group. Kill the entire group
+            # before draining pipes, so an inherited pipe cannot hold a slice
+            # open after the pinned read's deadline.
+            with subprocess.Popen(
+                ["git", *args], cwd=directory, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                stdin=subprocess.PIPE if input_bytes is not None else None,
+            ) as process:
+                try:
+                    stdout, stderr = process.communicate(input_bytes, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.communicate()
+                    raise
+                result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+        else:
+            result = subprocess.run(
+                ["git", *args], cwd=directory, env=environment, input=input_bytes,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=timeout,
+            )
     except (OSError, subprocess.TimeoutExpired) as error:
+        if work_budget:
+            work_budget.check()
         raise BridgeError(f"Git invocation failed: {error}") from error
+    if work_budget:
+        work_budget.check()
     if result.returncode:
         detail = result.stderr.decode("utf-8", "replace").strip()
         raise BridgeError(f"Git {' '.join(args[:2])} failed: {detail}")
@@ -127,14 +153,27 @@ class Blob:
 
 class PinnedRepository:
     def __init__(self, repository: str, revision: str, mirror_root: Path | None,
-                 *, github_token: str | None = None):
+                 *, github_token: str | None = None, work_budget=None):
         self.repository = repository
         self.revision = revision
+        self.work_budget = work_budget
         self.temporary = tempfile.TemporaryDirectory(prefix="bridge-git-")
         self.root = Path(self.temporary.name)
-        git(self.root, "init", "--quiet", "--bare")
+        try:
+            self._acquire(mirror_root, github_token)
+        except BaseException:
+            self.close()
+            raise
+
+    def git(self, *args, **kwargs):
+        if self.work_budget:
+            kwargs["work_budget"] = self.work_budget
+        return git(self.root, *args, **kwargs)
+
+    def _acquire(self, mirror_root, github_token):
+        self.git("init", "--quiet", "--bare")
         if mirror_root is None:
-            remote = f"https://github.com/{repository}.git"
+            remote = f"https://github.com/{self.repository}.git"
             protocol = "protocol.file.allow=never"
             fetch_environment = None
             if github_token:
@@ -149,24 +188,24 @@ class PinnedRepository:
                     "GIT_CONFIG_VALUE_0": "AUTHORIZATION: basic " + credential,
                 }
         else:
-            remote = str((mirror_root / f"{repository}.git").resolve())
+            remote = str((mirror_root / f"{self.repository}.git").resolve())
             require(Path(remote).is_dir(), f"offline mirror does not exist: {remote}")
             protocol = "protocol.file.allow=always"
             fetch_environment = None
-        git(self.root, "remote", "add", "origin", remote)
-        git(
-            self.root, "-c", protocol, "fetch", "--quiet", "--no-tags",
-            "--depth=1", "--filter=blob:none", "origin", revision,
+        self.git("remote", "add", "origin", remote)
+        self.git(
+            "-c", protocol, "fetch", "--quiet", "--no-tags",
+            "--depth=1", "--filter=blob:none", "origin", self.revision,
             extra_env=fetch_environment,
         )
-        actual = git(self.root, "rev-parse", "FETCH_HEAD^{commit}").decode().strip()
-        require(actual == revision, f"fetched commit {actual} does not match pinned revision {revision}")
+        actual = self.git("rev-parse", "FETCH_HEAD^{commit}").decode().strip()
+        require(actual == self.revision, f"fetched commit {actual} does not match pinned revision {self.revision}")
 
     def close(self) -> None:
         self.temporary.cleanup()
 
     def _tree_records(self, source: str) -> list[tuple[str, str, str]]:
-        raw = git(self.root, "ls-tree", "-rz", "-r", self.revision, "--", source)
+        raw = self.git("ls-tree", "-rz", "-r", self.revision, "--", source)
         records = []
         for record in raw.split(b"\0"):
             if not record:
@@ -184,7 +223,7 @@ class PinnedRepository:
 
     def blobs(self, source: str) -> list[Blob]:
         source_path = portable_path(source, "copy.source")
-        exact = git(self.root, "ls-tree", "-z", self.revision, "--", source)
+        exact = self.git("ls-tree", "-z", self.revision, "--", source)
         require(bool(exact), f"upstream path does not exist at pinned revision: {source}")
         header = exact.split(b"\0", 1)[0].split(b"\t", 1)[0].decode("ascii")
         mode, kind, _object_id = header.split(" ")
@@ -196,19 +235,19 @@ class PinnedRepository:
         result = []
         for path, file_mode, _ in records:
             portable_path(path, "upstream tree")
-            body = git(self.root, "show", f"{self.revision}:{path}")
+            body = self.git("show", f"{self.revision}:{path}")
             require(not body.startswith(LFS_HEADER), f"Git LFS pointer is forbidden: {path}")
             result.append(Blob(path, GIT_MODES[file_mode], body))
         return result
 
     def evidence(self, path: str) -> bytes:
         portable_path(path, "evidence.path")
-        exact = git(self.root, "ls-tree", "-z", self.revision, "--", path)
+        exact = self.git("ls-tree", "-z", self.revision, "--", path)
         require(bool(exact), f"pinned evidence path does not exist: {path}")
         header = exact.split(b"\0", 1)[0].split(b"\t", 1)[0].decode("ascii")
         mode, kind, _object_id = header.split(" ")
         require(kind == "blob" and mode in GIT_MODES, f"evidence must be a regular file: {path}")
-        body = git(self.root, "show", f"{self.revision}:{path}")
+        body = self.git("show", f"{self.revision}:{path}")
         require(not body.startswith(LFS_HEADER), f"Git LFS pointer is forbidden: {path}")
         return body
 

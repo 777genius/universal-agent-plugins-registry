@@ -1,0 +1,73 @@
+diff --git a/dist/core/index.mjs b/dist/core/index.mjs
+index 8a601e0360c576d1e1c0e73da413d2393b8beb26..4a17c0f119b3223631d815f6e8f9835264963c08 100644
+--- a/dist/core/index.mjs
++++ b/dist/core/index.mjs
+@@ -20,7 +20,7 @@ import { resolveNitroPath, isDirectory, writeFile, prettyPath } from 'nitropack/
+ export { defineNitroPreset } from 'nitropack/kit';
+ import { findWorkspaceDir } from 'pkg-types';
+ import { createJiti } from 'jiti';
+-import { globby } from 'globby';
++import { globby } from '../shared/uap-glob.mjs';
+ import fsp, { readFile, rm, writeFile as writeFile$1 } from 'node:fs/promises';
+ import { ofetch } from 'ofetch';
+ import { klona as klona$1 } from 'klona';
+diff --git a/dist/presets/cloudflare/utils.mjs b/dist/presets/cloudflare/utils.mjs
+index 68de76acbf568c69fa2254c57ac74451075fbb17..b169176b4e798957d6b0386d60e6b1e8fdc79c53 100644
+--- a/dist/presets/cloudflare/utils.mjs
++++ b/dist/presets/cloudflare/utils.mjs
+@@ -5,7 +5,7 @@ import { writeFile } from "nitropack/kit";
+ import { parseTOML, parseJSONC } from "confbox";
+ import { readGitConfig, readPackageJSON, findNearestFile } from "pkg-types";
+ import { defu } from "defu";
+-import { globby } from "globby";
++import { globby } from "../../shared/uap-glob.mjs";
+ import { provider } from "std-env";
+ import { join, resolve } from "pathe";
+ import {
+diff --git a/dist/rollup/index.mjs b/dist/rollup/index.mjs
+index 9aadcbc7925e965062670f1d86436f8e0830b200..fa75639caceed8eeb229abeb19680f60f4c18b3b 100644
+--- a/dist/rollup/index.mjs
++++ b/dist/rollup/index.mjs
+@@ -20,7 +20,7 @@ import { rollup } from 'unwasm/plugin';
+ import { genImport, genSafeVariableName } from 'knitwork';
+ import { connectors } from 'db0';
+ import { camelCase } from 'scule';
+-import { globby } from 'globby';
++import { globby } from '../shared/uap-glob.mjs';
+ import { createFilter } from 'unplugin-utils';
+ import { transform } from 'esbuild';
+ import { existsSync, promises } from 'node:fs';
+diff --git a/dist/shared/uap-glob.mjs b/dist/shared/uap-glob.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..2403d1447f633959d841f03f34abfc9f455bfe05
+--- /dev/null
++++ b/dist/shared/uap-glob.mjs
+@@ -0,0 +1,28 @@
++// Generated runtime: dist/shared/uap-glob.mjs in nitropack@2.13.4.patch.
++// Regenerate with the pinned TypeScript compiler; nitro-glob.test.ts checks bytes.
++import { glob } from 'tinyglobby';
++// fast-glob treats negated options.ignore as exclusions too, except extglobs.
++const exclusion = (pattern) => pattern.startsWith('!') && !pattern.startsWith('!(') ? pattern.slice(1) : pattern;
++// Nitro uses ordered globby patterns: negatives exclude earlier positives only.
++export async function globby(input, options = {}) {
++    const patterns = [...new Set(typeof input === 'string' ? [input] : input)];
++    if (patterns.length && patterns.every(pattern => pattern.startsWith('!')))
++        patterns.unshift('**/*');
++    const ignore = typeof options.ignore === 'string' ? [options.ignore] : [...(options.ignore ?? [])];
++    const tasks = [];
++    let positives = [];
++    for (let index = 0; index <= patterns.length; index++) {
++        const pattern = patterns[index];
++        if (pattern !== undefined && !pattern.startsWith('!')) {
++            positives.push(pattern);
++            continue;
++        }
++        if (positives.length) {
++            // Nitro's public include groups and negation-only fallback are cwd-relative.
++            const subsequentExcludes = patterns.slice(index).filter(pattern => pattern.startsWith('!')).map(pattern => pattern.slice(1).replace(/^\//, ''));
++            tasks.push(glob(positives, { ...options, ignore: [...ignore, ...subsequentExcludes].map(exclusion) }));
++            positives = [];
++        }
++    }
++    return [...new Set((await Promise.all(tasks)).flat())];
++}

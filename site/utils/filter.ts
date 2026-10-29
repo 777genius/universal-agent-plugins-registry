@@ -1,4 +1,5 @@
 import type { RegistryPlugin } from '../types/registry'
+import { isRetiredPlugin } from './registry.ts'
 
 export interface CatalogFilters {
   query?: string
@@ -45,7 +46,8 @@ function diversifiedDiscovery(plugins: RegistryPlugin[]): RegistryPlugin[] {
   const ranked: RegistryPlugin[] = []
   for (let index = 0; ranked.length < plugins.length; index += 1) {
     for (const [, group] of repositories) {
-      if (group[index]) ranked.push(group[index])
+      const plugin = group[index]
+      if (plugin) ranked.push(plugin)
     }
   }
   return ranked
@@ -73,6 +75,11 @@ function textRelevance(plugin: RegistryPlugin, query: string): number {
     .map(value => matchQuality(value, query))
     .filter((quality): quality is number => quality !== undefined)
     .map(quality => weight + quality)), Number.MAX_SAFE_INTEGER)
+}
+
+/** Fully retired products stay reachable by direct URL but leave the catalog. */
+export function catalogVisiblePlugins(plugins: RegistryPlugin[]): RegistryPlugin[] {
+  return plugins.filter(plugin => !isRetiredPlugin(plugin))
 }
 
 export function filterPlugins(plugins: RegistryPlugin[], filters: CatalogFilters): RegistryPlugin[] {

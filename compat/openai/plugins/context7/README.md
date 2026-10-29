@@ -10,11 +10,13 @@ npx universal-agent-plugins add context7 --target codex
 ```
 <!-- agentplugins-install:end -->
 
+The short name selects the Directory's default distribution. To explicitly install this integrity-locked community distribution, use `npx universal-agent-plugins add 777genius/context7 --target codex`.
+
 This is an independent community package for [Agent Plugins 1.0](https://agent-plugins.org/specification). It is not an endorsement or an official package from Context7.
 
 - Component: MCP server
 - Transport: `stdio`
-- Runtime: integrity-locked `@upstash/context7-mcp@4.0.5`; install scripts are disabled
+- Runtime: integrity-locked `@upstash/context7-mcp@4.1.1`; install scripts are disabled
 - Requirement: Node.js 22 or newer; the first launch downloads the locked npm closure into plugin data
 - Upstream documentation: https://context7.com
 - Authentication: No credential is declared by the package. Context7 may apply its own service limits.

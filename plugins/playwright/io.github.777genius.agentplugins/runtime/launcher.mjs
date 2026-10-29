@@ -201,9 +201,14 @@ async function acquireLock(lockPath, target, expected) {
       } catch (error) {
         throw new Error(`could not record runtime lock owner: ${error.message}`);
       }
-      if (await exists(join(lockPath, RECLAIM_MARKER)) ||
-          !(await readFile(join(lockPath, "owner.json"))).equals(Buffer.from(ownerBody))) {
+      if (!(await readFile(join(lockPath, "owner.json"))).equals(Buffer.from(ownerBody))) {
         throw new Error("runtime lock ownership changed during acquisition; retry");
+      }
+      if (await exists(join(lockPath, RECLAIM_MARKER))) {
+        // A stale reclaimer may have marked this replacement generation.
+        // Retire only our own claim and retry before starting npm.
+        await releaseOwnedLock(lockPath, Buffer.from(ownerBody));
+        continue;
       }
       return { ownerBody: Buffer.from(ownerBody) };
     } catch (error) {

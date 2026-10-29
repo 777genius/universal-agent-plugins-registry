@@ -2,7 +2,7 @@
 
 These marks identify supported clients. They remain trademarks of their owners;
 their inclusion does not imply affiliation or endorsement. Sources were checked
-on 2026-08-31.
+on 2026-08-31, plus the Kimi mark on 2026-10-19.
 
 | Asset | Official source |
 | --- | --- |
@@ -16,6 +16,11 @@ on 2026-08-31.
 | `opencode.svg` | OpenCode's official [identity mark](https://github.com/anomalyco/opencode/blob/1251a870cb384543c150c4a72fb101b55eec971b/packages/identity/mark.svg), mirrored through the CC0 [Simple Icons geometry](https://github.com/simple-icons/simple-icons/blob/develop/icons/opencode.svg) |
 | `cline.svg` | Cline's official [brand asset](https://cline.bot/assets/branding/logos/cline-wordmark-black.svg), mirrored through the CC0 [Simple Icons geometry](https://github.com/simple-icons/simple-icons/blob/develop/icons/cline.svg) |
 | `windsurf.svg` | Windsurf's official [brand resources](https://windsurf.com/brand), mirrored through the CC0 [Simple Icons geometry](https://github.com/simple-icons/simple-icons/blob/develop/icons/windsurf.svg) |
+| `kimi.svg` | Moonshot AI's Kimi mark, mirrored through the CC0 [Simple Icons geometry](https://github.com/simple-icons/simple-icons/blob/develop/icons/kimi.svg); source SHA-256 `01fb4be70032974e2c9a4f2af9688ea505ad7d996de8866cea0844c4b0581091` |
+
+Grok and Qoder currently share the neutral `terminal.svg` mark: no official or
+CC0 brand geometry was available at check time (2026-10-19). Entries may opt
+into a mirrored brand asset later following the same provenance table.
 
 The OpenAI and GitHub Copilot marks are placed on neutral light tiles so they
 remain visible in both GitHub themes. Their logo geometry is unchanged.

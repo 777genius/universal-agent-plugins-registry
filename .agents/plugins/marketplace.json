@@ -5,18 +5,6 @@
   },
   "plugins": [
     {
-      "name": "agent-code-navigator",
-      "source": {
-        "source": "local",
-        "path": "./compat/openai/plugins/agent-code-navigator"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Developer Tools"
-    },
-    {
       "name": "atlassian",
       "source": {
         "source": "local",
@@ -237,6 +225,18 @@
       "source": {
         "source": "local",
         "path": "./compat/openai/plugins/linear"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "marketing-kit",
+      "source": {
+        "source": "local",
+        "path": "./compat/openai/plugins/marketing-kit"
       },
       "policy": {
         "installation": "AVAILABLE",

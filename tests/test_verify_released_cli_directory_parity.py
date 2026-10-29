@@ -2,6 +2,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,23 +52,20 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
             "repository": "example/plugins", "revision": self.revision, "package_path": "plugins/context7",
             "release_sequence": 2,
         }], "snapshot_digest": self.snapshot_digest}}
-        identity = {
-            "plugin": "context7", "version": "1.2.3", "source": "example/plugins//plugins/context7",
-            "revision": self.revision, "distribution_id": "example/context7", "release_sequence": 2,
-            "tree_digest": "sha256:" + "1" * 64,
-            "manifest_digest": "sha256:" + "2" * 64,
+        self.add = {"result": "success", "data": {
             "dry_run": True,
-        }
-        self.add = {"result": "success", "data": {**identity, "directory": {
-            "product_id": "context7", "distribution_id": "example/context7",
-            "distribution_kind": "community", "desired_release_sequence": 2,
-            "snapshot_schema": 1, "snapshot_sequence": 19,
-            "snapshot_digest": self.snapshot_digest,
-        }, "targets": [{
-            "target": "cursor", "output": {**identity, "result": {
-                "mutated": False, "plan": {"client_id": "cursor"},
-            }},
-        }]}}
+            "actions": [{
+                "component_support": [{"kind": "mcp_server", "name": "context7", "support": "prepared"}],
+                "alias": "context7", "client_id": "cursor", "action": "install",
+                "reason": "no matching environment-owned binding",
+                "package_digest": "sha256:" + "1" * 64,
+                "revision": self.revision,
+            }],
+            "environment": {
+                "alias": "context7", "intent_change": True,
+                "lock_path": "/tmp/uap.lock", "manifest_path": "/tmp/uap.toml", "saved": True,
+            },
+        }}
 
     def verify(self, snapshot=None, search=None, add=None) -> None:
         verifier.verify(
@@ -75,6 +73,16 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
             sequence=19, snapshot_digest=self.snapshot_digest,
             product_id="context7", cli_version="0.1.18",
         )
+
+    def test_add_fixture_matches_released_action_shape(self) -> None:
+        self.assertEqual(set(self.add["data"]), {"dry_run", "actions", "environment"})
+        self.assertEqual(set(self.add["data"]["actions"][0]), {
+            "component_support", "alias", "client_id", "action", "reason", "package_digest", "revision",
+        })
+        self.assertEqual(set(self.add["data"]["environment"]), {
+            "alias", "intent_change", "lock_path", "manifest_path", "saved",
+        })
+        self.verify()
 
     def test_selects_default_distribution_among_same_product_results(self) -> None:
         search = copy.deepcopy(self.search)
@@ -113,43 +121,55 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.verify(search=search)
 
-    def test_rejects_mismatched_add_release_identity(self) -> None:
-        for location in ("data", "output"):
-            for field in ("plugin", "version", "source", "revision", "tree_digest", "manifest_digest", "dry_run"):
-                with self.subTest(location=location, field=field):
-                    add = copy.deepcopy(self.add)
-                    container = add["data"] if location == "data" else add["data"]["targets"][0]["output"]
-                    container[field] = "substituted"
-                    with self.assertRaisesRegex(ValueError, field):
-                        self.verify(add=add)
+    def test_rejects_mismatched_add_action_identity(self) -> None:
+        for field, value in (
+            ("alias", "attacker"),
+            ("revision", "c" * 40),
+            ("package_digest", "sha256:" + "0" * 64),
+            ("client_id", "codex"),
+            ("action", "update"),
+        ):
+            with self.subTest(field=field):
+                add = copy.deepcopy(self.add)
+                add["data"]["actions"][0][field] = value
+                with self.assertRaisesRegex(ValueError, re.escape(f"add.data.actions[0].{field} ")):
+                    self.verify(add=add)
+
+    def test_rejects_mismatched_environment_alias(self) -> None:
+        add = copy.deepcopy(self.add)
+        add["data"]["environment"]["alias"] = "attacker"
+        with self.assertRaisesRegex(ValueError, re.escape("add.data.environment.alias")):
+            self.verify(add=add)
 
     def test_fails_closed_on_missing_released_identity_fields(self) -> None:
-        for location in ("search", "data", "output", "directory"):
-            fields = {
-                "search": ("distribution_id", "distribution_kind", "package_version", "install_selector", "status", "repository", "revision", "package_path"),
-                "data": ("plugin", "version", "source", "revision", "tree_digest", "manifest_digest", "dry_run"),
-                "output": ("plugin", "version", "source", "revision", "tree_digest", "manifest_digest", "dry_run"),
-                "directory": ("product_id", "distribution_id", "distribution_kind", "desired_release_sequence", "snapshot_schema", "snapshot_sequence", "snapshot_digest"),
-            }[location]
+        fields_by_location = {
+            "search": ("distribution_id", "distribution_kind", "package_version", "install_selector", "status", "repository", "revision", "package_path"),
+            "action": ("alias", "client_id", "action", "revision", "package_digest"),
+            "data": ("dry_run",),
+            "environment": ("environment",),
+            "environment_fields": ("alias", "saved"),
+        }
+        for location, fields in fields_by_location.items():
             for field in fields:
                 with self.subTest(location=location, field=field):
                     search, add = copy.deepcopy(self.search), copy.deepcopy(self.add)
                     containers = {
                         "search": search["data"]["results"][0],
+                        "action": add["data"]["actions"][0],
                         "data": add["data"],
-                        "output": add["data"]["targets"][0]["output"],
-                        "directory": add["data"]["directory"],
+                        "environment": add["data"],
+                        "environment_fields": add["data"]["environment"],
                     }
                     containers[location].pop(field)
                     with self.assertRaises(ValueError):
                         self.verify(search=search, add=add)
 
-    def test_rejects_substituted_directory_identity(self) -> None:
-        for field in ("product_id", "distribution_id", "distribution_kind", "desired_release_sequence", "snapshot_schema", "snapshot_sequence", "snapshot_digest"):
-            with self.subTest(field=field):
+    def test_fails_closed_on_empty_or_ambiguous_add_actions(self) -> None:
+        for actions in ([], [copy.deepcopy(self.add["data"]["actions"][0]) for _ in range(2)]):
+            with self.subTest(actions=len(actions)):
                 add = copy.deepcopy(self.add)
-                add["data"]["directory"][field] = "substituted"
-                with self.assertRaisesRegex(ValueError, field):
+                add["data"]["actions"] = actions
+                with self.assertRaisesRegex(ValueError, "exactly one add action"):
                     self.verify(add=add)
 
     def test_rejects_missing_or_substituted_search_snapshot_digest(self) -> None:
@@ -163,89 +183,77 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "snapshot digest"):
                     self.verify(search=search)
 
-    def test_rejects_missing_or_substituted_cursor_plan_client(self) -> None:
+    def test_rejects_missing_or_substituted_cursor_action_client(self) -> None:
         for value in (None, "codex"):
             with self.subTest(value=value):
                 add = copy.deepcopy(self.add)
-                plan = add["data"]["targets"][0]["output"]["result"]["plan"]
+                action = add["data"]["actions"][0]
                 if value is None:
-                    plan.pop("client_id")
+                    action.pop("client_id")
                 else:
-                    plan["client_id"] = value
+                    action["client_id"] = value
                 with self.assertRaisesRegex(ValueError, "client_id"):
                     self.verify(add=add)
 
-    def test_rejects_non_boolean_dry_run_and_mutated_values(self) -> None:
-        for location in ("data", "output"):
-            for value in (1, 1.0, 19.0, False, None):
-                with self.subTest(location=location, value=value):
-                    add = copy.deepcopy(self.add)
-                    container = add["data"] if location == "data" else add["data"]["targets"][0]["output"]
-                    if value is None:
-                        container.pop("dry_run")
-                    else:
-                        container["dry_run"] = value
-                    with self.assertRaisesRegex(ValueError, "dry_run"):
-                        self.verify(add=add)
-        for value in (1, 1.0, 19.0, True, 0, 0.0, None):
-            with self.subTest(mutated=value):
+    def test_requires_true_dry_run_and_environment_saved(self) -> None:
+        for value in (1, 1.0, 19.0, False, None):
+            with self.subTest(dry_run=value):
                 add = copy.deepcopy(self.add)
-                result = add["data"]["targets"][0]["output"]["result"]
                 if value is None:
-                    result.pop("mutated")
+                    add["data"].pop("dry_run")
                 else:
-                    result["mutated"] = value
-                with self.assertRaisesRegex(ValueError, "mutation"):
+                    add["data"]["dry_run"] = value
+                with self.assertRaisesRegex(ValueError, "dry_run"):
+                    self.verify(add=add)
+        for value in (1, 1.0, "true", False, None):
+            with self.subTest(saved=value):
+                add = copy.deepcopy(self.add)
+                if value is None:
+                    add["data"]["environment"].pop("saved")
+                else:
+                    add["data"]["environment"]["saved"] = value
+                with self.assertRaisesRegex(ValueError, "saved"):
                     self.verify(add=add)
 
     def test_public_sequences_require_exact_positive_json_integers(self) -> None:
-        locations = (
-            ("snapshot", "sequence"),
-            ("search", "snapshot_sequence"),
-            ("directory", "snapshot_sequence"),
-        )
-        for location, field in locations:
+        for location, field in (("snapshot", "sequence"), ("search", "snapshot_sequence")):
             for value in (1, 1.0, 19.0, True, False, 0, None):
                 with self.subTest(location=location, value=value):
-                    snapshot, search, add = copy.deepcopy(self.snapshot), copy.deepcopy(self.search), copy.deepcopy(self.add)
-                    containers = {"snapshot": snapshot, "search": search["data"], "directory": add["data"]["directory"]}
+                    snapshot, search = copy.deepcopy(self.snapshot), copy.deepcopy(self.search)
+                    containers = {"snapshot": snapshot, "search": search["data"]}
                     if value is None:
                         containers[location].pop(field)
                     else:
                         containers[location][field] = value
                     with self.assertRaises(ValueError):
-                        self.verify(snapshot=snapshot, search=search, add=add)
+                        self.verify(snapshot=snapshot, search=search)
 
     def test_release_sequences_require_exact_positive_json_integers(self) -> None:
-        for location in ("policy", "release", "directory"):
+        for location, field in (("policy", "release_sequence"), ("release", "sequence")):
             for value in (1, 1.0, 19.0, True, False, 0, None):
                 with self.subTest(location=location, value=value):
-                    snapshot, add = copy.deepcopy(self.snapshot), copy.deepcopy(self.add)
+                    snapshot = copy.deepcopy(self.snapshot)
                     containers = {
                         "policy": snapshot["distributions"][0]["release_policies"][0],
                         "release": snapshot["distributions"][0]["releases"][0],
-                        "directory": add["data"]["directory"],
                     }
-                    field = "desired_release_sequence" if location == "directory" else ("release_sequence" if location == "policy" else "sequence")
                     if value is None:
                         containers[location].pop(field)
                     else:
                         containers[location][field] = value
                     with self.assertRaises(ValueError):
-                        self.verify(snapshot=snapshot, add=add)
+                        self.verify(snapshot=snapshot)
 
     def test_snapshot_schema_requires_exact_positive_json_integers(self) -> None:
-        for location in ("snapshot", "directory"):
-            for value in (1.0, 19.0, True, False, 0, None):
-                with self.subTest(location=location, value=value):
-                    snapshot, add = copy.deepcopy(self.snapshot), copy.deepcopy(self.add)
-                    container, field = ((snapshot, "snapshot_schema_version") if location == "snapshot" else (add["data"]["directory"], "snapshot_schema"))
-                    if value is None:
-                        container.pop(field)
-                    else:
-                        container[field] = value
-                    with self.assertRaises(ValueError):
-                        self.verify(snapshot=snapshot, add=add)
+        for value in (1.0, 19.0, True, False, 0, None):
+            with self.subTest(value=value):
+                snapshot = copy.deepcopy(self.snapshot)
+                if value is None:
+                    snapshot.pop("snapshot_schema_version")
+                else:
+                    snapshot["snapshot_schema_version"] = value
+                with self.assertRaises(ValueError):
+                    self.verify(snapshot=snapshot)
 
     def test_load_snapshot_rejects_file_level_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -268,6 +276,12 @@ class ReleasedCliDirectoryParityTests(unittest.TestCase):
         snapshot = copy.deepcopy(self.snapshot)
         snapshot["distributions"][0]["status"] = "suspended"
         with self.assertRaisesRegex(ValueError, "default distribution is not active"):
+            self.verify(snapshot=snapshot)
+
+    def test_fails_closed_when_no_policy_applies_to_the_released_cli(self) -> None:
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot["distributions"][0]["release_policies"][0]["minimum_installer_version"] = "0.1.19"
+        with self.assertRaisesRegex(ValueError, "applicable active Cursor policy"):
             self.verify(snapshot=snapshot)
 
 

@@ -26,6 +26,7 @@ SPEC.loader.exec_module(registry)
 
 CANONICAL_PRODUCT_IDS = {
     "agent-code-navigator",
+    "agent-notifications",
     "atlassian",
     "chrome-devtools",
     "cloudflare",
@@ -45,6 +46,7 @@ CANONICAL_PRODUCT_IDS = {
     "hubspot-crm",
     "hubspot-developer",
     "linear",
+    "marketing-kit",
     "neon",
     "notion",
     "playwright",
@@ -592,7 +594,13 @@ class DirectoryDomainTests(unittest.TestCase):
             "id": "zz-community/zz-community-product",
             "product_id": "zz-community-product",
             "packager": "zz-community",
+            # Live entries get retired over time; the fixture needs its own
+            # eligibility baseline. Tests that need revoked/suspended state
+            # set it explicitly.
+            "status": "active",
         })
+        for policy in distribution["release_policies"]:
+            policy["status"] = "active"
         distribution["releases"][0].update({
             "manifest_name": "zz-community-product",
             "package_source": {
@@ -1082,14 +1090,16 @@ class DirectoryDomainTests(unittest.TestCase):
             if distribution["id"] not in expected_distribution_ids:
                 continue
             suspended_live_npx = {
+                "777genius/agent-code-navigator",
+                "777genius/agent-notifications",
                 "777genius/chrome-devtools",
             }
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
-                expected_sequences = [1, 2, 3, 4, 5]
+                expected_sequences = [1, 2, 3, 4, 5, 6]
             elif distribution["id"] == "777genius/context7":
-                expected_sequences = [1, 2, 3, 4]
+                expected_sequences = [1, 2, 3, 4, 5]
             elif distribution["id"] in {
                 "777genius/cloudflare-docs-bridge", "777genius/github-bridge",
                 "777genius/playwright-bridge",
@@ -1146,8 +1156,10 @@ class DirectoryDomainTests(unittest.TestCase):
                     )
                 if distribution["id"] == "777genius/context7" and policy["release_sequence"] >= 2:
                     expected_minimum = "0.1.26"
+                if distribution["id"] in {"777genius/agent-code-navigator", "777genius/agent-notifications"}:
+                    expected_minimum = "0.1.26"
                 if distribution["id"] == "upstash/context7":
-                    expected_minimum = "0.1.51"
+                    expected_minimum = "0.1.87"
                 if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] >= 2:
                     expected_minimum = "0.1.26"
                 if distribution["id"] == "777genius/playwright-bridge":
@@ -1165,6 +1177,9 @@ class DirectoryDomainTests(unittest.TestCase):
                     "777genius/github-bridge",
                 }:
                     expected_minimum = "0.1.26"
+                if distribution["id"] == "777genius/marketing-kit":
+                    # The kit has mandatory package dependencies and requires saved add.
+                    expected_minimum = "0.1.91"
                 self.assertEqual(policy["minimum_installer_version"], expected_minimum)
             release = distribution["releases"][0]
             if release["package_source"]["revision"] is not None:
@@ -1213,7 +1228,7 @@ class DirectoryDomainTests(unittest.TestCase):
         )
         context7_resolution = registry.resolve_directory(source, "context7", ["codex"])
         self.assertEqual((context7_resolution["distribution_id"], context7_resolution["release_sequence"]), ("upstash/context7", 1))
-        context7_clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
+        context7_clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"]
         for target in context7_clients:
             with self.subTest(target=target):
                 upstream = registry.resolve_directory(source, "upstash/context7", [target])
@@ -1224,16 +1239,16 @@ class DirectoryDomainTests(unittest.TestCase):
         all_clients = registry.resolve_directory(source, "context7", context7_clients)
         self.assertEqual((all_clients["distribution_id"], all_clients["release_sequence"]), ("upstash/context7", 1))
         bridge = registry.resolve_directory(source, "777genius/context7", context7_clients)
-        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 4))
+        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 5))
 
         context7 = next(
             product for product in registry.directory_preview(source)["products"]
             if product["id"] == "context7"
         )
-        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 4)
+        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 5)
         self.assertEqual(
             [item["client"] for item in local["eligible_targets"]],
-            ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"],
+            ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"],
         )
 
     def test_chrome_bridge_has_one_locked_active_release_and_legacy_bytes_stay_revoked(self) -> None:
@@ -1255,6 +1270,40 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertTrue(all(policy["status"] in {"revoked", "superseded"} for policy in bridge["release_policies"][:-1]))
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "chrome-devtools")
 
+    def test_agent_code_navigator_is_retired_and_agent_notifications_is_visible_not_installable(self) -> None:
+        source = self.source()
+        distributions = {item["id"]: item for item in source["distributions"]}
+        navigator = distributions["777genius/agent-code-navigator"]
+        self.assertEqual(navigator["status"], "suspended")
+        self.assertEqual({policy["status"] for policy in navigator["release_policies"]}, {"revoked"})
+        notifications = distributions["777genius/agent-notifications"]
+        self.assertEqual(notifications["product_id"], "agent-notifications")
+        self.assertEqual(notifications["status"], "suspended")
+        self.assertEqual([policy["status"] for policy in notifications["release_policies"]], ["active"])
+        self.assertEqual(notifications["release_policies"][0]["current_evidence"], [])
+        registry.validate_release_package(
+            registry.ROOT / "plugins" / "agent-notifications",
+            notifications["releases"][0],
+            label="777genius/agent-notifications@1",
+            allow_unresolved_revision=True,
+        )
+        for selector in ("agent-code-navigator", "777genius/agent-code-navigator", "agent-notifications", "777genius/agent-notifications"):
+            with self.subTest(selector=selector):
+                with self.assertRaises(registry.RegistryError):
+                    registry.resolve_directory(source, selector, ["codex"])
+                self.assertEqual(registry.eligible_product_targets(source, selector), [])
+        preview = registry.directory_preview(source)
+        card = next(item for item in preview["products"] if item["id"] == "agent-notifications")
+        self.assertEqual(card["display_name"], "Agent Notifications")
+        self.assertEqual([item["id"] for item in card["distributions"]], ["777genius/agent-notifications"])
+        self.assertEqual(card["distributions"][0]["status"], "suspended")
+        self.assertEqual(card["distributions"][0]["eligible_targets"], [])
+        for product_id in ("agent-code-navigator", "agent-notifications"):
+            readme = (registry.ROOT / "plugins" / product_id / "README.md").read_text()
+            block = readme.split("<!-- agentplugins-install:start -->", 1)[1].split("<!-- agentplugins-install:end -->", 1)[0]
+            self.assertIn("Installation is currently unavailable", block)
+            self.assertNotIn("npx universal-agent-plugins add", block)
+
     def test_context7_locked_npm_runtime_is_complete(self) -> None:
         registry.validate_locked_npm_runtime(registry.ROOT / "plugins" / "context7")
         source = self.source()
@@ -1262,7 +1311,7 @@ class DirectoryDomainTests(unittest.TestCase):
 
     def test_chrome_alias_resolves_every_reviewed_client_and_complete_target_set(self) -> None:
         source = self.source()
-        clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
+        clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"]
         bridge = next(item for item in source["distributions"] if item["id"] == "777genius/chrome-devtools-bridge")
         previous = bridge["release_policies"][0]
         active = next(item for item in bridge["release_policies"] if item["status"] == "active")
@@ -1275,7 +1324,7 @@ class DirectoryDomainTests(unittest.TestCase):
         # The current public CLI client registry keeps Directory delivery
         # distinct from its internal package mode.
         # domain.ClientDefinitions().DirectoryDelivery is distinct from PackageMode.
-        expected_delivery = {"claude": "managed", "gemini": "managed", "opencode": "managed", "cline": "managed", "windsurf": "prepared"}
+        expected_delivery = {"claude": "managed", "gemini": "managed", "opencode": "managed", "cline": "managed", "windsurf": "prepared", "grok": "managed", "kimi": "managed", "qoder": "managed"}
         for client, delivery in expected_delivery.items():
             self.assertIn({"client": client, "authentication": "not_required", "scopes": ["user"], "delivery": delivery}, active["targets"])
         for targets in [[client] for client in clients] + [clients, clients[5:], ["codex", "gemini"]]:
@@ -1291,20 +1340,40 @@ class DirectoryDomainTests(unittest.TestCase):
 
     def test_every_reviewed_product_resolves_the_complete_cli_client_set(self) -> None:
         source = self.source()
-        clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
+        clients = ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"]
+        not_installable = {"agent-code-navigator", "agent-notifications"}
         expected_delivery = {
             "codex": "managed", "cursor": "managed", "copilot": "managed", "vscode": "prepared",
             "kiro": "managed", "claude": "managed", "gemini": "managed", "opencode": "managed",
-            "cline": "managed", "windsurf": "prepared",
+            "cline": "managed", "windsurf": "prepared", "grok": "managed", "kimi": "managed", "qoder": "managed",
         }
         for product in source["products"]:
             with self.subTest(product=product["id"]):
+                if product["id"] in not_installable:
+                    with self.assertRaises(registry.RegistryError):
+                        registry.resolve_directory(source, product["id"], clients)
+                    continue
+                if product["id"] == "marketing-kit":
+                    # New dependency-managed packages qualify their own target subset;
+                    # they do not inherit the legacy catalog's broad target claims.
+                    admitted = ["codex", "cursor", "claude", "gemini", "opencode"]
+                    with self.assertRaises(registry.RegistryError):
+                        registry.resolve_directory(source, product["id"], clients)
+                    resolved = registry.resolve_directory(source, product["id"], admitted)
+                    distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])
+                    policy = distribution["release_policies"][0]
+                    self.assertEqual([target["client"] for target in policy["targets"]], admitted)
+                    self.assertTrue(all(target["authentication"] == "required" for target in policy["targets"]))
+                    self.assertTrue(all(target["scopes"] == ["user"] for target in policy["targets"]))
+                    self.assertEqual(policy["minimum_installer_version"], "0.1.91")
+                    self.assertEqual(policy["current_evidence"], [])
+                    continue
                 resolved = registry.resolve_directory(source, product["id"], clients)
                 distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])
                 policy = next(item for item in distribution["release_policies"] if item["release_sequence"] == resolved["release_sequence"])
                 by_client = {target["client"]: target for target in policy["targets"]}
                 self.assertEqual({client: by_client[client]["delivery"] for client in clients}, expected_delivery)
-                minimum = "0.1.51" if distribution["id"] == "upstash/context7" else "0.1.26"
+                minimum = "0.1.87" if distribution["id"] == "upstash/context7" else "0.1.26"
                 self.assertEqual(policy["minimum_installer_version"], minimum)
 
     def test_chrome_preview_preserves_complete_target_resolution_without_runtime_claims(self) -> None:
@@ -1357,6 +1426,13 @@ class DirectoryDomainTests(unittest.TestCase):
 
     def test_reviewed_runtime_upgrade_allowlists_are_exact(self) -> None:
         self.assertEqual(
+            registry.LOCKED_NPM_SECURITY_OVERRIDES[("@hubspot/cli", "8.15.0")],
+            {
+                "@sentry/node": "10.71.0", "qs": "6.16.0", "js-yaml": "4.3.2",
+                "moment": "2.31.0", "axios": "1.20.0",
+            },
+        )
+        self.assertEqual(
             registry.LOCKED_NPM_SECURITY_OVERRIDES[("@upstash/context7-mcp", "4.0.5")],
             {"qs": "6.16.0"},
         )
@@ -1391,18 +1467,18 @@ class DirectoryDomainTests(unittest.TestCase):
                 f"historical runtime policy must remain available for {historical}",
             )
 
-    def test_firebase_locked_runtime_is_active_at_sequence_five(self) -> None:
+    def test_firebase_locked_runtime_is_active_at_sequence_six(self) -> None:
         package = registry.ROOT / "plugins" / "firebase"
         registry.validate_locked_npm_runtime(package)
         runtime_root = package / registry.LOCKED_NPM_RUNTIME_PATH
         runtime = json.loads((runtime_root / "runtime.json").read_text())
         package_json = json.loads((runtime_root / "package.json").read_text())
         package_lock = json.loads((runtime_root / "package-lock.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.29.0"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.32.0"))
         self.assertNotIn("stream-json", package_json["overrides"])
         self.assertEqual(
-            package_lock["packages"]["node_modules/firebase-tools/node_modules/stream-json"]["version"],
-            "1.9.1",
+            package_lock["packages"]["node_modules/stream-json"]["version"],
+            "3.7.0",
         )
         source = self.source()
         distribution = next(
@@ -1412,19 +1488,19 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(distribution["status"], "active")
         self.assertEqual(
             [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
-            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"), (5, "active")],
+            [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"), (5, "active"), (6, "active")],
         )
         resolution = registry.resolve_directory(source, "firebase", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/firebase", 5),
+            ("777genius/firebase", 6),
         )
 
-    def test_hubspot_locked_runtime_is_active_at_sequence_five(self) -> None:
+    def test_hubspot_locked_runtime_is_active_at_sequence_six(self) -> None:
         package = registry.ROOT / "plugins" / "hubspot-developer"
         registry.validate_locked_npm_runtime(package)
         runtime = json.loads((package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.14.0"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.15.0"))
         self.assertFalse(runtime["omit_optional"])
         source = self.source()
         distribution = next(
@@ -1441,12 +1517,13 @@ class DirectoryDomainTests(unittest.TestCase):
                 (3, "superseded", "0.1.26"),
                 (4, "superseded", "0.1.26"),
                 (5, "active", "0.1.26"),
+                (6, "active", "0.1.26"),
             ],
         )
         resolution = registry.resolve_directory(source, "hubspot-developer", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/hubspot-developer", 5),
+            ("777genius/hubspot-developer", 6),
         )
 
     def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:
@@ -1656,12 +1733,12 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(context7["tree_digest"], "sha256:08eed3b67f2e71a11b68baa594380c2f69ec1bc97584d701deaf7942ac34c0d8")
         self.assertEqual(context7["manifest_digest"], "sha256:d01781acd899aefa9445a290cf43a481230321934d62f9c8a2aab06a89718236")
         context7_policy = distributions["upstash/context7"]["release_policies"][0]
-        context7_clients = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf")
+        context7_clients = ("codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder")
         self.assertEqual(
             {target["client"]: target["authentication"] for target in context7_policy["targets"]},
             {client: "required" for client in context7_clients},
         )
-        self.assertEqual(context7_policy["minimum_installer_version"], "0.1.51")
+        self.assertEqual(context7_policy["minimum_installer_version"], "0.1.87")
         self.assertEqual(
             {item["client"] for item in source["evidence"] if item["id"] in context7_policy["current_evidence"]},
             set(context7_clients),
@@ -2234,6 +2311,7 @@ class DirectoryDomainTests(unittest.TestCase):
         source = self.source()
         expected_not_required = {
             "agent-code-navigator",
+            "agent-notifications",
             "chrome-devtools",
             "cloudflare-docs",
             "context7",
@@ -2392,12 +2470,18 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
                 )
                 for _ in range(2)
             ]
-            for process in processes:
-                stdout, stderr = process.communicate(timeout=10)
-                self.assertEqual(process.returncode, 0, stderr)
-                self.assertEqual(stdout, "READY\n")
-            self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
-            self.assertFalse(lock.exists())
+            try:
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, "READY\n")
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+                self.assertFalse(lock.exists())
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
 
     def test_owner_arriving_after_reclaim_claim_is_not_stolen(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2547,13 +2631,72 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
                 )
                 for _ in range(2)
             ]
-            for process in processes:
-                stdout, stderr = process.communicate(timeout=10)
-                self.assertEqual(process.returncode, 0, stderr)
-                self.assertEqual(stdout, "READY\n")
-            self.assertGreaterEqual(len(list(lock.parent.glob(lock.name + ".retired-*"))), 2)
-            self.assertFalse(lock.exists())
-            self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            try:
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, "READY\n")
+                self.assertGreaterEqual(len(list(lock.parent.glob(lock.name + ".retired-*"))), 2)
+                self.assertFalse(lock.exists())
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+
+    def test_stale_reclaimer_marker_does_not_abort_replacement_acquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.joinpath("owner.json").write_text(json.dumps({"pid": 999_999_999, "token": "old"}))
+            source = launcher.read_text()
+            before_claim = "const digest = await retirementMarkerDigest(lockPath);"
+            before_owner_check = "if (await exists(join(lockPath, RECLAIM_MARKER))"
+            self.assertEqual(source.count(before_owner_check), 1)
+            for target, variable in ((before_claim, "TEST_PAUSE_BEFORE_CLAIM"),
+                                     (before_owner_check, "TEST_PAUSE_BEFORE_OWNER_CHECK")):
+                source = source.replace(target,
+                    f"if (process.env.{variable}) {{\n"
+                    f"  await writeFile(process.env.{variable} + '.observed', 'yes');\n"
+                    f"  while (!(await exists(process.env.{variable} + '.resume')))\n"
+                    "    await new Promise(resolve => setTimeout(resolve, 10));\n"
+                    "}\n    " + target, 1)
+            launcher.write_text(source)
+            claim_barrier, owner_barrier = root / "claim", root / "owner"
+            processes = []
+            def start(variable, barrier):
+                process = subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env={**environment, variable: str(barrier)},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                processes.append(process)
+                return process
+            def wait_for(path):
+                deadline = time.monotonic() + 10
+                while not path.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(path.is_file(), f"barrier was not reached: {path.name}")
+            try:
+                stale = start("TEST_PAUSE_BEFORE_CLAIM", claim_barrier)
+                wait_for(claim_barrier.with_suffix(".observed"))
+                owner = start("TEST_PAUSE_BEFORE_OWNER_CHECK", owner_barrier)
+                wait_for(owner_barrier.with_suffix(".observed"))
+                self.assertEqual(json.loads(lock.joinpath("owner.json").read_text())["pid"], owner.pid)
+                claim_barrier.with_suffix(".resume").write_text("go")
+                wait_for(lock / ".agentplugins-reclaim.json")
+                owner_barrier.with_suffix(".resume").write_text("go")
+                for process in (owner, stale):
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, "READY\n")
+                self.assertFalse(lock.exists())
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
 
     def test_delayed_reclaimer_cannot_move_replacement_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

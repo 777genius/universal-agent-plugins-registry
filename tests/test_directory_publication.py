@@ -110,7 +110,8 @@ class CanonicalAndSignatureTests(unittest.TestCase):
         import jsonschema
         import build_registry
 
-        expected = ["codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf"]
+        expected = ["codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
+                    "grok", "kimi", "qoder"]
         self.assertEqual(list(build_registry.CLIENT_IDS), expected)
         self.assertEqual(publication.CLIENTS, set(expected))
 
@@ -136,7 +137,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
                     self.assertFalse(validator.is_valid("unknown"))
 
     def test_publication_target_and_evidence_contracts_accept_new_clients(self) -> None:
-        for client in ("claude", "gemini", "opencode", "cline", "windsurf"):
+        for client in ("claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"):
             with self.subTest(client=client):
                 candidate = fixture_json("candidate.json")
                 policy = candidate["distributions"][0]["release_policies"][0]
@@ -1750,6 +1751,8 @@ class PublicationWorkflowTests(unittest.TestCase):
             {
                 "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
                 "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
             },
         )
         step_names = [step.get("name", "") for step in site_job["steps"] if isinstance(step, dict)]
@@ -1757,9 +1760,16 @@ class PublicationWorkflowTests(unittest.TestCase):
             step_names.index("Reject unsafe archive entries and verify the artifact"),
             step_names.index("Fetch the exact shared-ledger head without credentials"),
         )
-        for forbidden in ("npm", "pnpm", "node ", "python", "trusted-source"):
+        for forbidden in ("npm", "pnpm", "node "):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, site_commands.lower())
+        self.assertIn("verify_directory_publication.py", site_commands)
+        self.assertIn("directory_publication_cas.py materialize-rebase-publish", site_commands)
+        publish_step = next(step for step in site_job["steps"] if step.get("name") == "Publish the signed and materialized commits with exact CAS")
+        self.assertEqual(publish_step["env"]["PUBLISHER_TOKEN"], "${{ steps.publisher.outputs.token }}")
+        self.assertNotIn("github.token", json.dumps(site_job))
+        self.assertNotIn("GH_TOKEN", json.dumps(site_job))
+        self.assertIn("EXPECTED_SIGNED_BUNDLE_DIGEST", site_commands)
         self.assertIn("EXPECTED_ARCHIVE_DIGEST", json.dumps(site_job))
         self.assertIn("EXPECTED_MANIFEST_DIGEST", json.dumps(site_job))
         self.assertIn("EXPECTED_SNAPSHOT_DIGEST", json.dumps(site_job))
@@ -1772,13 +1782,16 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn("manifest.paths", site_commands)
         self.assertIn("core.hooksPath=/dev/null commit", site_commands)
         self.assertIn("git -C ledger diff --exit-code -- registry/schemas/1/snapshots", site_commands)
-        self.assertNotIn("github.token", text)
-        self.assertNotIn("GH_TOKEN", text)
         self.assertEqual(signer["permissions"], {"actions": "read", "contents": "read"})
         self.assertEqual(site_job["environment"], "directory-publication-materialization")
-        deploy_commands = "\n".join(step.get("run", "") for step in workflow["jobs"]["deploy"]["steps"] if isinstance(step, dict))
+        deploy_job = workflow["jobs"]["deploy"]
+        self.assertEqual(deploy_job["uses"], "./.github/workflows/pages-production-compositor.yml")
+        self.assertEqual(deploy_job["needs"], ["promotion_intent"])
         self.assertIn("needs.materialize_site.outputs.ledger_commit", text)
-        self.assertIn("git -C exact-pages-tree rev-parse HEAD", deploy_commands)
+        pages = yaml.load((ROOT / ".github" / "workflows" / "pages-production-compositor.yml").read_text(), Loader=yaml.BaseLoader)
+        marker_steps = pages["jobs"]["record_production_marker"]["steps"]
+        receipt_step = next(step for step in marker_steps if step.get("name") == "Require exact successful Pages deployment receipt")
+        self.assertIn("git -C exact-pages-tree rev-parse HEAD", receipt_step["run"])
         exact_gate = workflow["jobs"]["gate_exact_staged_publication"]
         gate_step = next(step for step in exact_gate["steps"] if step.get("name") == "Verify staged bytes and immutable identity before promotion")
         self.assertEqual(exact_gate["needs"], ["sign", "materialize_site"])
@@ -1786,7 +1799,7 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertEqual(gate_step["env"]["EXPECTED_SNAPSHOT_DIGEST"], "${{ needs.sign.outputs.snapshot_digest }}")
         self.assertEqual(gate_step["env"]["EXPECTED_PUBLICATION_ID"], "${{ needs.sign.outputs.publication_id }}")
         self.assertEqual(gate_step["env"]["EXPECTED_SOURCE_COMMIT"], "${{ needs.sign.outputs.marker_commit }}")
-        self.assertEqual(gate_step["env"]["EXPECTED_SIGNED_LEDGER_COMMIT"], "${{ needs.sign.outputs.ledger_commit }}")
+        self.assertEqual(gate_step["env"]["EXPECTED_SIGNED_LEDGER_COMMIT"], "${{ needs.materialize_site.outputs.signed_commit }}")
         self.assertIn("raw.githubusercontent.com", gate_step["run"])
         self.assertIn('cmp --silent "${feed}/${relative}"', gate_step["run"])
         cli_step = next(
@@ -1803,10 +1816,13 @@ class PublicationWorkflowTests(unittest.TestCase):
         )
         self.assertIn('--snapshot-digest "${EXPECTED_SNAPSHOT_DIGEST}"', cli_step["run"])
         self.assertIn("--product-id context7", cli_step["run"])
+        self.assertIn('"${run_root}/bin/cursor"', cli_step["run"])
+        self.assertIn('PATH="${run_root}/bin:${PATH}"', cli_step["run"])
         self.assertNotIn('result["revision"] == expected_source["revision"]', cli_step["run"])
-        self.assertIn("required_catalog_readiness", workflow["jobs"]["deploy"]["needs"])
-        self.assertIn("gate_exact_staged_publication", workflow["jobs"]["deploy"]["needs"])
-        self.assertIn("sign", workflow["jobs"]["deploy"]["needs"])
+        self.assertEqual(
+            set(workflow["jobs"]["promotion_intent"]["needs"]),
+            {"sign", "materialize_site", "gate_exact_staged_publication", "required_catalog_readiness"},
+        )
         self.assertEqual(
             set(workflow["jobs"]["required_stable_launch_evidence"]["needs"]),
             {"prepare", "sign", "materialize_site", "gate_exact_staged_publication"},
@@ -1820,19 +1836,25 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn("needs.required_stable_launch_evidence.result == 'success'", marker_gate["if"])
         self.assertIn("needs.required_stable_launch_evidence.result == 'skipped'", marker_gate["if"])
         deploy_if = workflow["jobs"]["deploy"]["if"]
-        self.assertIn("always()", deploy_if)
-        self.assertIn("needs.required_catalog_readiness.result == 'success'", deploy_if)
+        self.assertIn("needs.promotion_intent.result == 'success'", deploy_if)
+        promotion_if = workflow["jobs"]["promotion_intent"]["if"]
+        self.assertIn("always()", promotion_if)
+        self.assertIn("needs.required_catalog_readiness.result == 'success'", promotion_if)
+        self.assertIn("needs.gate_exact_staged_publication.result == 'success'", promotion_if)
         production_observation = workflow["jobs"]["observe_production_latest"]
         self.assertIn("deploy", production_observation["needs"])
         self.assertEqual(production_observation["permissions"], {"contents": "read"})
         self.assertIn("EXISTING_MATERIALIZED_COMMIT", site_commands)
         self.assertIn("commit --allow-empty", site_commands)
-        self.assertIn('--materialized-output ../materialized-ledger.commit', signer_commands)
+        self.assertIn("git bundle create ../signed-objects/signed-ledger.bundle", signer_commands)
+        self.assertIn("git -C ../trusted-source bundle create ../signed-objects/publication-marker.bundle", signer_commands)
+        self.assertNotIn("DIRECTORY_PUBLISHER_APP_PRIVATE_KEY", json.dumps(signer))
         for match in __import__("re").findall(r"uses:\s+([^\s]+)", text):
             if match.startswith("./"):
                 self.assertIn(match, {
                     "./.github/workflows/live-e2e.yml",
                     "./.github/workflows/catalog-publication-readiness.yml",
+                    "./.github/workflows/pages-production-compositor.yml",
                 })
             else:
                 self.assertRegex(match, r"@[0-9a-f]{40}$")

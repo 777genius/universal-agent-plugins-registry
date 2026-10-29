@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hubspot-developer",
-  "version": "0.2.3",
-  "description": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.14.0.",
+  "version": "0.2.4",
+  "description": "HubSpot Developer MCP integration pinned to stable @hubspot/cli@8.15.0.",
   "author": {
     "name": "777genius",
     "url": "https://github.com/777genius"

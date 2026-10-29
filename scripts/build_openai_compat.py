@@ -46,6 +46,7 @@ CATEGORIES = {
     "atlassian": "Productivity",
     "figma": "Creativity",
     "linear": "Productivity",
+    "marketing-kit": "Productivity",
     "notion": "Productivity",
     "stripe": "Finance",
 }
@@ -98,6 +99,7 @@ SHORT_DESCRIPTIONS = {
     "hubspot-crm": "HubSpot CRM access",
     "hubspot-developer": "HubSpot developer tools",
     "linear": "Linear planning MCP",
+    "marketing-kit": "Campaign planning workflows",
     "neon": "Neon database MCP",
     "notion": "Notion workspace MCP",
     "playwright": "Browser automation MCP",

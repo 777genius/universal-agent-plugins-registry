@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-notifications",
+  "version": "1.0.0",
+  "description": "Desktop notifications for coding agents. Get a native alert the moment a task finishes, needs your input, or fails.",
+  "author": {"name": "777genius", "url": "https://github.com/777genius"},
+  "homepage": "https://agent-notifications.com",
+  "repository": "https://github.com/777genius/universal-agent-plugins-registry",
+  "license": "GPL-3.0-or-later",
+  "keywords": ["agent-plugins", "ai-agents", "mcp", "notifications"]
+}

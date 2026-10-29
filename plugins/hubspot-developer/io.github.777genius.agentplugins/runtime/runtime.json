@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "package": "@hubspot/cli",
-  "version": "8.14.0",
+  "version": "8.15.0",
   "entrypoint": "node_modules/@hubspot/cli/bin/hs.js",
-  "package_lock_sha256": "sha256:487946ba252d4c3cc41408a32280ca1bbd7fb13d3e8d1d12a87b3429d1883008",
+  "package_lock_sha256": "sha256:5e2a940bfb5024ba2f4fb59dd9a0d977bd58ea952f95260dd779aa30095f1b92",
   "omit_optional": false
 }

@@ -4,7 +4,8 @@ Choose one: these are independent examples, not sequential steps. The first
 four need no account credentials. The CLI detects Codex, Cursor, GitHub
 Copilot/VS Code, and Kiro; if several are installed, choose one when prompted.
 
-Agent Code Navigator is skills-only. Context7 and Chrome DevTools use reviewed,
+Agent Code Navigator is skills-only and retired from the Directory; its section
+below is kept for existing installs. Context7 and Chrome DevTools use reviewed,
 integrity-locked npm runtime closures. Cloudflare Docs uses a public remote MCP
 server and also has a registered ChatGPT development binding. Notion requires
 client-managed OAuth.
@@ -14,13 +15,11 @@ manual activation, and read-only runtime. The repository package separately
 passed marketplace ingestion and official manager installation; package-routed
 ChatGPT Work runtime remains unproved.
 
-## 1. Agent Code Navigator
+## 1. Agent Code Navigator (retired)
 
-Install:
-
-```bash
-npx universal-agent-plugins add agent-code-navigator
-```
+Agent Code Navigator is retired from the Directory. Its published releases stay
+available for existing installs, but the short name no longer installs: new add
+attempts fail closed. Existing installs behave the same as at launch:
 
 Try:
 
@@ -30,6 +29,12 @@ Map this sandbox repository's architecture and explain which search tool you use
 
 Expected: the agent loads the routing and architecture-map skills without
 starting an MCP server or modifying the repository.
+
+Remove an existing installation with:
+
+```bash
+npx universal-agent-plugins remove agent-code-navigator
+```
 
 ## 2. Context7
 
