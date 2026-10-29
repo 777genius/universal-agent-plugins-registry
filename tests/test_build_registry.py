@@ -5,10 +5,12 @@ import copy
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1101,6 +1103,7 @@ class DirectoryDomainTests(unittest.TestCase):
                 expected_sequences = [1, 2, 3, 4, 5, 6]
             elif distribution["id"] in {
                 "777genius/cloudflare-docs-bridge", "777genius/github-bridge",
+                "777genius/playwright-bridge",
             }:
                 expected_sequences = [1, 2]
             elif distribution["id"] == "777genius/chrome-devtools-bridge":
@@ -1159,6 +1162,8 @@ class DirectoryDomainTests(unittest.TestCase):
                 if distribution["id"] == "upstash/context7":
                     expected_minimum = "0.1.87"
                 if distribution["id"] == "777genius/chrome-devtools-bridge" and policy["release_sequence"] >= 2:
+                    expected_minimum = "0.1.26"
+                if distribution["id"] == "777genius/playwright-bridge":
                     expected_minimum = "0.1.26"
                 if (
                     distribution["status"] == "active"
@@ -2408,6 +2413,448 @@ class DirectoryDomainTests(unittest.TestCase):
         for path in [registry.DIRECTORY_SOURCE, registry.REVIEW_PREVIEW, registry.REVIEW_SEARCH]:
             prohibited = "registry " + "v3"
             self.assertNotIn(prohibited, path.read_text(encoding="utf-8").casefold())
+
+
+class LockedRuntimeRecoveryTests(unittest.TestCase):
+    def fixture(self, root: Path) -> tuple[str, Path, Path, dict[str, str]]:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is unavailable")
+        runtime = root / "runtime"
+        shutil.copytree(
+            registry.ROOT / "plugins" / "playwright" / registry.LOCKED_NPM_RUNTIME_PATH,
+            runtime,
+        )
+        data = root / "plugin-data"
+        data.mkdir()
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        fake_npm = fake_bin / ("npm.cmd" if os.name == "nt" else "npm")
+        if os.name == "nt":
+            self.skipTest("fake npm fixture uses a POSIX executable")
+        fake_npm.write_text(
+            "#!/usr/bin/env node\n"
+            "const fs = require('node:fs');\n"
+            "fs.appendFileSync(process.env.PLUGIN_DATA + '/npm-invocations', '1\\n');\n"
+            "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), "
+            "0, 0, Number(process.env.TEST_NPM_SLEEP_MS || 200));\n"
+            "fs.mkdirSync('node_modules/@playwright/mcp', {recursive:true});\n"
+            "fs.mkdirSync('node_modules/.bin', {recursive:true});\n"
+            "fs.writeFileSync('node_modules/@playwright/mcp/cli.js', "
+            "\"require('node:fs').writeFileSync(process.env.PLUGIN_DATA + '/server-cwd', process.cwd()); "
+            "process.stdout.write('READY\\\\n')\\n\");\n"
+        )
+        fake_npm.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
+        environment["PLUGIN_DATA"] = str(data)
+        digest = registry.digest_bytes((runtime / "package-lock.json").read_bytes()).split(":", 1)[1]
+        lock = data / "npm-runtime" / f"{digest}.lock"
+        lock.mkdir(parents=True)
+        return node, runtime / "launcher.mjs", lock, environment
+
+    def test_exited_owner_lock_is_reclaimed_and_runtime_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.joinpath("owner.json").write_text(json.dumps({"pid": 999_999_999, "created_at": "old"}))
+            result = subprocess.run(
+                [node, str(launcher)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "READY\n")
+            self.assertEqual((root / "plugin-data/server-cwd").read_text(), str((root / "plugin-data").resolve()))
+            self.assertFalse(lock.exists())
+            retired = list(lock.parent.glob(lock.name + ".retired-*"))
+            self.assertEqual(len(retired), 2)
+            self.assertTrue(all((item / "owner.json").is_file() for item in retired))
+            self.assertTrue(all((item / ".agentplugins-reclaim.json").is_file() for item in retired))
+
+    def test_reused_launcher_pid_is_reclaimed_without_waiting_for_age(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            # Reproduce a persistent lock whose old owner PID has been assigned
+            # to this new launcher, without depending on OS PID allocation.
+            preload = root / "previous-owner.cjs"
+            preload.write_text(
+                "require('node:fs').writeFileSync(process.env.TEST_LOCK_OWNER_PATH, "
+                "JSON.stringify({pid: process.pid, token: 'previous-process', "
+                "created_at: new Date().toISOString()}));\n"
+            )
+            environment["TEST_LOCK_OWNER_PATH"] = str(lock / "owner.json")
+            source = launcher.read_text()
+            deadline = "const LOCK_WAIT_MS = INSTALL_TIMEOUT_MS + 120_000;"
+            self.assertEqual(source.count(deadline), 1)
+            launcher.write_text(source.replace(deadline, "const LOCK_WAIT_MS = 500;"))
+            result = subprocess.run(
+                [node, "--require", str(preload), str(launcher)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "READY\n")
+            self.assertFalse(lock.exists())
+            self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            self.assertEqual(len(list(lock.parent.glob(lock.name + ".retired-*"))), 2)
+
+    def test_expired_unverifiable_lock_is_reclaimed(self) -> None:
+        for owner_body in (None, "{", json.dumps({"pid": 0})):
+            with self.subTest(owner_body=owner_body), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                node, launcher, lock, environment = self.fixture(root)
+                if owner_body is not None:
+                    lock.joinpath("owner.json").write_text(owner_body)
+                old = time.time() - 45
+                os.utime(lock, (old, old))
+                result = subprocess.run(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "READY\n")
+                self.assertFalse(lock.exists())
+                retired = list(lock.parent.glob(lock.name + ".retired-*"))
+                self.assertEqual(len(retired), 2)
+                self.assertTrue(any((item / ".agentplugins-reclaim.json").is_file() for item in retired))
+
+    def test_expired_unverifiable_lock_recovers_after_claimant_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.joinpath(".agentplugins-reclaim.json").write_text(
+                json.dumps({"pid": 999_999_999, "token": "interrupted"})
+            )
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            result = subprocess.run(
+                [node, str(launcher)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "READY\n")
+            self.assertFalse(lock.exists())
+
+    def test_concurrent_ownerless_recovery_installs_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            processes = [
+                subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                for _ in range(2)
+            ]
+            try:
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, "READY\n")
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+                self.assertFalse(lock.exists())
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+
+    def test_owner_arriving_after_reclaim_claim_is_not_stolen(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            barrier = root / "reclaim-claim"
+            source = launcher.read_text()
+            target = "await link(candidate, markerPath);"
+            self.assertEqual(source.count(target), 1)
+            instrumented = source.replace(
+                target,
+                target + "\n      await writeFile(process.env.TEST_PAUSE_AFTER_CLAIM + '.observed', 'yes');"
+                "\n      while (!(await exists(process.env.TEST_PAUSE_AFTER_CLAIM + '.resume')))"
+                " await new Promise(resolve => setTimeout(resolve, 10));",
+            )
+            launcher.write_text(instrumented)
+            contender = subprocess.Popen(
+                [node, str(launcher)], cwd=root,
+                env={**environment, "TEST_PAUSE_AFTER_CLAIM": str(barrier)},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not barrier.with_suffix(".observed").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(barrier.with_suffix(".observed").is_file())
+                owner = json.dumps({"pid": os.getpid(), "token": "late-owner"})
+                lock.joinpath("owner.json").write_text(owner)
+                barrier.with_suffix(".resume").write_text("go")
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    contender.communicate(timeout=0.6)
+                self.assertEqual(lock.joinpath("owner.json").read_text(), owner)
+                self.assertEqual(list(lock.parent.glob(lock.name + ".retired-*")), [])
+            finally:
+                contender.terminate()
+                contender.communicate(timeout=5)
+
+    def test_late_owner_cannot_split_retirement_destinations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            old = time.time() - 45
+            os.utime(lock, (old, old))
+            barrier = root / "before-retirement"
+            source = launcher.read_text()
+            target = "await rename(lockPath, retiredLockPath(lockPath, digest));"
+            self.assertGreaterEqual(source.count(target), 1)
+            launcher.write_text(source.replace(
+                target,
+                "if (process.env.TEST_PAUSE_RECLAIM_BEFORE_RENAME) {"
+                "\n      await writeFile(process.env.TEST_PAUSE_RECLAIM_BEFORE_RENAME + '.observed', 'yes');"
+                "\n      while (!(await exists(process.env.TEST_PAUSE_RECLAIM_BEFORE_RENAME + '.resume')))"
+                " await new Promise(resolve => setTimeout(resolve, 10));"
+                "\n    }\n    " + target,
+                1,
+            ))
+            first = subprocess.Popen(
+                [node, str(launcher)], cwd=root,
+                env={**environment, "TEST_PAUSE_RECLAIM_BEFORE_RENAME": str(barrier)},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not barrier.with_suffix(".observed").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(barrier.with_suffix(".observed").is_file())
+                lock.joinpath("owner.json").write_text(json.dumps({"pid": 999_999_999, "token": "late"}))
+                second = subprocess.run(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertEqual(second.stdout, "READY\n")
+                replacement = json.dumps({"pid": os.getpid(), "token": "replacement"})
+                lock.mkdir()
+                lock.joinpath("owner.json").write_text(replacement)
+                barrier.with_suffix(".resume").write_text("go")
+                first_stdout, first_stderr = first.communicate(timeout=5)
+                self.assertEqual(first.returncode, 0, first_stderr)
+                self.assertEqual(first_stdout, "READY\n")
+                self.assertEqual(lock.joinpath("owner.json").read_text(), replacement)
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                if first.poll() is None:
+                    first.kill()
+                    first.communicate(timeout=5)
+
+    def test_interrupted_cold_start_recovers_without_manual_cache_cleanup(self) -> None:
+        if os.name == "nt":
+            self.skipTest("process-group interruption fixture is POSIX-only")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.rmdir()
+            slow_environment = {**environment, "TEST_NPM_SLEEP_MS": "1500"}
+            process = subprocess.Popen(
+                [node, str(launcher)], cwd=root, env=slow_environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not (lock / "owner.json").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue((lock / "owner.json").is_file(), "cold start never acquired its lock")
+            finally:
+                process.kill()
+                process.communicate(timeout=5)
+            result = subprocess.run(
+                [node, str(launcher)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "READY\n")
+            self.assertEqual(len(list(lock.parent.glob(lock.name + ".retired-*"))), 2)
+            time.sleep(1.5)  # Let the interrupted launcher's fake npm child exit.
+
+    def test_live_owner_lock_is_not_stolen(self) -> None:
+        # A paused live installer can outlast the nominal install deadline.
+        # Neither an old valid timestamp nor an unverifiable one proves exit.
+        for created_at in ("current", "2000-01-01T00:00:00.000Z"):
+            with self.subTest(created_at=created_at), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                node, launcher, lock, environment = self.fixture(root)
+                owner = json.dumps({"pid": os.getpid(), "created_at": created_at})
+                lock.joinpath("owner.json").write_text(owner)
+                os.utime(lock, (1, 1))
+                process = subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        process.communicate(timeout=0.6)
+                    self.assertEqual(lock.joinpath("owner.json").read_text(), owner)
+                    self.assertEqual(list(lock.parent.glob(lock.name + ".retired-*")), [])
+                    self.assertFalse((root / "plugin-data/npm-invocations").exists())
+                finally:
+                    process.terminate()
+                    process.communicate(timeout=5)
+
+    def test_concurrent_recovery_keeps_one_verified_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.joinpath("owner.json").write_text(json.dumps({"pid": 999_999_999, "created_at": "old"}))
+            processes = [
+                subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                for _ in range(2)
+            ]
+            try:
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, "READY\n")
+                self.assertGreaterEqual(len(list(lock.parent.glob(lock.name + ".retired-*"))), 2)
+                self.assertFalse(lock.exists())
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+
+    def test_stale_reclaimer_marker_does_not_abort_replacement_acquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.joinpath("owner.json").write_text(json.dumps({"pid": 999_999_999, "token": "old"}))
+            source = launcher.read_text()
+            before_claim = "const digest = await retirementMarkerDigest(lockPath);"
+            before_owner_check = "if (await exists(join(lockPath, RECLAIM_MARKER))"
+            self.assertEqual(source.count(before_owner_check), 1)
+            for target, variable in ((before_claim, "TEST_PAUSE_BEFORE_CLAIM"),
+                                     (before_owner_check, "TEST_PAUSE_BEFORE_OWNER_CHECK")):
+                source = source.replace(target,
+                    f"if (process.env.{variable}) {{\n"
+                    f"  await writeFile(process.env.{variable} + '.observed', 'yes');\n"
+                    f"  while (!(await exists(process.env.{variable} + '.resume')))\n"
+                    "    await new Promise(resolve => setTimeout(resolve, 10));\n"
+                    "}\n    " + target, 1)
+            launcher.write_text(source)
+            claim_barrier, owner_barrier = root / "claim", root / "owner"
+            processes = []
+            def start(variable, barrier):
+                process = subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env={**environment, variable: str(barrier)},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                processes.append(process)
+                return process
+            def wait_for(path):
+                deadline = time.monotonic() + 10
+                while not path.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(path.is_file(), f"barrier was not reached: {path.name}")
+            try:
+                stale = start("TEST_PAUSE_BEFORE_CLAIM", claim_barrier)
+                wait_for(claim_barrier.with_suffix(".observed"))
+                owner = start("TEST_PAUSE_BEFORE_OWNER_CHECK", owner_barrier)
+                wait_for(owner_barrier.with_suffix(".observed"))
+                self.assertEqual(json.loads(lock.joinpath("owner.json").read_text())["pid"], owner.pid)
+                claim_barrier.with_suffix(".resume").write_text("go")
+                wait_for(lock / ".agentplugins-reclaim.json")
+                owner_barrier.with_suffix(".resume").write_text("go")
+                for process in (owner, stale):
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout, "READY\n")
+                self.assertFalse(lock.exists())
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+
+    def test_delayed_reclaimer_cannot_move_replacement_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            lock.rmdir()
+            first = subprocess.Popen(
+                [node, str(launcher)], cwd=root,
+                env={**environment, "TEST_NPM_SLEEP_MS": "1500"},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            contender = None
+            try:
+                deadline = time.monotonic() + 10
+                while not (lock / "owner.json").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue((lock / "owner.json").is_file())
+                barrier = root / "owner-read"
+                source = launcher.read_text()
+                target = 'return await readFile(join(lockPath, "owner.json"));'
+                self.assertEqual(source.count(target), 1)
+                instrumented = source.replace(
+                    target,
+                    'const body = await readFile(join(lockPath, "owner.json"));'
+                    + "\n    if (process.env.TEST_PAUSE_AFTER_OWNER_READ) {"
+                    "\n      await writeFile(process.env.TEST_PAUSE_AFTER_OWNER_READ + '.observed', body);"
+                    "\n      while (!(await exists(process.env.TEST_PAUSE_AFTER_OWNER_READ + '.resume')))"
+                    " await new Promise(resolve => setTimeout(resolve, 10));"
+                    "\n    }\n    return body;",
+                )
+                launcher.write_text(instrumented)
+                contender = subprocess.Popen(
+                    [node, str(launcher)], cwd=root,
+                    env={**environment, "TEST_PAUSE_AFTER_OWNER_READ": str(barrier)},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                while not barrier.with_suffix(".observed").is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(barrier.with_suffix(".observed").is_file())
+                first_stdout, first_stderr = first.communicate(timeout=5)
+                self.assertEqual(first.returncode, 0, first_stderr)
+                self.assertEqual(first_stdout, "READY\n")
+                replacement = json.dumps({"pid": os.getpid(), "token": "replacement"})
+                lock.mkdir()
+                lock.joinpath("owner.json").write_text(replacement)
+                barrier.with_suffix(".resume").write_text("go")
+                contender_stdout, contender_stderr = contender.communicate(timeout=5)
+                self.assertEqual(contender.returncode, 0, contender_stderr)
+                self.assertEqual(contender_stdout, "READY\n")
+                self.assertEqual(lock.joinpath("owner.json").read_text(), replacement)
+                self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            finally:
+                for process in (first, contender):
+                    if process is not None and process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=5)
+
+    def test_unverifiable_owner_lock_is_preserved(self) -> None:
+        for body in ("invalid JSON", "null", "{}"):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                node, launcher, lock, environment = self.fixture(root)
+                lock.joinpath("owner.json").write_text(body)
+                process = subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        process.communicate(timeout=0.6)
+                    self.assertEqual(lock.joinpath("owner.json").read_text(), body)
+                    self.assertEqual(list(lock.parent.glob(lock.name + ".retired-*")), [])
+                finally:
+                    process.terminate()
+                    process.communicate(timeout=5)
 
 
 if __name__ == "__main__":
