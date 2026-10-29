@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "firebase-tools": "15.32.0"
+    "firebase-tools": "15.34.2"
   },
   "overrides": {
     "@google-cloud/pubsub": "6.0.1",
     "gaxios": "8.0.0",
-    "qs": "6.16.0"
+    "qs": "6.16.1"
   }
 }

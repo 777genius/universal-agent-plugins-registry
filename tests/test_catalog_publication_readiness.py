@@ -255,10 +255,23 @@ class CatalogContractTests(unittest.TestCase):
         self.expected()
 
         firebase = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/firebase")
-        active = sorted((policy for policy in firebase["release_policies"] if policy["status"] == "active"),
-                        key=lambda policy: policy["release_sequence"])
-        self.assertGreaterEqual(len(active), 2)
-        active[0]["targets"] = copy.deepcopy(active[-1]["targets"])
+        current = max((policy for policy in firebase["release_policies"] if policy["status"] == "active"),
+                      key=lambda policy: policy["release_sequence"])
+        # Construct a shadowed active policy explicitly: production may correctly
+        # supersede every older release when promoting a security update.
+        shadowed = next(policy for policy in firebase["release_policies"]
+                        if policy["status"] == "superseded"
+                        and policy["release_sequence"] < current["release_sequence"])
+        shadowed["status"] = "active"
+        shadowed["targets"] = [target for target in shadowed["targets"]
+                               if target["client"] not in ("grok", "kimi", "qoder")]
+        baseline_firebase = next(item for item in self.baseline["distributions"]
+                                 if item["id"] == firebase["id"])
+        baseline_shadowed = next(policy for policy in baseline_firebase["release_policies"]
+                                 if policy["release_sequence"] == shadowed["release_sequence"])
+        baseline_shadowed["status"] = "active"
+        self.expected()
+        shadowed["targets"] = copy.deepcopy(current["targets"])
         with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/firebase:(grok|kimi|qoder)"):
             self.expected()
 

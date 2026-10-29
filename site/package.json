@@ -54,7 +54,8 @@
       "tar@<=7.5.20": "7.5.22",
       "listhen": "1.10.1",
       "listhen>node-forge": "-",
-      "nitropack@2.13.4>globby": "-"
+      "nitropack@2.13.4>globby": "-",
+      "@rollup/plugin-node-resolve@16.0.3>deepmerge": "-"
     },
     "packageExtensions": {
       "listhen@1.10.1": {
@@ -71,7 +72,8 @@
     },
     "patchedDependencies": {
       "listhen@1.10.1": "patches/listhen@1.10.1.patch",
-      "nitropack@2.13.4": "patches/nitropack@2.13.4.patch"
+      "nitropack@2.13.4": "patches/nitropack@2.13.4.patch",
+      "@rollup/plugin-node-resolve@16.0.3": "patches/@rollup__plugin-node-resolve@16.0.3.patch"
     }
   }
 }

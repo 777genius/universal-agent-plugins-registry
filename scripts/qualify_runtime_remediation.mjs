@@ -10,16 +10,16 @@ import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const AUDIT = "registry/upstream-promotion-audit/runtime-dependencies/2026-09-30";
+const AUDIT = "registry/upstream-promotion-audit/runtime-dependencies/2026-10-29";
 const RUNTIME = "io.github.777genius.agentplugins/runtime";
 const NODE = "v24.20.0";
 const NPM = "12.0.2";
 // Observed from https://registry.npmjs.org/npm/12.0.2; engines support ^24.15.0.
 const NPM_INTEGRITY = "sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw==";
 const EXPECTED = [
-  ["context7", "@upstash/context7-mcp", "4.1.1", "0.2.3"],
-  ["firebase", "firebase-tools", "15.32.0", "0.2.4"],
-  ["hubspot-developer", "@hubspot/cli", "8.15.0", "0.2.4"],
+  ["context7", "@upstash/context7-mcp"],
+  ["firebase", "firebase-tools"],
+  ["hubspot-developer", "@hubspot/cli"],
 ];
 const LAUNCHER_DIGEST = "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b";
 const PROTOCOL = "2024-11-05";
@@ -29,7 +29,7 @@ const digest = (body) => `sha256:${createHash("sha256").update(body).digest("hex
 const json = async (path) => JSON.parse(await readFile(path, "utf8"));
 let output = null;
 const evidence = {
-  format_version: 1, status: "running", started_at: new Date().toISOString(),
+  format_version: 2, status: "running", started_at: new Date().toISOString(),
   source_sha: null, node_version: process.version, npm_version: NPM,
   npm_integrity: NPM_INTEGRITY, platform: process.platform, arch: process.arch,
   run_id: process.env.QUALIFICATION_RUN_ID || null,
@@ -91,21 +91,21 @@ async function validateSources() {
   const recordPath = join(REPO, AUDIT, "remediation-candidates.json");
   const recordBody = await readFile(recordPath);
   const record = JSON.parse(recordBody);
-  const smokePath = join(REPO, AUDIT, "launcher-smoke-result.json");
-  const smokeBody = await readFile(smokePath);
-  const smoke = JSON.parse(smokeBody);
+  evidence.record_path = `${AUDIT}/remediation-candidates.json`;
   evidence.record_digest = digest(recordBody);
-  evidence.expected_tools_evidence_digest = digest(smokeBody);
-  assert.equal(record.format_version, 1);
+  evidence.expected_mcp_source = "Reviewed candidate record; expectations only, not prior runtime evidence";
+  assert.equal(record.format_version, 2);
   assert.equal(record.candidates.length, EXPECTED.length);
   assert.deepEqual(record.candidates.map((c) => c.product_id), EXPECTED.map((c) => c[0]));
   const validated = [];
-  for (const [id, dependency, version, packageVersion] of EXPECTED) {
+  for (const [id, dependency] of EXPECTED) {
     const candidate = record.candidates.find((c) => c.product_id === id);
-    assert.equal(candidate.candidate_path, `${AUDIT}/candidates/${id}`);
+    assert.equal(candidate.candidate_path, `plugins/${id}`);
+    const version = candidate.runtime.version;
+    const packageVersion = candidate.candidate_package_version;
+    assert.match(version, /^\d+\.\d+\.\d+$/, "reviewed runtime version must be exact");
+    assert.match(packageVersion, /^\d+\.\d+\.\d+$/, "reviewed plugin version must be exact");
     assert.equal(candidate.runtime.package, dependency);
-    assert.equal(candidate.runtime.version, version);
-    assert.equal(candidate.candidate_package_version, packageVersion);
     assert.equal(candidate.runtime.omit_optional, id === "firebase");
     const root = join(REPO, candidate.candidate_path);
     const manifest = await json(join(root, "plugin.json"));
@@ -135,11 +135,16 @@ async function validateSources() {
     assert.deepEqual(server.env || {}, id === "hubspot-developer" ? {
       HUBSPOT_CLI_VERSION: runtime.version, HUBSPOT_MCP_STANDALONE: "false",
     } : {});
-    const prior = smoke.results.find((r) => r.name === id);
-    assert.equal(prior.status, "passed");
-    assert.equal(prior.toolNames.length, prior.toolCount);
-    assert.equal(new Set(prior.toolNames).size, prior.toolCount);
-    validated.push({ candidate, root, server, prior, tree });
+    const expected = candidate.expected_mcp;
+    assert.deepEqual(Object.keys(expected).sort(), ["serverInfo", "toolNames"]);
+    assert.deepEqual(Object.keys(expected.serverInfo).sort(), ["name", "version"]);
+    for (const value of Object.values(expected.serverInfo)) {
+      assert(typeof value === "string" && value.length > 0, "MCP server identity must be nonempty strings");
+    }
+    assert(Array.isArray(expected.toolNames) && expected.toolNames.length > 0, "expected MCP tool names required");
+    assert(expected.toolNames.every((name) => typeof name === "string" && name.length > 0), "invalid expected MCP tool name");
+    assert.equal(new Set(expected.toolNames).size, expected.toolNames.length, "duplicate expected MCP tool names");
+    validated.push({ candidate, root, server, expected, tree });
   }
   return validated;
 }
@@ -324,7 +329,7 @@ async function pinnedNpm(root, env) {
   return { cli, bin };
 }
 
-export async function mcpSmoke(args, env, cwd, prior, result) {
+export async function mcpSmoke(args, env, cwd, expected, result) {
   const child = spawn(process.execPath, args, { env, cwd, stdio: ["pipe", "pipe", "pipe"],
     detached: process.platform !== "win32", windowsHide: true });
   let buffered = "", total = 0, stderr = Buffer.alloc(0), fatal, finished = false, ownStop = false, aborted = false;
@@ -383,8 +388,8 @@ export async function mcpSmoke(args, env, cwd, prior, result) {
     const initialize = await request(1, "initialize", { protocolVersion: PROTOCOL, capabilities: {},
       clientInfo: { name: "uap-runtime-remediation-qualification", version: "1.0.0" } }, 660_000);
     assert.equal(initialize.protocolVersion, PROTOCOL);
-    assert.equal(initialize.serverInfo?.name, prior.serverInfo.name);
-    assert.equal(initialize.serverInfo?.version, prior.serverInfo.version);
+    assert.equal(initialize.serverInfo?.name, expected.serverInfo.name, "MCP server name differs from reviewed expectation");
+    assert.equal(initialize.serverInfo?.version, expected.serverInfo.version, "MCP server version differs from reviewed expectation");
     assert(initialize.capabilities?.tools, "server must advertise tools capability");
     result.initialize = { protocol_version: initialize.protocolVersion, server_info: initialize.serverInfo,
       capabilities_digest: digest(JSON.stringify(initialize.capabilities)) }; await save();
@@ -393,7 +398,7 @@ export async function mcpSmoke(args, env, cwd, prior, result) {
     assert(Array.isArray(listed.tools)); assert.equal(listed.nextCursor, undefined, "unexpected paginated tool set");
     const names = listed.tools.map((tool) => tool.name);
     assert.equal(new Set(names).size, names.length, "duplicate tools");
-    assert.deepEqual([...names].sort(), [...prior.toolNames].sort());
+    assert.deepEqual([...names].sort(), [...expected.toolNames].sort(), "MCP tool set differs from reviewed expectation");
     for (const tool of listed.tools) assert.equal(tool.inputSchema?.type, "object", "tool must expose object input schema");
     result.tools = { count: names.length, names, response_digest: digest(JSON.stringify(listed)), called: false };
     if (fatal) throw fatal;
@@ -433,11 +438,12 @@ export async function mcpSmoke(args, env, cwd, prior, result) {
 }
 
 async function qualify(item, npm) {
-  const { candidate, root: source, server, prior, tree } = item;
+  const { candidate, root: source, server, expected, tree } = item;
   const result = { product_id: candidate.product_id, status: "running", candidate_path: candidate.candidate_path,
     package_version: candidate.candidate_package_version, runtime: candidate.runtime,
     manifest_digest: candidate.candidate_manifest_digest, tree_digest: tree.digest, source_file_count: tree.file_count,
-    lock_digest: candidate.runtime.package_lock_sha256, launcher_digest: LAUNCHER_DIGEST, checks: {} };
+    lock_digest: candidate.runtime.package_lock_sha256, launcher_digest: LAUNCHER_DIGEST,
+    expected_mcp: expected, checks: {} };
   evidence.results.push(result); await save();
   try {
     const root = await realpath(await mkdtemp(join(tmpdir(), `uap-remediation-${candidate.product_id}-`)));
@@ -457,7 +463,7 @@ async function qualify(item, npm) {
     result.checks.mcp = { status: "running" }; await save();
     const args = server.args.map((arg) => arg.replaceAll("${PLUGIN_ROOT}", copied));
     assert(args.every((arg) => !arg.includes("${")), "unresolved MCP argument");
-    await mcpSmoke(args, env, paths.project, prior, result.checks.mcp);
+    await mcpSmoke(args, env, paths.project, expected, result.checks.mcp);
     result.checks.mcp.status = "passed";
     result.checks.materialization = { status: "running" }; await save();
     const marker = await json(join(runtimeRoot, ".agentplugins-runtime.json"));
