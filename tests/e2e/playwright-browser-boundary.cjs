@@ -5,14 +5,14 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
-const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 assert.equal(process.platform, 'linux', 'This browser fixture runs on the disposable Linux runner');
-const root = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'playwright-boundary-'));
+// Chromium's profile socket must fit Linux's Unix-socket pathname limit.
+const root = fs.mkdtempSync('/tmp/pw-boundary-');
 const managed = path.join(root, 'managed-playwright');
 const data = path.join(root, 'plugin-data');
 const runtimePath = 'io.github.777genius.agentplugins/runtime';
