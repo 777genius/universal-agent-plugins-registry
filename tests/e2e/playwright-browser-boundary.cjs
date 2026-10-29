@@ -200,7 +200,8 @@ async function main() {
     const exited = await bounded(session.exit, 20000, 'MCP shutdown');
     assert.equal(exited.code, 0, session.stderr);
     assert.equal(treeFingerprint(managed), before, 'The real browser modified the managed package');
-    const artifact = path.join(data, '.playwright-mcp', 'boundary-snapshot.md');
+    // Explicit relative filenames use cwd; only generated names use .playwright-mcp.
+    const artifact = path.join(data, 'boundary-snapshot.md');
     assert(fs.readFileSync(artifact, 'utf8').includes(marker), 'Snapshot was not written under PLUGIN_DATA');
     proof = { package: '@playwright/mcp@0.0.80', fixture: 'loopback static HTML',
       browserTools: ['browser_navigate', 'browser_snapshot', 'browser_close'],
