@@ -166,7 +166,7 @@ class LockedNpmLauncherTests(unittest.TestCase):
                 self.assertEqual(list((data / "npm-runtime").iterdir()), [])
 
     def test_reviewed_candidates_active_and_historical_packages_validate_but_modified_launcher_fails(self) -> None:
-        # Validation must admit both exact reviewed implementations while failing
+        # Validation must admit each exact reviewed implementation while failing
         # closed on an otherwise valid candidate with different launcher bytes.
         candidate_bodies = set()
         current_digest = "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b"
@@ -185,13 +185,16 @@ class LockedNpmLauncherTests(unittest.TestCase):
                     (active / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes(),
                     body,
                 )
-        for plugin in ("chrome-devtools", "playwright"):
-            historical = ROOT / "plugins" / plugin
-            with self.subTest(historical_plugin=plugin):
-                registry.validate_locked_npm_runtime(historical)
+        for plugin, expected_digest in (
+            ("chrome-devtools", historical_digest),
+            ("playwright", "sha256:0810481a548e2ef59c55aa8448006fa92336824d77209a0b58e2f09be21eb99d"),
+        ):
+            package = ROOT / "plugins" / plugin
+            with self.subTest(reviewed_plugin=plugin):
+                registry.validate_locked_npm_runtime(package)
                 self.assertEqual(registry.digest_bytes(
-                    (historical / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes(),
-                ), historical_digest)
+                    (package / registry.LOCKED_NPM_RUNTIME_PATH / "launcher.mjs").read_bytes(),
+                ), expected_digest)
         self.assertEqual(len(candidate_bodies), 1, "all candidates use the reviewed invocation")
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "context7"
