@@ -123,37 +123,37 @@
         "selected": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         },
         "reported": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         },
         "pending": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         },
         "complete": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         },
         "partial": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         },
         "error": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         },
         "stale": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10000
+          "maximum": 20000
         }
       }
     },
@@ -210,7 +210,7 @@
     },
     "source_states": {
       "type": "array",
-      "maxItems": 20000,
+      "maxItems": 30000,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -306,7 +306,7 @@
     },
     "plugin_states": {
       "type": "array",
-      "maxItems": 10000,
+      "maxItems": 20000,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -422,7 +422,7 @@
     },
     "plugin_coverage": {
       "type": "array",
-      "maxItems": 10000,
+      "maxItems": 20000,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -451,37 +451,37 @@
           "selected": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           },
           "reported": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           },
           "pending": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           },
           "complete": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           },
           "partial": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           },
           "error": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           },
           "stale": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10000
+            "maximum": 20000
           }
         }
       }

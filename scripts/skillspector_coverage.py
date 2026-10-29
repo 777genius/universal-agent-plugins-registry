@@ -128,8 +128,9 @@ def load_selection(path: Path):
     return selection
 
 
-def validate_selection(selection):
+def validate_selection(selection, *, maximum_sources=MAX_SOURCES):
     schema(selection, SELECTION_SCHEMA)
+    require(len(selection["sources"]) <= maximum_sources, "selection exceeds source inventory limit")
     ids, roots = set(), set()
     for item in selection["sources"]:
         require(item["id"] not in ids, "selection IDs must be unique")
@@ -465,7 +466,7 @@ def write_bounded(path, document, maximum):
     return body
 
 
-def validate_discovery_summary(summary, selection, source_commit):
+def validate_discovery_summary(summary, selection, source_commit, *, maximum_sources=MAX_SOURCES):
     """The resolution cache is data, and must describe exactly this selection."""
     base_fields = ("schema_version", "source_commit", "generated_at", "scope", "catalog", "bounds",
         "listings_observed", "repositories_observed", "repositories_resolved", "repositories_retained",
@@ -480,13 +481,13 @@ def validate_discovery_summary(summary, selection, source_commit):
         summary["selected_roots"] == len(selection["sources"]), "discovery summary identity differs")
     timestamp(summary["generated_at"], "discovery generated_at")
     for field in ("listings_observed", "repositories_observed", "repositories_resolved", "repositories_retained", "selected_roots"):
-        require(type(summary[field]) is int and 0 <= summary[field] <= MAX_SOURCES, "invalid discovery count")
+        require(type(summary[field]) is int and 0 <= summary[field] <= maximum_sources, "invalid discovery count")
     for field in ("complete", "selection_truncated", "diagnostics_truncated"):
         require(type(summary[field]) is bool, "invalid discovery completeness")
     bounds = summary["bounds"]
     exact(bounds, ("pages", "listings", "roots"), "discovery bounds")
     require(type(bounds["pages"]) is int and 1 <= bounds["pages"] <= 50 and
-        bounds["listings"] == MAX_SOURCES and bounds["roots"] == MAX_SOURCES, "unsupported discovery bounds")
+        bounds["listings"] == MAX_SOURCES and bounds["roots"] in {MAX_SOURCES, maximum_sources}, "unsupported discovery bounds")
     require(isinstance(summary["catalog"], dict) and type(summary["catalog"].get("complete")) is bool,
         "invalid catalog diagnostics")
     if "directory" in summary["catalog"]:
@@ -534,7 +535,7 @@ def validate_discovery_summary(summary, selection, source_commit):
             isinstance(entry["revision"], str) and SHA.fullmatch(entry["revision"]) is not None and
             isinstance(entry["hints_digest"], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", entry["hints_digest"]) is not None,
             "invalid cached repository identity")
-        require(isinstance(entry["selected_ids"], list) and len(entry["selected_ids"]) <= MAX_SOURCES and
+        require(isinstance(entry["selected_ids"], list) and len(entry["selected_ids"]) <= maximum_sources and
             len(set(entry["selected_ids"])) == len(entry["selected_ids"]), "invalid cached selection IDs")
         for identifier in entry["selected_ids"]:
             item = subjects.get(identifier)
@@ -554,12 +555,12 @@ def validate_discovery_summary(summary, selection, source_commit):
             return value is None or isinstance(value, str) and SHA.fullmatch(value) is not None
 
         def identities(values):
-            require(isinstance(values, list) and len(values) <= MAX_SOURCES and
+            require(isinstance(values, list) and len(values) <= maximum_sources and
                 all(isinstance(identifier, str) and identifier in subjects for identifier in values) and
                 len(set(values)) == len(values), "invalid resolved selection IDs")
 
         source_states = summary["source_states"]
-        require(isinstance(source_states, list) and summary["listings_observed"] <= len(source_states) <= 2 * MAX_SOURCES,
+        require(isinstance(source_states, list) and summary["listings_observed"] <= len(source_states) <= MAX_SOURCES + maximum_sources,
             "invalid source resolution states")
         observed_ids = set()
         for state in source_states:
@@ -596,7 +597,7 @@ def validate_discovery_summary(summary, selection, source_commit):
                 for kind in kinds), "catalog coverage differs from source outcomes")
 
         plugin_states = summary["plugin_states"]
-        require(isinstance(plugin_states, list) and len(plugin_states) <= MAX_SOURCES, "invalid plugin resolution states")
+        require(isinstance(plugin_states, list) and len(plugin_states) <= maximum_sources, "invalid plugin resolution states")
         plugin_ids = set()
         for state in plugin_states:
             exact(state, ("id", "repository", "plugin_path", "revision", "state", "reason", "skills_total", "selected_ids"),

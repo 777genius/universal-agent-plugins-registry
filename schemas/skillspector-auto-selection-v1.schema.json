@@ -12,7 +12,7 @@
     "sources": {
       "type": "array",
       "minItems": 0,
-      "maxItems": 10000,
+      "maxItems": 20000,
       "items": {
         "type": "object",
         "additionalProperties": false,

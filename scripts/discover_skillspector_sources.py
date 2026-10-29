@@ -34,11 +34,12 @@ from scripts.directory_publication import (MAX_ENVELOPE_BYTES, MAX_LATEST_BYTES,
     read_json, sha256_digest, validate_latest, validate_snapshot_semantics, verify_envelope)
 from scripts.observe_directory_publication import cryptography_ed25519_verify
 from scripts.skillspector_acquisition import read_blobs
+from scripts import discovery_publication as community_publication
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_PAGES = 50
 MAX_LISTINGS = 10_000
-MAX_ROOTS = 10_000
+MAX_ROOTS = 20_000
 MAX_TREE_BYTES = 16 << 20
 MAX_TREE_ENTRIES = 100_000
 MAX_DOCUMENT_BYTES = 256 << 10
@@ -48,10 +49,13 @@ MAX_DIAGNOSTICS = 256
 MAX_CANDIDATES = 64
 MAX_SOURCE_STATES = MAX_LISTINGS + MAX_ROOTS
 RESOLVER_VERSION = 2
+PLUGIN_RESOLVER_VERSION = 1
 PATH_RE = re.compile(r"^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIRECTORY_ORIGIN = "https://777genius.github.io/universal-agent-plugins-registry/registry/schemas/1/"
 DIRECTORY_KEYS = ROOT / "registry/publication/trusted-keys.json"
+COMMUNITY_ORIGIN = "https://777genius.github.io/universal-agent-plugins-registry/discovery/"
+COMMUNITY_KEYS = ROOT / "registry/discovery/trusted-keys.json"
 
 
 def now():
@@ -93,10 +97,10 @@ def fetch_page(page, budget):
     raise DiscoveryError("catalog acquisition exhausted retries")
 
 
-def fetch_directory(relative, maximum, budget):
+def fetch_directory(relative, maximum, budget, *, origin=DIRECTORY_ORIGIN):
     """Read only the fixed production feed; never send GitHub credentials."""
     opener = urllib.request.build_opener(NoRedirect())
-    request = urllib.request.Request(DIRECTORY_ORIGIN + relative,
+    request = urllib.request.Request(origin + relative,
         headers={"Accept": "application/json", "User-Agent": "uap-skillspector-discovery/2"})
     for attempt in range(3):
         budget.check()
@@ -116,6 +120,57 @@ def fetch_directory(relative, maximum, budget):
                 raise
             time.sleep(min(5 * (attempt + 1), budget.remaining()))
     raise DiscoveryError("Directory acquisition exhausted retries")
+
+
+def fetch_community(relative, maximum, budget):
+    return fetch_directory(relative, maximum, budget, origin=COMMUNITY_ORIGIN)
+
+
+def load_published_community_plugins(budget, *, fetch=fetch_community, trusted_keys=COMMUNITY_KEYS, current=None):
+    """Acquire the existing signed Discovery feed, not a new trust source."""
+    pointer_body = fetch("latest.json", community_publication.MAX_LATEST_BYTES, budget)
+    pointer = parse_json_bytes(pointer_body, "Discovery pointer", max_bytes=community_publication.MAX_LATEST_BYTES)
+    require(canonical_json(pointer) == pointer_body, "Discovery pointer is not canonical JSON")
+    community_publication.validate_with_schema(pointer, community_publication.LATEST_SCHEMA)
+    stem = f"{pointer['sequence']:020d}"
+    require(pointer["snapshot_path"] == f"snapshots/{stem}.json" and
+            pointer["envelope_path"] == f"snapshots/{stem}.envelope.json" and
+            pointer["search_path"] == f"search/{stem}.json", "Discovery pointer paths differ from sequence")
+    body = fetch(pointer["snapshot_path"], pointer["fetch_contract"]["snapshot_max_bytes"], budget)
+    snapshot = community_publication.verify_bundle(body,
+        fetch(pointer["envelope_path"], pointer["fetch_contract"]["envelope_max_bytes"], budget),
+        fetch(pointer["search_path"], pointer["fetch_contract"]["search_max_bytes"], budget), trusted_keys,
+        signature_verifier=community_publication.cryptography_ed25519_verify)
+    require(snapshot["sequence"] == pointer["sequence"] and
+            snapshot["search_projection"]["path"] == pointer["search_path"], "Discovery pointer identity differs")
+    current = current or datetime.now(timezone.utc)
+    require(parse_timestamp(snapshot["generated_at"], "Discovery generated_at") <= current <
+            parse_timestamp(snapshot["expires_at"], "Discovery expires_at"), "Discovery snapshot is outside its validity window")
+    plugins = [{"name": "community:" + sha256_digest(canonical_json([row["repository"], row["package_path"]]))[7:39],
+                "components": [key for key, count in row["components"].items() if count],
+                "expected_skills": row["components"]["skills"], "available": row["availability"] == "available",
+                "tree_digest": row["tree_digest"], "manifest_digest": row["manifest_digest"],
+                "source": {"repository": row["repository"], "revision": row["revision"], "path": row["package_path"]}}
+               for row in snapshot["records"]]
+    return plugins, {"state": "resolved", "reason": None, "sequence": snapshot["sequence"],
+        "source_commit": snapshot["source_commit"], "snapshot_digest": sha256_digest(body),
+        "packages": len(plugins), "available_packages": sum(plugin["available"] for plugin in plugins),
+        "expected_skills": sum(plugin["expected_skills"] for plugin in plugins if plugin["available"]),
+        "package_identities": {plugin["name"]: {key: plugin[key] for key in
+            ("source", "expected_skills", "tree_digest", "manifest_digest")} for plugin in plugins}}
+
+
+def merge_plugin_sources(directory, community):
+    """One display identity per package root; the reviewed Directory wins."""
+    roots, result = set(), []
+    for plugin in [*directory, *community]:
+        source = plugin["source"]
+        key = (source["repository"].casefold(), source["path"])
+        if key not in roots:
+            roots.add(key)
+            result.append(plugin)
+    require(len(result) <= MAX_ROOTS, f"plugin inventory exceeds {MAX_ROOTS} package roots")
+    return result
 
 
 def published_plugin_sources(snapshot):
@@ -267,10 +322,22 @@ def bounded_tree(pinned, budget, paths=None):
     return b"".join(chunks)
 
 
-def skill_documents(pinned, budget, paths=None):
+def skill_documents(pinned, budget, paths=None, *, plugin_path=None):
     """Read only bounded regular SKILL.md blobs; unrelated modes stay inert."""
     budget.check()
-    raw = bounded_tree(pinned, budget) if paths is None else bounded_tree(pinned, budget, paths)
+    # A published plugin installs only its immediate skills/* roots. Scope the
+    # tree request and document hydration before applying limits: unrelated
+    # packages or nested helper documents must not suppress an eligible root.
+    # This changes discovery only; scanning still acquires the full skill tree.
+    prefix = None
+    if plugin_path is not None:
+        require(paths is None, "plugin and exact document scopes are mutually exclusive")
+        if plugin_path:
+            portable_path(plugin_path, "plugin path")
+        prefix = (plugin_path + "/" if plugin_path else "") + "skills/"
+        raw = bounded_tree(pinned, budget, [prefix.removesuffix("/")])
+    else:
+        raw = bounded_tree(pinned, budget) if paths is None else bounded_tree(pinned, budget, paths)
     rows = raw.split(b"\0")
     require(len(rows) <= MAX_TREE_ENTRIES + 1, "repository entry count exceeds limit")
     documents, invalid = [], []
@@ -281,6 +348,8 @@ def skill_documents(pinned, budget, paths=None):
         metadata, encoded = row.split(b"\t", 1)
         path = encoded.decode("utf-8")
         if PurePosixPath(path).name != "SKILL.md":
+            continue
+        if prefix is not None and (not path.startswith(prefix) or len(path[len(prefix):].split("/")) != 2):
             continue
         if paths is not None and path not in paths:
             continue
@@ -425,7 +494,7 @@ def previous_existence_proofs(previous, summary):
     """Validate positive resolutions and removal proof at an exact examined pin."""
     if not isinstance(summary, dict) or not SHA_RE.fullmatch(str(summary.get("source_commit", ""))):
         return set(), set()
-    from scripts.skillspector_coverage import validate_discovery_summary
+    from scripts.skillspector_coverage_v3 import validate_discovery_summary
     try:
         validate_discovery_summary(summary, {"schema_version": 1, "sources": list(previous)}, summary["source_commit"])
     except (PublicationError, ValueError, KeyError, TypeError):
@@ -444,6 +513,165 @@ def previous_existence_proofs(previous, summary):
                 # target; this is not evidence about a newly observed revision.
                 removed.add((identifier, subject_key(source), state["revision"], state["path"]))
     return resolved, removed
+
+
+def resolve_plugin_inventory(plugins, previous, previous_summary, api, budget, workers, mirror_root):
+    """Resolve cold repositories once; reuse only complete validated exact pins.
+
+    The previous run's actually started cold groups sort after untouched ones.
+    Persistent network failures cannot monopolize every discovery deadline.
+    """
+    from scripts.skillspector_coverage_v3 import validate_discovery_summary
+    try:
+        validate_discovery_summary(previous_summary, {"schema_version": 1, "sources": list(previous)}, previous_summary["source_commit"])
+        require(previous_summary["catalog"].get("plugin_inventory_version") == PLUGIN_RESOLVER_VERSION,
+                "plugin inventory resolver changed")
+        community = previous_summary["catalog"].get("community", {})
+        require(isinstance(community, dict), "invalid community inventory metadata")
+        if community:
+            require(community.get("state") in {"resolved", "unavailable"}, "invalid community acquisition state")
+            if community["state"] == "resolved":
+                require(community.get("reason") is None and type(community.get("sequence")) is int and
+                    1 <= community["sequence"] < 2**53 and SHA_RE.fullmatch(str(community.get("source_commit", ""))) is not None and
+                    re.fullmatch(r"sha256:[0-9a-f]{64}", str(community.get("snapshot_digest", ""))) is not None,
+                    "invalid community publication identity")
+                require(all(type(community.get(key)) is int and community[key] >= 0 for key in
+                    ("packages", "available_packages", "expected_skills")) and
+                    community["available_packages"] <= community["packages"] <= MAX_LISTINGS,
+                    "invalid community inventory counts")
+            else:
+                require(community.get("reason") == "community_acquisition_failed" and
+                    all(community.get(key) is None for key in ("sequence", "source_commit", "snapshot_digest")),
+                    "invalid unavailable community identity")
+        package_identities = community.get("package_identities", {})
+        require(isinstance(package_identities, dict) and len(package_identities) <= MAX_LISTINGS and
+                (community.get("state") != "resolved" or len(package_identities) == community["packages"]),
+                "invalid community package identities")
+        for identifier, entry in package_identities.items():
+            require(isinstance(entry, dict) and set(entry) == {"source", "expected_skills", "tree_digest", "manifest_digest"},
+                    "invalid cached package fields")
+            source = entry["source"]
+            require(isinstance(source, dict) and set(source) == {"repository", "revision", "path"} and
+                isinstance(source["repository"], str) and REPOSITORY_RE.fullmatch(source["repository"]) is not None and
+                SHA_RE.fullmatch(str(source["revision"])) is not None and isinstance(source["path"], str) and
+                PATH_RE.fullmatch(source["path"]) is not None and len(source["path"]) <= 1000 and
+                (not source["path"] or all(part not in {".", "..", ".git"} for part in source["path"].split("/"))) and
+                identifier == "community:" + sha256_digest(canonical_json([source["repository"], source["path"]]))[7:39] and
+                type(entry["expected_skills"]) is int and 0 <= entry["expected_skills"] < 2**53 and
+                all(re.fullmatch(r"sha256:[0-9a-f]{64}", str(entry[key])) is not None for key in ("tree_digest", "manifest_digest")),
+                "invalid cached immutable package identity")
+        history = community.get("resolution_attempted", [])
+        require(isinstance(history, list) and len(history) <= MAX_ROOTS and all(
+            isinstance(key, list) and len(key) == 2 and isinstance(key[0], str) and
+            REPOSITORY_RE.fullmatch(key[0]) is not None and SHA_RE.fullmatch(str(key[1])) is not None for key in history),
+            "invalid plugin discovery scheduling history")
+        prior = {(s["repository"].casefold(), s["plugin_path"]): s for s in previous_summary["plugin_states"]}
+        attempted_before = list(dict.fromkeys(tuple(key) for key in history))
+    except (PublicationError, DiscoveryError, ValueError, KeyError, TypeError):
+        prior, attempted_before = {}, []
+    by_id = {source["id"]: source for source in previous}
+    outcomes, groups = {}, collections.defaultdict(list)
+    for position, plugin in enumerate(plugins):
+        source = plugin["source"]
+        state = {"id": plugin["name"], "repository": source["repository"], "plugin_path": source["path"],
+                 "revision": source["revision"] if SHA_RE.fullmatch(str(source.get("revision", ""))) else None,
+                 "state": "unresolved", "reason": None, "skills_total": None, "selected_ids": []}
+        if not plugin.get("available", True):
+            state.update(state="unavailable", reason="community_source_unavailable", skills_total=plugin.get("expected_skills"))
+        elif "skills" not in plugin.get("components", []):
+            state.update(state="not_applicable", reason="plugin_has_no_skills", skills_total=0)
+        elif state["revision"] is None:
+            state["reason"] = "plugin_revision_unpinned"
+        else:
+            old = prior.get((source["repository"].casefold(), source["path"]), {})
+            ids = old.get("selected_ids", [])
+            metadata = {key: plugin[key] for key in ("source", "expected_skills", "tree_digest", "manifest_digest") if key in plugin}
+            old_metadata = package_identities.get(plugin["name"]) if prior else None
+            if old.get("state") == "resolved" and old.get("revision") == source["revision"] and \
+                    old.get("id") == plugin["name"] and ids and \
+                    (not plugin["name"].startswith("community:") or metadata == old_metadata) and \
+                    ("expected_skills" not in plugin or plugin["expected_skills"] == len(ids)):
+                state.update(state="resolved", skills_total=len(ids))
+                outcomes[position] = (state, [by_id[identifier] for identifier in ids], True)
+                continue
+            groups[(source["repository"], source["revision"])].append((position, plugin, state))
+            continue
+        outcomes[position] = (state, [], state["state"] == "not_applicable")
+
+    def resolve_group(key):
+        entries, results, started, pinned = groups[key], {}, False, None
+        try:
+            budget.check()
+            started = True
+            pinned = PinnedRepository(*key, mirror_root,
+                github_token=getattr(api, "token", None) if mirror_root is None else None, work_budget=budget)
+            for position, plugin, state in entries:
+                try:
+                    budget.check()
+                    source = plugin["source"]
+                    names, invalid = skill_documents(pinned, budget, plugin_path=source["path"])
+                    prefix = (source["path"] + "/" if source["path"] else "") + "skills/"
+                    valid_paths = {path for paths in names.values() for path in paths
+                                   if path.startswith(prefix) and "/" not in path[len(prefix):]}
+                    invalid_paths = {str(PurePosixPath(path).parent) for path in invalid
+                                     if path.startswith(prefix) and "/" not in path[len(prefix):].removesuffix("/SKILL.md")}
+                    total = len(valid_paths | invalid_paths)
+                    mismatch = "expected_skills" in plugin and total != plugin["expected_skills"]
+                    state.update(skills_total=max(plugin.get("expected_skills", total), total),
+                        state="resolved" if valid_paths and not invalid_paths and not mismatch else "unresolved",
+                        reason="plugin_inventory_count_mismatch" if mismatch else "invalid_skill_documents" if invalid_paths else
+                               None if valid_paths else "plugin_skills_not_found")
+                    sources = []
+                    for path in sorted(valid_paths):
+                        identifier = f"plugin:{plugin['name']}/{path[len(prefix):]}"
+                        if len(identifier) > 200:
+                            identifier = "plugin:" + sha256_digest(canonical_json([plugin["name"], path]))[7:]
+                        sources.append({"id": identifier, "kind": "plugin_skill", "repository": source["repository"],
+                                        "revision": source["revision"], "path": path, "plugin_path": source["path"]})
+                    results[position] = (state, sources, True)
+                except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, UnicodeError, subprocess.SubprocessError) as error:
+                    state.update(state="unavailable", reason="plugin_discovery_budget_exhausted" if isinstance(error, CheckpointYield)
+                                 else "plugin_acquisition_failed", skills_total=plugin.get("expected_skills"))
+                    results[position] = (state, [], False)
+        except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, subprocess.SubprocessError) as error:
+            for position, plugin, state in entries:
+                state.update(state="unavailable", reason="plugin_discovery_budget_exhausted" if isinstance(error, CheckpointYield)
+                             else "plugin_acquisition_failed", skills_total=plugin.get("expected_skills"))
+                results[position] = (state, [], False)
+        finally:
+            if pinned is not None:
+                try:
+                    pinned.close()
+                except (OSError, subprocess.SubprocessError):
+                    pass  # Cleanup cannot invalidate already examined immutable data.
+        return results, started
+
+    def priority(key):
+        return (1, attempt_order[key], key) if key in attempt_order else (0, 0, key)
+
+    attempt_order = {key: position for position, key in enumerate(attempted_before)}
+    attempted = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(resolve_group, key): key for key in sorted(groups, key=priority)}
+        for future in as_completed(futures):
+            try:
+                results, started = future.result()
+            except Exception:
+                # A failed repository is explicit, and cannot erase other
+                # groups' completed inventories or prevent their publication.
+                results, started = {}, True
+                for position, plugin, state in groups[futures[future]]:
+                    state.update(state="unavailable", reason="plugin_acquisition_failed", skills_total=plugin.get("expected_skills"))
+                    results[position] = (state, [], False)
+            outcomes.update(results)
+            if started:
+                attempted.append(list(futures[future]))
+    # Retain cumulative least-recently-attempted ordering. A last-round-only
+    # set would alternate A/B failures forever while starving untouched C.
+    started = {tuple(key) for key in attempted}
+    order = [key for key in attempted_before if key in groups and key not in started]
+    order.extend(sorted(started, key=priority))
+    return [outcomes[index] for index in range(len(plugins))], [list(key) for key in order]
 
 
 def listing_hints_digest(listings):
@@ -480,17 +708,35 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
     states, resolution_cache, resolved, retained = {}, {}, {}, set()
     prior_resolved, prior_removed = previous_existence_proofs(previous, previous_summary)
     removed_by_id = {}
+    overall_budget = budget
+    inventories = None
+    if any(plugin["name"].startswith("community:") for plugin in plugins):
+        # Inventory is independent of standalone resolution. Complete its bounded
+        # half-window first: an API retry must honor its full server delay even
+        # when that delay crosses a slice boundary. Leave the rest for catalog
+        # resolution, and retain completed inventory if a later wait exhausts it.
+        inventory_budget = WorkBudget(max(.001, (overall_budget.deadline - overall_budget.monotonic()) / 2),
+                                      monotonic=overall_budget.monotonic)
+        inventory_budget.deadline = min(inventory_budget.deadline, overall_budget.deadline)
+        inventories, attempted_repositories = resolve_plugin_inventory(
+            plugins, previous, previous_summary, api, inventory_budget, workers, mirror_root)
     # Resolve in bounded batches. A transient batch failure must not erase old
     # immutable subjects, and other batches can still make progress.
-    for offset in range(0, len(grouped), 50):
-        batch = sorted(grouped)[offset:offset + 50]
-        try:
-            budget.check()
-            states.update(repository_states(api, batch, work_budget=budget))
-        except (DiscoveryError, CheckpointYield, OSError, ValueError) as error:
-            diagnostics.extend({"code": "repository_resolution_failed", "repository": repo} for repo in batch)
-            if isinstance(error, CheckpointYield):
-                break
+    # API retries share the remaining overall budget; server backoff is unchanged.
+    previous_api_budget = getattr(api, "work_budget", None)
+    api.work_budget = budget
+    try:
+        for offset in range(0, len(grouped), 50):
+            batch = sorted(grouped)[offset:offset + 50]
+            try:
+                budget.check()
+                states.update(repository_states(api, batch, work_budget=budget))
+            except (DiscoveryError, CheckpointYield, OSError, ValueError) as error:
+                diagnostics.extend({"code": "repository_resolution_failed", "repository": repo} for repo in batch)
+                if isinstance(error, CheckpointYield):
+                    break
+    finally:
+        api.work_budget = previous_api_budget
 
     def confirm_removed(repo, revision, sources, issues, entry):
         # The current resolver proved an exact path absent. Establish that the
@@ -597,75 +843,56 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             candidates.extend(previous_by_repo[repo])
             retained.add(repo)
     directory_unavailable = catalog.get("directory", {}).get("state") == "unavailable"
+    community_unavailable = catalog.get("community", {}).get("state") == "unavailable"
+    active_plugin_roots = {(plugin["source"]["repository"].casefold(), plugin["source"]["path"]) for plugin in plugins}
     if directory_unavailable:
         diagnostics.append({"code": "directory_acquisition_failed", "repository": "777genius/universal-agent-plugins-registry"})
         candidates.extend(source for source in previous if source["kind"] == "plugin_skill")
         old_states = previous_summary.get("plugin_states", []) if isinstance(previous_summary, dict) else []
         for state in old_states:
+            if (state["repository"].casefold(), state["plugin_path"]) in active_plugin_roots:
+                continue
+            if state["id"].startswith("community:") and not community_unavailable:
+                continue
             plugin_states.append({**state, "state": "unavailable", "reason": "directory_acquisition_failed",
                                   "selected_ids": []})
         known_roots = {(state["repository"].casefold(), state["plugin_path"]) for state in plugin_states}
         for source in [*previous, *reviewed]:
             root = (source["repository"].casefold(), source["plugin_path"])
-            if source["kind"] != "plugin_skill" or root in known_roots:
+            if source["kind"] != "plugin_skill" or root in known_roots or any(
+                    plugin["source"]["repository"].casefold() == root[0] and plugin["source"]["path"] == root[1] for plugin in plugins):
                 continue
             known_roots.add(root)
             plugin_states.append({"id": "historical:" + sha256_digest(canonical_json(list(root)))[7:31],
                 "repository": source["repository"], "plugin_path": source["plugin_path"], "revision": source["revision"],
                 "state": "unavailable", "reason": "directory_acquisition_failed", "skills_total": None, "selected_ids": []})
-    # Enumerate pinned Directory plugin roots independently of catalog names.
-    for plugin in plugins:
-        source = plugin.get("source", {})
-        plugin_state = {"id": plugin["name"], "repository": source.get("repository", ""),
-                        "plugin_path": source.get("path", ""),
-                        "revision": source.get("revision") if SHA_RE.fullmatch(str(source.get("revision", ""))) else None,
-                        "state": "unresolved", "reason": None, "skills_total": None, "selected_ids": []}
+    if community_unavailable and not directory_unavailable:
+        old_states = previous_summary.get("plugin_states", []) if isinstance(previous_summary, dict) else []
+        for state in old_states:
+            if state["id"].startswith("community:") and (state["repository"].casefold(), state["plugin_path"]) not in active_plugin_roots:
+                plugin_states.append({**state, "state": "unavailable", "reason": "community_acquisition_failed", "selected_ids": []})
+                candidates.extend(source for source in previous if source["kind"] == "plugin_skill" and
+                    source["repository"].casefold() == state["repository"].casefold() and source["plugin_path"] == state["plugin_path"])
+    # Current signed Directory and community packages share the same inert
+    # acquisition boundary. Complete inventories are reused only at exact pins.
+    if inventories is None:
+        inventories, attempted_repositories = resolve_plugin_inventory(
+            plugins, previous, previous_summary, api, overall_budget, workers, mirror_root)
+    catalog["plugin_inventory_version"] = PLUGIN_RESOLVER_VERSION
+    if "community" in catalog:
+        catalog["community"]["resolution_attempted"] = attempted_repositories
+    for plugin_state, sources, superseded in inventories:
         plugin_states.append(plugin_state)
-        if "skills" not in plugin.get("components", []):
-            plugin_state.update(state="not_applicable", reason="plugin_has_no_skills", skills_total=0)
-            # The current signed package declares no skills. Do not queue its
-            # former skill roots just because a historical bootstrap lists them.
+        root = (plugin_state["repository"].casefold(), plugin_state["plugin_path"])
+        if superseded:
             candidates = [old for old in candidates if not (old["kind"] == "plugin_skill" and
-                old["repository"].casefold() == source.get("repository", "").casefold() and
-                old["plugin_path"] == source.get("path"))]
-            superseded_plugin_roots.add((source.get("repository", "").casefold(), source.get("path")))
-            continue
-        if not SHA_RE.fullmatch(str(source.get("revision", ""))):
-            plugin_state["reason"] = "plugin_revision_unpinned"
-            continue
-        try:
-            budget.check()
-            pinned = PinnedRepository(source["repository"], source["revision"], mirror_root,
-                                      github_token=getattr(api, "token", None) if mirror_root is None else None, work_budget=budget)
-            try:
-                names, invalid = skill_documents(pinned, budget)
-            finally:
-                pinned.close()
-            prefix = (source["path"] + "/" if source["path"] else "") + "skills/"
-            # An explicit published Directory source supersedes historical
-            # plugin revisions only after successful enumeration. Otherwise
-            # preserve their exact immutable evidence for the next attempt.
-            candidates = [old for old in candidates if not (old["kind"] == "plugin_skill" and
-                old["repository"].casefold() == source["repository"].casefold() and old["plugin_path"] == source["path"])]
-            superseded_plugin_roots.add((source["repository"].casefold(), source["path"]))
-            valid_paths = {path for paths in names.values() for path in paths
-                           if path.startswith(prefix) and "/" not in path[len(prefix):]}
-            invalid_paths = {str(PurePosixPath(path).parent) for path in invalid
-                             if path.startswith(prefix) and "/" not in path[len(prefix):].removesuffix("/SKILL.md")}
-            plugin_state.update(skills_total=len(valid_paths | invalid_paths),
-                                state="resolved" if valid_paths and not invalid_paths else "unresolved",
-                                reason="invalid_skill_documents" if invalid_paths else
-                                       None if valid_paths else "plugin_skills_not_found")
-            for path in sorted({path for paths in names.values() for path in paths}):
-                if path.startswith(prefix) and "/" not in path[len(prefix):]:
-                    candidates.append({"id": f"plugin:{plugin['name']}/{path[len(prefix):]}", "kind": "plugin_skill",
-                                       "repository": source["repository"], "revision": source["revision"],
-                                       "path": path, "plugin_path": source["path"]})
-        except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, subprocess.SubprocessError):
-            plugin_state.update(state="unavailable", reason="plugin_acquisition_failed")
-            diagnostics.append({"code": "plugin_acquisition_failed", "repository": source.get("repository", "")})
-            candidates.extend(s for s in previous if s["kind"] == "plugin_skill" and
-                              s["repository"] == source.get("repository") and s["plugin_path"] == source.get("path"))
+                (old["repository"].casefold(), old["plugin_path"]) == root)]
+            superseded_plugin_roots.add(root)
+            candidates.extend(sources)
+        else:
+            diagnostics.append({"code": plugin_state["reason"], "repository": plugin_state["repository"]})
+            candidates.extend(old for old in previous if old["kind"] == "plugin_skill" and
+                (old["repository"].casefold(), old["plugin_path"]) == root)
     # Current resolved or retained prior subjects take precedence over the
     # initial reviewed bootstrap. A failed acquisition must never regress a
     # previously resolved current subject to its older bootstrap revision.
@@ -711,8 +938,8 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         return (2, 0, source["id"])
 
     selected.sort(key=priority)
-    truncated = len(selected) > MAX_ROOTS
-    selected = selected[:MAX_ROOTS]
+    require(len(selected) <= MAX_ROOTS, f"skill inventory capacity exceeded: {len(selected)} roots > {MAX_ROOTS}; refusing truncated publication")
+    truncated = False
     # Dedupe can replace a generated ID with an equivalent already-selected ID.
     # Cache only the actual emitted subjects, so the next run can reuse them.
     emitted_by_subject = {subject_key(s): s["id"] for s in selected}
@@ -770,6 +997,12 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                                  source["plugin_path"] == state["plugin_path"]]
         if state["state"] == "resolved" and len(state["selected_ids"]) != state["skills_total"]:
             state.update(state="unresolved", reason="selection_limit_reached")
+    if "community" in catalog:
+        community_states = [state for state in plugin_states if state["id"].startswith("community:")]
+        catalog["community"]["inventory"] = {"packages_selected": len(community_states),
+            **{status: sum(state["state"] == status for state in community_states)
+               for status in ("resolved", "not_applicable", "unresolved", "unavailable")},
+            "selected_skill_roots": sum(len(state["selected_ids"]) for state in community_states)}
     observed_ids = {state["id"] for state in source_states}
     plugin_by_root = {(state["repository"].casefold(), state["plugin_path"]): state for state in plugin_states}
     for source in selected:
@@ -777,7 +1010,8 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
             continue
         plugin_state = plugin_by_root.get((source["repository"].casefold(), source["plugin_path"])) \
             if source["kind"] == "plugin_skill" else None
-        current = bool(plugin_state and plugin_state["state"] == "resolved" and source["revision"] == plugin_state["revision"])
+        current = bool(plugin_state and (plugin_state["state"] == "resolved" or plugin_state["reason"] in
+                       {"invalid_skill_documents", "plugin_inventory_count_mismatch"}) and source["revision"] == plugin_state["revision"])
         source_states.append({"id": source["id"], "repository": source["repository"].casefold(),
                               "state": "resolved" if current else "historical", "current": current,
                               "reason": None if current else (plugin_state or {}).get("reason") or "catalog_not_observed",
@@ -796,7 +1030,7 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                "listings_observed": len(listings), "repositories_observed": len(grouped),
                "repositories_resolved": len(resolved), "repositories_retained": len(retained),
                "selected_roots": len(selected), "selection_digest": sha256_digest(canonical_json(selection)),
-               "complete": catalog["complete"] and not directory_unavailable and len(resolved) == len(grouped) and not truncated and
+               "complete": catalog["complete"] and not directory_unavailable and not community_unavailable and len(resolved) == len(grouped) and not truncated and
                            catalog_coverage["resolved"] == catalog_coverage["observed"] and
                            all(state["state"] in {"resolved", "not_applicable"} for state in plugin_states),
                "selection_truncated": truncated, "diagnostic_counts": counts,
@@ -823,8 +1057,20 @@ def main():
     except (DiscoveryError, PublicationError, RegistryError, CheckpointYield, OSError, ValueError, KeyError, TypeError):
         plugins, directory = [], {"state": "unavailable", "reason": "directory_acquisition_failed", "sequence": None,
                                   "source_commit": None, "snapshot_digest": None}
-    listings, catalog = browse_catalog(budget, max_pages=args.max_pages)
+    try:
+        community_plugins, community = load_published_community_plugins(budget)
+    except (DiscoveryError, PublicationError, RegistryError, CheckpointYield, OSError, ValueError, KeyError, TypeError):
+        community_plugins, community = [], {"state": "unavailable", "reason": "community_acquisition_failed", "sequence": None,
+            "source_commit": None, "snapshot_digest": None, "packages": None, "available_packages": None, "expected_skills": None,
+            "package_identities": {}}
+    plugins = merge_plugin_sources(plugins, community_plugins)
+    crawl_budget = budget
+    if community_plugins:
+        crawl_budget = WorkBudget(max(.001, (budget.deadline - budget.monotonic()) / 4), monotonic=budget.monotonic)
+        crawl_budget.deadline = min(crawl_budget.deadline, budget.deadline)
+    listings, catalog = browse_catalog(crawl_budget, max_pages=args.max_pages)
     catalog["directory"] = directory
+    catalog["community"] = community
     previous_summary = read_json(args.previous_summary, max_bytes=16 << 20) if args.previous_summary and args.previous_summary.exists() else None
     selection, summary = discover(listings, catalog, GitHubAPI(os.environ.get("GITHUB_TOKEN", ""), work_budget=budget), budget,
                                   source_commit=args.source_commit, previous=load_sources(args.previous_selection),

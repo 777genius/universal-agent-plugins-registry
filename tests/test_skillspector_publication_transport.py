@@ -61,13 +61,18 @@ class GitTreeStore:
 
 class FakeGitHub(LegacyFakeGitHub):
     """The publication API contract backed by independent native Git objects."""
-    def __init__(self, root, **kwargs):
+    def __init__(self, root, *, create_response_limit=None, **kwargs):
         super().__init__(**kwargs)
         self.store = GitTreeStore(root)
         self.created = set()
         self.assembly_calls = []
+        self.create_response_limit = create_response_limit
 
     def request(self, method, path, data=None):
+        if method == "GET" and path.startswith("git/trees/") and path.removeprefix("git/trees/") in self.created:
+            self.calls.append((method, path, copy.deepcopy(data)))
+            sha = path.removeprefix("git/trees/")
+            return {"sha": sha, "truncated": False, "tree": copy.deepcopy(self.store.entries[sha])}
         if (method, path) != ("POST", "git/trees"):
             return super().request(method, path, data)
         self.calls.append((method, path, copy.deepcopy(data)))
@@ -90,10 +95,35 @@ class FakeGitHub(LegacyFakeGitHub):
         rows = list(entries.values())
         sha = self.store.write(rows)
         self.created.add(sha)
-        return {"sha": sha, "truncated": False, "tree": rows}
+        limit = self.create_response_limit
+        return {"sha": sha, "truncated": limit is not None and len(rows) > limit,
+                "tree": rows if limit is None else rows[:limit]}
 
 
 class TreeTests(unittest.TestCase):
+    def test_truncated_create_response_is_verified_with_complete_nonrecursive_read(self):
+        files = {f"file{number:04d}": "a" * 40 for number in range(1087)}
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git", create_response_limit=1000)
+            expected = github.store.build(files)
+            result = transport.create_filtered_tree(github, files)
+            self.assertEqual(result["sha"], expected)
+            self.assertEqual(github.store.flatten(result["sha"]), files)
+            self.assertEqual([method for method, _, _ in github.calls], ["POST", "GET"] * 9)
+            self.assertTrue(all("?" not in path for method, path, _ in github.calls if method == "GET"))
+
+    def test_create_listing_is_not_used_instead_of_independent_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git")
+            original = github.request
+            def request(method, path, data=None):
+                value = original(method, path, data)
+                return {"sha": value["sha"]} if method == "POST" else value
+            github.request = request
+            result = transport.create_filtered_tree(github, {"file": "a" * 40})
+            self.assertEqual(github.store.flatten(result["sha"]), {"file": "a" * 40})
+            self.assertEqual([method for method, _, _ in github.calls], ["POST", "GET"])
+
     def test_exact_real_1297_file_artifact_preserves_all_673_legacy_files(self):
         fixture = json.loads(FIXTURE.read_text())
         with tempfile.TemporaryDirectory() as directory:
@@ -135,31 +165,26 @@ class TreeTests(unittest.TestCase):
         for corrupt in (lambda value: value.update(sha="f" * 40),
                         lambda value: value.update(truncated=True),
                         lambda value: value["tree"][0].update(mode="100755"),
-                        lambda value: value["tree"].clear()):
+                        lambda value: value["tree"].clear(),
+                        lambda value: value["tree"].append(copy.deepcopy(value["tree"][0]))):
             with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as directory:
                 github = FakeGitHub(Path(directory) / "git")
                 original = github.request
-                def request(*args, **kwargs):
-                    value = original(*args, **kwargs)
-                    corrupt(value)
+                def request(method, path, data=None):
+                    value = original(method, path, data)
+                    if method == "GET":
+                        corrupt(value)
                     return value
                 github.request = request
                 with self.assertRaises(PublicationError):
                     transport.create_filtered_tree(github, {"x": "a" * 40})
+                self.assertEqual([method for method, _, _ in github.calls], ["POST", "GET"])
 
-    def test_malformed_response_shapes_fail_before_any_further_api_write(self):
-        def missing_tree(value):
-            del value["tree"]
-            return value
+    def test_forged_or_malformed_create_identity_stops_before_verification(self):
         changes = [lambda _value: [], lambda _value: "unexpected", lambda _value: None,
-                   missing_tree, lambda value: {**value, "tree": {}},
-                   lambda value: {**value, "tree": [None]},
-                   lambda value: {**value, "tree": [{}]}]
-        for field in ("path", "mode", "type", "sha"):
-            changes.append(lambda value, field=field: {**value,
-                "tree": [{key: item for key, item in value["tree"][0].items() if key != field}]})
-            changes.append(lambda value, field=field: {**value,
-                "tree": [{**value["tree"][0], field: ["invalid"]}]})
+                   lambda value: {key: item for key, item in value.items() if key != "sha"},
+                   lambda value: {**value, "sha": "f" * 40},
+                   lambda value: {**value, "sha": ["invalid"]}]
         for index, change in enumerate(changes):
             with self.subTest(shape=index), tempfile.TemporaryDirectory() as directory:
                 github = FakeGitHub(Path(directory) / "git")
@@ -169,6 +194,35 @@ class TreeTests(unittest.TestCase):
                     transport.create_filtered_tree(github, {"nested/file": "a" * 40})
                 self.assertEqual(len(github.calls), 1)
                 self.assertEqual(github.calls[0][:2], ("POST", "git/trees"))
+
+    def test_malformed_verification_shapes_fail_before_any_further_api_write(self):
+        def missing_tree(value):
+            del value["tree"]
+            return value
+        changes = [lambda _value: [], lambda _value: "unexpected", lambda _value: None,
+                   missing_tree, lambda value: {**value, "tree": {}},
+                   lambda value: {**value, "tree": [None]},
+                   lambda value: {**value, "tree": [{}]},
+                   lambda value: {key: item for key, item in value.items() if key != "truncated"},
+                   lambda value: {**value, "truncated": 0}]
+        for field in ("path", "mode", "type", "sha"):
+            changes.append(lambda value, field=field: {**value,
+                "tree": [{key: item for key, item in value["tree"][0].items() if key != field}]})
+            changes.append(lambda value, field=field: {**value,
+                "tree": [{**value["tree"][0], field: ["invalid"]}]})
+        for index, change in enumerate(changes):
+            with self.subTest(shape=index), tempfile.TemporaryDirectory() as directory:
+                github = FakeGitHub(Path(directory) / "git")
+                original = github.request
+                def request(method, path, data=None):
+                    value = original(method, path, data)
+                    return change(value) if method == "GET" else value
+                github.request = request
+                with self.assertRaisesRegex(PublicationError, "uploaded publication tree verification"):
+                    transport.create_filtered_tree(github, {"nested/file": "a" * 40})
+                self.assertEqual(len(github.calls), 2)
+                self.assertEqual(github.calls[0][:2], ("POST", "git/trees"))
+                self.assertEqual(github.calls[1][0], "GET")
 
 
 class Response(io.BytesIO):

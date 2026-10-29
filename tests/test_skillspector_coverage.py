@@ -335,6 +335,8 @@ class CoverageTests(unittest.TestCase):
              mock.patch.object(discovery, "PinnedRepository"), \
              mock.patch.object(discovery, "resolve_listings", return_value=([item()], [], {})):
             selection, summary = discovery.discover([row], catalog, mock.Mock(token=None), coverage.WorkBudget(10), source_commit=COMMIT)
+        # The legacy v2 validator retains its original 10k inventory contract.
+        summary["bounds"]["roots"] = coverage.MAX_SOURCES
         coverage.validate_discovery_summary(summary, selection, COMMIT)
         for key, value in [("selection_digest", "sha256:" + "0" * 64), ("selected_roots", 2)]:
             altered = copy.deepcopy(summary); altered[key] = value

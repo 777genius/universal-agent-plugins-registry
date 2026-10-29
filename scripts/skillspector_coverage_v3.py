@@ -28,7 +28,7 @@ from scripts.directory_publication import PublicationError, canonical_json, form
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
 
 SCANNER, PROFILE = scanner.SCANNER, contract.PROFILE
-MAX_SOURCES, MAX_PARTITIONS, MAX_ATTEMPTS = v2.MAX_SOURCES, v2.MAX_PARTITIONS, v2.MAX_ATTEMPTS
+MAX_SOURCES, MAX_PARTITIONS, MAX_ATTEMPTS = 20_000, v2.MAX_PARTITIONS, v2.MAX_ATTEMPTS
 MAX_MANIFEST_BYTES, MAX_STATE_BYTES = 16 << 20, 64 << 20
 MAX_SHARD_BYTES, MAX_SELECTION_BYTES = v2.MAX_SHARD_BYTES, v2.MAX_SELECTION_BYTES
 MAX_DISCOVERY_BYTES, MAX_WORKER_BYTES = v2.MAX_DISCOVERY_BYTES, v2.MAX_WORKER_BYTES
@@ -44,9 +44,15 @@ PERMANENT_REASONS = frozenset({"static_parse_limit", "reference_missing", "refer
     "excluded_executable_content", "source_invalid"})
 read_json = scanner.read_report_json
 report_json = scanner.report_json
-validate_selection = v2.validate_selection
-validate_discovery_summary = v2.validate_discovery_summary
 source_digest, logical_digest, partition_for = v2.source_digest, v2.logical_digest, v2.partition_for
+
+
+def validate_selection(selection):
+    return v2.validate_selection(selection, maximum_sources=MAX_SOURCES)
+
+
+def validate_discovery_summary(summary, selection, source_commit):
+    return v2.validate_discovery_summary(summary, selection, source_commit, maximum_sources=MAX_SOURCES)
 
 
 def write_bounded(path, value, maximum):

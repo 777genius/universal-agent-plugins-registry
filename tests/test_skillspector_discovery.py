@@ -9,7 +9,7 @@ from unittest import mock
 
 from scripts import discover_skillspector_sources as discovery
 from scripts.discovery_checkpoint import WorkBudget
-from scripts.skillspector_coverage import validate_discovery_summary, validate_selection
+from scripts.skillspector_coverage_v3 import validate_discovery_summary, validate_selection
 from scripts.directory_publication import PublicationError
 from tests.test_skillspector_reports import fixture_repository, git, item
 
@@ -483,6 +483,43 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(selection["sources"], [old])
         self.assertEqual(summary["diagnostic_counts"]["plugin_acquisition_failed"], 1)
 
+    def test_plugin_enumeration_ignores_unrelated_and_nested_document_limits(self):
+        for plugin_path in ("", "plugins/current"):
+            for document_limit in (1, discovery.MAX_DOCUMENTS):
+                with self.subTest(plugin_path=plugin_path, document_limit=document_limit), \
+                     tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    mirrors, _ = fixture_repository(root)
+                    source = root / "source"
+                    skill_path = (plugin_path + "/" if plugin_path else "") + "skills/demo"
+                    skill = source / skill_path
+                    skill.mkdir(parents=True, exist_ok=True)
+                    (skill / "SKILL.md").write_text("---\nname: demo\n---\nRead helpers/note.txt.\n")
+                    (skill / "helpers").mkdir()
+                    (skill / "helpers/note.txt").write_text("inert helper data\n")
+                    # Neither another package nor a nested reference document
+                    # is a root installed by this plugin. Do not hydrate them.
+                    (skill / "helpers/SKILL.md").write_bytes(b"x" * (discovery.MAX_DOCUMENT_BYTES + 1))
+                    (source / "unrelated").mkdir()
+                    (source / "unrelated/SKILL.md").write_bytes(b"x" * (discovery.MAX_DOCUMENT_BYTES + 1))
+                    git(source, "add", ".")
+                    git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "package")
+                    revision = git(source, "rev-parse", "HEAD")
+                    git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+                    plugin = {"name": "current", "components": ["skills"], "source": {
+                        "repository": "owner/repo", "revision": revision, "path": plugin_path}}
+                    with mock.patch.object(discovery, "MAX_DOCUMENTS", document_limit), \
+                         mock.patch.object(discovery, "read_blobs", wraps=discovery.read_blobs) as read:
+                        selection, summary = self.run_discovery([], plugins=[plugin], mirror_root=mirrors)
+                    expected = item(id="plugin:current/demo", kind="plugin_skill", revision=revision,
+                                    path=skill_path, plugin_path=plugin_path)
+                    self.assertEqual(selection["sources"], [expected])
+                    self.assertEqual(summary["plugin_states"][0]["state"], "resolved")
+                    self.assertEqual(summary["plugin_states"][0]["skills_total"], 1)
+                    self.assertEqual(len(read.call_args.args[1]), 1)
+                    validate_selection(selection)
+                    validate_discovery_summary(summary, selection, "b" * 40)
+
     def test_subject_identity_is_repository_case_insensitive(self):
         self.assertEqual(discovery.subject_key(item(repository="Owner/Repo")), discovery.subject_key(item()))
 
@@ -606,11 +643,8 @@ class DiscoveryTests(unittest.TestCase):
              mock.patch.object(discovery, "resolve_listings", return_value=([tail, popular, reviewed], [], {})):
             selection, _ = self.run_discovery(rows, reviewed=[old])
             self.assertEqual(selection["sources"], [reviewed, popular, tail])
-            with mock.patch.object(discovery, "MAX_ROOTS", 2):
-                capped, summary = self.run_discovery(rows, reviewed=[old])
-        self.assertEqual(capped["sources"], [reviewed, popular])
-        self.assertTrue(summary["selection_truncated"])
-        self.assertNotIn("owner/repo", summary["resolution_cache"])
+            with mock.patch.object(discovery, "MAX_ROOTS", 2), self.assertRaisesRegex(discovery.DiscoveryError, "3 roots > 2"):
+                self.run_discovery(rows, reviewed=[old])
 
 
 if __name__ == "__main__":

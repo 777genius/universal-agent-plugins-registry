@@ -120,6 +120,52 @@ separate new/retry/changed lanes. Content, scanner or profile changes create a
 new scan identity. Complete matching results are reused without a seven-day
 expiration; partial results are classified by cause.
 
+Discovery includes the currently valid signed Directory and signed community
+Discovery publications, plus the bounded skills.sh listing crawl. Community
+packages are acquired only at the signed immutable revision; unavailable
+packages retain an explicit unavailable state. The Directory takes precedence
+when both feeds identify the same repository and package path. A different
+revision is never made current by that precedence rule.
+
+The inventory and execution budgets are separate. V3 persists at most 20,000
+unique skill roots and 30,000 source resolution states, while the listing crawl
+remains capped at 10,000 listings. Exceeding the root capacity fails discovery
+with the actual candidate count and preserves the previously published report;
+it does not silently discard a stable tail. Legacy v2 inventory remains capped
+at 10,000. Each normal run still uses eight partitions, at most 128 attempts
+per partition and 2,100 seconds per worker, and the automatic schedule remains
+every six hours. A pending root is queued work, not a completed analysis.
+
+The combined Directory/community inventory also bounds plugin states, plugin
+coverage rows and persisted cold-group scheduling history at 20,000. These
+counts can exceed a single feed's 10,000-package limit. Per-package Skill,
+shard, file and byte limits remain independent. If enumeration finds more
+Skill documents than the signed expected count, the plugin denominator keeps
+the larger count and the mismatch reason; unselected invalid documents remain
+visible as incomplete inventory.
+
+Cold plugin discovery groups packages by repository and exact revision and
+uses at most eight acquisition workers. Only the package's immediate
+`skills/*/SKILL.md` documents are inventoried. The subsequent scanner still
+acquires each complete skill subtree, including its helpers. Successful full
+inventories can be reused at the same pin and resolver version; community
+reuse also requires the same signed skill count, package tree digest and
+manifest digest. Failed and incomplete inventories are retried. When community
+packages are present, plugin inventory runs first within half the remaining
+discovery window, leaving the rest for standalone resolution. A later API
+backoff cannot erase completed inventories. Actually started cold groups are
+persisted so untouched groups run before the previous round's failures on the
+next round. This keeps a repeatedly failing repository from monopolizing every
+discovery deadline.
+
+`coverage.json` records the exact community publication identity, expected
+signed skill count, resolved/unresolved/unavailable package counts, selected
+skill roots and attempted cold repository groups. A timeout does not turn a
+skill-bearing package into a package without skills. Verified roots from a
+partially resolved package may still be scanned; the package retains its
+incomplete inventory status. These counts describe discovery and static skill
+coverage, independently of installation, activation, OAuth or MCP runtime.
+
 The initial standard budget retains the observed 45-second internal workflow
 and 60-second process limit. The extended profile has a 150-second workflow,
 180-second process cap, and larger bounded input. Per-artifact limits remain
