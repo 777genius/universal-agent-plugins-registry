@@ -187,7 +187,7 @@ class LockedNpmLauncherTests(unittest.TestCase):
                 )
         for plugin, expected_digest in (
             ("chrome-devtools", historical_digest),
-            ("playwright", "sha256:0810481a548e2ef59c55aa8448006fa92336824d77209a0b58e2f09be21eb99d"),
+            ("playwright", "sha256:3f24087a8798bc0db35accf806c39f5078008385bd8c442644fdc778e0b3031c"),
         ):
             package = ROOT / "plugins" / plugin
             with self.subTest(reviewed_plugin=plugin):

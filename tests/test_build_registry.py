@@ -2471,6 +2471,33 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             self.assertTrue(all((item / "owner.json").is_file() for item in retired))
             self.assertTrue(all((item / ".agentplugins-reclaim.json").is_file() for item in retired))
 
+    def test_reused_launcher_pid_is_reclaimed_without_waiting_for_age(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            node, launcher, lock, environment = self.fixture(root)
+            # Reproduce a persistent lock whose old owner PID has been assigned
+            # to this new launcher, without depending on OS PID allocation.
+            preload = root / "previous-owner.cjs"
+            preload.write_text(
+                "require('node:fs').writeFileSync(process.env.TEST_LOCK_OWNER_PATH, "
+                "JSON.stringify({pid: process.pid, token: 'previous-process', "
+                "created_at: new Date().toISOString()}));\n"
+            )
+            environment["TEST_LOCK_OWNER_PATH"] = str(lock / "owner.json")
+            source = launcher.read_text()
+            deadline = "const LOCK_WAIT_MS = INSTALL_TIMEOUT_MS + 120_000;"
+            self.assertEqual(source.count(deadline), 1)
+            launcher.write_text(source.replace(deadline, "const LOCK_WAIT_MS = 500;"))
+            result = subprocess.run(
+                [node, "--require", str(preload), str(launcher)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "READY\n")
+            self.assertFalse(lock.exists())
+            self.assertEqual((root / "plugin-data/npm-invocations").read_text().splitlines(), ["1"])
+            self.assertEqual(len(list(lock.parent.glob(lock.name + ".retired-*"))), 2)
+
     def test_expired_unverifiable_lock_is_reclaimed(self) -> None:
         for owner_body in (None, "{", json.dumps({"pid": 0})):
             with self.subTest(owner_body=owner_body), tempfile.TemporaryDirectory() as temporary:
@@ -2652,23 +2679,28 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
             time.sleep(1.5)  # Let the interrupted launcher's fake npm child exit.
 
     def test_live_owner_lock_is_not_stolen(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            node, launcher, lock, environment = self.fixture(root)
-            owner = json.dumps({"pid": os.getpid(), "created_at": "current"})
-            lock.joinpath("owner.json").write_text(owner)
-            process = subprocess.Popen(
-                [node, str(launcher)], cwd=root, env=environment,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            try:
-                with self.assertRaises(subprocess.TimeoutExpired):
-                    process.communicate(timeout=0.6)
-                self.assertEqual(lock.joinpath("owner.json").read_text(), owner)
-                self.assertEqual(list(lock.parent.glob(lock.name + ".retired-*")), [])
-            finally:
-                process.terminate()
-                process.communicate(timeout=5)
+        # A paused live installer can outlast the nominal install deadline.
+        # Neither an old valid timestamp nor an unverifiable one proves exit.
+        for created_at in ("current", "2000-01-01T00:00:00.000Z"):
+            with self.subTest(created_at=created_at), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                node, launcher, lock, environment = self.fixture(root)
+                owner = json.dumps({"pid": os.getpid(), "created_at": created_at})
+                lock.joinpath("owner.json").write_text(owner)
+                os.utime(lock, (1, 1))
+                process = subprocess.Popen(
+                    [node, str(launcher)], cwd=root, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        process.communicate(timeout=0.6)
+                    self.assertEqual(lock.joinpath("owner.json").read_text(), owner)
+                    self.assertEqual(list(lock.parent.glob(lock.name + ".retired-*")), [])
+                    self.assertFalse((root / "plugin-data/npm-invocations").exists())
+                finally:
+                    process.terminate()
+                    process.communicate(timeout=5)
 
     def test_concurrent_recovery_keeps_one_verified_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

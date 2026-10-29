@@ -93,7 +93,10 @@ function lockPID(body) {
     ? owner.pid : null;
 }
 
-function processIsDead(pid) {
+function lockOwnerIsUnavailable(pid) {
+  // Reclamation runs before this launcher begins installing. In the same
+  // PID namespace, a recorded self PID cannot belong to another live owner.
+  if (pid === process.pid) return true;
   try {
     process.kill(pid, 0);
     return false;
@@ -161,10 +164,10 @@ async function reclaimAbandonedLock(lockPath) {
   const before = await lockSnapshot(lockPath);
   if (!before) return false;
   const pid = lockPID(before.ownerBody);
-  if (pid ? !processIsDead(pid) : Date.now() - before.identity.mtimeMs < OWNERLESS_GRACE_MS) return false;
+  if (pid ? !lockOwnerIsUnavailable(pid) : Date.now() - before.identity.mtimeMs < OWNERLESS_GRACE_MS) return false;
   const digest = await retirementMarkerDigest(lockPath);
   if (!digest) return false;
-  if (!(await sameLockSnapshot(lockPath, before)) || (pid && !processIsDead(pid))) return false;
+  if (!(await sameLockSnapshot(lockPath, before)) || (pid && !lockOwnerIsUnavailable(pid))) return false;
   try {
     await rename(lockPath, retiredLockPath(lockPath, digest));
     return true;
