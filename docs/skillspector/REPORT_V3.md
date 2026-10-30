@@ -128,7 +128,8 @@ stale <= pending
 
 Historical reports are useful evidence for pending current sources. They are
 never counted as current complete analysis. The same arithmetic applies per
-plugin; a plugin with three completed and ten partial skills displays 3 of 13.
+plugin: three complete and ten partial skills means all thirteen have current
+reports, with limited analysis for ten. It does not mean only three were checked.
 
 ## Queue and execution rollout
 
@@ -136,6 +137,13 @@ The queue persists bounded attempt history, explicit next attempts and
 separate new/retry/changed lanes. Content, scanner or profile changes create a
 new scan identity. Complete matching results are reused without a seven-day
 expiration; partial results are classified by cause.
+
+Each lane shares turns between standalone repositories and individual plugin
+packages, then cycles through their roots. Groups with no actual previous
+attempt run before recently attempted groups; recency is recovered from the
+published bounded attempts. A large repository or package therefore cannot
+occupy every slot ahead of a small plugin on every run. This scheduling order
+does not change evidence identity, scanner limits or source discovery ranking.
 
 Discovery includes the currently valid signed Directory and signed community
 Discovery publications, plus the bounded skills.sh listing crawl. Community
@@ -151,7 +159,11 @@ with the actual candidate count and preserves the previously published report;
 it does not silently discard a stable tail. Legacy v2 inventory remains capped
 at 10,000. Each normal run still uses eight partitions, at most 128 attempts
 per partition and 2,100 seconds per worker, and the automatic schedule remains
-every six hours. A pending root is queued work, not a completed analysis.
+every six hours. A pending root has no current analysis. Pending includes
+historical-only sources that are ineligible until discovery resolves them, so
+the count is not a promise that every root is scheduled or running. The cadence
+does not guarantee when a particular analysis will finish: workers share their
+bounded capacity between new sources, retries and changed evidence.
 
 The combined Directory/community inventory also bounds plugin states, plugin
 coverage rows and persisted cold-group scheduling history at 20,000. These

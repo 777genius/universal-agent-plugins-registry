@@ -92,6 +92,8 @@ LOCKED_NPM_REVIEWED_LAUNCHER_DIGESTS = frozenset({
     LOCKED_NPM_LAUNCHER_DIGEST,
     # Windows cmd.exe bootstrap; preserve the original published implementation.
     "sha256:2d2cfe5853a02bd67940b2c840e32d34a33e6fa4cc630130b508208f134a610b",
+    # Playwright recovers interrupted installs with one immutable retirement marker.
+    "sha256:3f24087a8798bc0db35accf806c39f5078008385bd8c442644fdc778e0b3031c",
 })
 LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST = {
     ("@hubspot/cli", "8.15.0"): frozenset({

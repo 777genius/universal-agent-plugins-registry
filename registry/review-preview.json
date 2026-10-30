@@ -7335,7 +7335,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7345,7 +7345,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7355,7 +7355,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7365,7 +7365,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7375,7 +7375,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7385,7 +7385,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7395,7 +7395,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7405,7 +7405,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7415,7 +7415,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7425,7 +7425,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7435,7 +7435,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7445,7 +7445,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7455,7 +7455,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         },
         {
           "targets": [
@@ -7513,7 +7513,7 @@
             }
           ],
           "distribution_id": "777genius/playwright-bridge",
-          "release_sequence": 1
+          "release_sequence": 2
         }
       ],
       "distributions": [
@@ -7521,7 +7521,7 @@
           "id": "777genius/playwright-bridge",
           "kind": "community_bridge",
           "status": "active",
-          "release_sequence": 1,
+          "release_sequence": 2,
           "package_version": "0.0.80",
           "components": [
             "mcp"
@@ -7587,7 +7587,7 @@
             "path": "plugins/playwright"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:8f0c8ac610974293c4f91f1ecb782fbe9d740f79f84cafe40fdfed1db234d103",
+          "tree_digest": "sha256:ff3c74bb5760fea47003130f3984d48234892330325a7cad35a7bc973acc9cf6",
           "manifest_digest": "sha256:8419b5c9e67894c2312048c4fe30e3ea920d00101d02641230183dd7ab4d3b31"
         }
       ]

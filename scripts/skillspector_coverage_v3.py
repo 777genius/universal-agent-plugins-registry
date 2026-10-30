@@ -222,6 +222,7 @@ def compatible_attempts(previous, selection):
         return {}
     return {item["id"]: copy.deepcopy(previous["attempts"][item["id"]]) for item in selection["sources"]
         if item["id"] in previous["attempts"] and previous["attempts"][item["id"]]["source_digest"] == source_digest(item) and
+           previous["attempts"][item["id"]]["scanner"] == SCANNER and
            previous["attempts"][item["id"]]["policy_digest"] == PROFILE["digest"]}
 
 
@@ -273,6 +274,34 @@ def previous_records(previous, selection, *, repository_aliases=None):
     return result
 
 
+def scheduling_group(item):
+    """Share a turn per standalone repository or independently listed plugin."""
+    return item["kind"], item["repository"].casefold(), item["plugin_path"]
+
+
+def fair_lane(entries, previous):
+    # Reconstruct group recency from actual persisted work, including changed
+    # source pins. A per-run round robin alone would keep picking the first
+    # large groups when the worker has fewer slots than groups.
+    attempted = {}
+    for item in (previous or {}).get("selection", {}).get("sources", []):
+        attempt = (previous or {}).get("attempts", {}).get(item["id"])
+        if attempt is not None:
+            key = scheduling_group(item)
+            attempted[key] = max(attempted.get(key, ""), attempt["last_attempted_at"])
+    grouped = defaultdict(deque)
+    for entry in sorted(entries, key=lambda entry: entry[:2]):
+        grouped[scheduling_group(entry[2])].append(entry)
+    groups = deque(sorted(grouped, key=lambda key: (attempted.get(key, ""), grouped[key][0][:2])))
+    result = deque()
+    while groups:
+        key = groups.popleft()
+        result.append(grouped[key].popleft()[2])
+        if grouped[key]:
+            groups.append(key)
+    return result
+
+
 def plan_attempts(selection, previous, partition_index, partition_count, maximum_attempts, *, current=None, excluded_ids=(),
                   repository_aliases=None):
     require(type(partition_count) is int and 1 <= partition_count <= MAX_PARTITIONS, "invalid partition count")
@@ -294,7 +323,7 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         else:
             lane, last = "new", ""
         lanes[lane].append((last, position, item))
-    queues = {key: deque(entry[2] for entry in sorted(values, key=lambda entry: entry[:2])) for key, values in lanes.items()}
+    queues = {key: fair_lane(values, previous) for key, values in lanes.items()}
     order = contract.RETRY_POLICY["queue_lanes"]
     cursor = (previous or {}).get("queue_cursor", 0)
     result = []

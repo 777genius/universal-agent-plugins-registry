@@ -9,6 +9,7 @@ on:
       - 'registry/directory.json'
       - 'tests/e2e/cloudflare-package-lifecycle.cjs'
       - 'tests/e2e/playwright-live-readonly.cjs'
+      - 'tests/e2e/playwright-browser-boundary.cjs'
       - '.github/workflows/playwright-package-e2e.yml'
 
 permissions:
@@ -58,3 +59,17 @@ jobs:
           node-version: '24.20.0'
       - name: Verify the pinned MCP interface without invoking browser tools
         run: node tests/e2e/playwright-live-readonly.cjs
+
+  browser-boundary:
+    name: Browser artifact stays in plugin data
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+      - name: Verify a real browser writes only outside the managed package
+        run: node tests/e2e/playwright-browser-boundary.cjs
