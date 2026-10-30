@@ -94,6 +94,58 @@ REFERENCE_MESSAGES = {
     "ambiguous": "A local path-like reference matched more than one bundled artifact and could not be resolved to a single target.",
 }
 
+# Public examples can contain provider-shaped credentials even when the
+# scanner correctly reports them as findings. Never republish these values.
+# This deliberately covers the observed Stripe secret/restricted key formats;
+# it is not a general secret detector, and repository push protection remains
+# the final fail-closed boundary for other formats.
+STRIPE_SECRET_KEY = re.compile(r"(?<![A-Za-z0-9_])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}(?![A-Za-z0-9_])")
+REDACTED_CREDENTIAL = "[REDACTED Stripe key]"
+REPORT_IDENTITY_FIELDS = frozenset({"id", "rule", "finding_id", "finding_ids", "match_fingerprint",
+    "source", "source_identity", "source_digest", "source_sha256", "source_url", "report_digest",
+    "path", "file", "source_path", "target_path", "plugin_path", "code", "reason_code", "analyzer_id"})
+
+
+def has_public_credentials(value: Any, *, depth: int = 0) -> bool:
+    require(depth <= 64, "SkillSpector public evidence is too deeply nested")
+    if isinstance(value, str):
+        return STRIPE_SECRET_KEY.search(value) is not None
+    if isinstance(value, list):
+        return any(has_public_credentials(item, depth=depth + 1) for item in value)
+    if isinstance(value, dict):
+        return any(has_public_credentials(key, depth=depth + 1) or
+                   has_public_credentials(item, depth=depth + 1) for key, item in value.items())
+    return False
+
+
+def redact_public_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Project display text after source, finding and exception identities exist.
+
+    A source path or opaque identity cannot be rewritten without changing its
+    meaning. If one contains a recognized credential, fail closed instead.
+    """
+    def redact(value: Any, depth: int = 0) -> Any:
+        require(depth <= 64, "SkillSpector public evidence is too deeply nested")
+        if isinstance(value, str):
+            return STRIPE_SECRET_KEY.sub(REDACTED_CREDENTIAL, value)
+        if isinstance(value, list):
+            return [redact(item, depth + 1) for item in value]
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                cleaned = STRIPE_SECRET_KEY.sub(REDACTED_CREDENTIAL, key)
+                require(cleaned not in result, "SkillSpector evidence keys collide after credential redaction")
+                result[cleaned] = copy.deepcopy(item) if key in REPORT_IDENTITY_FIELDS else redact(item, depth + 1)
+            return result
+        return value
+
+    result = copy.deepcopy(record)
+    for key in ("skill_name", "findings", "coverage", "errors"):
+        if key in result:
+            result[key] = redact(result[key])
+    require(not has_public_credentials(result), "Credential-shaped text remains in structural SkillSpector data")
+    return result
+
 
 def report_json(value: Any) -> bytes:
     """Deterministic display JSON; never used for signed directory documents.
@@ -532,7 +584,7 @@ def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, ro
         coverage["grouping_complete"] = not record["findings_truncated"]
         require(len(report_json(record)) <= publication_budget,
                 "SkillSpector coverage evidence exceeds publication budget")
-    return record
+    return redact_public_record(record)
 
 
 def environment_v3(home: Path, profile_id: str, timeout: float | None = None) -> dict[str, str]:

@@ -303,6 +303,156 @@ class TransportTests(unittest.TestCase):
             client.request("GET", "git/ref/heads/main")
         self.assertEqual(len(self.requests), 1)
 
+    def test_forbidden_pacing_hints_keep_supported_retry_behavior(self):
+        for headers, body, delay in (({"Retry-After": "7"}, b"private response", 7),
+                                     ({}, b"You have exceeded a secondary rate limit.", 60)):
+            with self.subTest(headers=headers):
+                error = http_error(403, headers, body)
+                stream = error.fp
+                client = self.client([error, {"sha": "a" * 40}])
+                with redirect_stderr(io.StringIO()):
+                    self.assertEqual(client.request("POST", "git/trees", {"tree": []})["sha"], "a" * 40)
+                self.assertEqual(self.clock.sleeps, [delay])
+                self.assertTrue(stream.closed)
+
+    def test_validation_details_only_emit_fixed_categories_codes_and_fields(self):
+        secret = "private-scanner-content-secret-token"
+        response = {"message": "Validation Failed", "documentation_url": "https://example.test/" + secret,
+            "errors": [{"resource": secret, "field": "content", "code": "invalid", "message": secret,
+                        "value": secret}, {"field": "sha", "code": "missing_field"},
+                       {"field": secret, "code": secret}, secret, None]}
+        error = http_error(422, {"X-GitHub-Request-Id": "SAFE:422", "Retry-After": "1"},
+                           json.dumps(response).encode())
+        stream = error.fp
+        client = self.client([error])
+        output = io.StringIO()
+        payload = {"tree": [{"path": "blob00000", "mode": "100644", "type": "blob", "content": secret}]}
+        with redirect_stderr(output), self.assertRaises(PublicationError) as raised:
+            client.request("POST", "git/trees", payload)
+        diagnostic = str(raised.exception)
+        self.assertIn("status=422 request_id=SAFE:422 attempt=1/3", diagnostic)
+        self.assertIn("error_category=validation_failed error_count=5", diagnostic)
+        self.assertIn("error_codes=invalid,missing_field error_fields=content,sha", diagnostic)
+        self.assertIn(f"request_bytes={len(canonical_json(payload))} tree_entries=1", diagnostic)
+        self.assertNotIn(secret, diagnostic + output.getvalue())
+        self.assertNotIn("https://", diagnostic)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.clock.sleeps, [])
+        self.assertTrue(stream.closed)
+
+    def test_unknown_validation_messages_and_fields_are_not_echoed(self):
+        for message, category in (("Invalid request", "invalid_request"),
+            ("Validation Failed private-scanner-content", "unclassified"),
+            ({"private-scanner-content": "secret-token"}, "unclassified")):
+            with self.subTest(category=category):
+                response = {"message": message, "errors": [
+                    {"field": ["content", "private-scanner-content"], "code": {"invalid": "secret-token"}},
+                    {"field": "content\nprivate-scanner-content", "code": "invalid-secret-token"}]}
+                error = http_error(422, body=json.dumps(response).encode())
+                client = self.client([error])
+                with self.assertRaises(PublicationError) as raised:
+                    client.request("POST", "git/trees", {"tree": []})
+                diagnostic = str(raised.exception)
+                self.assertIn("error_category=" + category, diagnostic)
+                self.assertIn("error_count=2", diagnostic)
+                self.assertNotIn("error_codes=", diagnostic)
+                self.assertNotIn("error_fields=", diagnostic)
+                self.assertNotIn("private-scanner-content", diagnostic)
+                self.assertNotIn("secret-token", diagnostic)
+                self.assertEqual(len(self.requests), 1)
+                self.assertEqual(self.clock.sleeps, [])
+
+    def test_invalid_validation_bodies_preserve_status_and_are_read_once_with_a_bound(self):
+        for body, expected in ((b"<html>private-scanner-content</html>", "malformed"),
+            (b"\xff", "malformed"), (b'{"message":', "malformed"),
+            (b'{"message":"Validation Failed","message":"secret-token"}', "malformed"),
+            (b'[]', "invalid_shape"),
+            (b"private-scanner-content" + b"x" * transport.MAX_ERROR_BYTES, "oversized")):
+            with self.subTest(expected=expected, bytes=len(body)):
+                error = http_error(422, {"X-GitHub-Request-Id": "SAFE:422"}, body)
+                stream, read, sizes = error.fp, error.read, []
+                def bounded_read(size):
+                    sizes.append(size)
+                    return read(size)
+                error.read = bounded_read
+                client = self.client([error])
+                with self.assertRaises(PublicationError) as raised:
+                    client.request("POST", "git/trees", {"tree": []})
+                diagnostic = str(raised.exception)
+                self.assertIn("status=422 request_id=SAFE:422", diagnostic)
+                self.assertIn("diagnostic_body=" + expected, diagnostic)
+                self.assertNotIn("private-scanner-content", diagnostic)
+                self.assertNotIn("secret-token", diagnostic)
+                self.assertEqual(sizes, [transport.MAX_ERROR_BYTES + 1])
+                self.assertTrue(stream.closed)
+                self.assertEqual(len(self.requests), 1)
+                self.assertEqual(self.clock.sleeps, [])
+
+    def test_unreadable_validation_body_preserves_status_and_closes_error(self):
+        for failure in (TimeoutError("secret-token"), ConnectionResetError("private-scanner-content"),
+                        transport.http.client.IncompleteRead(b"secret-token", 10)):
+            with self.subTest(failure=type(failure).__name__):
+                error = http_error(422, {"X-GitHub-Request-Id": "SAFE:422"})
+                stream = error.fp
+                def broken_read(*_args): raise failure
+                error.read = broken_read
+                client = self.client([error])
+                with self.assertRaises(PublicationError) as raised:
+                    client.request("POST", "git/trees", {"tree": []})
+                diagnostic = str(raised.exception)
+                self.assertIn("status=422 request_id=SAFE:422", diagnostic)
+                self.assertIn("diagnostic_body=unreadable", diagnostic)
+                self.assertNotIn("secret-token", diagnostic)
+                self.assertNotIn("private-scanner-content", diagnostic)
+                self.assertTrue(stream.closed)
+                self.assertEqual(len(self.requests), 1)
+                self.assertEqual(self.clock.sleeps, [])
+
+    def test_validation_close_failure_preserves_status_and_request_id_without_retry(self):
+        error = http_error(422, {"X-GitHub-Request-Id": "SAFE:422"},
+            b'{"message":"Validation Failed"}')
+        stream, close = error.fp, error.close
+        def broken_close():
+            close()
+            raise OSError("private-scanner-content-secret-token")
+        error.close = broken_close
+        client = self.client([error])
+        try:
+            with self.assertRaises(PublicationError) as raised:
+                client.request("POST", "git/trees", {"tree": []})
+        finally:
+            error.close = close
+        diagnostic = str(raised.exception)
+        self.assertIn("status=422 request_id=SAFE:422 attempt=1/3", diagnostic)
+        self.assertIn("error_category=validation_failed", diagnostic)
+        self.assertNotIn("private-scanner-content", diagnostic)
+        self.assertNotIn("secret-token", diagnostic)
+        self.assertTrue(stream.closed)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.clock.sleeps, [])
+
+    def test_v3_inline_upload_422_stops_before_commit_or_report_ref_update(self):
+        from scripts import publish_skillspector_coverage_v3 as publisher
+        from tests.test_skillspector_coverage_v3 import COMMIT, bundle, item, record
+        source = item()
+        error = http_error(422, {"X-GitHub-Request-Id": "SAFE:422"}, json.dumps({
+            "message": "Validation Failed", "errors": [{"field": "content", "code": "invalid",
+                "value": "private-scanner-content-secret-token"}]}).encode())
+        # Model an existing report ref: the normal publisher may read it, but
+        # must never create a commit or move that ref after a rejected upload.
+        client = self.client([{"object": {"sha": COMMIT}}, {"object": {"sha": "a" * 40}},
+                              {"truncated": False, "tree": []}, error])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            with self.assertRaisesRegex(PublicationError, "status=422.*error_category=validation_failed"):
+                publisher.publish(client, root, COMMIT, fetch=lambda *args, **kwargs: None)
+        self.assertEqual([request.get_method() for request, _ in self.requests], ["GET", "GET", "GET", "POST"])
+        self.assertTrue(self.requests[-1][0].full_url.endswith("/git/trees"))
+        self.assertTrue(any("content" in row for row in json.loads(self.requests[-1][0].data)["tree"]))
+        self.assertEqual(self.clock.sleeps, [])
+
 
 if __name__ == "__main__":
     unittest.main()

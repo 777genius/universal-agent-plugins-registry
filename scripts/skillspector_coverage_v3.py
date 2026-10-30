@@ -222,6 +222,7 @@ def compatible_attempts(previous, selection):
         return {}
     return {item["id"]: copy.deepcopy(previous["attempts"][item["id"]]) for item in selection["sources"]
         if item["id"] in previous["attempts"] and previous["attempts"][item["id"]]["source_digest"] == source_digest(item) and
+           previous["attempts"][item["id"]]["scanner"] == SCANNER and
            previous["attempts"][item["id"]]["policy_digest"] == PROFILE["digest"]}
 
 
@@ -273,6 +274,34 @@ def previous_records(previous, selection, *, repository_aliases=None):
     return result
 
 
+def scheduling_group(item):
+    """Share a turn per standalone repository or independently listed plugin."""
+    return item["kind"], item["repository"].casefold(), item["plugin_path"]
+
+
+def fair_lane(entries, previous):
+    # Reconstruct group recency from actual persisted work, including changed
+    # source pins. A per-run round robin alone would keep picking the first
+    # large groups when the worker has fewer slots than groups.
+    attempted = {}
+    for item in (previous or {}).get("selection", {}).get("sources", []):
+        attempt = (previous or {}).get("attempts", {}).get(item["id"])
+        if attempt is not None:
+            key = scheduling_group(item)
+            attempted[key] = max(attempted.get(key, ""), attempt["last_attempted_at"])
+    grouped = defaultdict(deque)
+    for entry in sorted(entries, key=lambda entry: entry[:2]):
+        grouped[scheduling_group(entry[2])].append(entry)
+    groups = deque(sorted(grouped, key=lambda key: (attempted.get(key, ""), grouped[key][0][:2])))
+    result = deque()
+    while groups:
+        key = groups.popleft()
+        result.append(grouped[key].popleft()[2])
+        if grouped[key]:
+            groups.append(key)
+    return result
+
+
 def plan_attempts(selection, previous, partition_index, partition_count, maximum_attempts, *, current=None, excluded_ids=(),
                   repository_aliases=None):
     require(type(partition_count) is int and 1 <= partition_count <= MAX_PARTITIONS, "invalid partition count")
@@ -294,7 +323,7 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         else:
             lane, last = "new", ""
         lanes[lane].append((last, position, item))
-    queues = {key: deque(entry[2] for entry in sorted(values, key=lambda entry: entry[:2])) for key, values in lanes.items()}
+    queues = {key: fair_lane(values, previous) for key, values in lanes.items()}
     order = contract.RETRY_POLICY["queue_lanes"]
     cursor = (previous or {}).get("queue_cursor", 0)
     result = []
@@ -490,7 +519,7 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
                 record = fail(scanner.empty_record_v3(item, profile_id), "acquisition_failed", "The immutable repository could not be acquired.")
                 record["execution"]["acquisition_seconds"] = round(time.monotonic() - acquisition_started, 6)
             attempt = make_attempt(item, record, old, old_records.get(item["id"]))
-            outcome = {"attempt": attempt, "record": record}
+            outcome = {"attempt": attempt, "record": scanner.redact_public_record(record)}
             if len(report_json(outcomes)) + len(report_json(outcome)) + 4096 > MAX_WORKER_BYTES:
                 break  # Completed prior work remains publishable; unpersisted work is still queued.
             outcomes.append(outcome)
@@ -586,7 +615,10 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     output_dir.mkdir(parents=True, exist_ok=True)
     grouped = defaultdict(list)
     for record in sorted(records.values(), key=lambda value: value["id"]):
-        grouped[expected[record["id"]]["repository"]].append(record)
+        # Cached, historical and useful fallback records cross the same public
+        # text boundary as new scanner results, before shard bytes are hashed.
+        public = scanner.redact_public_record(record)
+        grouped[expected[record["id"]]["repository"]].append(public)
     descriptors = []
     for repository, group in sorted(grouped.items()):
         parts, pending = [], []

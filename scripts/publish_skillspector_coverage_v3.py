@@ -104,6 +104,8 @@ def validate_directory(directory, source_commit):
     require(bundle["manifest"]["schema_version"] == 3, "only v3 bundles can be published here")
     coverage.validate_manifest(bundle["manifest"], current_policy=True)
     require(bundle["manifest"]["source_commit"] == source_commit, "coverage was produced from another source commit")
+    require(not scanner.has_public_credentials(bundle),
+            "coverage contains unredacted credential-shaped report text")
     allowed = set(CONTROL_FILES) | {part["path"] for part in bundle["manifest"]["shards"]}
     present = set()
     for path in directory.rglob("*"):

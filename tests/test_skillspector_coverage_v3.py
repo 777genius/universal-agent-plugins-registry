@@ -200,6 +200,48 @@ class QueueTests(unittest.TestCase):
             planned = coverage.plan_attempts({"schema_version": 1, "sources": sources}, prior, 0, 1, 3)
             self.assertEqual({subject["id"] for subject in planned}, {"fixture/new0", "fixture/retry", "fixture/changed"})
 
+    def test_large_repository_does_not_hide_a_small_plugin_in_the_same_partition(self):
+        bulk = [item(id=f"bulk/skill{n}", repository="fixture/bulk", path=f"skills/skill{n}") for n in range(40)]
+        plugin = item(id="plugin:fixture/marketing/campaign", repository="fixture/bulk", kind="plugin_skill",
+            path="plugins/marketing/skills/campaign", plugin_path="plugins/marketing")
+        selection = {"schema_version": 1, "sources": [*bulk, plugin]}
+        self.assertEqual(coverage.plan_attempts(selection, None, 0, 1, 2), [bulk[0], plugin])
+
+    def test_plugin_packages_share_turns_and_progress_survives_publication(self):
+        packages = [[item(id=f"plugin:fixture/{name}/skill{n}", kind="plugin_skill",
+            repository="fixture/shared", path=f"plugins/{name}/skills/skill{n}", plugin_path=f"plugins/{name}")
+            for n in range(3)] for name in ("bulk-a", "bulk-b", "small")]
+        selection = {"schema_version": 1, "sources": [source for package in packages for source in package]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = coverage.plan_attempts(selection, None, 0, 1, 2)
+            self.assertEqual(first, [packages[0][0], packages[1][0]])
+            earlier = coverage.format_timestamp(datetime.now(timezone.utc) - timedelta(minutes=10))
+            with mock.patch.object(scanner, "now", return_value=earlier):
+                prior = bundle(root / "first", selection, [record(source) for source in first])
+            # The previous two packages still have work. The untouched package
+            # must get a slot before either starts its second root.
+            second = coverage.plan_attempts(selection, prior, 0, 1, 2)
+            self.assertEqual(second[0], packages[2][0])
+            final = bundle(root / "second", selection, [record(source) for source in second], prior)
+            third = coverage.plan_attempts(selection, final, 0, 1, 1)
+            untouched_previous_round = packages[1] if second[1] in packages[0] else packages[0]
+            self.assertEqual(third, [untouched_previous_round[1]])
+            self.assertEqual(final["manifest"]["coverage"]["complete"], 4)
+            self.assertEqual(final["manifest"]["coverage"]["pending"], 5)
+
+    def test_changed_source_keeps_group_recency_without_reusing_its_scan(self):
+        old = item(id="fixture/old", repository="fixture/shared", path="skills/old")
+        untouched = item(id="fixture/untouched", repository="fixture/other", path="skills/untouched")
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), {"schema_version": 1, "sources": [old]}, [record(old)])
+            changed = old | {"revision": "d" * 40}
+            new_same_repository = item(id="fixture/new", repository="fixture/shared", path="skills/new")
+            selected = {"schema_version": 1, "sources": [new_same_repository, untouched, changed]}
+            self.assertEqual({source["id"] for source in coverage.plan_attempts(selected, prior, 0, 1, 2)},
+                {untouched["id"], changed["id"]})
+            self.assertEqual(coverage.previous_records(prior, selected)[old["id"]]["freshness"], "historical")
+
     def test_zero_skill_selection_and_empty_workers_are_publishable(self):
         with tempfile.TemporaryDirectory() as directory:
             result = bundle(Path(directory), {"schema_version": 1, "sources": []})
@@ -264,6 +306,24 @@ class QueueTests(unittest.TestCase):
                 fresh = bundle(root / "after", selection, previous=loaded)
                 self.assertEqual(fresh["manifest"]["coverage"]["complete"], 0)
                 self.assertEqual(fresh["manifest"]["coverage"]["stale"], 1)
+
+    def test_scanner_upgrade_requeues_complete_and_blocked_sources_without_old_retry_state(self):
+        complete = item(id="fixture/complete", path="skills/complete")
+        limited = item(id="fixture/limited", path="skills/limited")
+        selection = {"schema_version": 1, "sources": [complete, limited]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = bundle(root / "before", selection, [record(complete), record(limited, "partial", "reference_missing")])
+            with mock.patch.dict(coverage.SCANNER, {"revision": "f" * 40}):
+                self.assertEqual(coverage.compatible_attempts(prior, selection), {})
+                self.assertEqual({source["id"] for source in coverage.plan_attempts(selection, prior, 0, 1, 128)},
+                    {complete["id"], limited["id"]})
+                historical = bundle(root / "pending", selection, previous=prior)
+                self.assertEqual(historical["manifest"]["coverage"]["stale"], 2)
+                self.assertEqual(historical["attempts"], {})
+                refreshed = bundle(root / "refreshed", selection, [record(complete), record(limited)], historical)
+                self.assertEqual(refreshed["manifest"]["coverage"]["complete"], 2)
+                self.assertTrue(all(attempt["attempt_count"] == 1 for attempt in refreshed["attempts"].values()))
 
     def test_actual_scan_worker_measures_timings_and_keeps_credentials_out(self):
         with tempfile.TemporaryDirectory() as directory:
