@@ -73,9 +73,13 @@ def keys(value, expected):
     check(type(value) is dict and set(value) == set(expected), "invalid fields")
 
 
+def bounded_count(value, limit, label):
+    check(len(value) <= limit, f"{label}: {len(value)} exceeds the limit of {limit}")
+
+
 def bounded_list(value, limit=MAX_ENTRIES):
     check(type(value) is list, "invalid entry list")
-    check(len(value) <= limit, f"invalid entry count: {len(value)} exceeds the limit of {limit}")
+    bounded_count(value, limit, "invalid entry count")
 
 
 def text(value, limit=4096):
@@ -92,7 +96,8 @@ def diagnostics(value):
 
 
 def repository_states_payload(value, repositories):
-    check(type(value) is dict and len(value) <= MAX_CANDIDATES, "invalid frozen state count")
+    check(type(value) is dict, "invalid frozen states")
+    bounded_count(value, MAX_CANDIDATES, "invalid frozen state count")
     check(set(value).issubset(repositories), "unknown frozen repository")
     for repository, state in value.items():
         check(REPOSITORY.fullmatch(repository) is not None, "invalid frozen repository")
@@ -265,7 +270,8 @@ class DiscoveryCheckpoint:
 
     def start_validation(self, context, validate_records, repositories):
         check(self.payload["complete"], "acquisition is incomplete")
-        check(len(repositories) <= MAX_CANDIDATES and all(type(name) is str and REPOSITORY.fullmatch(name) is not None for name in repositories), "invalid validation repositories")
+        bounded_count(repositories, MAX_CANDIDATES, "invalid validation repositories")
+        check(all(type(name) is str and REPOSITORY.fullmatch(name) is not None for name in repositories), "invalid validation repositories")
         check(len({name.casefold() for name in repositories}) == len(repositories), "duplicate validation repository")
         self.repositories = set(repositories)
         self.validation_binding = sha256_digest(canonical_json({"acquisition": self.envelope("acquisition", self.binding, self.payload), "context": context}))
@@ -278,7 +284,8 @@ class DiscoveryCheckpoint:
         payload = envelope["payload"]
         keys(payload, {"states", "results"})
         repository_states_payload(payload["states"], self.repositories)
-        check(type(payload["results"]) is dict and len(payload["results"]) <= MAX_CANDIDATES, "invalid repository result count")
+        check(type(payload["results"]) is dict, "invalid repository results")
+        bounded_count(payload["results"], MAX_CANDIDATES, "invalid repository result count")
         all_records = []
         for repository, result in payload["results"].items():
             check(REPOSITORY.fullmatch(repository) is not None, "invalid result repository")
