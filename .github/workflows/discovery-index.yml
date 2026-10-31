@@ -77,11 +77,12 @@ jobs:
     # leaves room for always-uploaded checkpoints before the job limit.
     timeout-minutes: 330
     # Never overlap discovery scans (they share one Search API rate limit).
-    # Nothing is cancelled mid-run; a newer queued scan only replaces an older
-    # one that has not started, and scans never sign or publish anything.
+    # Queue every mode rather than silently replacing pending daily/weekly
+    # discover/reconcile with a newer refresh. Scans never sign or publish.
     concurrency:
       group: discovery-index-acquire
       cancel-in-progress: false
+      queue: max
     environment: discovery-read
     permissions:
       contents: read
