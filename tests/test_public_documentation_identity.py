@@ -178,7 +178,7 @@ class PublicDocumentationIdentityTests(unittest.TestCase):
             readme,
         )
         self.assertNotIn("https://777genius.github.io/universal-agent-plugins-registry/", readme)
-        self.assertNotIn("The catalog currently contains", readme)
+        self.assertNotIn("The catalog currently contains", " ".join(readme.split()))
         self.assertIn(
             "live catalog reports its current counts from signed Directory and Discovery",
             " ".join(readme.split()),
