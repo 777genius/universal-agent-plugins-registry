@@ -8,8 +8,9 @@ install one with the Universal Agent Plugins CLI.
 
 ## Browse and install
 
-[Open the directory](https://777genius.github.io/universal-agent-plugins-registry/)
-to search reviewed packages and the public Discovery index.
+[Open the directory](https://universal-agent-plugins.com/plugins/)
+to search reviewed packages and the public Discovery index. The former registry
+GitHub Pages address is retired; use the product Directory for installation.
 
 ```bash
 npx universal-agent-plugins search docs
@@ -60,14 +61,16 @@ shown by the CLI.
 - **Community bridges** package a pinned upstream commit while an upstream
   contribution is being reviewed. The source label is always shown.
 
-The catalog currently contains 28 reviewed packages and 3,000+ discovered
-package paths. Counts can change as signed snapshots are published. A schema
-pass does not prove activation, OAuth, or a successful tool call in every agent.
+The live catalog reports its current counts from signed Directory and Discovery
+snapshots; those counts change as feeds are published. A schema pass does not
+prove activation, OAuth, or a successful tool call in every agent.
 
-All 28 packages pass standard schema validation. Historical evidence includes
+The [2026-09-05 verification record](docs/VERIFICATION.md) documents historical
+schema checks for 28 root `plugin.json` manifests. Earlier evidence also includes
 15/15 runtime checks for five starter packages across Codex, Cursor, and Kiro.
-Installation coverage is broader than runtime coverage; see the test matrix and
-verification report for exact boundaries.
+These are dated, source-bound observations, not a current catalog count or an
+assurance about newly published packages. Installation coverage is broader than
+runtime coverage; see the test matrix and verification report for exact boundaries.
 
 Evidence is intentionally separated: runtime-tested, OAuth-tested, read-only,
 and not-proven are different claims. Figma OAuth was tested separately in Codex

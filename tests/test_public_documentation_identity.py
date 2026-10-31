@@ -171,10 +171,27 @@ class PublicDocumentationIdentityTests(unittest.TestCase):
             with self.subTest(stale_readme_copy=stale_readme_copy):
                 self.assertNotIn(stale_readme_copy, readme)
 
+    def test_public_directory_link_is_current_and_counts_are_not_frozen(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn(
+            "[Open the directory](https://universal-agent-plugins.com/plugins/)",
+            readme,
+        )
+        self.assertNotIn("https://777genius.github.io/universal-agent-plugins-registry/", readme)
+        normalized = " ".join(readme.split())
+        self.assertNotIn("The catalog currently contains", normalized)
+        self.assertNotIn("All 28 packages pass standard schema validation", normalized)
+        self.assertIn("[2026-09-05 verification record](docs/VERIFICATION.md)", readme)
+        self.assertIn(
+            "live catalog reports its current counts from signed Directory and Discovery",
+            normalized,
+        )
+
     def test_readme_keeps_evidence_claims_narrow(self) -> None:
         readme = (ROOT / "README.md").read_text()
         normalized = " ".join(readme.split())
-        self.assertIn("All 28 packages pass standard schema validation", normalized)
+        self.assertIn("historical schema checks for 28 root `plugin.json` manifests", normalized)
+        self.assertIn("not a current catalog count", normalized)
         self.assertIn(
             "materialized or installed package does not by itself prove", normalized
         )
