@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts import build_bridges, build_discovery_index as builder
+from scripts import discovery_checkpoint
 from scripts.discovery_checkpoint import CheckpointYield, DiscoveryCheckpoint, WorkBudget, atomic_json
 from scripts.directory_publication import canonical_json, sha256_digest
 from tests.test_discovery_index import FixtureAPI, PartitionAPI, SearchFixtureAPI, candidate_record, create_mirror, git
@@ -402,6 +403,19 @@ class DiscoveryCheckpointTests(unittest.TestCase):
                 checkpoint.save_acquisition()
             self.assertEqual(checkpoint.path.read_bytes(), before)
             self.assertTrue(self.checkpoint(temporary).payload["complete"])
+
+    def test_search_candidates_may_exceed_record_limit_but_not_candidate_limit(self):
+        query = CONFIG["query"]
+
+        def payload(count):
+            items = [{"repository": f"owner/repo{index}", "manifest_path": "plugin.json"} for index in range(count)]
+            stage = {"queue": [], "partitions": [{"query": f"{query} size:0..10", "size_min": 0, "size_max": 10, "total_count": 0}],
+                     "items": items, "diagnostics": []}
+            return {"complete": True, "refresh_paths": {}, "stages": {query: stage}}
+
+        discovery_checkpoint.acquisition_payload(payload(discovery_checkpoint.MAX_ENTRIES + 1), [query], 10)
+        with self.assertRaisesRegex(ValueError, "invalid entry count"):
+            discovery_checkpoint.acquisition_payload(payload(discovery_checkpoint.MAX_CANDIDATES + 1), [query], 10)
 
     def test_unsupported_raw_hits_remain_inert_and_preserve_diagnostics(self):
         api = SearchFixtureAPI("a" * 40, [("owner/repo", "../plugin.json"), ("owner/repo", "packages/demo/plugin.json"),
