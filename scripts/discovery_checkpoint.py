@@ -13,7 +13,13 @@ from pathlib import Path
 from scripts.directory_publication import PublicationError, canonical_json, parse_timestamp, sha256_digest
 
 MAX_BYTES = 32 << 20
+# MAX_ENTRIES bounds signed-record-shaped data and must stay equal to the
+# 10000 record limit of the discovery schemas, config and byte budgets.
 MAX_ENTRIES = 10_000
+# Search hits, their diagnostics and scanned repositories are inert
+# pre-validation candidates. They outnumber published records (about 2.5x
+# in production) and grow with the public corpus, so they get their own bound.
+MAX_CANDIDATES = 25_000
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 MANIFEST = re.compile(r"^(?:[A-Za-z0-9._-]+/)*plugin\.json$")
@@ -67,8 +73,13 @@ def keys(value, expected):
     check(type(value) is dict and set(value) == set(expected), "invalid fields")
 
 
-def bounded_list(value):
-    check(type(value) is list and len(value) <= MAX_ENTRIES, "invalid entry count")
+def bounded_count(value, limit, label):
+    check(len(value) <= limit, f"{label}: {len(value)} exceeds the limit of {limit}")
+
+
+def bounded_list(value, limit=MAX_ENTRIES):
+    check(type(value) is list, "invalid entry list")
+    bounded_count(value, limit, "invalid entry count")
 
 
 def text(value, limit=4096):
@@ -76,7 +87,7 @@ def text(value, limit=4096):
 
 
 def diagnostics(value):
-    bounded_list(value)
+    bounded_list(value, MAX_CANDIDATES)
     for item in value:
         keys(item, {"kind", "repository", "path", "error"})
         for field in item.values():
@@ -85,7 +96,8 @@ def diagnostics(value):
 
 
 def repository_states_payload(value, repositories):
-    check(type(value) is dict and len(value) <= MAX_ENTRIES, "invalid frozen state count")
+    check(type(value) is dict, "invalid frozen states")
+    bounded_count(value, MAX_CANDIDATES, "invalid frozen state count")
     check(set(value).issubset(repositories), "unknown frozen repository")
     for repository, state in value.items():
         check(REPOSITORY.fullmatch(repository) is not None, "invalid frozen repository")
@@ -148,8 +160,9 @@ def acquisition_payload(value, queries, maximum_size):
     check(type(value["stages"]) is dict and set(value["stages"]).issubset(queries), "invalid search stages")
     for query, stage in value["stages"].items():
         keys(stage, {"queue", "partitions", "items", "diagnostics"})
-        for field in ("queue", "partitions", "items"):
+        for field in ("queue", "partitions"):
             bounded_list(stage[field])
+        bounded_list(stage["items"], MAX_CANDIDATES)
         intervals = []
         for interval in stage["queue"]:
             check(type(interval) is list and len(interval) == 2, "invalid queue interval")
@@ -257,7 +270,8 @@ class DiscoveryCheckpoint:
 
     def start_validation(self, context, validate_records, repositories):
         check(self.payload["complete"], "acquisition is incomplete")
-        check(len(repositories) <= MAX_ENTRIES and all(type(name) is str and REPOSITORY.fullmatch(name) is not None for name in repositories), "invalid validation repositories")
+        bounded_count(repositories, MAX_CANDIDATES, "invalid validation repositories")
+        check(all(type(name) is str and REPOSITORY.fullmatch(name) is not None for name in repositories), "invalid validation repositories")
         check(len({name.casefold() for name in repositories}) == len(repositories), "duplicate validation repository")
         self.repositories = set(repositories)
         self.validation_binding = sha256_digest(canonical_json({"acquisition": self.envelope("acquisition", self.binding, self.payload), "context": context}))
@@ -270,7 +284,8 @@ class DiscoveryCheckpoint:
         payload = envelope["payload"]
         keys(payload, {"states", "results"})
         repository_states_payload(payload["states"], self.repositories)
-        check(type(payload["results"]) is dict and len(payload["results"]) <= MAX_ENTRIES, "invalid repository result count")
+        check(type(payload["results"]) is dict, "invalid repository results")
+        bounded_count(payload["results"], MAX_CANDIDATES, "invalid repository result count")
         all_records = []
         for repository, result in payload["results"].items():
             check(REPOSITORY.fullmatch(repository) is not None, "invalid result repository")

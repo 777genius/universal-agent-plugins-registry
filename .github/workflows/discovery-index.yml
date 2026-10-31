@@ -76,6 +76,13 @@ jobs:
     # Acquisition and validation have independent budgets. A step timeout
     # leaves room for always-uploaded checkpoints before the job limit.
     timeout-minutes: 330
+    # Never overlap discovery scans (they share one Search API rate limit).
+    # Queue every mode rather than silently replacing pending daily/weekly
+    # discover/reconcile with a newer refresh. Scans never sign or publish.
+    concurrency:
+      group: discovery-index-acquire
+      cancel-in-progress: false
+      queue: max
     environment: discovery-read
     permissions:
       contents: read
@@ -877,6 +884,7 @@ jobs:
     if: always() && needs.scan.result == 'success' && needs.scan.outputs.complete != 'true'
     needs: scan
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - run: |
           echo "Discovery scan was incomplete. Diagnostics were retained and publication was skipped." >&2
