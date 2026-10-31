@@ -68,7 +68,8 @@ def keys(value, expected):
 
 
 def bounded_list(value):
-    check(type(value) is list and len(value) <= MAX_ENTRIES, "invalid entry count")
+    check(type(value) is list, "invalid entry list")
+    check(len(value) <= MAX_ENTRIES, f"invalid entry count: {len(value)} exceeds the limit of {MAX_ENTRIES}")
 
 
 def text(value, limit=4096):
