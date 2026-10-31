@@ -417,6 +417,14 @@ class DiscoveryCheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid entry count"):
             discovery_checkpoint.acquisition_payload(payload(discovery_checkpoint.MAX_CANDIDATES + 1), [query], 10)
 
+    def test_candidate_map_overflow_reports_count_and_limit(self):
+        for label in ("invalid frozen state count", "invalid validation repositories",
+                      "invalid repository result count"):
+            with self.subTest(label=label), self.assertRaisesRegex(
+                ValueError, f"{label}: 4 exceeds the limit of 3"
+            ):
+                discovery_checkpoint.bounded_count({"a": 1, "b": 2, "c": 3, "d": 4}, 3, label)
+
     def test_unsupported_raw_hits_remain_inert_and_preserve_diagnostics(self):
         api = SearchFixtureAPI("a" * 40, [("owner/repo", "../plugin.json"), ("owner/repo", "packages/demo/plugin.json"),
             ("owner/repo", "nested//plugin.json"), ("owner/repo", "/leading/plugin.json"),
