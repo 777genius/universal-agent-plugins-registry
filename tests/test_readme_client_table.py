@@ -150,7 +150,8 @@ class ReadmeClientTableTests(unittest.TestCase):
                 "package_routed_runtime",
             }.issubset(not_proved)
         )
-        self.assertIn("All 28 packages pass standard schema validation", readme)
+        self.assertIn("schema checks for 28 root `plugin.json` manifests", " ".join(readme.split()))
+        self.assertIn("dated, source-bound observations", " ".join(readme.split()))
         self.assertIn("15/15 runtime checks", normalized_readme)
         self.assertIn(
             "Installation coverage is broader than runtime coverage",
