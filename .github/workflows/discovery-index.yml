@@ -141,7 +141,10 @@ jobs:
           elif test "${EVENT_NAME}" = schedule && test "${SCHEDULE}" = "43 2 * * *"; then
             mode=discover
           elif test "${EVENT_NAME}" = push; then
-            mode=discover
+            # Source/registry pushes should refresh authenticated published
+            # candidates, not trigger another five-hour global Code Search sweep.
+            # A missing or empty LKG still becomes discover in the builder.
+            mode=refresh
           else
             mode=refresh
           fi
