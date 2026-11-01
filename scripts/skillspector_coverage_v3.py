@@ -320,19 +320,22 @@ def fair_lane(entries, previous, lane_budget):
         if continuing:
             groups.append(continuing.popleft())
     result = deque()
+    served = set()
     while groups:
         key = groups.popleft()
         group = grouped[key]
         take = 1
         if key[0] == "plugin_skill" and len(result) < lane_budget:
-            # Reserve a turn for the next group when capacity is small. A large
-            # group may use a bounded chunk but cannot fill the whole lane.
+            # Reserve a turn only for a group that has not yet received one
+            # in this scheduling pass. Otherwise a competitor can consume two
+            # slots while a 15-root package receives only 14 of its 15.
             available = lane_budget - len(result)
-            reserved = 1 if groups else 0
+            reserved = 1 if any(other not in served for other in groups) else 0
             take = min(len(group), MAX_COHERENT_PLUGIN_ROOTS,
                        max(1, available - reserved))
         for _ in range(take):
             result.append(group.popleft()[2])
+        served.add(key)
         if group:
             groups.append(key)
     return result
