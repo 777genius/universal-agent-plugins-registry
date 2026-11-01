@@ -279,10 +279,15 @@ def scheduling_group(item):
     return item["kind"], item["repository"].casefold(), item["plugin_path"]
 
 
-def fair_lane(entries, previous):
+MAX_COHERENT_PLUGIN_ROOTS = 16
+
+
+def fair_lane(entries, previous, maximum_attempts):
     # Reconstruct group recency from actual persisted work, including changed
-    # source pins. A per-run round robin alone would keep picking the first
-    # large groups when the worker has fewer slots than groups.
+    # source pins. Keep long repositories in round robin, but give a small
+    # *known* plugin package one contiguous turn when its remaining roots fit
+    # the partition's actual attempt budget. This is scheduling, not proof that
+    # the worker has enough wall time to complete every selected scan.
     attempted = {}
     for item in (previous or {}).get("selection", {}).get("sources", []):
         attempt = (previous or {}).get("attempts", {}).get(item["id"])
@@ -296,8 +301,16 @@ def fair_lane(entries, previous):
     result = deque()
     while groups:
         key = groups.popleft()
-        result.append(grouped[key].popleft()[2])
-        if grouped[key]:
+        group = grouped[key]
+        if (key[0] == "plugin_skill" and len(group) <= MAX_COHERENT_PLUGIN_ROOTS and
+                len(result) + len(group) <= maximum_attempts):
+            # Do not consume a tiny budget by partially privileging one plugin:
+            # in that case use the existing one-root round robin.
+            result.extend(entry[2] for entry in group)
+            group.clear()
+        else:
+            result.append(group.popleft()[2])
+        if group:
             groups.append(key)
     return result
 
@@ -323,7 +336,7 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         else:
             lane, last = "new", ""
         lanes[lane].append((last, position, item))
-    queues = {key: fair_lane(values, previous) for key, values in lanes.items()}
+    queues = {key: fair_lane(values, previous, maximum_attempts) for key, values in lanes.items()}
     order = contract.RETRY_POLICY["queue_lanes"]
     cursor = (previous or {}).get("queue_cursor", 0)
     result = []

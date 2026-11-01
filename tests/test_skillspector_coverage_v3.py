@@ -207,6 +207,39 @@ class QueueTests(unittest.TestCase):
         selection = {"schema_version": 1, "sources": [*bulk, plugin]}
         self.assertEqual(coverage.plan_attempts(selection, None, 0, 1, 2), [bulk[0], plugin])
 
+    def test_fitting_small_plugin_is_scheduled_as_a_coherent_batch(self):
+        # The source population is intentionally larger than this pass's budget.
+        # A 15-Skill package should not receive just one token when its remaining
+        # roots all fit, even though a large standalone repository also exists.
+        bulk = [item(id=f"bulk/skill{n}", repository="fixture/shared",
+                     path=f"skills/skill{n}") for n in range(40)]
+        plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                       repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                       plugin_path="plugins/n8n") for n in range(15)]
+        selected = {"schema_version": 1, "sources": [*bulk, *plugin]}
+        batch = coverage.plan_attempts(selected, None, 0, 1, 16)
+        self.assertEqual(batch, [bulk[0], *plugin])
+        self.assertEqual(len({entry["id"] for entry in batch}), 16)
+        self.assertEqual(coverage.plan_attempts(selected, None, 0, 1, 14)[:2],
+                         [bulk[0], plugin[0]])
+
+    def test_coherent_batches_preserve_retry_and_changed_lane_admission(self):
+        # Coherent plugin scheduling never supplants the v3 new/retry/changed
+        # lane cursor, and completed matching evidence remains reusable.
+        retry = item(id="fixture/retry", path="skills/retry")
+        prior_selection = {"schema_version": 1, "sources": [retry]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), prior_selection, [record(retry, "partial", "runtime_limit")])
+            plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                           repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                           plugin_path="plugins/n8n") for n in range(6)]
+            selection = {"schema_version": 1, "sources": [*plugin, retry]}
+            batch = coverage.plan_attempts(selection, prior, 0, 1, 7)
+            self.assertEqual(batch[0], plugin[0])
+            self.assertEqual(batch[1], retry)
+            self.assertEqual([value["id"] for value in batch if value in plugin],
+                             [value["id"] for value in plugin])
+
     def test_plugin_packages_share_turns_and_progress_survives_publication(self):
         packages = [[item(id=f"plugin:fixture/{name}/skill{n}", kind="plugin_skill",
             repository="fixture/shared", path=f"plugins/{name}/skills/skill{n}", plugin_path=f"plugins/{name}")
