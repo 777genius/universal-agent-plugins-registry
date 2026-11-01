@@ -404,7 +404,8 @@ class DiscoveryIndexTests(unittest.TestCase):
                      ("schedule", "11 3 * * 0", "", populated, "reconcile", 300),
                      ("schedule", "43 2 * * *", "", populated, "discover", 300),
                      ("schedule", "17 */6 * * *", "", populated, "refresh", 120),
-                     ("push", "", "", populated, "discover", 300)]
+                     ("push", "", "", populated, "refresh", 120),
+                     ("push", "", "", empty, "refresh", 300)]
             for index, (event, schedule, requested, snapshot, mode, budget) in enumerate(cases):
                 with self.subTest(event=event, requested=requested, snapshot=snapshot):
                     output = root / f"output-{index}"
