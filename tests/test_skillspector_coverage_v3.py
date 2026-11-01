@@ -283,6 +283,23 @@ class QueueTests(unittest.TestCase):
             positions = [batch.index(value) for value in plugin]
             self.assertEqual(positions, list(range(positions[0], positions[0] + 9)))
 
+    def test_expensive_plugin_cannot_block_three_due_retries(self):
+        retries = [item(id=f"fixture/retry{n}", path=f"skills/retry{n}") for n in range(3)]
+        plugins = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                        repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                        plugin_path="plugins/n8n") for n in range(9)]
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory),
+                           {"schema_version": 1, "sources": retries},
+                           [record(value, "partial", "runtime_limit") for value in retries])
+            batch = coverage.plan_attempts(
+                {"schema_version": 1, "sources": [*plugins, *retries]}, prior, 0, 1, 12)
+            self.assertEqual({value["id"] for value in batch},
+                             {value["id"] for value in [*plugins, *retries]})
+            self.assertLess(batch.index(retries[1]), batch.index(plugins[-1]))
+            self.assertLess(batch.index(retries[2]), batch.index(plugins[-1]))
+            self.assertLessEqual(len(batch), 12)
+
     def test_plugin_packages_share_turns_and_progress_survives_publication(self):
         packages = [[item(id=f"plugin:fixture/{name}/skill{n}", kind="plugin_skill",
             repository="fixture/shared", path=f"plugins/{name}/skills/skill{n}", plugin_path=f"plugins/{name}")

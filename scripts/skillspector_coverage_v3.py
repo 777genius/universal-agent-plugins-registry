@@ -366,24 +366,16 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
     cursor = (previous or {}).get("queue_cursor", 0)
     quotas = lane_quotas(lanes, order, cursor, maximum_attempts)
     queues = {key: fair_lane(values, previous, quotas[key]) for key, values in lanes.items()}
+    # The chosen per-lane prefix already contains coherent plugin groups.
+    # Interleave execution across lanes, rather than letting a 15-Skill group
+    # spend the worker's wall-clock budget before due retries can start.
     result = []
     while any(quotas.values()):
         lane = order[cursor]
         cursor = (cursor + 1) % len(order)
-        if not quotas[lane]:
-            continue
-        source = queues[lane].popleft()
-        result.append(source)
-        quotas[lane] -= 1
-        # Keep the bounded contiguous plugin group intact across lanes.
-        if source["kind"] == "plugin_skill":
-            group = scheduling_group(source)
-            taken = 1
-            while (quotas[lane] and queues[lane] and taken < MAX_COHERENT_PLUGIN_ROOTS and
-                   scheduling_group(queues[lane][0]) == group):
-                result.append(queues[lane].popleft())
-                quotas[lane] -= 1
-                taken += 1
+        if quotas[lane]:
+            result.append(queues[lane].popleft())
+            quotas[lane] -= 1
     return result
 
 
