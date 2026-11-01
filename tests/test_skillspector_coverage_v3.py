@@ -235,8 +235,12 @@ class QueueTests(unittest.TestCase):
                            plugin_path="plugins/n8n") for n in range(6)]
             selection = {"schema_version": 1, "sources": [*plugin, retry]}
             batch = coverage.plan_attempts(selection, prior, 0, 1, 7)
-            self.assertEqual(batch[0], plugin[0])
-            self.assertEqual(batch[1], retry)
+            # The persisted lane cursor can start with retry. Require every
+            # eligible member and bounded admission instead of a fake fixed
+            # first-lane order.
+            self.assertEqual({value["id"] for value in batch},
+                             {value["id"] for value in [*plugin, retry]})
+            self.assertLessEqual(batch.index(retry), 1)
             self.assertEqual([value["id"] for value in batch if value in plugin],
                              [value["id"] for value in plugin])
 
