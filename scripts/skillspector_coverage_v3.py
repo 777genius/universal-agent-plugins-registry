@@ -282,12 +282,25 @@ def scheduling_group(item):
 MAX_COHERENT_PLUGIN_ROOTS = 16
 
 
-def fair_lane(entries, previous, maximum_attempts):
-    # Reconstruct group recency from actual persisted work, including changed
-    # source pins. Keep long repositories in round robin, but give a small
-    # *known* plugin package one contiguous turn when its remaining roots fit
-    # the partition's actual attempt budget. This is scheduling, not proof that
-    # the worker has enough wall time to complete every selected scan.
+def lane_quotas(lanes, order, cursor, maximum_attempts):
+    """Reserve per-lane admission exactly as the original one-at-a-time policy."""
+    available = {name: len(entries) for name, entries in lanes.items()}
+    quotas = {name: 0 for name in lanes}
+    total = 0
+    while total < maximum_attempts and any(available.values()):
+        lane = order[cursor]
+        cursor = (cursor + 1) % len(order)
+        if available[lane]:
+            available[lane] -= 1
+            quotas[lane] += 1
+            total += 1
+    return quotas
+
+
+def fair_lane(entries, previous, lane_budget):
+    # Rotate never-attempted and previously attempted groups. A partially
+    # checked plugin can finish its remaining small batch without moving ahead
+    # of every new source or using slots reserved for retries/changed sources.
     attempted = {}
     for item in (previous or {}).get("selection", {}).get("sources", []):
         attempt = (previous or {}).get("attempts", {}).get(item["id"])
@@ -297,18 +310,28 @@ def fair_lane(entries, previous, maximum_attempts):
     grouped = defaultdict(deque)
     for entry in sorted(entries, key=lambda entry: entry[:2]):
         grouped[scheduling_group(entry[2])].append(entry)
-    groups = deque(sorted(grouped, key=lambda key: (attempted.get(key, ""), grouped[key][0][:2])))
+    ordered = sorted(grouped, key=lambda key: (attempted.get(key, ""), grouped[key][0][:2]))
+    cold = deque(key for key in ordered if key not in attempted)
+    continuing = deque(key for key in ordered if key in attempted)
+    groups = deque()
+    while cold or continuing:
+        if cold:
+            groups.append(cold.popleft())
+        if continuing:
+            groups.append(continuing.popleft())
     result = deque()
     while groups:
         key = groups.popleft()
         group = grouped[key]
-        if (key[0] == "plugin_skill" and len(group) <= MAX_COHERENT_PLUGIN_ROOTS and
-                len(result) + len(group) <= maximum_attempts):
-            # Do not consume a tiny budget by partially privileging one plugin:
-            # in that case use the existing one-root round robin.
-            result.extend(entry[2] for entry in group)
-            group.clear()
-        else:
+        take = 1
+        if key[0] == "plugin_skill" and len(result) < lane_budget:
+            # Reserve a turn for the next group when capacity is small. A large
+            # group may use a bounded chunk but cannot fill the whole lane.
+            available = lane_budget - len(result)
+            reserved = 1 if groups else 0
+            take = min(len(group), MAX_COHERENT_PLUGIN_ROOTS,
+                       max(1, available - reserved))
+        for _ in range(take):
             result.append(group.popleft()[2])
         if group:
             groups.append(key)
@@ -336,15 +359,28 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         else:
             lane, last = "new", ""
         lanes[lane].append((last, position, item))
-    queues = {key: fair_lane(values, previous, maximum_attempts) for key, values in lanes.items()}
     order = contract.RETRY_POLICY["queue_lanes"]
     cursor = (previous or {}).get("queue_cursor", 0)
+    quotas = lane_quotas(lanes, order, cursor, maximum_attempts)
+    queues = {key: fair_lane(values, previous, quotas[key]) for key, values in lanes.items()}
     result = []
-    while len(result) < maximum_attempts and any(queues.values()):
+    while any(quotas.values()):
         lane = order[cursor]
         cursor = (cursor + 1) % len(order)
-        if queues[lane]:
-            result.append(queues[lane].popleft())
+        if not quotas[lane]:
+            continue
+        source = queues[lane].popleft()
+        result.append(source)
+        quotas[lane] -= 1
+        # Keep the bounded contiguous plugin group intact across lanes.
+        if source["kind"] == "plugin_skill":
+            group = scheduling_group(source)
+            taken = 1
+            while (quotas[lane] and queues[lane] and taken < MAX_COHERENT_PLUGIN_ROOTS and
+                   scheduling_group(queues[lane][0]) == group):
+                result.append(queues[lane].popleft())
+                quotas[lane] -= 1
+                taken += 1
     return result
 
 

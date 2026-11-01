@@ -244,6 +244,45 @@ class QueueTests(unittest.TestCase):
             self.assertEqual([value["id"] for value in batch if value in plugin],
                              [value["id"] for value in plugin])
 
+    def test_remainder_of_partially_checked_n8n_fits_one_fair_batch(self):
+        bulk = [item(id=f"fixture/bulk{n}", repository="fixture/other",
+                     path=f"skills/bulk{n}") for n in range(50)]
+        plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                       repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                       plugin_path="plugins/n8n") for n in range(15)]
+        selected = {"schema_version": 1, "sources": [*bulk, *plugin]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), selected, [record(value) for value in plugin[:6]])
+            pending = coverage.plan_attempts(selected, prior, 0, 1, 16)
+            remaining = plugin[6:]
+            self.assertTrue(all(value in pending for value in remaining))
+            positions = [pending.index(value) for value in remaining]
+            self.assertEqual(positions, list(range(positions[0], positions[0] + 9)))
+            self.assertIn(bulk[0], pending)
+            self.assertLessEqual(len(pending), 16)
+
+    def test_group_of_17_continues_without_a_16_root_cliff(self):
+        plugin = [item(id=f"plugin:fixture/large/skill{n}", kind="plugin_skill",
+                       repository="fixture/shared", path=f"plugins/large/skills/skill{n}",
+                       plugin_path="plugins/large") for n in range(17)]
+        selected = {"schema_version": 1, "sources": plugin}
+        self.assertEqual(coverage.plan_attempts(selected, None, 0, 1, 17), plugin)
+        self.assertEqual(coverage.plan_attempts(selected, None, 0, 1, 16), plugin[:16])
+
+    def test_interleaved_retry_lane_retains_contiguous_plugin_roots(self):
+        retry = item(id="fixture/retry", path="skills/retry")
+        previous = {"schema_version": 1, "sources": [retry]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), previous, [record(retry, "partial", "runtime_limit")])
+            plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                           repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                           plugin_path="plugins/n8n") for n in range(9)]
+            batch = coverage.plan_attempts(
+                {"schema_version": 1, "sources": [*plugin, retry]}, prior, 0, 1, 10)
+            self.assertIn(retry, batch)
+            positions = [batch.index(value) for value in plugin]
+            self.assertEqual(positions, list(range(positions[0], positions[0] + 9)))
+
     def test_plugin_packages_share_turns_and_progress_survives_publication(self):
         packages = [[item(id=f"plugin:fixture/{name}/skill{n}", kind="plugin_skill",
             repository="fixture/shared", path=f"plugins/{name}/skills/skill{n}", plugin_path=f"plugins/{name}")
