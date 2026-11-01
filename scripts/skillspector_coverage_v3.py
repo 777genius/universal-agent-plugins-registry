@@ -279,10 +279,28 @@ def scheduling_group(item):
     return item["kind"], item["repository"].casefold(), item["plugin_path"]
 
 
-def fair_lane(entries, previous):
-    # Reconstruct group recency from actual persisted work, including changed
-    # source pins. A per-run round robin alone would keep picking the first
-    # large groups when the worker has fewer slots than groups.
+MAX_COHERENT_PLUGIN_ROOTS = 16
+
+
+def lane_quotas(lanes, order, cursor, maximum_attempts):
+    """Reserve per-lane admission exactly as the original one-at-a-time policy."""
+    available = {name: len(entries) for name, entries in lanes.items()}
+    quotas = {name: 0 for name in lanes}
+    total = 0
+    while total < maximum_attempts and any(available.values()):
+        lane = order[cursor]
+        cursor = (cursor + 1) % len(order)
+        if available[lane]:
+            available[lane] -= 1
+            quotas[lane] += 1
+            total += 1
+    return quotas
+
+
+def fair_lane(entries, previous, lane_budget):
+    # Rotate never-attempted and previously attempted groups. A partially
+    # checked plugin can finish its remaining small batch without moving ahead
+    # of every new source or using slots reserved for retries/changed sources.
     attempted = {}
     for item in (previous or {}).get("selection", {}).get("sources", []):
         attempt = (previous or {}).get("attempts", {}).get(item["id"])
@@ -292,12 +310,33 @@ def fair_lane(entries, previous):
     grouped = defaultdict(deque)
     for entry in sorted(entries, key=lambda entry: entry[:2]):
         grouped[scheduling_group(entry[2])].append(entry)
-    groups = deque(sorted(grouped, key=lambda key: (attempted.get(key, ""), grouped[key][0][:2])))
+    ordered = sorted(grouped, key=lambda key: (attempted.get(key, ""), grouped[key][0][:2]))
+    cold = deque(key for key in ordered if key not in attempted)
+    continuing = deque(key for key in ordered if key in attempted)
+    groups = deque()
+    while cold or continuing:
+        if cold:
+            groups.append(cold.popleft())
+        if continuing:
+            groups.append(continuing.popleft())
     result = deque()
+    served = set()
     while groups:
         key = groups.popleft()
-        result.append(grouped[key].popleft()[2])
-        if grouped[key]:
+        group = grouped[key]
+        take = 1
+        if key[0] == "plugin_skill" and len(result) < lane_budget:
+            # Reserve a turn only for a group that has not yet received one
+            # in this scheduling pass. Otherwise a competitor can consume two
+            # slots while a 15-root package receives only 14 of its 15.
+            available = lane_budget - len(result)
+            reserved = 1 if any(other not in served for other in groups) else 0
+            take = min(len(group), MAX_COHERENT_PLUGIN_ROOTS,
+                       max(1, available - reserved))
+        for _ in range(take):
+            result.append(group.popleft()[2])
+        served.add(key)
+        if group:
             groups.append(key)
     return result
 
@@ -323,15 +362,20 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         else:
             lane, last = "new", ""
         lanes[lane].append((last, position, item))
-    queues = {key: fair_lane(values, previous) for key, values in lanes.items()}
     order = contract.RETRY_POLICY["queue_lanes"]
     cursor = (previous or {}).get("queue_cursor", 0)
+    quotas = lane_quotas(lanes, order, cursor, maximum_attempts)
+    queues = {key: fair_lane(values, previous, quotas[key]) for key, values in lanes.items()}
+    # The chosen per-lane prefix already contains coherent plugin groups.
+    # Interleave execution across lanes, rather than letting a 15-Skill group
+    # spend the worker's wall-clock budget before due retries can start.
     result = []
-    while len(result) < maximum_attempts and any(queues.values()):
+    while any(quotas.values()):
         lane = order[cursor]
         cursor = (cursor + 1) % len(order)
-        if queues[lane]:
+        if quotas[lane]:
             result.append(queues[lane].popleft())
+            quotas[lane] -= 1
     return result
 
 

@@ -207,6 +207,99 @@ class QueueTests(unittest.TestCase):
         selection = {"schema_version": 1, "sources": [*bulk, plugin]}
         self.assertEqual(coverage.plan_attempts(selection, None, 0, 1, 2), [bulk[0], plugin])
 
+    def test_fitting_small_plugin_is_scheduled_as_a_coherent_batch(self):
+        # The source population is intentionally larger than this pass's budget.
+        # A 15-Skill package should not receive just one token when its remaining
+        # roots all fit, even though a large standalone repository also exists.
+        bulk = [item(id=f"bulk/skill{n}", repository="fixture/shared",
+                     path=f"skills/skill{n}") for n in range(40)]
+        plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                       repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                       plugin_path="plugins/n8n") for n in range(15)]
+        selected = {"schema_version": 1, "sources": [*bulk, *plugin]}
+        batch = coverage.plan_attempts(selected, None, 0, 1, 16)
+        self.assertEqual(batch, [bulk[0], *plugin])
+        self.assertEqual(len({entry["id"] for entry in batch}), 16)
+        self.assertEqual(coverage.plan_attempts(selected, None, 0, 1, 14)[:2],
+                         [bulk[0], plugin[0]])
+
+    def test_coherent_batches_preserve_retry_and_changed_lane_admission(self):
+        # Coherent plugin scheduling never supplants the v3 new/retry/changed
+        # lane cursor, and completed matching evidence remains reusable.
+        retry = item(id="fixture/retry", path="skills/retry")
+        prior_selection = {"schema_version": 1, "sources": [retry]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), prior_selection, [record(retry, "partial", "runtime_limit")])
+            plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                           repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                           plugin_path="plugins/n8n") for n in range(6)]
+            selection = {"schema_version": 1, "sources": [*plugin, retry]}
+            batch = coverage.plan_attempts(selection, prior, 0, 1, 7)
+            # The persisted lane cursor can start with retry. Require every
+            # eligible member and bounded admission instead of a fake fixed
+            # first-lane order.
+            self.assertEqual({value["id"] for value in batch},
+                             {value["id"] for value in [*plugin, retry]})
+            self.assertLessEqual(batch.index(retry), 1)
+            self.assertEqual([value["id"] for value in batch if value in plugin],
+                             [value["id"] for value in plugin])
+
+    def test_remainder_of_partially_checked_n8n_fits_one_fair_batch(self):
+        bulk = [item(id=f"fixture/bulk{n}", repository="fixture/other",
+                     path=f"skills/bulk{n}") for n in range(50)]
+        plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                       repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                       plugin_path="plugins/n8n") for n in range(15)]
+        selected = {"schema_version": 1, "sources": [*bulk, *plugin]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), selected, [record(value) for value in plugin[:6]])
+            pending = coverage.plan_attempts(selected, prior, 0, 1, 16)
+            remaining = plugin[6:]
+            self.assertTrue(all(value in pending for value in remaining))
+            positions = [pending.index(value) for value in remaining]
+            self.assertEqual(positions, list(range(positions[0], positions[0] + 9)))
+            self.assertIn(bulk[0], pending)
+            self.assertLessEqual(len(pending), 16)
+
+    def test_group_of_17_continues_without_a_16_root_cliff(self):
+        plugin = [item(id=f"plugin:fixture/large/skill{n}", kind="plugin_skill",
+                       repository="fixture/shared", path=f"plugins/large/skills/skill{n}",
+                       plugin_path="plugins/large") for n in range(17)]
+        selected = {"schema_version": 1, "sources": plugin}
+        self.assertEqual(coverage.plan_attempts(selected, None, 0, 1, 17), plugin)
+        self.assertEqual(coverage.plan_attempts(selected, None, 0, 1, 16), plugin[:16])
+
+    def test_interleaved_retry_lane_retains_contiguous_plugin_roots(self):
+        retry = item(id="fixture/retry", path="skills/retry")
+        previous = {"schema_version": 1, "sources": [retry]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), previous, [record(retry, "partial", "runtime_limit")])
+            plugin = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                           repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                           plugin_path="plugins/n8n") for n in range(9)]
+            batch = coverage.plan_attempts(
+                {"schema_version": 1, "sources": [*plugin, retry]}, prior, 0, 1, 10)
+            self.assertIn(retry, batch)
+            positions = [batch.index(value) for value in plugin]
+            self.assertEqual(positions, list(range(positions[0], positions[0] + 9)))
+
+    def test_expensive_plugin_cannot_block_three_due_retries(self):
+        retries = [item(id=f"fixture/retry{n}", path=f"skills/retry{n}") for n in range(3)]
+        plugins = [item(id=f"plugin:fixture/n8n/skill{n}", kind="plugin_skill",
+                        repository="fixture/shared", path=f"plugins/n8n/skills/skill{n}",
+                        plugin_path="plugins/n8n") for n in range(9)]
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory),
+                           {"schema_version": 1, "sources": retries},
+                           [record(value, "partial", "runtime_limit") for value in retries])
+            batch = coverage.plan_attempts(
+                {"schema_version": 1, "sources": [*plugins, *retries]}, prior, 0, 1, 12)
+            self.assertEqual({value["id"] for value in batch},
+                             {value["id"] for value in [*plugins, *retries]})
+            self.assertLess(batch.index(retries[1]), batch.index(plugins[-1]))
+            self.assertLess(batch.index(retries[2]), batch.index(plugins[-1]))
+            self.assertLessEqual(len(batch), 12)
+
     def test_plugin_packages_share_turns_and_progress_survives_publication(self):
         packages = [[item(id=f"plugin:fixture/{name}/skill{n}", kind="plugin_skill",
             repository="fixture/shared", path=f"plugins/{name}/skills/skill{n}", plugin_path=f"plugins/{name}")
