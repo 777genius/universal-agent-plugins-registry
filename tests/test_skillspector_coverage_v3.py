@@ -734,6 +734,17 @@ class PublicationTests(unittest.TestCase):
                     self.assertEqual(github.request.call_count, 3)
                     self.assertEqual([call.args[0] for call in github.request.call_args_list], ["GET"] * 3)
 
+    def test_unavailable_main_ref_still_fails_instead_of_masquerading_as_supersession(self):
+        source = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            github = mock.Mock()
+            github.request.return_value = None
+            with self.assertRaisesRegex(PublicationError, "main ref is unavailable"):
+                publisher.publish(github, root, COMMIT)
+            self.assertEqual(github.request.call_count, 1)
+
     def test_equal_timestamp_with_different_manifest_fails_closed(self):
         source = item()
         with tempfile.TemporaryDirectory() as directory:
