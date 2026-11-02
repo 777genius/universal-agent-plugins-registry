@@ -143,6 +143,25 @@ class TreeTests(unittest.TestCase):
             self.assertEqual(len(lookups), 3)
             self.assertEqual([call.args for call in pause.call_args_list], [(1,), (2,)])
 
+    def test_stale_verification_sha_retries_until_exact_object_arrives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git")
+            original = github.request
+            lookups = []
+            def request(method, path, data=None):
+                if method == "GET" and path.startswith("git/trees/"):
+                    lookups.append(path)
+                    if len(lookups) <= 2:
+                        value = original(method, path, data)
+                        return {**value, "sha": "f" * 40}
+                return original(method, path, data)
+            github.request = request
+            with mock.patch.object(transport.time, "sleep") as pause:
+                result = transport.create_filtered_tree(github, {"file": "a" * 40})
+            self.assertEqual(github.store.flatten(result["sha"]), {"file": "a" * 40})
+            self.assertEqual(len(lookups), 3)
+            self.assertEqual([call.args for call in pause.call_args_list], [(1,), (2,)])
+
     def test_permanently_unreadable_tree_never_publishes_unverified_data(self):
         with tempfile.TemporaryDirectory() as directory:
             github = FakeGitHub(Path(directory) / "git")
@@ -200,11 +219,12 @@ class TreeTests(unittest.TestCase):
                 self.assertEqual(github.calls, [])
 
     def test_bad_hash_mode_missing_entry_and_truncation_fail_closed(self):
-        for corrupt in (lambda value: value.update(sha="f" * 40),
-                        lambda value: value.update(truncated=True),
-                        lambda value: value["tree"][0].update(mode="100755"),
-                        lambda value: value["tree"].clear(),
-                        lambda value: value["tree"].append(copy.deepcopy(value["tree"][0]))):
+        corruptions = (lambda value: value.update(sha="f" * 40),
+                       lambda value: value.update(truncated=True),
+                       lambda value: value["tree"][0].update(mode="100755"),
+                       lambda value: value["tree"].clear(),
+                       lambda value: value["tree"].append(copy.deepcopy(value["tree"][0])))
+        for corrupt in corruptions:
             with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as directory:
                 github = FakeGitHub(Path(directory) / "git")
                 original = github.request
@@ -214,9 +234,14 @@ class TreeTests(unittest.TestCase):
                         corrupt(value)
                     return value
                 github.request = request
-                with self.assertRaises(PublicationError):
-                    transport.create_filtered_tree(github, {"x": "a" * 40})
-                self.assertEqual([method for method, _, _ in github.calls], ["POST", "GET"])
+                with mock.patch.object(transport.time, "sleep") as pause:
+                    with self.assertRaises(PublicationError):
+                        transport.create_filtered_tree(github, {"x": "a" * 40})
+                if corrupt == corruptions[0]:
+                    self.assertEqual([method for method, _, _ in github.calls], ["POST"] + ["GET"] * 5)
+                    self.assertEqual([call.args for call in pause.call_args_list], [(1,), (2,), (4,), (8,)])
+                else:
+                    self.assertEqual([method for method, _, _ in github.calls], ["POST", "GET"])
 
     def test_forged_or_malformed_create_identity_stops_before_verification(self):
         changes = [lambda _value: [], lambda _value: "unexpected", lambda _value: None,
