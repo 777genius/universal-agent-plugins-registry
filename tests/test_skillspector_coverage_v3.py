@@ -707,6 +707,83 @@ class PublicationTests(unittest.TestCase):
             commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
             self.assertEqual(len(github.store.flatten(commit["tree"])), 131)
 
+    def test_identical_report_retry_checks_every_published_blob_without_writing(self):
+        source = item()
+        selection = {"schema_version": 1, "sources": [source]}
+        for with_discovery in (False, True):
+            with self.subTest(with_discovery=with_discovery), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "reports"
+                if with_discovery:
+                    summary = QueueTests().discovery_summary(selection)
+                    coverage.merge_reports(selection, None, [worker(selection, [record(source)])],
+                        source_commit=COMMIT, output_dir=root, discovery_summary=summary)
+                    report = coverage.read_bundle(root)
+                    self.assertTrue((root / "coverage.json").is_file())
+                else:
+                    report = bundle(root, selection, [record(source)])
+                published_head = "a" * 40
+                files = {publisher.PREFIX + path.relative_to(root).as_posix(): path.read_bytes()
+                         for path in root.rglob("*") if path.is_file()}
+                identities = {path: publisher.hashlib.sha1(
+                    b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
+                    for path, body in files.items()}
+                shard_path = publisher.PREFIX + report["manifest"]["shards"][0]["path"]
+                defects = [None, ("missing", publisher.PREFIX + "index.json"),
+                           ("wrong_sha", shard_path)]
+                if with_discovery:
+                    defects.append(("missing", publisher.PREFIX + "coverage.json"))
+                for defect in defects:
+                    with self.subTest(defect=defect):
+                        entries = identities.copy()
+                        if defect and defect[0] == "missing":
+                            del entries[defect[1]]
+                        elif defect:
+                            entries[defect[1]] = "d" * 40
+                        github = mock.Mock()
+                        github.request.side_effect = [
+                            {"object": {"sha": COMMIT}},
+                            {"object": {"sha": published_head}},
+                            {"truncated": False, "tree": [
+                                {"path": path, "mode": "100644", "type": "blob", "sha": sha}
+                                for path, sha in sorted(entries.items())]},
+                        ]
+                        fetch = lambda *_args, **_kwargs: publisher.canonical_json(report["manifest"])
+                        if defect:
+                            with self.assertRaisesRegex(PublicationError, "identical report publication file differs"):
+                                publisher.publish(github, root, COMMIT, fetch=fetch)
+                        else:
+                            self.assertEqual(publisher.publish(github, root, COMMIT, fetch=fetch), published_head)
+                        self.assertEqual(github.request.call_count, 3)
+                        self.assertEqual([call.args[0] for call in github.request.call_args_list],
+                                         ["GET", "GET", "GET"])
+
+    def test_unavailable_main_ref_still_fails_instead_of_masquerading_as_supersession(self):
+        source = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            github = mock.Mock()
+            github.request.return_value = None
+            with self.assertRaisesRegex(PublicationError, "main ref is unavailable"):
+                publisher.publish(github, root, COMMIT)
+            self.assertEqual(github.request.call_count, 1)
+
+    def test_equal_timestamp_with_different_manifest_fails_closed(self):
+        source = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            report = bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            prior = copy.deepcopy(report["manifest"])
+            prior["source_commit"] = "f" * 40
+            github = mock.Mock()
+            github.request.side_effect = [
+                {"object": {"sha": COMMIT}}, {"object": {"sha": "a" * 40}},
+            ]
+            with self.assertRaisesRegex(PublicationError, "conflicting report with identical timestamp"):
+                publisher.publish(github, root, COMMIT,
+                    fetch=lambda *_args, **_kwargs: publisher.canonical_json(prior))
+            self.assertEqual(github.request.call_count, 2)
+
     def test_atomic_publisher_preserves_legacy_bytes_and_refuses_obsolete_main(self):
         from tests.test_skillspector_publication_transport import FakeGitHub
         source = item()
@@ -729,9 +806,22 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(github.calls[-1], ("PATCH", "git/refs/heads/skillspector-reports", {"sha": result, "force": False}))
             for github in (FakeGitHub(Path(directory) / "git-obsolete", main="f" * 40),
                            FakeGitHub(Path(directory) / "git-race", main_changed=True)):
-                with self.assertRaises(PublicationError):
+                with self.assertRaises(publisher.SupersededCoverage):
                     publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
                 self.assertFalse(any(method == "PATCH" for method, _, _ in github.calls))
+
+
+    def test_superseded_scheduled_publisher_exits_green_without_masking_other_errors(self):
+        argv = ["skillspector", "publish", "--report-dir", "/unused-fixture", "--source-commit", COMMIT]
+        for failure, expected in (
+            (publisher.SupersededCoverage("main changed during coverage publication"), 0),
+            (PublicationError("uploaded publication tree identity differs"), 1),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(publisher.sys, "argv", argv), \
+                     mock.patch.dict(publisher.os.environ, {"GITHUB_TOKEN": "test-token"}), \
+                     mock.patch.object(publisher, "publish", side_effect=failure):
+                    self.assertEqual(publisher.main(), expected)
 
 
 if __name__ == "__main__":

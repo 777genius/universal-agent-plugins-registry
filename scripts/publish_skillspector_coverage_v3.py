@@ -34,6 +34,10 @@ CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "coverage.json": coverage.MAX_DISCOVERY_BYTES}
 
 
+class SupersededCoverage(PublicationError):
+    """A completed scan for an older main is safely skipped, not a failed publication."""
+
+
 read_json = scanner.read_report_json
 
 
@@ -127,18 +131,28 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
             "controlled regression reports are artifacts and cannot replace catalog publication")
     manifest = bundle["manifest"]
     main = github.request("GET", "git/ref/heads/main")
-    require(main is not None and main["object"]["sha"] == source_commit, "refusing coverage from obsolete main")
+    require(main is not None, "main ref is unavailable during coverage publication")
+    if main["object"]["sha"] != source_commit:
+        raise SupersededCoverage("refusing coverage from obsolete main")
     ref = github.request("GET", f"git/ref/heads/{BRANCH}")
     head = ref["object"]["sha"] if ref else None
     require(head is None or coverage.SHA.fullmatch(head) is not None, "invalid report branch head")
     prior_manifest, old_entries, old_trees = None, {}, {}
+    duplicate_publication = False
     if head:
         prior_body = fetch(head, "index.json", coverage.MAX_MANIFEST_BYTES, optional=True)
         if prior_body is not None:
             prior_manifest = parse_report(prior_body, "previous manifest", max_bytes=coverage.MAX_MANIFEST_BYTES)
             coverage.validate_manifest(prior_manifest)
-            require(parse_timestamp(manifest["generated_at"], "generated_at") >
-                    parse_timestamp(prior_manifest["generated_at"], "previous generated_at"), "refusing stale coverage")
+            current_at = parse_timestamp(manifest["generated_at"], "generated_at")
+            previous_at = parse_timestamp(prior_manifest["generated_at"], "previous generated_at")
+            if current_at == previous_at:
+                # A re-run of an already published artifact is idempotent.
+                # Identical timestamps with different contents remain an error.
+                require(manifest == prior_manifest, "conflicting report with identical timestamp")
+                duplicate_publication = True
+            if current_at < previous_at:
+                raise SupersededCoverage("newer coverage is already published")
         tree = github.request("GET", f"git/trees/{head}?recursive=1")
         require(tree is not None and tree.get("truncated") is False, "report tree is unavailable or truncated")
         for item in tree["tree"]:
@@ -147,6 +161,19 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                 old_entries[item["path"]] = item["sha"]
             elif item["type"] == "tree":
                 old_trees[item["path"]] = item["sha"]
+    if duplicate_publication:
+        # Matching metadata is insufficient: the existing immutable tree must
+        # contain the exact bytes of every validated local artifact, including
+        # optional coverage.json when discovery metadata was generated.
+        files = [name for name in CONTROL_FILES if (directory / name).is_file()]
+        files.extend(part["path"] for part in manifest["shards"])
+        for relative in files:
+            body = read_bytes_bounded(directory / relative,
+                                      CONTROL_FILES.get(relative, coverage.MAX_SHARD_BYTES))
+            blob_sha = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
+            require(old_entries.get(PREFIX + relative) == blob_sha,
+                    "identical report publication file differs")
+        return head
     entries = {}
     # Keep every supported v1/v2 control and content-addressed shard byte exact.
     # Older clients can continue using the last complete legacy publication.
@@ -211,7 +238,9 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                    "date": manifest["generated_at"]}})
     # Check again after uploading blobs, before the single pointer update.
     main = github.request("GET", "git/ref/heads/main")
-    require(main is not None and main["object"]["sha"] == source_commit, "main changed during coverage publication")
+    require(main is not None, "main ref is unavailable during coverage publication")
+    if main["object"]["sha"] != source_commit:
+        raise SupersededCoverage("main changed during coverage publication")
     if head:
         github.request("PATCH", f"git/refs/heads/{BRANCH}", {"sha": commit["sha"], "force": False})
     else:
@@ -238,6 +267,9 @@ def main():
             token = os.environ.get("GITHUB_TOKEN", "")
             require(bool(token), "publication token is missing")
             print(publish(GitHub(token), args.report_dir, args.source_commit))
+        return 0
+    except SupersededCoverage as error:
+        print(f"SkillSpector coverage superseded: {error}; previous publication retained", file=sys.stderr)
         return 0
     except (PublicationError, OSError, ValueError, KeyError, TypeError, RecursionError, urllib.error.URLError) as error:
         print(f"SkillSpector coverage publication failed: {error}", file=sys.stderr)

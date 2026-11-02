@@ -114,11 +114,25 @@ def create_filtered_tree(github, files, *, known_trees=None):
             created = github.request("POST", "git/trees", payload)
             require(isinstance(created, dict) and created.get("sha") == expected_prefix,
                     "uploaded publication tree identity differs")
-            # A create response can truncate its tree listing even for a bounded
-            # write. Read the resulting immediate children explicitly before
-            # accepting this object as the next verified prefix.
-            verified = github.request("GET", f"git/trees/{expected_prefix}")
-            require(isinstance(verified, dict) and verified.get("sha") == expected_prefix,
+            # Cross-backend read-after-write consistency is not guaranteed.
+            # Retry a missing object or a *well-formed* different tree identity;
+            # never accept one. Malformed responses and mismatched entries stay
+            # hard failures. No unverified tree can become a prefix/base.
+            verified = None
+            for visibility_attempt in range(5):
+                verified = github.request("GET", f"git/trees/{expected_prefix}")
+                if verified is not None:
+                    require(isinstance(verified, dict) and
+                            isinstance(verified.get("sha"), str) and
+                            SHA.fullmatch(verified["sha"]) is not None,
+                            "uploaded publication tree verification identity differs")
+                    if verified["sha"] == expected_prefix:
+                        break
+                if visibility_attempt < 4:
+                    time.sleep(2 ** visibility_attempt)
+            require(verified is not None,
+                    "uploaded publication tree is not visible after bounded verification retries")
+            require(verified["sha"] == expected_prefix,
                     "uploaded publication tree verification identity differs")
             require(verified.get("truncated") is False,
                     "uploaded publication tree verification is incomplete or truncated")
