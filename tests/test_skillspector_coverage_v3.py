@@ -707,6 +707,23 @@ class PublicationTests(unittest.TestCase):
             commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
             self.assertEqual(len(github.store.flatten(commit["tree"])), 131)
 
+    def test_identical_report_retry_reuses_published_ref_without_writing(self):
+        source = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            report = bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            github = mock.Mock()
+            published_head = "a" * 40
+            github.request.side_effect = [
+                {"object": {"sha": COMMIT}},
+                {"object": {"sha": published_head}},
+            ]
+            result = publisher.publish(github, root, COMMIT,
+                fetch=lambda *_args, **_kwargs: publisher.canonical_json(report["manifest"]))
+            self.assertEqual(result, published_head)
+            self.assertEqual(github.request.call_count, 2)
+            self.assertEqual([call.args[0] for call in github.request.call_args_list], ["GET", "GET"])
+
     def test_atomic_publisher_preserves_legacy_bytes_and_refuses_obsolete_main(self):
         from tests.test_skillspector_publication_transport import FakeGitHub
         source = item()
