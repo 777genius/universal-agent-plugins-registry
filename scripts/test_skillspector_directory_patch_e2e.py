@@ -62,6 +62,38 @@ def main() -> None:
         assert report["metadata"]["skillspector_version"] == "2.13.1"
         print("Verified pinned scanner CLI evidence and incomplete scan: directory vs missing")
 
+    if len(sys.argv) >= 4:
+        # Re-run the unchanged pinned public daisyUI source and the immutable
+        # Cloudflare community bridge, rather than relying on synthetic paths.
+        daisy, cloudflare = (Path(value).resolve() for value in sys.argv[2:4])
+        for label, source in (("daisyui", daisy), ("cloudflare", cloudflare)):
+            with tempfile.TemporaryDirectory(prefix="uap-real-reference-") as temp_home:
+                process = subprocess.run(
+                    [str(scanner), "scan", str(source), "--no-llm", "--format", "json",
+                     "--fail-on-incomplete"],
+                    cwd=temp_home,
+                    env={**env, "HOME": temp_home, "SKILLSPECTOR_MAX_WORKFLOW_SECONDS": "80"},
+                    capture_output=True, timeout=150, check=False,
+                )
+                assert process.stdout, (
+                    label, process.returncode, process.stderr.decode(errors="replace")[-600:]
+                )
+                report = json.loads(process.stdout)
+                refs = report["analysis_completeness"]["references"]
+                if label == "daisyui":
+                    relevant = [r for r in refs if r["reference_kind"] == "markdown_link"
+                                and "./components/" in r["evidence"]]
+                    assert any(r["status"] == "uninspected" and
+                               r["target_path"] == "components" and
+                               str(r["disposition"]) == "partial" for r in relevant), relevant
+                    assert report["analysis_completeness"]["is_complete"] is False
+                else:
+                    missing_runtime = [r for r in refs
+                        if "node_modules/wrangler/config-schema.json" in r["evidence"]]
+                    assert any(r["status"] == "missing" and r["target_path"] is None
+                               for r in missing_runtime), missing_runtime
+                print(f"Verified real {label} source with pinned scanner")
+
 
 if __name__ == "__main__":
     main()
