@@ -131,7 +131,8 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
             "controlled regression reports are artifacts and cannot replace catalog publication")
     manifest = bundle["manifest"]
     main = github.request("GET", "git/ref/heads/main")
-    if main is None or main["object"]["sha"] != source_commit:
+    require(main is not None, "main ref is unavailable during coverage publication")
+    if main["object"]["sha"] != source_commit:
         raise SupersededCoverage("refusing coverage from obsolete main")
     ref = github.request("GET", f"git/ref/heads/{BRANCH}")
     head = ref["object"]["sha"] if ref else None
@@ -233,7 +234,8 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                    "date": manifest["generated_at"]}})
     # Check again after uploading blobs, before the single pointer update.
     main = github.request("GET", "git/ref/heads/main")
-    if main is None or main["object"]["sha"] != source_commit:
+    require(main is not None, "main ref is unavailable during coverage publication")
+    if main["object"]["sha"] != source_commit:
         raise SupersededCoverage("main changed during coverage publication")
     if head:
         github.request("PATCH", f"git/refs/heads/{BRANCH}", {"sha": commit["sha"], "force": False})
