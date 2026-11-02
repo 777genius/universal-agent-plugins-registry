@@ -144,10 +144,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("scanner", type=Path)
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--check-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.check_only:
+        verify_resolver(args.scanner)
+        return
     apply_patch(args.scanner)
     if args.verify:
-        verify_resolver(args.scanner)
+        # The scanner package is installed into its locked venv, not the
+        # setup-python interpreter. Import from that interpreter so package
+        # metadata and runtime dependencies resolve exactly as in production.
+        interpreter = args.scanner / ".venv" / "bin" / "python"
+        subprocess.run(
+            [str(interpreter), str(Path(__file__).resolve()), str(args.scanner), "--check-only"],
+            check=True,
+        )
 
 
 if __name__ == "__main__":
