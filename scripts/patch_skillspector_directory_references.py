@@ -82,7 +82,7 @@ def apply_patch(scanner: Path) -> None:
     for relative, (before, after) in PATCHES.items():
         path = scanner / relative
         actual_blob = subprocess.check_output(
-            ["git", "-C", str(scanner), "hash-object", str(path)], text=True
+            ["git", "-C", str(scanner), "hash-object", relative], text=True
         ).strip()
         if actual_blob != ORIGINAL_BLOBS[relative]:
             raise RuntimeError(f"Scanner source bytes differ for {relative}: {actual_blob}")

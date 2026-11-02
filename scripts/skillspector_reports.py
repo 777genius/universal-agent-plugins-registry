@@ -58,6 +58,7 @@ PROFILE = {"id": PROFILE_DOCUMENT["id"], "digest": sha256_digest(canonical_json(
 # deadlines must expire first so an incomplete report can still be returned.
 STANDARD_PROFILE_DOCUMENT = PROFILE_DOCUMENT | {
     "id": "static-standard-v3", "normalization_version": 3,
+    "reference_inventory_patch": "uap-directory-inventory-v1",
     "static_artifact_seconds": 30, "cache_max_age_seconds": None,
     "exception_set_digest": EXCEPTION_SET_DIGEST,
 }
@@ -297,10 +298,10 @@ def reference_evidence(record: dict, completeness: dict, root: Path, *, reason_k
                     require(type(value[field]) is int and 1 <= value[field] < 2**53,
                             "SkillSpector reference position is invalid")
                 require(isinstance(value["evidence"], str) and all(isinstance(value[field], str) for field in
-                        ("status", "disposition", "reference_kind")) and value["status"] in {"resolved", "missing", "ambiguous", "rejected"}
+                        ("status", "disposition", "reference_kind")) and value["status"] in {"resolved", "missing", "ambiguous", "rejected", "uninspected"}
                         and value["disposition"] in {"analyzed", "partial", "failed", "out_of_scope"}
                         and value["reference_kind"] in REFERENCE_KINDS, "SkillSpector reference state is invalid")
-                require((value["target_path"] is not None) == (value["status"] == "resolved"),
+                require((value["target_path"] is not None) == (value["status"] in {"resolved", "uninspected"}),
                         "SkillSpector reference target differs from resolution")
                 if value["target_path"] is not None:
                     value["target_path"] = report_path(raw["target_path"], root)
@@ -310,6 +311,12 @@ def reference_evidence(record: dict, completeness: dict, root: Path, *, reason_k
                 if value["status"] in REFERENCE_MESSAGES:
                     code = "reference_missing" if value["status"] == "missing" else "reference_unresolved"
                     add_coverage_reason(record, code, REFERENCE_MESSAGES[value["status"]],
+                        path=value["source_path"], seen=reason_keys)
+                    coverage["status"] = "partial"
+                elif value["status"] == "uninspected":
+                    require(value["disposition"] == "partial", "Uninspected directory must stay partial")
+                    add_coverage_reason(record, "referenced_uninspected",
+                        "A linked directory has acquired files, but directory-wide contents and behavior were not fully inspected.",
                         path=value["source_path"], seen=reason_keys)
                     coverage["status"] = "partial"
                 elif value["status"] == "resolved" and value["disposition"] != "analyzed":

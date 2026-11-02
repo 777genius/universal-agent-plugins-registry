@@ -107,6 +107,9 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         self.assertEqual(checkout['with']['persist-credentials'], 'false')
         install = next(s['run'] for s in scan['steps'] if 'uv sync' in s.get('run',''))
         self.assertIn('uv sync --directory scanner --frozen --no-dev --python 3.12', install)
+        patch = next(s for s in scan['steps'] if 'patch_skillspector_directory_references.py' in s.get('run', ''))
+        self.assertIn('scanner --verify', patch['run'])
+        self.assertEqual(scanner.STANDARD_PROFILE_DOCUMENT['reference_inventory_patch'], 'uap-directory-inventory-v1')
         for name, job in self.workflow['jobs'].items():
             for step in job['steps']:
                 if step.get('uses','').startswith('actions/checkout@'):
