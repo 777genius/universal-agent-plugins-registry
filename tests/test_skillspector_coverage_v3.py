@@ -66,6 +66,48 @@ class QueueTests(unittest.TestCase):
         coverage.validate_discovery_summary(summary, selection, COMMIT)
         return summary
 
+    def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
+        source = item()
+        selection = {"schema_version": 1, "sources": [source]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = bundle(root, selection, [record(source)])
+            manifest = copy.deepcopy(prior["manifest"])
+
+            def budget_manifest(shard_count):
+                # Model the real production failure (248.9 MiB already stored
+                # before eight more partitions) without allocating 320+ MiB.
+                result = copy.deepcopy(manifest)
+                result["shards"] = [{
+                    "repository": source["repository"],
+                    "path": f"shards/{index:064x}.json",
+                    "digest": f"sha256:{index:064x}",
+                    "bytes": coverage.MAX_SHARD_BYTES,
+                    "record_count": 1,
+                } for index in range(shard_count)]
+                result["coverage"] = {"selected": shard_count, "reported": shard_count,
+                    "pending": 0, "complete": shard_count, "partial": 0,
+                    "error": 0, "stale": 0}
+                return result
+
+            allowed = budget_manifest(40)  # 320 MiB > v2's 256 MiB ceiling.
+            self.assertGreater(sum(part["bytes"] for part in allowed["shards"]),
+                               coverage.v2.MAX_TOTAL_SHARD_BYTES)
+            self.assertLess(sum(part["bytes"] for part in allowed["shards"]),
+                            coverage.MAX_TOTAL_SHARD_BYTES)
+            coverage.validate_manifest(allowed, current_policy=True)
+
+            # Aggregate headroom never bypasses immutable shard verification:
+            # metadata alone cannot promote an absent/fabricated report.
+            (root / "index.json").write_bytes(coverage.report_json(allowed))
+            with self.assertRaises(PublicationError):
+                publisher.validate_directory(root, COMMIT)
+
+            oversized = budget_manifest(65)  # 520 MiB > v3's 512 MiB ceiling.
+            with self.assertRaisesRegex(PublicationError,
+                                        "total report budget exceeded: 545259520 > 536870912 bytes"):
+                coverage.validate_manifest(oversized, current_policy=True)
+
     def test_uninspected_directory_survives_shard_assembly_and_publication_validation(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
