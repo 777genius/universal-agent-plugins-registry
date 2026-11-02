@@ -71,8 +71,23 @@ class QueueTests(unittest.TestCase):
         selection = {"schema_version": 1, "sources": [source]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            prior = bundle(root, selection, [record(source)])
+            source_record = record(source)
+            prior = bundle(root, selection, [source_record])
             manifest = copy.deepcopy(prior["manifest"])
+
+            # Run actual merge -> shard files -> publication validation with a
+            # scaled-down old/new aggregate ceiling. This covers real assembly
+            # beyond the old limit without allocating 320 MiB in every CI run.
+            existing_bytes = sum(part["bytes"] for part in manifest["shards"])
+            with mock.patch.object(coverage.v2, "MAX_TOTAL_SHARD_BYTES", existing_bytes - 1), \
+                 mock.patch.object(coverage, "MAX_TOTAL_SHARD_BYTES", existing_bytes + (64 << 10)):
+                real_dir = root / "real-assembly"
+                merged = coverage.merge_reports(selection, None, [worker(selection, [source_record])],
+                    source_commit=COMMIT, output_dir=real_dir)
+                real_bytes = sum(part["bytes"] for part in merged["shards"])
+                self.assertGreater(real_bytes, coverage.v2.MAX_TOTAL_SHARD_BYTES)
+                self.assertLessEqual(real_bytes, coverage.MAX_TOTAL_SHARD_BYTES)
+                self.assertEqual(publisher.validate_directory(real_dir, COMMIT)["manifest"], merged)
 
             def budget_manifest(shard_count):
                 # Model the real production failure (248.9 MiB already stored
