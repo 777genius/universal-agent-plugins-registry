@@ -218,6 +218,20 @@ class V3NormalizationTests(unittest.TestCase):
         with self.assertRaises(PublicationError):
             self.normalize(invalid)
 
+
+    def test_shard_record_schema_matches_standalone_record_schema(self):
+        # The shard embeds an entire copy of the record schema. A producer
+        # change must update both contracts or publication may reject a report
+        # that the individual-record tests accepted.
+        individual = json.loads((reports.ROOT / 'schemas/skillspector-record-v3.schema.json').read_text())
+        shard = json.loads((reports.ROOT / 'schemas/skillspector-shard-v3.schema.json').read_text())
+        embedded = shard['$defs']['record']
+        fields = ('type', 'additionalProperties', 'required', 'properties', 'allOf')
+        self.assertEqual({key: individual[key] for key in fields},
+                         {key: embedded[key] for key in fields})
+        statuses = embedded['properties']['coverage']['properties']['references']['items']['properties']['status']['enum']
+        self.assertIn('uninspected', statuses)
+
     def test_missing_reference_context_and_distinct_positions_remain_coverage(self):
         raw = upstream_report()
         # Measured ASC authoring instructions and two caller-project Vite

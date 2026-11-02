@@ -66,6 +66,44 @@ class QueueTests(unittest.TestCase):
         coverage.validate_discovery_summary(summary, selection, COMMIT)
         return summary
 
+    def test_uninspected_directory_survives_shard_assembly_and_publication_validation(self):
+        source = item()
+        selection = {"schema_version": 1, "sources": [source]}
+        raw = upstream_report()
+        raw['analysis_completeness'].update(
+            is_complete=False, status='partial',
+            references=[{
+                "source_path": "SKILL.md", "line": 5, "column": 8,
+                "evidence": "[docs](./docs/)", "target_path": "docs",
+                "status": "uninspected", "disposition": "partial",
+                "reference_kind": "markdown_link",
+            }],
+            ledger_exceptions=[{
+                "reason_code": "referenced_uninspected",
+                "message": "A referenced directory was not fully inspected.",
+                "outcome": "partial", "phase": "reference_resolution",
+                "path": "SKILL.md", "start_line": 5, "end_line": 5,
+            }],
+        )
+        result = scanner.empty_record_v3(source)
+        result['source']['content_digest'] = 'sha256:' + 'a' * 64
+        result['scanned_at'] = scanner.now()
+        result = scanner.normalize_report_v3(result, json.dumps(raw).encode(), 1, Path('/source'))
+        self.assertEqual(result['status'], 'partial')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assembled = bundle(root, selection, [result])
+            # The actual publication gate validates the full shard, not just
+            # the record schema; this caught the production assemble failure.
+            publisher.validate_directory(root, COMMIT)
+            self.assertEqual(assembled['manifest']['coverage']['partial'], 1)
+            self.assertEqual(assembled['manifest']['coverage']['complete'], 0)
+            path = assembled['manifest']['shards'][0]['path']
+            shard = json.loads((root / path).read_text())
+            ref = shard['records'][0]['coverage']['references'][0]
+            self.assertEqual((ref['status'], ref['target_path'], ref['disposition']),
+                             ('uninspected', 'docs', 'partial'))
+
     def test_verified_rename_keeps_exact_original_source_as_historical_until_rescan(self):
         old = item(id="old/repo/demo", repository="old/repo")
         new = item(id="canonical/renamed/demo", repository="canonical/renamed", revision="d" * 40)
