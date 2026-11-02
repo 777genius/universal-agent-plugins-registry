@@ -37,6 +37,10 @@ def main() -> None:
              "--fail-on-incomplete"],
             cwd=home, env=env, capture_output=True, timeout=110, check=False,
         )
+        assert completed.returncode == 1, (
+            f"Expected --fail-on-incomplete exit 1; got {completed.returncode}: "
+            f"{completed.stderr.decode(errors='replace')[-800:]}"
+        )
         if not completed.stdout:
             raise AssertionError(
                 f"No scanner JSON. exit={completed.returncode}, "
