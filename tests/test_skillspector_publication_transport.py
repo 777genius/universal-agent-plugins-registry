@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import urllib.error
 from contextlib import redirect_stderr
+from unittest import mock
 from pathlib import Path
 
 from scripts import skillspector_publication_transport as transport
@@ -123,6 +124,43 @@ class TreeTests(unittest.TestCase):
             result = transport.create_filtered_tree(github, {"file": "a" * 40})
             self.assertEqual(github.store.flatten(result["sha"]), {"file": "a" * 40})
             self.assertEqual([method for method, _, _ in github.calls], ["POST", "GET"])
+
+    def test_newly_uploaded_tree_can_be_temporarily_invisible_on_get(self):
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git")
+            original = github.request
+            lookups = []
+            def request(method, path, data=None):
+                if method == "GET" and path.startswith("git/trees/"):
+                    lookups.append(path)
+                    if len(lookups) <= 2:
+                        return None  # GitHub returns HTTP 404 during object propagation.
+                return original(method, path, data)
+            github.request = request
+            with mock.patch.object(transport.time, "sleep") as pause:
+                result = transport.create_filtered_tree(github, {"file": "a" * 40})
+            self.assertEqual(github.store.flatten(result["sha"]), {"file": "a" * 40})
+            self.assertEqual(len(lookups), 3)
+            self.assertEqual([call.args for call in pause.call_args_list], [(1,), (2,)])
+
+    def test_permanently_unreadable_tree_never_publishes_unverified_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            github = FakeGitHub(Path(directory) / "git")
+            original = github.request
+            lookups = []
+            def request(method, path, data=None):
+                if method == "GET" and path.startswith("git/trees/"):
+                    lookups.append(path)
+                    return None
+                return original(method, path, data)
+            github.request = request
+            with mock.patch.object(transport.time, "sleep") as pause:
+                with self.assertRaisesRegex(PublicationError, "not visible after bounded verification retries"):
+                    transport.create_filtered_tree(github, {"file": "a" * 40})
+            self.assertEqual(len(lookups), 5)
+            self.assertEqual([call.args for call in pause.call_args_list], [(1,), (2,), (4,), (8,)])
+            self.assertFalse(any(path in {"git/commits", "git/refs"} or path.startswith("git/refs/")
+                                 for _, path, _ in github.calls))
 
     def test_exact_real_1297_file_artifact_preserves_all_673_legacy_files(self):
         fixture = json.loads(FIXTURE.read_text())
