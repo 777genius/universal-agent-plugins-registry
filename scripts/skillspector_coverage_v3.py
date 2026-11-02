@@ -39,7 +39,7 @@ RESOURCE_REASONS = frozenset({"scan_timeout", "runtime_limit", "archive_time_lim
     "input_limit_exceeded", "acquisition_transfer_limit", "total_bytes_limit", "artifact_count_limit", "output_limit", "normalization_truncated"})
 TRANSIENT_REASONS = frozenset({"acquisition_failed", "preparation_timeout", "network_error", "network_timeout",
     "osv_request_failed", "osv_timeout"})
-PERMANENT_REASONS = frozenset({"static_parse_limit", "reference_missing", "reference_unresolved",
+PERMANENT_REASONS = frozenset({"static_parse_limit", "reference_missing", "reference_unresolved", "referenced_uninspected",
     "unsupported_content", "reference_extraction_limit", "opaque_content", "obfuscated_instruction_text",
     "excluded_executable_content", "source_invalid"})
 read_json = scanner.read_report_json
