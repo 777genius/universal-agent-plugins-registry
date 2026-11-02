@@ -41,6 +41,7 @@ def main() -> None:
             f"Expected --fail-on-incomplete exit 1; got {completed.returncode}: "
             f"{completed.stderr.decode(errors='replace')[-800:]}"
         )
+        assert completed.returncode == 1, (completed.returncode, completed.stderr[-1000:])
         if not completed.stdout:
             raise AssertionError(
                 f"No scanner JSON. exit={completed.returncode}, "
@@ -78,6 +79,9 @@ def main() -> None:
                     cwd=temp_home,
                     env={**env, "HOME": temp_home, "SKILLSPECTOR_MAX_WORKFLOW_SECONDS": "80"},
                     capture_output=True, timeout=150, check=False,
+                )
+                assert process.returncode == 1, (
+                    label, process.returncode, process.stderr.decode(errors="replace")[-600:]
                 )
                 assert process.stdout, (
                     label, process.returncode, process.stderr.decode(errors="replace")[-600:]
