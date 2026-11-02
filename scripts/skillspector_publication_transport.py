@@ -114,10 +114,20 @@ def create_filtered_tree(github, files, *, known_trees=None):
             created = github.request("POST", "git/trees", payload)
             require(isinstance(created, dict) and created.get("sha") == expected_prefix,
                     "uploaded publication tree identity differs")
-            # A create response can truncate its tree listing even for a bounded
-            # write. Read the resulting immediate children explicitly before
-            # accepting this object as the next verified prefix.
-            verified = github.request("GET", f"git/trees/{expected_prefix}")
+            # A successful Git tree write may not be immediately visible to a
+            # subsequent GET on another GitHub backend. Retry only 404 / missing
+            # immutable objects; do not retry a mismatched identity or entries.
+            # This keeps verification fail-closed without making a healthy
+            # scheduled publication fail on short-lived read-after-write lag.
+            verified = None
+            for visibility_attempt in range(5):
+                verified = github.request("GET", f"git/trees/{expected_prefix}")
+                if verified is not None:
+                    break
+                if visibility_attempt < 4:
+                    time.sleep(2 ** visibility_attempt)
+            require(verified is not None,
+                    "uploaded publication tree is not visible after bounded verification retries")
             require(isinstance(verified, dict) and verified.get("sha") == expected_prefix,
                     "uploaded publication tree verification identity differs")
             require(verified.get("truncated") is False,
