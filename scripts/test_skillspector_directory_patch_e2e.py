@@ -21,7 +21,8 @@ def main() -> None:
         skill = root / "SKILL.md"
         skill.write_text(
             "---\nname: directory-proof\ndescription: Inspect local references carefully.\n---\n"
-            "Read [the linked folder](./docs/) and [the missing folder](./absent/).\n",
+            "Read [the linked folder](./docs/).\n"
+            "Read [the missing folder](./absent/).\n",
             encoding="utf-8",
         )
         before = skill.read_bytes()
