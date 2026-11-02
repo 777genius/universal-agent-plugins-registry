@@ -734,6 +734,22 @@ class PublicationTests(unittest.TestCase):
                     self.assertEqual(github.request.call_count, 3)
                     self.assertEqual([call.args[0] for call in github.request.call_args_list], ["GET"] * 3)
 
+    def test_equal_timestamp_with_different_manifest_fails_closed(self):
+        source = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "reports"
+            report = bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            prior = copy.deepcopy(report["manifest"])
+            prior["source_commit"] = "f" * 40
+            github = mock.Mock()
+            github.request.side_effect = [
+                {"object": {"sha": COMMIT}}, {"object": {"sha": "a" * 40}},
+            ]
+            with self.assertRaisesRegex(PublicationError, "conflicting report with identical timestamp"):
+                publisher.publish(github, root, COMMIT,
+                    fetch=lambda *_args, **_kwargs: publisher.canonical_json(prior))
+            self.assertEqual(github.request.call_count, 2)
+
     def test_atomic_publisher_preserves_legacy_bytes_and_refuses_obsolete_main(self):
         from tests.test_skillspector_publication_transport import FakeGitHub
         source = item()
