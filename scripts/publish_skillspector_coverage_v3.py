@@ -34,6 +34,10 @@ CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "coverage.json": coverage.MAX_DISCOVERY_BYTES}
 
 
+class SupersededCoverage(PublicationError):
+    """A completed scan for an older main is safely skipped, not a failed publication."""
+
+
 read_json = scanner.read_report_json
 
 
@@ -127,7 +131,8 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
             "controlled regression reports are artifacts and cannot replace catalog publication")
     manifest = bundle["manifest"]
     main = github.request("GET", "git/ref/heads/main")
-    require(main is not None and main["object"]["sha"] == source_commit, "refusing coverage from obsolete main")
+    if main is None or main["object"]["sha"] != source_commit:
+        raise SupersededCoverage("refusing coverage from obsolete main")
     ref = github.request("GET", f"git/ref/heads/{BRANCH}")
     head = ref["object"]["sha"] if ref else None
     require(head is None or coverage.SHA.fullmatch(head) is not None, "invalid report branch head")
@@ -211,7 +216,8 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                    "date": manifest["generated_at"]}})
     # Check again after uploading blobs, before the single pointer update.
     main = github.request("GET", "git/ref/heads/main")
-    require(main is not None and main["object"]["sha"] == source_commit, "main changed during coverage publication")
+    if main is None or main["object"]["sha"] != source_commit:
+        raise SupersededCoverage("main changed during coverage publication")
     if head:
         github.request("PATCH", f"git/refs/heads/{BRANCH}", {"sha": commit["sha"], "force": False})
     else:
@@ -238,6 +244,9 @@ def main():
             token = os.environ.get("GITHUB_TOKEN", "")
             require(bool(token), "publication token is missing")
             print(publish(GitHub(token), args.report_dir, args.source_commit))
+        return 0
+    except SupersededCoverage as error:
+        print(f"SkillSpector coverage superseded: {error}; previous publication retained", file=sys.stderr)
         return 0
     except (PublicationError, OSError, ValueError, KeyError, TypeError, RecursionError, urllib.error.URLError) as error:
         print(f"SkillSpector coverage publication failed: {error}", file=sys.stderr)
