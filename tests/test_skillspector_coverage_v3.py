@@ -707,22 +707,32 @@ class PublicationTests(unittest.TestCase):
             commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
             self.assertEqual(len(github.store.flatten(commit["tree"])), 131)
 
-    def test_identical_report_retry_reuses_published_ref_without_writing(self):
+    def test_identical_report_retry_checks_immutable_tree_without_writing(self):
         source = item()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "reports"
             report = bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
-            github = mock.Mock()
             published_head = "a" * 40
-            github.request.side_effect = [
-                {"object": {"sha": COMMIT}},
-                {"object": {"sha": published_head}},
-            ]
-            result = publisher.publish(github, root, COMMIT,
-                fetch=lambda *_args, **_kwargs: publisher.canonical_json(report["manifest"]))
-            self.assertEqual(result, published_head)
-            self.assertEqual(github.request.call_count, 2)
-            self.assertEqual([call.args[0] for call in github.request.call_args_list], ["GET", "GET"])
+            paths = {publisher.PREFIX + relative for relative in ("index.json", "selection.json", "attempts.json")}
+            paths.update(publisher.PREFIX + part["path"] for part in report["manifest"]["shards"])
+            for omitted in (None, publisher.PREFIX + "index.json"):
+                with self.subTest(omitted=omitted):
+                    github = mock.Mock()
+                    github.request.side_effect = [
+                        {"object": {"sha": COMMIT}},
+                        {"object": {"sha": published_head}},
+                        {"truncated": False, "tree": [
+                            {"path": path, "mode": "100644", "type": "blob", "sha": "d" * 40}
+                            for path in sorted(paths - ({omitted} if omitted else set()))]},
+                    ]
+                    fetch = lambda *_args, **_kwargs: publisher.canonical_json(report["manifest"])
+                    if omitted:
+                        with self.assertRaisesRegex(PublicationError, "missing required files"):
+                            publisher.publish(github, root, COMMIT, fetch=fetch)
+                    else:
+                        self.assertEqual(publisher.publish(github, root, COMMIT, fetch=fetch), published_head)
+                    self.assertEqual(github.request.call_count, 3)
+                    self.assertEqual([call.args[0] for call in github.request.call_args_list], ["GET"] * 3)
 
     def test_atomic_publisher_preserves_legacy_bytes_and_refuses_obsolete_main(self):
         from tests.test_skillspector_publication_transport import FakeGitHub
