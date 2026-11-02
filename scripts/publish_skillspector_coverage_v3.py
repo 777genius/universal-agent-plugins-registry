@@ -137,6 +137,7 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
     head = ref["object"]["sha"] if ref else None
     require(head is None or coverage.SHA.fullmatch(head) is not None, "invalid report branch head")
     prior_manifest, old_entries, old_trees = None, {}, {}
+    duplicate_publication = False
     if head:
         prior_body = fetch(head, "index.json", coverage.MAX_MANIFEST_BYTES, optional=True)
         if prior_body is not None:
@@ -148,7 +149,7 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                 # A re-run of an already published artifact is idempotent.
                 # Identical timestamps with different contents remain an error.
                 require(manifest == prior_manifest, "conflicting report with identical timestamp")
-                return head
+                duplicate_publication = True
             if current_at < previous_at:
                 raise SupersededCoverage("newer coverage is already published")
         tree = github.request("GET", f"git/trees/{head}?recursive=1")
@@ -159,6 +160,15 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                 old_entries[item["path"]] = item["sha"]
             elif item["type"] == "tree":
                 old_trees[item["path"]] = item["sha"]
+    if duplicate_publication:
+        # Matching metadata alone is not evidence that the previously published
+        # tree still includes all referenced files. Check the immutable tree
+        # before treating an identical re-run as successfully complete.
+        required = {"index.json", "selection.json", "attempts.json"}
+        required.update(part["path"] for part in manifest["shards"])
+        require(all(PREFIX + relative in old_entries for relative in required),
+                "identical report publication is missing required files")
+        return head
     entries = {}
     # Keep every supported v1/v2 control and content-addressed shard byte exact.
     # Older clients can continue using the last complete legacy publication.
