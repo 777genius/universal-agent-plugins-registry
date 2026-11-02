@@ -142,8 +142,15 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
         if prior_body is not None:
             prior_manifest = parse_report(prior_body, "previous manifest", max_bytes=coverage.MAX_MANIFEST_BYTES)
             coverage.validate_manifest(prior_manifest)
-            require(parse_timestamp(manifest["generated_at"], "generated_at") >
-                    parse_timestamp(prior_manifest["generated_at"], "previous generated_at"), "refusing stale coverage")
+            current_at = parse_timestamp(manifest["generated_at"], "generated_at")
+            previous_at = parse_timestamp(prior_manifest["generated_at"], "previous generated_at")
+            if current_at == previous_at:
+                # A re-run of an already published artifact is idempotent.
+                # Identical timestamps with different contents remain an error.
+                require(manifest == prior_manifest, "conflicting report with identical timestamp")
+                return head
+            if current_at < previous_at:
+                raise SupersededCoverage("newer coverage is already published")
         tree = github.request("GET", f"git/trees/{head}?recursive=1")
         require(tree is not None and tree.get("truncated") is False, "report tree is unavailable or truncated")
         for item in tree["tree"]:
