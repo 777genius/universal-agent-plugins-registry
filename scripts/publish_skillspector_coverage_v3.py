@@ -162,13 +162,17 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
             elif item["type"] == "tree":
                 old_trees[item["path"]] = item["sha"]
     if duplicate_publication:
-        # Matching metadata alone is not evidence that the previously published
-        # tree still includes all referenced files. Check the immutable tree
-        # before treating an identical re-run as successfully complete.
-        required = {"index.json", "selection.json", "attempts.json"}
-        required.update(part["path"] for part in manifest["shards"])
-        require(all(PREFIX + relative in old_entries for relative in required),
-                "identical report publication is missing required files")
+        # Matching metadata is insufficient: the existing immutable tree must
+        # contain the exact bytes of every validated local artifact, including
+        # optional coverage.json when discovery metadata was generated.
+        files = [name for name in CONTROL_FILES if (directory / name).is_file()]
+        files.extend(part["path"] for part in manifest["shards"])
+        for relative in files:
+            body = read_bytes_bounded(directory / relative,
+                                      CONTROL_FILES.get(relative, coverage.MAX_SHARD_BYTES))
+            blob_sha = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
+            require(old_entries.get(PREFIX + relative) == blob_sha,
+                    "identical report publication file differs")
         return head
     entries = {}
     # Keep every supported v1/v2 control and content-addressed shard byte exact.
