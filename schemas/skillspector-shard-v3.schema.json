@@ -734,7 +734,8 @@
                       "resolved",
                       "missing",
                       "ambiguous",
-                      "rejected"
+                      "rejected",
+                      "uninspected"
                     ]
                   },
                   "disposition": {
