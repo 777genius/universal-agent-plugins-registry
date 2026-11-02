@@ -237,7 +237,9 @@ class TreeTests(unittest.TestCase):
         def missing_tree(value):
             del value["tree"]
             return value
-        changes = [lambda _value: [], lambda _value: "unexpected", lambda _value: None,
+        # A 404/missing tree is covered by the bounded visibility retry tests;
+        # malformed *present* verification responses must fail immediately.
+        changes = [lambda _value: [], lambda _value: "unexpected",
                    missing_tree, lambda value: {**value, "tree": {}},
                    lambda value: {**value, "tree": [None]},
                    lambda value: {**value, "tree": [{}]},
