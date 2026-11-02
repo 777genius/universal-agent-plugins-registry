@@ -725,7 +725,7 @@ class PublicationTests(unittest.TestCase):
                 files = {publisher.PREFIX + path.relative_to(root).as_posix(): path.read_bytes()
                          for path in root.rglob("*") if path.is_file()}
                 identities = {path: publisher.hashlib.sha1(
-                    b"blob " + str(len(body)).encode() + b"\\0" + body).hexdigest()
+                    b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
                     for path, body in files.items()}
                 shard_path = publisher.PREFIX + report["manifest"]["shards"][0]["path"]
                 defects = [None, ("missing", publisher.PREFIX + "index.json"),
