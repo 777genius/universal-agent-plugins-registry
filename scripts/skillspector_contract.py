@@ -121,11 +121,13 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     "truncated reference evidence requires an explicit coverage limitation")
         for reference in coverage["references"]:
             contained_path(reference["source_path"])
-            require((reference["target_path"] is not None) == (reference["status"] == "resolved"),
+            require((reference["target_path"] is not None) == (reference["status"] in {"resolved", "uninspected"}),
                     "reference target differs from resolution")
             if reference["target_path"] is not None:
                 contained_path(reference["target_path"])
-            if reference["status"] in {"missing", "ambiguous"} or (
+            if reference["status"] == "uninspected":
+                require(reference["disposition"] == "partial", "Uninspected directory cannot be analyzed")
+            if reference["status"] in {"missing", "ambiguous", "uninspected"} or (
                     reference["status"] == "resolved" and reference["disposition"] != "analyzed"):
                 require(record["status"] != "complete" and coverage["status"] != "complete",
                         "uninspected reference cannot claim complete analysis")

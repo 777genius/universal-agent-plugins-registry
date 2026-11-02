@@ -192,6 +192,32 @@ class V3NormalizationTests(unittest.TestCase):
         self.assertTrue(output['coverage']['reasons'][0]['retryable'])
         self.assertEqual(output['coverage']['reasons'][0]['analyzer_id'],'static_patterns_prompt_injection')
 
+
+    def test_directory_link_keeps_status_partial_and_raw_context(self):
+        raw = upstream_report()
+        raw['analysis_completeness'].update(
+            is_complete=False, status='partial',
+            references=[reference(status='uninspected', target_path='docs', disposition='partial',
+                                  evidence='[guide](./docs/)')],
+            ledger_exceptions=[ledger_exception(
+                reason_code='referenced_uninspected',
+                message='Directory exists but is not fully analyzed.')])
+        output = self.normalize(raw)
+        self.assertEqual((output['status'], output['coverage']['status']), ('partial', 'partial'))
+        self.assertEqual(output['coverage']['references'][0]['target_path'], 'docs')
+        self.assertEqual(output['coverage']['references'][0]['status'], 'uninspected')
+        self.assertIn('referenced_uninspected', {r['code'] for r in output['coverage']['reasons']})
+        self.assertNotIn('reference_missing', {r['code'] for r in output['coverage']['reasons']})
+        contract.validate_record(output, item(), datetime.now(timezone.utc))
+        from scripts.skillspector_coverage_v3 import make_attempt
+        attempt = make_attempt(item(), output)
+        self.assertEqual(attempt['disposition'], 'blocked')
+
+        invalid = copy.deepcopy(raw)
+        invalid['analysis_completeness']['references'][0]['disposition'] = 'analyzed'
+        with self.assertRaises(PublicationError):
+            self.normalize(invalid)
+
     def test_missing_reference_context_and_distinct_positions_remain_coverage(self):
         raw = upstream_report()
         # Measured ASC authoring instructions and two caller-project Vite

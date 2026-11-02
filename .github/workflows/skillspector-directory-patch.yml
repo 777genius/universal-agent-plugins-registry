@@ -1,0 +1,53 @@
+name: SkillSpector pinned directory patch
+
+on:
+  pull_request:
+    paths:
+      - "scripts/patch_skillspector_directory_references.py"
+      - "scripts/test_skillspector_directory_patch_e2e.py"
+      - "scripts/skillspector_reports.py"
+      - "scripts/skillspector_coverage_v3.py"
+      - "scripts/skillspector_contract.py"
+      - "schemas/skillspector-record-v3.schema.json"
+      - ".github/workflows/skillspector-directory-patch.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-scanner-cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035 # v2.13.1
+          persist-credentials: false
+          path: scanner
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install locked scanner
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4 PyYAML==6.0.3
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+      - name: Apply and qualify exact pinned patch
+        run: python3 source/scripts/patch_skillspector_directory_references.py scanner --verify
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: saadeghi/daisyui
+          ref: bf3bac3a397b543e55641ecb2d60a2ed961f09ec
+          sparse-checkout: skills/daisyui
+          persist-credentials: false
+          path: daisyui
+      - name: Prove synthetic, real daisyUI and Cloudflare reference behavior
+        run: |
+          python3 source/scripts/test_skillspector_directory_patch_e2e.py \
+            scanner/.venv/bin/skillspector daisyui/skills/daisyui \
+            source/plugins/cloudflare/skills/cloudflare
