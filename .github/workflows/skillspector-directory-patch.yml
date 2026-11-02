@@ -39,5 +39,15 @@ jobs:
           uv sync --directory scanner --frozen --no-dev --python 3.12
       - name: Apply and qualify exact pinned patch
         run: python3 source/scripts/patch_skillspector_directory_references.py scanner --verify
-      - name: Check pinned real CLI report and incomplete coverage
-        run: python3 source/scripts/test_skillspector_directory_patch_e2e.py scanner/.venv/bin/skillspector
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: saadeghi/daisyui
+          ref: bf3bac3a397b543e55641ecb2d60a2ed961f09ec
+          sparse-checkout: skills/daisyui
+          persist-credentials: false
+          path: daisyui
+      - name: Prove synthetic, real daisyUI and Cloudflare reference behavior
+        run: |
+          python3 source/scripts/test_skillspector_directory_patch_e2e.py \
+            scanner/.venv/bin/skillspector daisyui/skills/daisyui \
+            source/plugins/cloudflare/skills/cloudflare
