@@ -707,32 +707,55 @@ class PublicationTests(unittest.TestCase):
             commit = next(data for method, path, data in github.calls if (method, path) == ("POST", "git/commits"))
             self.assertEqual(len(github.store.flatten(commit["tree"])), 131)
 
-    def test_identical_report_retry_checks_immutable_tree_without_writing(self):
+    def test_identical_report_retry_checks_every_published_blob_without_writing(self):
         source = item()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "reports"
-            report = bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
-            published_head = "a" * 40
-            paths = {publisher.PREFIX + relative for relative in ("index.json", "selection.json", "attempts.json")}
-            paths.update(publisher.PREFIX + part["path"] for part in report["manifest"]["shards"])
-            for omitted in (None, publisher.PREFIX + "index.json"):
-                with self.subTest(omitted=omitted):
-                    github = mock.Mock()
-                    github.request.side_effect = [
-                        {"object": {"sha": COMMIT}},
-                        {"object": {"sha": published_head}},
-                        {"truncated": False, "tree": [
-                            {"path": path, "mode": "100644", "type": "blob", "sha": "d" * 40}
-                            for path in sorted(paths - ({omitted} if omitted else set()))]},
-                    ]
-                    fetch = lambda *_args, **_kwargs: publisher.canonical_json(report["manifest"])
-                    if omitted:
-                        with self.assertRaisesRegex(PublicationError, "missing required files"):
-                            publisher.publish(github, root, COMMIT, fetch=fetch)
-                    else:
-                        self.assertEqual(publisher.publish(github, root, COMMIT, fetch=fetch), published_head)
-                    self.assertEqual(github.request.call_count, 3)
-                    self.assertEqual([call.args[0] for call in github.request.call_args_list], ["GET"] * 3)
+        selection = {"schema_version": 1, "sources": [source]}
+        for with_discovery in (False, True):
+            with self.subTest(with_discovery=with_discovery), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "reports"
+                if with_discovery:
+                    summary = QueueTests().discovery_summary(selection)
+                    coverage.merge_reports(selection, None, [worker(selection, [record(source)])],
+                        source_commit=COMMIT, output_dir=root, discovery_summary=summary)
+                    report = coverage.read_bundle(root)
+                    self.assertTrue((root / "coverage.json").is_file())
+                else:
+                    report = bundle(root, selection, [record(source)])
+                published_head = "a" * 40
+                files = {publisher.PREFIX + path.relative_to(root).as_posix(): path.read_bytes()
+                         for path in root.rglob("*") if path.is_file()}
+                identities = {path: publisher.hashlib.sha1(
+                    b"blob " + str(len(body)).encode() + b"\\0" + body).hexdigest()
+                    for path, body in files.items()}
+                shard_path = publisher.PREFIX + report["manifest"]["shards"][0]["path"]
+                defects = [None, ("missing", publisher.PREFIX + "index.json"),
+                           ("wrong_sha", shard_path)]
+                if with_discovery:
+                    defects.append(("missing", publisher.PREFIX + "coverage.json"))
+                for defect in defects:
+                    with self.subTest(defect=defect):
+                        entries = identities.copy()
+                        if defect and defect[0] == "missing":
+                            del entries[defect[1]]
+                        elif defect:
+                            entries[defect[1]] = "d" * 40
+                        github = mock.Mock()
+                        github.request.side_effect = [
+                            {"object": {"sha": COMMIT}},
+                            {"object": {"sha": published_head}},
+                            {"truncated": False, "tree": [
+                                {"path": path, "mode": "100644", "type": "blob", "sha": sha}
+                                for path, sha in sorted(entries.items())]},
+                        ]
+                        fetch = lambda *_args, **_kwargs: publisher.canonical_json(report["manifest"])
+                        if defect:
+                            with self.assertRaisesRegex(PublicationError, "identical report publication file differs"):
+                                publisher.publish(github, root, COMMIT, fetch=fetch)
+                        else:
+                            self.assertEqual(publisher.publish(github, root, COMMIT, fetch=fetch), published_head)
+                        self.assertEqual(github.request.call_count, 3)
+                        self.assertEqual([call.args[0] for call in github.request.call_args_list],
+                                         ["GET", "GET", "GET"])
 
     def test_unavailable_main_ref_still_fails_instead_of_masquerading_as_supersession(self):
         source = item()
