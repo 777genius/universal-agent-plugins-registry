@@ -32,7 +32,11 @@ MAX_SOURCES, MAX_PARTITIONS, MAX_ATTEMPTS = 20_000, v2.MAX_PARTITIONS, v2.MAX_AT
 MAX_MANIFEST_BYTES, MAX_STATE_BYTES = 16 << 20, 64 << 20
 MAX_SHARD_BYTES, MAX_SELECTION_BYTES = v2.MAX_SHARD_BYTES, v2.MAX_SELECTION_BYTES
 MAX_DISCOVERY_BYTES, MAX_WORKER_BYTES = v2.MAX_DISCOVERY_BYTES, v2.MAX_WORKER_BYTES
-MAX_TOTAL_SHARD_BYTES, MAX_SHARD_RECORDS = v2.MAX_TOTAL_SHARD_BYTES, v2.MAX_SHARD_RECORDS
+# V3 retains historical evidence while adding eight bounded scan partitions.
+# The v2 aggregate ceiling was already at ~249 MiB in production before the
+# next batch; keep an independent finite cap without weakening shard limits.
+MAX_TOTAL_SHARD_BYTES = 512 << 20
+MAX_SHARD_RECORDS = v2.MAX_SHARD_RECORDS
 SHA, SHARD_PATH = v2.SHA, v2.SHARD_PATH
 PREPARATION_SECONDS = 120
 RESOURCE_REASONS = frozenset({"scan_timeout", "runtime_limit", "archive_time_limit", "size_limit",
@@ -102,7 +106,9 @@ def validate_manifest(manifest, *, current_policy=False):
         require(match is not None and part["digest"] == "sha256:" + match[1] and part["path"] not in seen,
                 "invalid or repeated immutable shard")
         seen.add(part["path"])
-    require(sum(part["bytes"] for part in manifest["shards"]) <= MAX_TOTAL_SHARD_BYTES, "total report budget exceeded")
+    total_shard_bytes = sum(part["bytes"] for part in manifest["shards"])
+    require(total_shard_bytes <= MAX_TOTAL_SHARD_BYTES,
+            f"total report budget exceeded: {total_shard_bytes} > {MAX_TOTAL_SHARD_BYTES} bytes")
     plugins = set()
     for plugin in manifest["plugin_coverage"]:
         key = (plugin["repository"].lower(), plugin["plugin_path"])
