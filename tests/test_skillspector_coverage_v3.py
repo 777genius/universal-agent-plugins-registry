@@ -100,6 +100,10 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(assembled['manifest']['coverage']['complete'], 0)
             path = assembled['manifest']['shards'][0]['path']
             shard = json.loads((root / path).read_text())
+            # Preserve exact user-supplied reference text and source location
+            # through normalization, assembly, and the published shard.
+            self.assertEqual(shard['records'][0]['coverage']['references'],
+                             raw['analysis_completeness']['references'])
             ref = shard['records'][0]['coverage']['references'][0]
             self.assertEqual((ref['status'], ref['target_path'], ref['disposition']),
                              ('uninspected', 'docs', 'partial'))
