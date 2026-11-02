@@ -729,9 +729,22 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(github.calls[-1], ("PATCH", "git/refs/heads/skillspector-reports", {"sha": result, "force": False}))
             for github in (FakeGitHub(Path(directory) / "git-obsolete", main="f" * 40),
                            FakeGitHub(Path(directory) / "git-race", main_changed=True)):
-                with self.assertRaises(PublicationError):
+                with self.assertRaises(publisher.SupersededCoverage):
                     publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
                 self.assertFalse(any(method == "PATCH" for method, _, _ in github.calls))
+
+
+    def test_superseded_scheduled_publisher_exits_green_without_masking_other_errors(self):
+        argv = ["skillspector", "publish", "--report-dir", "/unused-fixture", "--source-commit", COMMIT]
+        for failure, expected in (
+            (publisher.SupersededCoverage("main changed during coverage publication"), 0),
+            (PublicationError("uploaded publication tree identity differs"), 1),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(publisher.sys, "argv", argv), \
+                     mock.patch.dict(publisher.os.environ, {"GITHUB_TOKEN": "test-token"}), \
+                     mock.patch.object(publisher, "publish", side_effect=failure):
+                    self.assertEqual(publisher.main(), expected)
 
 
 if __name__ == "__main__":
