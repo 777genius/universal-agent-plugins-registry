@@ -51,17 +51,31 @@ PATCHES = (
 
 
 def apply_patch(scanner: Path) -> None:
-    def git(*args: str) -> str:
-        return subprocess.check_output(["git", "-C", str(scanner), *args], text=True).strip()
+    # Verify the *working bytes* the canary is about to edit, not only the
+    # committed Git blob. Otherwise a mutated checkout could pass the gate.
+    from patch_skillspector_directory_references import RESOLVER_BEFORE, RESOLVER_AFTER
 
-    if git("rev-parse", "HEAD") != UPSTREAM_SHA:
+    safe_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(["git", "-C", str(scanner), *args], env=safe_env)
+
+    if git("rev-parse", "HEAD").decode().strip() != UPSTREAM_SHA:
         raise RuntimeError("Unexpected SkillSpector checkout: fail closed")
-    if git("rev-parse", "HEAD:src/skillspector/references.py") != REFERENCES_BLOB:
+    if git("rev-parse", "HEAD:src/skillspector/references.py").decode().strip() != REFERENCES_BLOB:
         raise RuntimeError("Unexpected immutable upstream source: fail closed")
+
     path = scanner / "src/skillspector/references.py"
-    content = path.read_text(encoding="utf-8")
-    if 'if urlsplit(raw.strip()).path.endswith("/") and any(' not in content:
-        raise RuntimeError("Production directory maintenance patch missing")
+    if any(item.is_symlink() for item in (path.parent.parent, path.parent, path)) or not path.is_file():
+        raise RuntimeError("Scanner references path is not a regular in-tree file")
+    pinned_source = git("show", "HEAD:src/skillspector/references.py").decode("utf-8")
+    if pinned_source.count(RESOLVER_BEFORE) != 1:
+        raise RuntimeError("Pinned upstream directory-patch anchor differs")
+    expected = pinned_source.replace(RESOLVER_BEFORE, RESOLVER_AFTER, 1)
+    if path.read_bytes() != expected.encode("utf-8"):
+        raise RuntimeError("Working scanner differs from the exact vetted directory patch")
+
+    content = expected
     for before, after in PATCHES:
         if content.count(before) != 1:
             raise RuntimeError(f"Candidate patch anchor absent or duplicated: {before!r}")
