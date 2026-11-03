@@ -31,7 +31,7 @@ MAX_API_BYTES = 32 << 20
 MAX_TREE_UPLOAD_BYTES = 8 << 20
 CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "selection.json": coverage.MAX_SELECTION_BYTES, "attempts.json": coverage.MAX_STATE_BYTES,
-    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 8 << 20,
+    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 16 << 20,
     "publication-base.json": 4096}
 
 
@@ -96,8 +96,8 @@ def previous(github, output_dir, *, fetch=raw_file):
         if contents is not None:
             document = parse_report(contents, "previous " + relative, max_bytes=maximum)
             if relative == "recovery.json":
-                from scripts.skillspector_recovery import validate_state
-                validate_state(document)
+                from scripts.skillspector_recovery import compact_state
+                document = compact_state(document)
             coverage.write_bounded(output_dir / relative, document, maximum)
 
     # This process only copies static JSON; scanner subprocesses are in separate serial jobs.

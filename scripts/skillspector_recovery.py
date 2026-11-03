@@ -48,7 +48,9 @@ def integer(value, label):
     return value
 
 
-def validate_state(value):
+def validate_state(value, *, max_bytes=None, max_runs=None):
+    max_bytes = MAX_STATE_BYTES if max_bytes is None else max_bytes
+    max_runs = MAX_RUNS if max_runs is None else max_runs
     require(isinstance(value, dict) and set(value) in ({"schema_version", "runs"}, {"schema_version", "runs", "cursor"}), "invalid recovery state fields")
     cursor = value.get("cursor")
     if cursor is not None:
@@ -57,7 +59,7 @@ def validate_state(value):
         require(type(cursor["page"]) is int and 1 <= cursor["page"] <= 10000 and
                 type(cursor["offset"]) is int and 0 <= cursor["offset"] < 100, "invalid recovery cursor")
     require(value["schema_version"] == 1 and isinstance(value["runs"], list) and
-            len(value["runs"]) <= MAX_RUNS, "invalid recovery state")
+            len(value["runs"]) <= max_runs, "invalid recovery state")
     seen = set()
     for run in value["runs"]:
         require(isinstance(run, dict) and {"run_id", "run_attempt", "head_sha", "created_at", "artifacts"} <= set(run) <=
@@ -80,15 +82,41 @@ def validate_state(value):
             require(integer(artifact["id"], "artifact id") not in ids and
                     re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"]), "invalid artifact acknowledgement")
             ids.add(artifact["id"])
-    require(len(canonical_json(value)) <= MAX_STATE_BYTES, "recovery acknowledgements exceed limit")
+    require(len(canonical_json(value)) <= max_bytes, "recovery acknowledgements exceed limit")
     return value
+
+
+def compact_state(value, *, now=None):
+    """Keep the newest valid acknowledgements within fixed count/byte/age limits.
+
+    Older published files may be read within a finite 2x repair envelope. We
+    never trust malformed records, and the next write uses the strict budget.
+    """
+    validate_state(value, max_bytes=MAX_STATE_BYTES * 2, max_runs=MAX_RUNS * 2)
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=RETENTION_DAYS)
+    ordered = sorted((run for run in value["runs"]
+                      if parse_timestamp(run["created_at"], "created_at") >= cutoff),
+                     key=lambda run: (run["created_at"], run["run_id"], run["run_attempt"]))
+    result = {"schema_version": 1, "runs": ordered}
+    if "cursor" in value:
+        result["cursor"] = value["cursor"]
+    # Exact canonical encoding size, without repeatedly serializing a large list.
+    total = len(canonical_json({**result, "runs": []}))
+    sizes = [len(canonical_json(run)) for run in ordered]
+    total += sum(sizes) + max(0, len(ordered) - 1)
+    start = 0
+    while start < len(ordered) and (len(ordered) - start > MAX_RUNS or total > MAX_STATE_BYTES):
+        total -= sizes[start] + (1 if len(ordered) - start > 1 else 0)
+        start += 1
+    result["runs"] = ordered[start:]
+    return validate_state(result)
 
 
 def read_state(path):
     if not path.exists():
         return {"schema_version": 1, "runs": []}
     require(path.is_file() and not path.is_symlink(), "recovery state must be regular")
-    return validate_state(scanner.read_report_json(path, max_bytes=MAX_STATE_BYTES))
+    return compact_state(scanner.read_report_json(path, max_bytes=MAX_STATE_BYTES * 2))
 
 
 def merge_state(*states, now=None):
@@ -116,9 +144,7 @@ def merge_state(*states, now=None):
                 run = {**run, "artifacts": sorted(entries.values(), key=lambda r: r["id"]),
                        "rejections": sorted(rejections.values(), key=lambda r: r["id"])}
             runs[key] = run
-    require(len(runs) <= MAX_RUNS, "recovery run retention bound exceeded")
-    return validate_state({"schema_version": 1, "runs": sorted(runs.values(), key=lambda r: (r["created_at"], r["run_id"], r["run_attempt"])),
-                           "cursor": cursor})
+    return compact_state({"schema_version": 1, "runs": list(runs.values()), "cursor": cursor}, now=now)
 
 
 def validate_provenance(value, documents, *, allow_unsupported_policy=False):
@@ -180,7 +206,7 @@ def pack(plan_dir, worker_path, output_dir, *, slice_index, environment=None):
     return value
 
 
-def trusted_run(run, workflow_id):
+def trusted_run(github, run, workflow_id):
     require(isinstance(run, dict) and run.get("repository", {}).get("full_name") == REPOSITORY and
             run.get("head_repository", {}).get("full_name") == REPOSITORY and run.get("workflow_id") == workflow_id and
             run.get("path") == WORKFLOW and run.get("head_branch") == "main" and
@@ -189,6 +215,16 @@ def trusted_run(run, workflow_id):
     integer(run.get("id"), "run id")
     integer(run.get("run_attempt"), "run attempt")
     coverage.v2.timestamp(run.get("created_at"), "run.created_at")
+    # A tag called "main" also appears as head_branch=main. Resolve the actual
+    # branch ref to its SHA and prove ancestry, never compare against a ref name.
+    main_ref = github.request("GET", "git/ref/heads/main")
+    main_sha = (main_ref or {}).get("object", {}).get("sha")
+    require(isinstance(main_sha, str) and coverage.SHA.fullmatch(main_sha),
+            "protected main branch cannot be authenticated")
+    comparison = github.request("GET", f"compare/{run['head_sha']}...{main_sha}")
+    require(isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"} and
+            (comparison.get("merge_base_commit") or {}).get("sha") == run["head_sha"],
+            "recovery requires a producing commit in protected main history")
     return run
 
 
@@ -336,7 +372,7 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                     require(0 < info.file_size <= MAX_PROVENANCE_BYTES, "checkpoint provenance exceeds bound")
                     envelope = scanner.parse_scanner_json(archive.read(info), "checkpoint provenance")
                 attempt = integer(envelope.get("run_attempt"), "checkpoint run attempt")
-                producing = run if attempt == run["run_attempt"] else trusted_run(github.request("GET",
+                producing = run if attempt == run["run_attempt"] else trusted_run(github, github.request("GET",
                     f"actions/runs/{run['id']}/attempts/{attempt}"), workflow_id)
                 require(attempt <= run["run_attempt"] and producing["id"] == run["id"], "checkpoint run attempt differs")
                 target = directory / f"{run['id']}-{attempt}-{identifier}"
@@ -362,7 +398,7 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     if current_run is not None:
         run = github.request("GET", f"actions/runs/{integer(current_run, 'current run')}")
         require(run and run.get("id") == current_run, "current acknowledgement run differs")
-        run = trusted_run({**run, "status": "completed"}, workflow_id)
+        run = trusted_run(github, {**run, "status": "completed"}, workflow_id)
         process(run, force=True)
         next_cursor = state.get("cursor")
     else:
@@ -380,7 +416,7 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                 run = listed[index]
                 next_cursor = {"before": cursor["before"], "page": page, "offset": index}
                 try:
-                    trusted_run(run, workflow_id)
+                    trusted_run(github, run, workflow_id)
                 except (PublicationError, TypeError, ValueError):
                     rejected.append({"run_id": run.get("id"), "reason": "untrusted_run"})
                     continue
@@ -456,7 +492,7 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
     workflow = github.request("GET", "actions/workflows/skillspector-reports.yml")
     run_id, attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
     metadata = github.request("GET", f"actions/runs/{run_id}")
-    run = trusted_run({**metadata, "status": "completed"}, workflow["id"])
+    run = trusted_run(github, {**metadata, "status": "completed"}, workflow["id"])
     require(run["id"] == run_id and run["run_attempt"] == attempt and run["head_sha"] == env["GITHUB_SHA"],
             "same-run checkpoint source differs")
     selection = coverage.load_selection(plan_dir / "selection.json")
@@ -478,7 +514,7 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
             provenance = scanner.parse_scanner_json(archive.read(info), "same-run provenance")
         old_attempt = integer(provenance.get("run_attempt"), "earlier run attempt")
         require(old_attempt < attempt, "same-run resume cannot use current/future attempt")
-        producing = trusted_run(github.request("GET", f"actions/runs/{run_id}/attempts/{old_attempt}"), workflow["id"])
+        producing = trusted_run(github, github.request("GET", f"actions/runs/{run_id}/attempts/{old_attempt}"), workflow["id"])
         target = staged / str(artifact["id"])
         batch = unpack_archive(body, artifact, producing, target)
         candidate = batch["workers"][0]

@@ -4,6 +4,7 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import skillspector_coverage_v3 as coverage
 from scripts.directory_publication import PublicationError
@@ -115,6 +116,31 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(duplicate["attempts"], recovered["attempts"])
             self.assertEqual(duplicate["queue_cursor"], recovered["queue_cursor"])
             self.assertEqual(duplicate["manifest"]["execution_summary"]["recovered_sources"], 0)
+
+    def test_independent_main_runs_with_same_fingerprint_dedupe_without_wedging(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T09:00:00Z"):
+            first = self.batch(selection, [record(subject)])
+        with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T09:05:00Z"):
+            second = self.batch(selection, [record(subject)])
+        earlier = first["workers"][0]["attempts"][0]["attempt"]
+        later = second["workers"][0]["attempts"][0]["attempt"]
+        self.assertEqual(earlier["fingerprint"], later["fingerprint"])
+        self.assertNotEqual(earlier["last_attempted_at"], later["last_attempted_at"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.recover(root / "coalesced", selection, [first, second])
+            self.assertEqual(result["attempts"][subject["id"]]["last_attempted_at"],
+                             later["last_attempted_at"])
+            baseline = self.recover(root / "original", selection, [first])
+            duplicate = self.recover(root / "persisted", selection, [second], baseline)
+            self.assertEqual(duplicate["attempts"], baseline["attempts"])
+            self.assertEqual(duplicate["manifest"]["execution_summary"]["recovered_sources"], 0)
+            with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T09:10:00Z"):
+                divergent = self.batch(selection, [record(subject, "partial", "runtime_limit")])
+            with self.assertRaisesRegex(PublicationError, "conflicting recovered outcomes"):
+                self.recover(root / "divergent", selection, [first, divergent])
 
     def test_changed_revision_is_not_promoted_and_source_discovery_remains_historical(self):
         old = item()

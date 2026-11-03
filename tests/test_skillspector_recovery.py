@@ -76,6 +76,10 @@ class FakeActions:
             raise AssertionError("recovery transport must be read only")
         if path == "actions/workflows/skillspector-reports.yml":
             return {"id": 9}
+        if path == "git/ref/heads/main":
+            return {"object": {"sha": COMMIT}}
+        if path == f"compare/{self.run['head_sha']}...{COMMIT}":
+            return {"status": "identical", "merge_base_commit": {"sha": self.run["head_sha"]}}
         if path.startswith("actions/workflows/9/runs?"):
             return {"workflow_runs": [self.run]}
         if path == "actions/runs/101":
@@ -105,7 +109,51 @@ class CheckpointTransportTests(unittest.TestCase):
                         {"repository": {"full_name": "someone/fork"}}, {"head_repository": {"full_name": "someone/fork"}},
                         {"event": "pull_request"}, {"status": "in_progress"}):
             with self.subTest(changes=changes), self.assertRaises(PublicationError):
-                recovery.trusted_run(run_metadata(**changes), 9)
+                recovery.trusted_run(FakeActions(run_metadata(**changes), None), run_metadata(**changes), 9)
+
+    def test_main_named_tag_cannot_authorize_recovered_checkpoints(self):
+        run = run_metadata()
+        api = FakeActions(run, None)
+        original = api.request
+
+        def malicious_tag(method, path, data=None):
+            if path.startswith("compare/"):
+                # A run dispatched against a tag called main can report the
+                # same head_branch as the protected branch, but is not ancestral.
+                return {"status": "diverged", "merge_base_commit": {"sha": "f" * 40}}
+            return original(method, path, data)
+
+        api.request = malicious_tag
+        with self.assertRaisesRegex(PublicationError, "protected main history"):
+            recovery.trusted_run(api, run, 9)
+        self.assertIn(("GET", "git/ref/heads/main"), api.calls)
+        legitimate = FakeActions(run, None)
+        self.assertEqual(recovery.trusted_run(legitimate, run, 9), run)
+        self.assertIn(("GET", f"compare/{COMMIT}...{COMMIT}"), legitimate.calls)
+
+    def test_acknowledgement_limits_evict_oldest_and_repair_bounded_oversize(self):
+        def row(identifier):
+            return {"run_id": identifier, "run_attempt": 1, "head_sha": COMMIT,
+                    "created_at": "2026-11-02T17:00:00Z",
+                    "artifacts": [{"id": identifier, "digest": "sha256:" + "f" * 64}]}
+
+        with mock.patch.object(recovery, "MAX_STATE_BYTES", 1800), \
+                mock.patch.object(recovery, "MAX_RUNS", 6), tempfile.TemporaryDirectory() as temporary:
+            state = {"schema_version": 1, "runs": []}
+            for identifier in range(1, 18):
+                state = recovery.merge_state(state, {"schema_version": 1, "runs": [row(identifier)]}, now=NOW)
+                self.assertLessEqual(len(recovery.canonical_json(state)), recovery.MAX_STATE_BYTES)
+                self.assertLessEqual(len(state["runs"]), 6)
+            self.assertEqual(state["runs"][-1]["run_id"], 17)
+            self.assertNotIn(1, [entry["run_id"] for entry in state["runs"]])
+            legacy = {"schema_version": 1, "runs": [row(identifier) for identifier in range(21, 31)]}
+            self.assertGreater(len(recovery.canonical_json(legacy)), recovery.MAX_STATE_BYTES)
+            self.assertLessEqual(len(recovery.canonical_json(legacy)), recovery.MAX_STATE_BYTES * 2)
+            source = Path(temporary) / "recovery.json"
+            source.write_bytes(recovery.canonical_json(legacy))
+            repaired = recovery.read_state(source)
+            self.assertLessEqual(len(recovery.canonical_json(repaired)), recovery.MAX_STATE_BYTES)
+            self.assertEqual(repaired["runs"][-1]["run_id"], 30)
 
     def test_branch_controlled_and_wrong_attempt_packages_cannot_recover(self):
         for kwargs, run in (({"branch": "feature"}, run_metadata()),

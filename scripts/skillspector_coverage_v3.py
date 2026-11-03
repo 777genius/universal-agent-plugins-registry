@@ -696,7 +696,10 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
     old_attempt, old_record = attempts.get(identifier), records.get(identifier)
     if replay and old_attempt is not None and attempt["attempt_count"] <= old_attempt["attempt_count"]:
         if attempt["attempt_count"] == old_attempt["attempt_count"]:
-            require(attempt == old_attempt, "recovered attempt conflicts with persisted progress")
+            # Independent authenticated runs can re-scan the same baseline.
+            # Published evidence is authoritative; do not fail a later recovery.
+            if attempt != old_attempt:
+                return False
             if old_record is not None and old_record["status"] == new["status"]:
                 controls = {"freshness", "target_revision", "retry", "attempt_history"}
                 require({key: value for key, value in old_record.items() if key not in controls} ==
@@ -836,7 +839,6 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
     attempts = compatible_attempts(previous, selection)
     targets = {source_digest(item): item for item in selection["sources"]}
     require(len(targets) == len(selection["sources"]), "ambiguous recovery target identity")
-    outcomes = []
     identities = {}
     for batch in recovery_bundles:
         original_selection, original_summary = batch["selection"], batch["discovery"]
@@ -857,14 +859,20 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 for key in ("attempt", "record"):
                     outcome[key]["id"] = target["id"]
                 identity = (source_digest(target), outcome["attempt"]["attempt_count"])
-                require(identity not in identities or identities[identity] == outcome,
-                        "conflicting recovered outcomes")
-                if identity not in identities:
-                    identities[identity] = outcome
-                    outcomes.append((target, outcome))
+                existing = identities.get(identity)
+                if existing is not None:
+                    prior = existing["attempt"]
+                    require(prior["fingerprint"] == outcome["attempt"]["fingerprint"],
+                            "conflicting recovered outcomes")
+                    # Same scan result from independent runs: keep newest
+                    # execution evidence deterministically, not both attempts.
+                    if prior["last_attempted_at"] >= outcome["attempt"]["last_attempted_at"]:
+                        continue
+                identities[identity] = outcome
     applied, recovered_ids = 0, set()
-    for item, outcome in sorted(outcomes, key=lambda value: (
-            value[1]["attempt"]["last_attempted_at"], value[1]["attempt"]["attempt_count"], value[0]["id"])):
+    for identity, outcome in sorted(identities.items(), key=lambda value: (
+            value[1]["attempt"]["last_attempted_at"], value[1]["attempt"]["attempt_count"], value[1]["attempt"]["id"])):
+        item = targets[identity[0]]
         if apply_outcome(records, attempts, item, outcome, replay=True):
             applied += 1
             recovered_ids.add(item["id"])
