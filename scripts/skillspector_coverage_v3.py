@@ -39,6 +39,9 @@ MAX_TOTAL_SHARD_BYTES = 512 << 20
 MAX_SHARD_RECORDS = v2.MAX_SHARD_RECORDS
 SHA, SHARD_PATH = v2.SHA, v2.SHARD_PATH
 PREPARATION_SECONDS = 120
+# A normalized record is capped below MAX_REPORT_BYTES. Reserve its entire
+# allowance, plus bounded retry history/envelope metadata, before executing it.
+MAX_OUTCOME_BYTES = scanner.MAX_REPORT_BYTES + (128 << 10)
 RESOURCE_REASONS = frozenset({"scan_timeout", "runtime_limit", "archive_time_limit", "size_limit",
     "input_limit_exceeded", "acquisition_transfer_limit", "total_bytes_limit", "artifact_count_limit", "output_limit", "normalization_truncated"})
 TRANSIENT_REASONS = frozenset({"acquisition_failed", "preparation_timeout", "network_error", "network_timeout",
@@ -528,12 +531,13 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
 
 def scan_partition(selection, executable, previous, *, source_commit, partition_index=0,
                    partition_count=MAX_PARTITIONS, maximum_attempts=MAX_ATTEMPTS,
-                   budget_seconds=2100, mirror_root=None, discovery_summary=None):
+                    budget_seconds=2100, mirror_root=None, discovery_summary=None,
+                    checkpoint=None, resume=None, slice_attempts=None):
     validate_selection(selection)
     require(SHA.fullmatch(source_commit) is not None, "invalid source commit")
     require(type(budget_seconds) in (int, float) and 0 < budget_seconds <= 2100, "invalid scan budget")
-    scanner.verify_scanner(executable)
-    budget = WorkBudget(budget_seconds)
+    require(slice_attempts is None or type(slice_attempts) is int and 1 <= slice_attempts <= maximum_attempts,
+            "invalid slice attempt bound")
     historical_ids = set()
     if discovery_summary:
         current_ids = {identifier for state in discovery_summary.get("source_states", []) if state["current"]
@@ -545,8 +549,48 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
                            excluded_ids=historical_ids, repository_aliases=aliases)
     old_attempts, old_records = compatible_attempts(previous, selection), previous_records(previous, selection, repository_aliases=aliases)
     outcomes, pins = [], {}
+    if resume is not None:
+        validate_worker(resume, selection, source_commit)
+        require(resume["partition"] == {"index": partition_index, "count": partition_count},
+                "checkpoint partition differs")
+        require(len(resume["attempts"]) <= maximum_attempts, "checkpoint exceeds requested attempt bound")
+        by_id = {item["id"]: item for item in selection["sources"]}
+        for outcome in resume["attempts"]:
+            attempt = outcome["attempt"]
+            old = old_attempts.get(attempt["id"])
+            require(old is None or attempt["last_attempted_at"] >= old["last_attempted_at"],
+                    "checkpoint regresses progress")
+            require(attempt == make_attempt(by_id[attempt["id"]], outcome["record"], old,
+                    old_records.get(attempt["id"]), at=attempt["last_attempted_at"]),
+                    "checkpoint attempt lineage differs")
+        outcomes = copy.deepcopy(resume["attempts"])
+    completed = {outcome["attempt"]["id"] for outcome in outcomes}
+
+    def document(entries):
+        return {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),
+            "selection_digest": sha256_digest(canonical_json(selection)), "scanner": SCANNER, "profile": PROFILE,
+            "partition": {"index": partition_index, "count": partition_count}, "attempts": entries}
+
+    def persist():
+        value = document(outcomes)
+        require(len(report_json(value)) <= MAX_WORKER_BYTES, "worker checkpoint exceeds byte bound")
+        if checkpoint is not None:
+            checkpoint(copy.deepcopy(value))
+        return value
+
+    # Even scanner verification/setup failures leave an honest empty checkpoint.
+    persist()
+    scanner.verify_scanner(executable)
+    budget = WorkBudget(budget_seconds)
+    admitted = 0
     try:
         for item in chosen:
+            if item["id"] in completed:
+                continue
+            if len(outcomes) >= maximum_attempts or slice_attempts is not None and admitted >= slice_attempts:
+                break
+            if len(report_json(document(outcomes))) + MAX_OUTCOME_BYTES > MAX_WORKER_BYTES:
+                break  # Defer before acquisition: an executed result must always fit.
             old = old_attempts.get(item["id"])
             profile_id = old["next_profile"] if old else scanner.STANDARD_PROFILE["id"]
             profile = scanner.PROFILE_DOCUMENTS[profile_id]
@@ -570,15 +614,17 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
                 record["execution"]["acquisition_seconds"] = round(time.monotonic() - acquisition_started, 6)
             attempt = make_attempt(item, record, old, old_records.get(item["id"]))
             outcome = {"attempt": attempt, "record": scanner.redact_public_record(record)}
-            if len(report_json(outcomes)) + len(report_json(outcome)) + 4096 > MAX_WORKER_BYTES:
-                break  # Completed prior work remains publishable; unpersisted work is still queued.
+            require(len(report_json(outcome)) <= MAX_OUTCOME_BYTES, "normalized outcome exceeds reserved capacity")
+            # Validate the new transaction once; all preceding outcomes were
+            # already validated, avoiding quadratic full-checkpoint validation.
+            validate_worker(document([outcome]), selection, source_commit)
             outcomes.append(outcome)
+            admitted += 1
+            persist()
     finally:
         for pinned in pins.values():
             pinned.close()
-    return {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),
-        "selection_digest": sha256_digest(canonical_json(selection)), "scanner": SCANNER, "profile": PROFILE,
-        "partition": {"index": partition_index, "count": partition_count}, "attempts": outcomes}
+    return persist()
 
 
 def validate_worker(worker, selection, source_commit):
@@ -716,6 +762,7 @@ def main():
     scan.add_argument("--partition-index", type=int, required=True)
     scan.add_argument("--partition-count", type=int, default=MAX_PARTITIONS)
     scan.add_argument("--maximum-attempts", type=int, default=MAX_ATTEMPTS)
+    scan.add_argument("--slice-attempts", type=int)
     scan.add_argument("--budget-seconds", type=int, default=2100)
     scan.add_argument("--mirror-root", type=Path)
     scan.add_argument("--output", type=Path, required=True)
@@ -734,9 +781,12 @@ def main():
         if summary:
             validate_discovery_summary(summary, selection, args.source_commit)
         if args.command == "scan":
+            resume = read_json(args.output, max_bytes=MAX_WORKER_BYTES) if args.output.exists() else None
             worker = scan_partition(selection, args.scanner.resolve(), previous, source_commit=args.source_commit,
                 partition_index=args.partition_index, partition_count=args.partition_count, maximum_attempts=args.maximum_attempts,
-                budget_seconds=args.budget_seconds, mirror_root=args.mirror_root, discovery_summary=summary)
+                budget_seconds=args.budget_seconds, mirror_root=args.mirror_root, discovery_summary=summary,
+                resume=resume, slice_attempts=args.slice_attempts,
+                checkpoint=lambda value: write_bounded(args.output, value, MAX_WORKER_BYTES))
             validate_worker(worker, selection, args.source_commit)
             write_bounded(args.output, worker, MAX_WORKER_BYTES)
         else:
