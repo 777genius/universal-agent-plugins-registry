@@ -525,6 +525,52 @@
           }
         }
       }
+    },
+    "execution_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition_count",
+        "received_partitions",
+        "missing_partitions",
+        "attempted_sources",
+        "recovered_sources"
+      ],
+      "properties": {
+        "partition_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "received_partitions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 7
+          }
+        },
+        "missing_partitions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 7
+          }
+        },
+        "attempted_sources": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "recovered_sources": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        }
+      }
     }
   }
 }

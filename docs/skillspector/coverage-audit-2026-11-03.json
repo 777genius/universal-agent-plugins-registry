@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-11-03T15:39:54Z",
+  "repository": "777genius/universal-agent-plugins-registry",
+  "report_commit": "3c0bd61eeafb5369f62b93c6c50cee223ebfd490",
+  "source_commit": "320c30d3a508d0c59a4a87ac36d3d5b216dff41d",
+  "report_generated_at": "2026-11-03T13:01:52Z",
+  "workflow_run_id": 41635762917,
+  "workflow_run_attempt": 1,
+  "verification": {
+    "all_shards_downloaded": true,
+    "shard_count": 2028,
+    "shard_bytes": 315862831,
+    "sha256_and_exact_bytes_verified": true,
+    "whole_bundle_schema_validation": false,
+    "failed_shards": []
+  },
+  "coverage": {
+    "complete": 2119,
+    "error": 44,
+    "partial": 4328,
+    "pending": 11252,
+    "reported": 15655,
+    "selected": 17743,
+    "stale": 9164
+  },
+  "scanner": {
+    "id": "skillspector",
+    "revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+    "version": "2.13.1"
+  },
+  "policy": {
+    "digest": "sha256:b9600f5cb6461c28b367a4ff460da4d07224e497fdddc25732cf18e231a343e9",
+    "id": "static-policy-v3"
+  },
+  "profiles": [
+    {
+      "digest": "sha256:33e3822d74ce72625cc5b479f4473b515f693890a3818366206a4dbc2b8f509c",
+      "id": "static-standard-v3"
+    },
+    {
+      "digest": "sha256:255c72648dd6a6e6b93ea75f5ad51553826692c60dd8222c7fb55613cf5766ba",
+      "id": "static-extended-v3"
+    }
+  ],
+  "source_state_counts": {
+    "resolved": 17631,
+    "unresolved": 1769,
+    "unsupported": 164,
+    "historical": 112,
+    "unavailable": 371
+  },
+  "source_reason_counts": {
+    "resolved": 17631,
+    "skill_not_found": 853,
+    "unsupported_source": 164,
+    "ambiguous_name": 942,
+    "repository_unavailable": 59,
+    "repository_acquisition_failed": 264,
+    "community_source_unavailable": 134
+  },
+  "plugin_state_counts": {
+    "resolved": 1946,
+    "not_applicable": 566,
+    "unavailable": 1349,
+    "unresolved": 55
+  },
+  "current_selected_ids": 17631,
+  "historical_excluded_selected_ids": 112,
+  "current_pending_cohorts": {
+    "changed_revision_or_profile": 9128,
+    "never_reported": 2012
+  },
+  "excluded_pending_cohorts": {
+    "historical_report": 36,
+    "never_reported": 76
+  },
+  "current_incomplete_records": 4372,
+  "current_incomplete_reason_incidence": {
+    "reference_missing": 4071,
+    "analyzer_incomplete": 1274,
+    "limitations": 1274,
+    "static_parse_limit": 987,
+    "obfuscated_instruction_text": 297,
+    "referenced_uninspected": 170,
+    "opaque_content": 144,
+    "runtime_limit": 83,
+    "reference_unresolved": 37,
+    "acquisition_failed": 29,
+    "output_limit": 18,
+    "input_limit_exceeded": 11,
+    "oms_signature": 10,
+    "unsupported_content": 6,
+    "excluded_executable_content": 5,
+    "manifest_parse_error": 4,
+    "binary_text_projection": 4,
+    "acquisition_transfer_limit": 4,
+    "syntax_error": 2,
+    "size_limit": 1,
+    "reference_extraction_limit": 1
+  },
+  "current_incomplete_retry_dispositions": [
+    {
+      "disposition": "blocked",
+      "reason": "reference_missing",
+      "records": 3653
+    },
+    {
+      "disposition": "blocked",
+      "reason": "obfuscated_instruction_text",
+      "records": 249
+    },
+    {
+      "disposition": "blocked",
+      "reason": "static_parse_limit",
+      "records": 183
+    },
+    {
+      "disposition": "blocked",
+      "reason": "opaque_content",
+      "records": 142
+    },
+    {
+      "disposition": "exhausted",
+      "reason": "extended_budget_exhausted",
+      "records": 79
+    },
+    {
+      "disposition": "exhausted",
+      "reason": "transient_retry_limit",
+      "records": 27
+    },
+    {
+      "disposition": "scheduled",
+      "reason": "extended_profile_required",
+      "records": 19
+    },
+    {
+      "disposition": "blocked",
+      "reason": "referenced_uninspected",
+      "records": 6
+    },
+    {
+      "disposition": "blocked",
+      "reason": "excluded_executable_content",
+      "records": 4
+    },
+    {
+      "disposition": "blocked",
+      "reason": "reference_unresolved",
+      "records": 4
+    },
+    {
+      "disposition": "scheduled",
+      "reason": "transient_source_failure",
+      "records": 2
+    },
+    {
+      "disposition": "scheduled",
+      "reason": "analyzer_retry",
+      "records": 2
+    },
+    {
+      "disposition": "blocked",
+      "reason": "persistent_limitation",
+      "records": 1
+    },
+    {
+      "disposition": "blocked",
+      "reason": "reference_extraction_limit",
+      "records": 1
+    }
+  ],
+  "stale_causes": [
+    {
+      "revision": "same_revision",
+      "profile": "old_profile",
+      "records": 5110
+    },
+    {
+      "revision": "changed_revision",
+      "profile": "old_profile",
+      "records": 2892
+    },
+    {
+      "revision": "changed_revision",
+      "profile": "same_profile",
+      "records": 1162
+    }
+  ],
+  "missing_reference_rows_by_kind": {
+    "quoted_or_code": 24563,
+    "plain_path": 6378,
+    "markdown_link": 232,
+    "inline_command": 118,
+    "markdown_image": 1
+  },
+  "run_timings_seconds": {
+    "prepare": 582,
+    "discovery_step": 304,
+    "scan_steps_min": 843,
+    "scan_steps_max": 1206,
+    "assemble": 403,
+    "publish": 489
+  },
+  "original_run_attempt_admission": {
+    "run_id": 41635762917,
+    "run_attempt": 1,
+    "run_started_at": "2026-11-03T12:26:46Z",
+    "run_updated_at": "2026-11-03T13:13:37Z",
+    "attempts_by_partition": {
+      "5": 128,
+      "2": 128,
+      "0": 128,
+      "1": 128,
+      "4": 128,
+      "7": 128,
+      "6": 128,
+      "3": 128
+    },
+    "attempts_total": 1024,
+    "unique_roots": 1024,
+    "sum_acquisition_analysis_seconds_by_partition": {
+      "5": 716.919957,
+      "2": 1033.2377930000005,
+      "0": 936.2403850000001,
+      "1": 878.1781919999999,
+      "4": 1062.329235,
+      "7": 782.2105379999998,
+      "6": 705.6936079999998,
+      "3": 807.6389900000001
+    }
+  },
+  "bounded_admission_decision": {
+    "v2_maximum_attempts": 128,
+    "v3_default_attempts": 128,
+    "v3_maximum_manual_attempts": 512,
+    "work_budget_seconds": 2100,
+    "worker_bytes": 33554432,
+    "scanner_profile_identity_changed": false
+  },
+  "local_failure_recovery_validation": {
+    "actual_scanner": true,
+    "immutable_git_mirrors": true,
+    "online_acquisition_validated": false,
+    "elapsed_seconds": 69.05,
+    "injected_child_exit_code": 23,
+    "fresh_cli_process_resume": true,
+    "first_transaction_preserved_exactly": true,
+    "attempt_counts": [
+      1,
+      1,
+      1
+    ],
+    "selected": 15,
+    "partial": 3,
+    "pending": 12,
+    "errors": 0,
+    "strict_prefix_merge_validated": true,
+    "bundle_and_publication_validators_passed": true
+  },
+  "local_regression_suite": {
+    "tests": 283,
+    "seconds": 41.94,
+    "passed": true
+  }
+}

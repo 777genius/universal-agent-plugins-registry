@@ -853,6 +853,7 @@ class PublicationTests(unittest.TestCase):
                 publisher.v2.PREFIX + "shards/" + "d" * 64 + ".json"]
             tree = [{"path": path, "mode": "100644", "type": "blob", "sha": "d" * 40} for path in legacy_paths]
             tree.append({"path": "unrelated.py", "mode": "100644", "type": "blob", "sha": "e" * 40})
+            coverage.write_bounded(root / "publication-base.json", {"schema_version": 1, "report_commit": "a" * 40}, 4096)
             github = FakeGitHub(Path(directory) / "git", old={"tree": tree})
             result = publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
             self.assertEqual(len(result), 40)
@@ -868,10 +869,10 @@ class PublicationTests(unittest.TestCase):
                 self.assertFalse(any(method == "PATCH" for method, _, _ in github.calls))
 
 
-    def test_superseded_scheduled_publisher_exits_green_without_masking_other_errors(self):
+    def test_supersession_without_durable_recovery_has_distinct_failure_status(self):
         argv = ["skillspector", "publish", "--report-dir", "/unused-fixture", "--source-commit", COMMIT]
         for failure, expected in (
-            (publisher.SupersededCoverage("main changed during coverage publication"), 0),
+            (publisher.SupersededCoverage("main changed during coverage publication"), 3),
             (PublicationError("uploaded publication tree identity differs"), 1),
         ):
             with self.subTest(failure=type(failure).__name__):

@@ -28,7 +28,10 @@ from scripts.directory_publication import PublicationError, canonical_json, form
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
 
 SCANNER, PROFILE = scanner.SCANNER, contract.PROFILE
-MAX_SOURCES, MAX_PARTITIONS, MAX_ATTEMPTS = 20_000, v2.MAX_PARTITIONS, v2.MAX_ATTEMPTS
+MAX_SOURCES, MAX_PARTITIONS = 20_000, v2.MAX_PARTITIONS
+# Broader manual admission shares the same deadline/output budgets. Keep normal
+# admission unchanged until a real larger run measures its useful throughput.
+MAX_ATTEMPTS, DEFAULT_ATTEMPTS = 512, v2.MAX_ATTEMPTS
 MAX_MANIFEST_BYTES, MAX_STATE_BYTES = 16 << 20, 64 << 20
 MAX_SHARD_BYTES, MAX_SELECTION_BYTES = v2.MAX_SHARD_BYTES, v2.MAX_SELECTION_BYTES
 MAX_DISCOVERY_BYTES, MAX_WORKER_BYTES = v2.MAX_DISCOVERY_BYTES, v2.MAX_WORKER_BYTES
@@ -39,6 +42,9 @@ MAX_TOTAL_SHARD_BYTES = 512 << 20
 MAX_SHARD_RECORDS = v2.MAX_SHARD_RECORDS
 SHA, SHARD_PATH = v2.SHA, v2.SHARD_PATH
 PREPARATION_SECONDS = 120
+# A normalized record is capped below MAX_REPORT_BYTES. Reserve its entire
+# allowance, plus bounded retry history/envelope metadata, before executing it.
+MAX_OUTCOME_BYTES = scanner.MAX_REPORT_BYTES + (128 << 10)
 RESOURCE_REASONS = frozenset({"scan_timeout", "runtime_limit", "archive_time_limit", "size_limit",
     "input_limit_exceeded", "acquisition_transfer_limit", "total_bytes_limit", "artifact_count_limit", "output_limit", "normalization_truncated"})
 TRANSIENT_REASONS = frozenset({"acquisition_failed", "preparation_timeout", "network_error", "network_timeout",
@@ -117,6 +123,15 @@ def validate_manifest(manifest, *, current_policy=False):
         check_counts(plugin)
     for key in coverage:
         require(sum(plugin[key] for plugin in manifest["plugin_coverage"]) <= coverage[key], "plugin totals exceed coverage")
+    if "execution_summary" in manifest:
+        execution = manifest["execution_summary"]
+        count = execution["partition_count"]
+        received, missing = execution["received_partitions"], execution["missing_partitions"]
+        require(received == sorted(set(received)) and missing == sorted(set(missing)) and
+                not set(received) & set(missing) and set(received) | set(missing) == set(range(count)),
+                "execution partitions do not partition the expected workers")
+        require(execution["attempted_sources"] <= coverage["selected"] and
+                execution["recovered_sources"] <= coverage["selected"], "execution source counts exceed selection")
     return manifest
 
 
@@ -527,13 +542,14 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
 
 
 def scan_partition(selection, executable, previous, *, source_commit, partition_index=0,
-                   partition_count=MAX_PARTITIONS, maximum_attempts=MAX_ATTEMPTS,
-                   budget_seconds=2100, mirror_root=None, discovery_summary=None):
+                    partition_count=MAX_PARTITIONS, maximum_attempts=DEFAULT_ATTEMPTS,
+                    budget_seconds=2100, mirror_root=None, discovery_summary=None,
+                    checkpoint=None, resume=None, slice_attempts=None):
     validate_selection(selection)
     require(SHA.fullmatch(source_commit) is not None, "invalid source commit")
     require(type(budget_seconds) in (int, float) and 0 < budget_seconds <= 2100, "invalid scan budget")
-    scanner.verify_scanner(executable)
-    budget = WorkBudget(budget_seconds)
+    require(slice_attempts is None or type(slice_attempts) is int and 1 <= slice_attempts <= maximum_attempts,
+            "invalid slice attempt bound")
     historical_ids = set()
     if discovery_summary:
         current_ids = {identifier for state in discovery_summary.get("source_states", []) if state["current"]
@@ -545,8 +561,48 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
                            excluded_ids=historical_ids, repository_aliases=aliases)
     old_attempts, old_records = compatible_attempts(previous, selection), previous_records(previous, selection, repository_aliases=aliases)
     outcomes, pins = [], {}
+    if resume is not None:
+        validate_worker(resume, selection, source_commit)
+        require(resume["partition"] == {"index": partition_index, "count": partition_count},
+                "checkpoint partition differs")
+        require(len(resume["attempts"]) <= maximum_attempts, "checkpoint exceeds requested attempt bound")
+        by_id = {item["id"]: item for item in selection["sources"]}
+        for outcome in resume["attempts"]:
+            attempt = outcome["attempt"]
+            old = old_attempts.get(attempt["id"])
+            require(old is None or attempt["last_attempted_at"] >= old["last_attempted_at"],
+                    "checkpoint regresses progress")
+            require(attempt == make_attempt(by_id[attempt["id"]], outcome["record"], old,
+                    old_records.get(attempt["id"]), at=attempt["last_attempted_at"]),
+                    "checkpoint attempt lineage differs")
+        outcomes = copy.deepcopy(resume["attempts"])
+    completed = {outcome["attempt"]["id"] for outcome in outcomes}
+
+    def document(entries):
+        return {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),
+            "selection_digest": sha256_digest(canonical_json(selection)), "scanner": SCANNER, "profile": PROFILE,
+            "partition": {"index": partition_index, "count": partition_count}, "attempts": entries}
+
+    def persist():
+        value = document(outcomes)
+        require(len(report_json(value)) <= MAX_WORKER_BYTES, "worker checkpoint exceeds byte bound")
+        if checkpoint is not None:
+            checkpoint(copy.deepcopy(value))
+        return value
+
+    # Even scanner verification/setup failures leave an honest empty checkpoint.
+    persist()
+    scanner.verify_scanner(executable)
+    budget = WorkBudget(budget_seconds)
+    admitted = 0
     try:
         for item in chosen:
+            if item["id"] in completed:
+                continue
+            if len(outcomes) >= maximum_attempts or slice_attempts is not None and admitted >= slice_attempts:
+                break
+            if len(report_json(document(outcomes))) + MAX_OUTCOME_BYTES > MAX_WORKER_BYTES:
+                break  # Defer before acquisition: an executed result must always fit.
             old = old_attempts.get(item["id"])
             profile_id = old["next_profile"] if old else scanner.STANDARD_PROFILE["id"]
             profile = scanner.PROFILE_DOCUMENTS[profile_id]
@@ -570,15 +626,17 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
                 record["execution"]["acquisition_seconds"] = round(time.monotonic() - acquisition_started, 6)
             attempt = make_attempt(item, record, old, old_records.get(item["id"]))
             outcome = {"attempt": attempt, "record": scanner.redact_public_record(record)}
-            if len(report_json(outcomes)) + len(report_json(outcome)) + 4096 > MAX_WORKER_BYTES:
-                break  # Completed prior work remains publishable; unpersisted work is still queued.
+            require(len(report_json(outcome)) <= MAX_OUTCOME_BYTES, "normalized outcome exceeds reserved capacity")
+            # Validate the new transaction once; all preceding outcomes were
+            # already validated, avoiding quadratic full-checkpoint validation.
+            validate_worker(document([outcome]), selection, source_commit)
             outcomes.append(outcome)
+            admitted += 1
+            persist()
     finally:
         for pinned in pins.values():
             pinned.close()
-    return {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),
-        "selection_digest": sha256_digest(canonical_json(selection)), "scanner": SCANNER, "profile": PROFILE,
-        "partition": {"index": partition_index, "count": partition_count}, "attempts": outcomes}
+    return persist()
 
 
 def validate_worker(worker, selection, source_commit):
@@ -604,13 +662,81 @@ def validate_worker(worker, selection, source_commit):
     return worker
 
 
+def coalesce_workers(workers, selection, source_commit, *, expected_partition_count=None):
+    """Accept cumulative checkpoints only when their outcomes extend exactly."""
+    require(isinstance(workers, (list, tuple)) and bool(workers), "worker artifacts required")
+    require(expected_partition_count is None or type(expected_partition_count) is int and
+            1 <= expected_partition_count <= MAX_PARTITIONS, "invalid expected partition count")
+    by_partition = {}
+    count = expected_partition_count
+    for value in workers:
+        validate_worker(value, selection, source_commit)
+        part = value["partition"]
+        if count is None:
+            count = part["count"]
+        require(part["count"] == count, "worker partition count differs from preparation")
+        prior = by_partition.get(part["index"])
+        if prior is not None:
+            short, long = sorted((prior, value), key=lambda entry: len(entry["attempts"]))
+            require(short["attempts"] == long["attempts"][:len(short["attempts"])],
+                    "conflicting cumulative worker checkpoints")
+            if len(short["attempts"]) < len(long["attempts"]):
+                require(short["generated_at"] <= long["generated_at"], "worker checkpoint timestamp regresses")
+                value = long
+            else:
+                value = max((prior, value), key=lambda entry: entry["generated_at"])
+        by_partition[part["index"]] = value
+    return [by_partition[index] for index in sorted(by_partition)], count
+
+
+def apply_outcome(records, attempts, item, outcome, *, replay=False):
+    """Commit one record/retry transaction while retaining useful failed-scan fallback."""
+    attempt, new = outcome["attempt"], outcome["record"]
+    identifier = item["id"]
+    old_attempt, old_record = attempts.get(identifier), records.get(identifier)
+    if replay and old_attempt is not None and attempt["attempt_count"] <= old_attempt["attempt_count"]:
+        if attempt["attempt_count"] == old_attempt["attempt_count"]:
+            require(attempt == old_attempt, "recovered attempt conflicts with persisted progress")
+            if old_record is not None and old_record["status"] == new["status"]:
+                controls = {"freshness", "target_revision", "retry", "attempt_history"}
+                require({key: value for key, value in old_record.items() if key not in controls} ==
+                        {key: value for key, value in new.items() if key not in controls},
+                        "recovered record conflicts with persisted evidence")
+        else:
+            final = attempt["history"][-1]
+            require(final in old_attempt["history"], "recovered older attempt has no persisted lineage")
+        return False
+    require(old_attempt is None or attempt["last_attempted_at"] >= old_attempt["last_attempted_at"],
+            "worker regresses progress")
+    require(attempt["attempt_count"] == (old_attempt["attempt_count"] + 1 if old_attempt else 1),
+            "attempt count is not consecutive")
+    require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
+            "worker attempt lineage differs")
+    if new["status"] == "error" and old_record is not None and old_record["status"] != "error":
+        record = old_record
+    else:
+        record = copy.deepcopy(new)
+        record["freshness"] = "current"
+    persisted_attempt = copy.deepcopy(attempt)
+    if old_attempt is not None and old_record is not None and predecessor_uncertain(old_record) and new["status"] == "error":
+        # A later failed execution cannot resolve an unavailable predecessor,
+        # even when both the old and new report contain no acquired content.
+        mark_missing_predecessor(record, persisted_attempt)
+    records[identifier] = record
+    attempts[identifier] = persisted_attempt
+    return True
+
+
 def shard_document(repository, records):
     return {"schema_version": 3, "scanner": SCANNER, "profile": PROFILE, "repository": repository, "records": records}
 
 
-def merge_reports(selection, previous, workers, *, source_commit, output_dir, discovery_summary=None):
+def merge_reports(selection, previous, workers, *, source_commit, output_dir, discovery_summary=None,
+                  expected_partition_count=None, allow_partial_workers=False, recovered_sources=0):
     validate_selection(selection)
     require(SHA.fullmatch(source_commit) is not None and workers, "source commit and worker artifacts required")
+    require(type(recovered_sources) is int and 0 <= recovered_sources <= len(selection["sources"]),
+            "invalid recovered source count")
     summary = discovery_summary
     if isinstance(summary, Path):
         summary = read_json(summary, max_bytes=MAX_DISCOVERY_BYTES)
@@ -623,10 +749,12 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     aliases = (summary or {}).get("repository_aliases", [])
     records, attempts = previous_records(previous, selection, repository_aliases=aliases), compatible_attempts(previous, selection)
     expected = {item["id"]: item for item in selection["sources"]}
+    require(type(allow_partial_workers) is bool and (not allow_partial_workers or expected_partition_count is not None),
+            "partial assembly requires an independently expected partition count")
+    workers, expected_count = coalesce_workers(workers, selection, source_commit,
+                                             expected_partition_count=expected_partition_count)
     partitions, seen = set(), set()
-    expected_count = workers[0]["partition"]["count"]
     for worker in workers:
-        validate_worker(worker, selection, source_commit)
         part = worker["partition"]
         require(part["count"] == expected_count and part["index"] not in partitions, "inconsistent worker partitions")
         partitions.add(part["index"])
@@ -635,18 +763,8 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
             identifier = attempt["id"]
             require(identifier not in seen, "repeated attempt across partitions")
             seen.add(identifier)
-            old_attempt, old_record = attempts.get(identifier), records.get(identifier)
-            require(old_attempt is None or attempt["last_attempted_at"] >= old_attempt["last_attempted_at"], "worker regresses progress")
-            require(attempt["attempt_count"] == (old_attempt["attempt_count"] + 1 if old_attempt else 1), "attempt count is not consecutive")
-            # An acquisition/scan failure must not erase useful prior evidence.
-            if new["status"] == "error" and old_record is not None and old_record["status"] != "error":
-                record = old_record
-            else:
-                record = copy.deepcopy(new)
-                record["freshness"] = "current"
-            records[identifier] = record
-            attempts[identifier] = copy.deepcopy(attempt)
-    require(partitions == set(range(expected_count)), "missing worker partition")
+            apply_outcome(records, attempts, expected[identifier], outcome)
+    require(allow_partial_workers or partitions == set(range(expected_count)), "missing worker partition")
     current_ids = {identifier for state in (summary or {}).get("source_states", []) if state["current"] for identifier in state["selected_ids"]}
     historical_ids = {identifier for state in (summary or {}).get("source_states", []) if not state["current"]
                       for identifier in state["selected_ids"]} - current_ids
@@ -694,18 +812,285 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
         "scope": "selected_sources", "scanner": SCANNER, "profile": PROFILE, "profiles": list(scanner.PROFILES.values()),
         "selection_digest": selection_hash, "coverage": contract.analysis_counts(selection, records),
         "plugin_coverage": contract.plugin_counts(selection, records), "shards": descriptors,
+        "execution_summary": {"partition_count": expected_count, "received_partitions": sorted(partitions),
+            "missing_partitions": sorted(set(range(expected_count)) - partitions),
+            "attempted_sources": len(seen), "recovered_sources": recovered_sources},
         **{key: (summary or {}).get(key, None if key == "catalog_coverage" else []) for key in
            ("source_states", "plugin_states", "repository_aliases", "catalog_coverage")}}
     validate_manifest(manifest, current_policy=True)
     write_bounded(output_dir / "selection.json", selection, MAX_SELECTION_BYTES)
     write_bounded(output_dir / "attempts.json", {"schema_version": 3, "source_commit": source_commit,
         "generated_at": generated, "selection_digest": selection_hash, "attempts": sorted(attempts.values(), key=lambda value: value["id"]),
-        "queue_cursor": ((previous or {}).get("queue_cursor", 0) + max(1, len(seen))) % 3}, MAX_STATE_BYTES)
+        "queue_cursor": ((previous or {}).get("queue_cursor", 0) + len(seen)) % 3}, MAX_STATE_BYTES)
     if summary is not None:
         write_bounded(output_dir / "coverage.json", summary, MAX_DISCOVERY_BYTES)
     write_bounded(output_dir / "index.json", manifest, MAX_MANIFEST_BYTES)
     read_bundle(output_dir)
     return manifest
+
+
+def recovery_analysis(record):
+    """Analysis equality excludes provenance that naturally varies per execution.
+
+    The upstream report digest can change with raw execution metadata. Retain the
+    chosen original digest; never manufacture a new digest or ignore source bytes,
+    execution state/exit code, coverage, findings or any other analysis field.
+    """
+    volatile = {"scanned_at", "report_digest", "freshness", "target_revision", "retry", "attempt_history"}
+    value = {key: copy.deepcopy(child) for key, child in record.items() if key not in volatile}
+    value["execution"] = {key: child for key, child in value["execution"].items()
+        if key not in {"started_at", "finished_at", "acquisition_seconds", "analysis_seconds"}}
+    return report_json(value)
+
+
+def recovery_history_contains(history, entries):
+    return bool(entries) and any(history[index:index + len(entries)] == entries
+        for index in range(len(history) - len(entries) + 1))
+
+
+def mark_recovery_uncertainty(record, attempt, reason, message):
+    """Limit publication and schedule bounded work without changing real scan history."""
+    scanner.add_coverage_reason(record, reason, message)
+    scanner.add_coverage_reason(record, "normalization_truncated",
+        "Recovery evidence is not fully represented as one complete original report; a fresh scan is required.")
+    if record["status"] != "error":
+        record["status"] = record["coverage"]["status"] = "partial"
+        record["findings_truncated"] = True
+        record["coverage"]["grouping_complete"] = False
+    operational = {"recovery_conflict", "recovery_conflict_attempt_limit",
+        "recovery_predecessor_unavailable", "recovery_predecessor_unavailable_attempt_limit"}
+    if attempt["reason"] not in operational:
+        can_retry = attempt["attempt_count"] < contract.RETRY_POLICY["maximum_attempts_per_identity"]
+        profile = record["profile"]["id"]
+        next_profile = attempt["next_profile"] or (profile if profile in scanner.PROFILES else attempt["profile"]["id"])
+        next_at = max(scanner.now(), attempt["next_attempt_at"] or attempt["last_attempted_at"])
+        attempt.update(disposition="scheduled" if can_retry else "exhausted",
+            reason=reason if can_retry else reason + "_attempt_limit",
+            next_attempt_at=next_at if can_retry else None,
+            next_profile=next_profile if can_retry else None)
+
+
+def predecessor_uncertain(record):
+    return any(reason["code"] == "recovery_predecessor_unavailable" for reason in record["coverage"]["reasons"])
+
+
+def mark_missing_predecessor(record, attempt):
+    mark_recovery_uncertainty(record, attempt, "recovery_predecessor_unavailable",
+        "An authenticated execution has a complete original attempt history, but its predecessor report was "
+        "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
+
+
+def quarantine_recovery(records, attempts, item, outcome):
+    """Keep an original adverse report and disclose that alternate evidence is omitted.
+
+    Attempt numbers belong to the originating queue lineage. A conflicting fork
+    does not reset that history or fabricate another scanner execution. Existing
+    fields can represent this publication limitation and a bounded fresh retry.
+    """
+    identifier = item["id"]
+    old, new = records[identifier], outcome["record"]
+
+    def rank(record):
+        # Prefer content warnings over a clean report. The tie break uses only
+        # preserved original fields, so derived quarantine flags cannot change
+        # the representative on a replay or when batch order changes.
+        original = {key: record.get(key) for key in ("source", "scanner", "profile", "skill_name",
+            "scanned_at", "report_digest", "findings", "errors", "raw_finding_count", "finding_group_count")}
+        return (bool(record["finding_count"] or record["findings"]), record["finding_count"],
+                len(record["findings"]), record["execution"]["state"] != "failed", report_json(original))
+
+    retained = copy.deepcopy(max((old, new), key=rank))
+    mark_recovery_uncertainty(retained, attempts[identifier], "recovery_conflict",
+        "Independent authenticated executions disagree. This original report is retained; "
+        "other authenticated outcomes are not fully represented. Their immutable checkpoint artifacts remain available.")
+    records[identifier] = retained
+
+
+def recover_previous(selection, previous, recovery_bundles, *, source_commit, discovery_summary, output_dir,
+                     diagnostics=None):
+    """Reconcile authenticated older-run outcomes at exact currently selected identities.
+
+    The transport authenticates producing runs/artifacts before this pure boundary.
+    Original selection, discovery and worker validation are repeated here. Nothing
+    becomes current solely because it was present in an older artifact.
+    """
+    validate_selection(selection)
+    validate_discovery_summary(discovery_summary, selection, source_commit)
+    aliases = verified_aliases(previous, selection, discovery_summary)
+    records = previous_records(previous, selection, repository_aliases=aliases)
+    attempts = compatible_attempts(previous, selection)
+    targets = {source_digest(item): item for item in selection["sources"]}
+    require(len(targets) == len(selection["sources"]), "ambiguous recovery target identity")
+    diagnostics = {} if diagnostics is None else diagnostics
+    diagnostics.update(equivalent_executions=0, conflicting_executions=0,
+        missing_predecessor_executions=0, examples=[])
+    outcomes, grouped, seen_outcomes = [], {}, set()
+    identities = {}
+    # Prefix strictness applies to each actual producing run/attempt, including
+    # snapshots split across separate artifact packages. Origin-less legacy pure
+    # callers retain strict conflict behavior; only authenticated origins may fork.
+    batches = []
+    for batch in recovery_bundles:
+        origin = batch.get("execution_origin")
+        if origin is None:
+            batches.append(batch)
+            continue
+        v2.exact(origin, ("run_id", "run_attempt"), "recovery execution origin")
+        require(all(type(value) is int and value > 0 for value in origin.values()), "invalid recovery execution origin")
+        key = origin["run_id"], origin["run_attempt"]
+        if key in grouped:
+            prior = grouped[key]
+            require(prior["selection"] == batch["selection"] and prior["discovery"] == batch["discovery"],
+                    "one execution origin has conflicting preparation snapshots")
+            prior["workers"].extend(batch["workers"])
+        else:
+            grouped[key] = {**batch, "workers": list(batch["workers"])}
+            batches.append(grouped[key])
+    for batch in batches:
+        origin = batch.get("execution_origin")
+        original_selection, original_summary = batch["selection"], batch["discovery"]
+        original_commit = batch.get("source_commit", original_summary["source_commit"])
+        validate_selection(original_selection)
+        validate_discovery_summary(original_summary, original_selection, original_commit)
+        require(original_summary.get("catalog", {}).get("mode") != "controlled_immutable_regression",
+                "controlled regression artifacts cannot recover production evidence")
+        workers, _ = coalesce_workers(batch["workers"], original_selection, original_commit)
+        original_items = {item["id"]: item for item in original_selection["sources"]}
+        for worker in workers:
+            for value in worker["attempts"]:
+                original = original_items[value["attempt"]["id"]]
+                target = targets.get(source_digest(original))
+                if target is None:
+                    continue
+                outcome = copy.deepcopy(value)
+                for key in ("attempt", "record"):
+                    outcome[key]["id"] = target["id"]
+                identity = (source_digest(target), outcome["attempt"]["attempt_count"])
+                prior = identities.get(identity)
+                require(prior is None or prior[0] == outcome or origin is not None and prior[1] is not None,
+                        "conflicting recovered outcomes")
+                identities.setdefault(identity, (outcome, origin))
+                outcome_digest = sha256_digest(report_json(outcome))
+                if outcome_digest not in seen_outcomes:
+                    seen_outcomes.add(outcome_digest)
+                    attempt = outcome["attempt"]
+                    require(len(attempt["history"]) >= attempt["attempt_count"] and
+                        all(left["at"] <= right["at"] for left, right in zip(attempt["history"], attempt["history"][1:])),
+                        "recovered attempt history is incomplete or regresses")
+                    prefix = attempt["history"][:-1]
+                    parent = {"attempt_count": attempt["attempt_count"] - 1, "history": prefix} if attempt["attempt_count"] > 1 else None
+                    require(attempt == make_attempt(target, outcome["record"], parent,
+                        {"attempt_history": prefix}, at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
+                    outcomes.append((target, outcome, origin))
+    # Authentication and a complete, self-consistent original history can retain
+    # higher-count evidence when a bounded window has not yet acquired its parent.
+    # It remains explicitly uncertain, and never restarts its counter at one.
+    unanchored = set()
+    uncertain_ids = set()  # Only newly unanchored evidence in this recovery batch propagates.
+    for item, outcome, origin in outcomes:
+        attempt = outcome["attempt"]
+        if attempt["attempt_count"] == 1:
+            continue
+        persisted = attempts.get(item["id"])
+        prefix = attempt["history"][:-1]
+        epoch = attempt["history"][-attempt["attempt_count"]:]
+        represented = epoch if origin is not None else attempt["history"]
+        known = persisted is not None and (recovery_history_contains(persisted["history"], represented) or
+            persisted["attempt_count"] == attempt["attempt_count"] - 1 and persisted["history"][-len(prefix):] == prefix)
+        known = known or bool(prefix) and any(parent["attempt"]["attempt_count"] == attempt["attempt_count"] - 1 and
+            parent["attempt"]["history"][-len(prefix):] == prefix
+            for parent_item, parent, _ in outcomes if parent_item["id"] == item["id"])
+        if not known and origin is not None and persisted is not None and persisted["attempt_count"] >= attempt["attempt_count"]:
+            continue  # Independent authenticated forks use reconciliation below.
+        if not known:
+            require(origin is not None and len(epoch) == attempt["attempt_count"] and
+                    all(entry["profile"] in scanner.PROFILES.values() for entry in epoch),
+                    "recovered attempt count is not consecutive: missing predecessor")
+            unanchored.add(sha256_digest(report_json(outcome)))
+            uncertain_ids.add(item["id"])
+    applied, recovered_ids = 0, set()
+    for item, outcome, origin in sorted(outcomes, key=lambda value: (
+            value[1]["attempt"]["last_attempted_at"], value[1]["attempt"]["attempt_count"], value[0]["id"],
+            sha256_digest(report_json(value[1])))):
+        old_attempt, old_record = attempts.get(item["id"]), records.get(item["id"])
+        if origin is not None and old_attempt is None and outcome["attempt"]["attempt_count"] == 1:
+            # A new identity may legitimately carry older source/policy history.
+            # Its current epoch has no retry predecessor; preserve the verified
+            # original prefix instead of recomputing it from an unrelated snapshot.
+            attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
+            if old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
+                records[item["id"]] = copy.deepcopy(outcome["record"])
+                records[item["id"]]["freshness"] = "current"
+            if item["id"] in uncertain_ids:
+                mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
+            applied += 1
+            recovered_ids.add(item["id"])
+            continue
+        if sha256_digest(report_json(outcome)) in unanchored and (old_attempt is None or
+                outcome["attempt"]["attempt_count"] > old_attempt["attempt_count"]):
+            identifier = item["id"]
+            attempts[identifier] = copy.deepcopy(outcome["attempt"])
+            if old_record is None or old_record["status"] == "error":
+                records[identifier] = copy.deepcopy(outcome["record"])
+                records[identifier]["freshness"] = "current"
+            elif outcome["record"]["status"] != "error":
+                quarantine_recovery(records, attempts, item, outcome)
+            mark_missing_predecessor(records[identifier], attempts[identifier])
+            diagnostics["missing_predecessor_executions"] += 1
+            if len(diagnostics["examples"]) < 32:
+                diagnostics["examples"].append({"id": identifier, "reason": "recovery_predecessor_unavailable",
+                    "execution_origin": copy.deepcopy(origin)})
+            applied += 1
+            recovered_ids.add(identifier)
+            continue
+        if origin is not None and old_attempt is not None:
+            attempt = outcome["attempt"]
+            scheduling = {"reason", "disposition", "next_attempt_at", "next_profile"}
+            if predecessor_uncertain(old_record) and \
+                    {key: value for key, value in old_attempt.items() if key not in scheduling} == \
+                    {key: value for key, value in attempt.items() if key not in scheduling}:
+                continue  # Exact original execution replay; retain its existing uncertainty/schedule.
+            if attempt == old_attempt and outcome["record"]["status"] == "error" and old_record["status"] != "error":
+                continue  # Exact replay of a failure already retaining useful prior evidence.
+            if attempt["attempt_count"] < old_attempt["attempt_count"] and \
+                    recovery_history_contains(old_attempt["history"], attempt["history"][-attempt["attempt_count"]:]):
+                if old_record["status"] == "error" and predecessor_uncertain(old_record) and outcome["record"]["status"] != "error":
+                    records[item["id"]] = copy.deepcopy(outcome["record"])
+                    records[item["id"]]["freshness"] = "current"
+                    mark_missing_predecessor(records[item["id"]], old_attempt)
+                    recovered_ids.add(item["id"])
+                continue
+            follows = attempt["attempt_count"] == old_attempt["attempt_count"] + 1 and \
+                old_attempt["history"][-len(attempt["history"][:-1]):] == attempt["history"][:-1]
+            if not follows:
+                if recovery_analysis(old_record) == recovery_analysis(outcome["record"]):
+                    diagnostics["equivalent_executions"] += 1
+                else:
+                    before = copy.deepcopy((old_record, old_attempt))
+                    quarantine_recovery(records, attempts, item, outcome)
+                    if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
+                        mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
+                    if (records[item["id"]], attempts[item["id"]]) != before:
+                        recovered_ids.add(item["id"])
+                    diagnostics["conflicting_executions"] += 1
+                    if len(diagnostics["examples"]) < 32:
+                        diagnostics["examples"].append({"id": item["id"], "reason": "recovery_conflict",
+                            "execution_origin": copy.deepcopy(origin)})
+                continue
+        if apply_outcome(records, attempts, item, outcome, replay=True):
+            applied += 1
+            recovered_ids.add(item["id"])
+            if item["id"] in uncertain_ids:
+                mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
+    aligned = {"manifest": {"schema_version": 3, "scanner": SCANNER, "profile": PROFILE,
+            "profiles": list(scanner.PROFILES.values()), "repository_aliases": aliases},
+        "selection": selection, "records": records, "attempts": attempts,
+        "queue_cursor": ((previous or {}).get("queue_cursor", 0) + applied) % 3}
+    empty = {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),
+        "selection_digest": sha256_digest(canonical_json(selection)), "scanner": SCANNER, "profile": PROFILE,
+        "partition": {"index": 0, "count": 1}, "attempts": []}
+    return merge_reports(selection, aligned, [empty], source_commit=source_commit, output_dir=output_dir,
+        discovery_summary=discovery_summary, expected_partition_count=1, recovered_sources=len(recovered_ids))
 
 
 def main():
@@ -715,13 +1100,17 @@ def main():
     scan.add_argument("--scanner", type=Path, required=True)
     scan.add_argument("--partition-index", type=int, required=True)
     scan.add_argument("--partition-count", type=int, default=MAX_PARTITIONS)
-    scan.add_argument("--maximum-attempts", type=int, default=MAX_ATTEMPTS)
+    scan.add_argument("--maximum-attempts", type=int, default=DEFAULT_ATTEMPTS)
+    scan.add_argument("--slice-attempts", type=int)
     scan.add_argument("--budget-seconds", type=int, default=2100)
     scan.add_argument("--mirror-root", type=Path)
     scan.add_argument("--output", type=Path, required=True)
     merge = commands.add_parser("merge")
     merge.add_argument("--workers", type=Path, nargs="+", required=True)
     merge.add_argument("--output-dir", type=Path, required=True)
+    merge.add_argument("--expected-partition-count", type=int)
+    merge.add_argument("--allow-partial-workers", action="store_true")
+    merge.add_argument("--recovered-sources", type=int, default=0)
     for command in (scan, merge):
         command.add_argument("--selection", type=Path, required=True)
         command.add_argument("--previous-dir", type=Path)
@@ -734,15 +1123,20 @@ def main():
         if summary:
             validate_discovery_summary(summary, selection, args.source_commit)
         if args.command == "scan":
+            resume = read_json(args.output, max_bytes=MAX_WORKER_BYTES) if args.output.exists() else None
             worker = scan_partition(selection, args.scanner.resolve(), previous, source_commit=args.source_commit,
                 partition_index=args.partition_index, partition_count=args.partition_count, maximum_attempts=args.maximum_attempts,
-                budget_seconds=args.budget_seconds, mirror_root=args.mirror_root, discovery_summary=summary)
+                budget_seconds=args.budget_seconds, mirror_root=args.mirror_root, discovery_summary=summary,
+                resume=resume, slice_attempts=args.slice_attempts,
+                checkpoint=lambda value: write_bounded(args.output, value, MAX_WORKER_BYTES))
             validate_worker(worker, selection, args.source_commit)
             write_bounded(args.output, worker, MAX_WORKER_BYTES)
         else:
             workers = [read_json(path, max_bytes=MAX_WORKER_BYTES) for path in args.workers]
             manifest = merge_reports(selection, previous, workers, source_commit=args.source_commit,
-                output_dir=args.output_dir, discovery_summary=summary)
+                output_dir=args.output_dir, discovery_summary=summary,
+                expected_partition_count=args.expected_partition_count, allow_partial_workers=args.allow_partial_workers,
+                recovered_sources=args.recovered_sources)
             print(json.dumps(manifest["coverage"], sort_keys=True))
         return 0
     except (PublicationError, CheckpointYield, OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError) as error:

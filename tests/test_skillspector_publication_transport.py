@@ -324,9 +324,87 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(result["sha"], "a" * 40)
         self.assertEqual(self.clock.sleeps, [1])
         self.assertEqual(self.requests[0][0].data, self.requests[1][0].data)
-        self.assertIn("method=POST path=git/trees status=502 request_id=ABCD:1234", output.getvalue())
+        self.assertEqual(output.getvalue(), "GitHub coverage transient failure; bounded retry\n")
         self.assertNotIn("secret-token", output.getvalue())
         self.assertNotIn("response body", output.getvalue())
+
+    def test_untrusted_request_id_and_exception_text_are_never_logged_in_plaintext(self):
+        echoed = 'server-echo-secret-token'
+        client = self.client([http_error(502, {'X-GitHub-Request-Id': echoed}, echoed.encode()), {'ok': True}])
+        output = io.StringIO()
+        with redirect_stderr(output):
+            self.assertEqual(client.request('GET', 'git/ref/heads/main'), {'ok': True})
+        self.assertNotIn('secret-token', output.getvalue())
+        self.assertNotIn(echoed, output.getvalue())
+        self.assertEqual(output.getvalue(), 'GitHub coverage transient failure; bounded retry\n')
+
+    def test_api_parse_read_and_budget_failures_are_typed_without_response_or_request_text(self):
+        secret = 'server-echo-secret-token'
+        bodies = [('{"' + secret + '":1,"' + secret + '":2}').encode(),
+                  ('{"' + secret + '\\u0301":1}').encode(), b'{"' + secret.encode(), b'\xff']
+        for body in bodies:
+            with self.subTest(body=body):
+                clock = Clock()
+                client = transport.GitHub('secret-token', opener=lambda *_args, **_kwargs: Response(body),
+                                          clock=clock, sleeper=clock.sleep)
+                with redirect_stderr(io.StringIO()) as output, self.assertRaises(transport.GitHubTransportError) as raised:
+                    client.request('GET', 'actions/runs?probe=secret-token')
+                self.assertEqual(str(raised.exception), 'GitHub coverage response invalid; prior report retained')
+                self.assertNotIn(secret, str(raised.exception) + output.getvalue())
+                self.assertNotIn('secret-token', str(raised.exception) + output.getvalue())
+        with mock.patch.object(transport, 'MAX_API_BYTES', 8):
+            client = transport.GitHub('secret-token', opener=lambda *_args, **_kwargs: Response(secret.encode()))
+            with self.assertRaisesRegex(transport.GitHubTransportError, 'response invalid'):
+                client.request('GET', 'git/ref/heads/main')
+        client = self.client([OSError(secret)])
+        with self.assertRaises(transport.GitHubTransportError) as raised:
+            client.request('GET', 'git/ref/heads/main')
+        self.assertNotIn(secret, str(raised.exception))
+        client = self.client([], budget_seconds=1)
+        self.clock.now = 2
+        with self.assertRaisesRegex(transport.GitHubTransportError, 'budget exhausted'):
+            client.request('GET', 'git/ref/heads/main')
+
+    def test_terminal_http_errors_never_echo_paths_queries_or_headers(self):
+        client = self.client([http_error(503, {'X-GitHub-Request-Id': 'secret-token'}, b'secret-token') for _ in range(3)])
+        output = io.StringIO()
+        with redirect_stderr(output), self.assertRaises(transport.GitHubTransportError) as raised:
+            client.request('GET', 'actions/runs?probe=secret-token')
+        self.assertEqual(str(raised.exception), 'GitHub coverage request failed operation=read target=actions status=503 attempt=3/3')
+        self.assertNotIn('secret-token', output.getvalue() + str(raised.exception))
+        self.assertNotIn('actions/runs', str(raised.exception))
+
+    def test_optional_validation_parser_uses_only_canonical_allowlist_labels(self):
+        error = http_error(422, body=json.dumps({'message': 'Validation Failed', 'errors': [
+            {'code': 'invalid', 'field': 'content', 'value': 'secret-token'},
+            {'code': 'secret-token', 'field': 'secret-token'}]}).encode())
+        try:
+            result = transport.validation_diagnostic(error)
+        finally:
+            error.close()
+        self.assertEqual(result, 'error_category=validation_failed error_count=2 error_codes=invalid error_fields=content')
+
+    def test_encoded_recovery_cursor_query_is_accepted_but_malformed_escapes_are_rejected(self):
+        path = 'actions/workflows/9/runs?branch=main&status=completed&per_page=100&page=6&created=%3C%3D2026-11-03T00%3A00%3A00Z'
+        client = self.client([{'workflow_runs': []}])
+        self.assertEqual(client.request('GET', path), {'workflow_runs': []})
+        self.assertTrue(self.requests[0][0].full_url.endswith(path))
+        for malformed in ('actions/runs?created=%', 'actions/runs?created=%0G', 'actions/runs?created=%3',
+                          'actions/%2Fruns?created=1', 'actions/../runs?created=1'):
+            with self.subTest(path=malformed), self.assertRaises(PublicationError):
+                client.request('GET', malformed)
+
+    def test_production_transport_accepts_only_sha_to_sha_ancestry_comparisons(self):
+        sha_path = 'compare/' + 'a' * 40 + '...' + 'b' * 40
+        for path in (sha_path, sha_path + '?per_page=1', 'contents/.github/workflows/skillspector-reports.yml',
+                     'contents/schemas/skillspector-manifest-v3.schema.json'):
+            with self.subTest(path=path):
+                client = self.client([{'ok': True}])
+                self.assertEqual(client.request('GET', path), {'ok': True})
+        for path in ('compare/../main', 'compare/abc...main', 'compare/' + 'a' * 40 + '...main',
+                     'git/ref/heads/../secrets', 'git/ref/heads/./main'):
+            with self.subTest(path=path), self.assertRaises(PublicationError):
+                self.client([]).request('GET', path)
 
     def test_only_three_safe_retries_and_strict_global_budget(self):
         client = self.client([http_error(503) for _ in range(3)])
@@ -364,7 +442,7 @@ class TransportTests(unittest.TestCase):
         def broken_read(*_args): raise TimeoutError()
         error.read = broken_read
         client = self.client([error])
-        with self.assertRaisesRegex(PublicationError, "status=403 request_id=SAFE:123"):
+        with self.assertRaisesRegex(PublicationError, "status=403"):
             client.request("GET", "git/ref/heads/main")
         self.assertEqual(len(self.requests), 1)
 
@@ -380,7 +458,7 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(self.clock.sleeps, [delay])
                 self.assertTrue(stream.closed)
 
-    def test_validation_details_only_emit_fixed_categories_codes_and_fields(self):
+    def test_validation_errors_emit_only_fixed_operation_status_and_local_attempt(self):
         secret = "private-scanner-content-secret-token"
         response = {"message": "Validation Failed", "documentation_url": "https://example.test/" + secret,
             "errors": [{"resource": secret, "field": "content", "code": "invalid", "message": secret,
@@ -395,10 +473,10 @@ class TransportTests(unittest.TestCase):
         with redirect_stderr(output), self.assertRaises(PublicationError) as raised:
             client.request("POST", "git/trees", payload)
         diagnostic = str(raised.exception)
-        self.assertIn("status=422 request_id=SAFE:422 attempt=1/3", diagnostic)
-        self.assertIn("error_category=validation_failed error_count=5", diagnostic)
-        self.assertIn("error_codes=invalid,missing_field error_fields=content,sha", diagnostic)
-        self.assertIn(f"request_bytes={len(canonical_json(payload))} tree_entries=1", diagnostic)
+        self.assertIn("status=422 attempt=1/3", diagnostic)
+        self.assertNotIn("error_category=", diagnostic)
+        self.assertNotIn("error_codes=", diagnostic)
+        self.assertNotIn("request_bytes=", diagnostic)
         self.assertNotIn(secret, diagnostic + output.getvalue())
         self.assertNotIn("https://", diagnostic)
         self.assertEqual(output.getvalue(), "")
@@ -419,8 +497,8 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(PublicationError) as raised:
                     client.request("POST", "git/trees", {"tree": []})
                 diagnostic = str(raised.exception)
-                self.assertIn("error_category=" + category, diagnostic)
-                self.assertIn("error_count=2", diagnostic)
+                self.assertNotIn("error_category=", diagnostic)
+                self.assertNotIn("error_count=", diagnostic)
                 self.assertNotIn("error_codes=", diagnostic)
                 self.assertNotIn("error_fields=", diagnostic)
                 self.assertNotIn("private-scanner-content", diagnostic)
@@ -428,7 +506,7 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(len(self.requests), 1)
                 self.assertEqual(self.clock.sleeps, [])
 
-    def test_invalid_validation_bodies_preserve_status_and_are_read_once_with_a_bound(self):
+    def test_validation_bodies_are_not_read_or_reflected_in_errors(self):
         for body, expected in ((b"<html>private-scanner-content</html>", "malformed"),
             (b"\xff", "malformed"), (b'{"message":', "malformed"),
             (b'{"message":"Validation Failed","message":"secret-token"}', "malformed"),
@@ -445,11 +523,11 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(PublicationError) as raised:
                     client.request("POST", "git/trees", {"tree": []})
                 diagnostic = str(raised.exception)
-                self.assertIn("status=422 request_id=SAFE:422", diagnostic)
-                self.assertIn("diagnostic_body=" + expected, diagnostic)
+                self.assertIn("status=422", diagnostic)
+                self.assertNotIn("diagnostic_body=", diagnostic)
                 self.assertNotIn("private-scanner-content", diagnostic)
                 self.assertNotIn("secret-token", diagnostic)
-                self.assertEqual(sizes, [transport.MAX_ERROR_BYTES + 1])
+                self.assertEqual(sizes, [])
                 self.assertTrue(stream.closed)
                 self.assertEqual(len(self.requests), 1)
                 self.assertEqual(self.clock.sleeps, [])
@@ -466,15 +544,15 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(PublicationError) as raised:
                     client.request("POST", "git/trees", {"tree": []})
                 diagnostic = str(raised.exception)
-                self.assertIn("status=422 request_id=SAFE:422", diagnostic)
-                self.assertIn("diagnostic_body=unreadable", diagnostic)
+                self.assertIn("status=422", diagnostic)
+                self.assertNotIn("diagnostic_body=", diagnostic)
                 self.assertNotIn("secret-token", diagnostic)
                 self.assertNotIn("private-scanner-content", diagnostic)
                 self.assertTrue(stream.closed)
                 self.assertEqual(len(self.requests), 1)
                 self.assertEqual(self.clock.sleeps, [])
 
-    def test_validation_close_failure_preserves_status_and_request_id_without_retry(self):
+    def test_validation_close_failure_preserves_only_fixed_status_without_retry(self):
         error = http_error(422, {"X-GitHub-Request-Id": "SAFE:422"},
             b'{"message":"Validation Failed"}')
         stream, close = error.fp, error.close
@@ -489,8 +567,8 @@ class TransportTests(unittest.TestCase):
         finally:
             error.close = close
         diagnostic = str(raised.exception)
-        self.assertIn("status=422 request_id=SAFE:422 attempt=1/3", diagnostic)
-        self.assertIn("error_category=validation_failed", diagnostic)
+        self.assertIn("status=422 attempt=1/3", diagnostic)
+        self.assertNotIn("error_category=", diagnostic)
         self.assertNotIn("private-scanner-content", diagnostic)
         self.assertNotIn("secret-token", diagnostic)
         self.assertTrue(stream.closed)
@@ -511,7 +589,9 @@ class TransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "reports"
             bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
-            with self.assertRaisesRegex(PublicationError, "status=422.*error_category=validation_failed"):
+            publisher.coverage.write_bounded(root / "publication-base.json",
+                {"schema_version": 1, "report_commit": "a" * 40}, 4096)
+            with self.assertRaisesRegex(PublicationError, "status=422.*attempt=1/3"):
                 publisher.publish(client, root, COMMIT, fetch=lambda *args, **kwargs: None)
         self.assertEqual([request.get_method() for request, _ in self.requests], ["GET", "GET", "GET", "POST"])
         self.assertTrue(self.requests[-1][0].full_url.endswith("/git/trees"))
