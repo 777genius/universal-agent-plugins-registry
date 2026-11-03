@@ -58,7 +58,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: skillspector-static-reports-${{ github.ref }}
+  group: skillspector-static-reports-${{ github.event_name == 'pull_request' && github.sha || github.ref }}
   queue: max
   cancel-in-progress: false
 
@@ -182,10 +182,11 @@ jobs:
           path: ${{ runner.temp }}/skillspector-plan
       - name: Restore earlier acknowledged slices when this main job is retried
         id: resume
-        if: github.ref == 'refs/heads/main' && github.run_attempt > 1
+        if: github.ref == 'refs/heads/main' && github.run_attempt > 1 && needs.prepare.outputs.corpus != 'controlled'
         working-directory: source
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          SCAN_CORPUS: ${{ needs.prepare.outputs.corpus }}
         run: |
           python3 -m scripts.skillspector_recovery resume-current \
             --plan-dir "${RUNNER_TEMP}/skillspector-plan" \

@@ -8,6 +8,7 @@ import json
 import tempfile
 import unittest
 import urllib.request
+import urllib.error
 import urllib.parse
 import zipfile
 from datetime import datetime, timezone
@@ -239,12 +240,12 @@ class CheckpointTransportTests(unittest.TestCase):
         class MalformedAPI(FakeActions):
             def request(self, method, path, data=None):
                 if path.startswith('actions/workflows/9/runs?'):
-                    return {'workflow_runs': [run_metadata(id='private-token-' + 'x' * 10000), None]}
+                    return {'workflow_runs': [run_metadata(id='private-token-' + 'x' * 10000)]}
                 return super().request(method, path, data)
         with tempfile.TemporaryDirectory() as temporary:
             _, status = recovery.collect(MalformedAPI(run_metadata(), None), Path(temporary),
                 {'schema_version': 1, 'runs': []}, token='read-only', now=NOW)
-            self.assertEqual(status['rejected'], [{'run_id': None, 'reason': 'untrusted_run'}] * 2)
+            self.assertEqual(status['rejected'], [{'run_id': None, 'reason': 'untrusted_run'}])
             self.assertNotIn(b'private-token', coverage.report_json(status))
 
     def test_authenticated_roundtrip_keeps_exact_outcome_and_source_evidence(self):
@@ -504,6 +505,75 @@ class CheckpointTransportTests(unittest.TestCase):
                 environment={'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': COMMIT})
             self.assertEqual(count, 0)
             self.assertFalse(output.exists())
+
+    def test_controlled_main_job_retry_never_requests_production_resume_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package(root, corpus='controlled')
+            api = mock.Mock()
+            result = recovery.restore_current(api, root / 'plan', root / 'resumed.json', token='read-only', partition=0,
+                environment={'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_REF': 'refs/heads/main', 'SCAN_CORPUS': 'catalog'})
+            self.assertEqual(result, 0)
+            api.request.assert_not_called()
+            self.assertFalse((root / 'resumed.json').exists())
+
+    def test_unavailable_ancestry_or_earlier_attempt_api_preserves_receipt_and_cursor(self):
+        for failure_point in ('ancestry_503', 'ancestry_missing', 'attempt_503', 'attempt_missing'):
+            with self.subTest(failure_point=failure_point), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                original = package(root)
+                body, artifact = archive_package(original)
+                previous = root / 'plan' / 'previous'
+                previous.mkdir()
+                state = {'schema_version': 1, 'runs': [],
+                         'cursor': {'before': '2026-11-02T18:00:00Z', 'page': 1, 'offset': 0}}
+                coverage.write_bounded(previous / 'recovery.json', state, recovery.MAX_STATE_BYTES)
+                before = (previous / 'recovery.json').read_bytes()
+                class UnavailableAPI(FakeActions):
+                    def request(self, method, path, data=None):
+                        if failure_point.startswith('ancestry') and path == 'git/ref/heads/main':
+                            return {'object': {'sha': 'd' * 40}}
+                        if path.startswith('compare/') or path == 'actions/runs/101/attempts/1':
+                            if failure_point.endswith('missing'):
+                                return None
+                            raise recovery.GitHubTransportError('GitHub API unavailable; recovery deferred')
+                        return super().request(method, path, data)
+                metadata = run_metadata(run_attempt=2 if failure_point.startswith('attempt') else 1)
+                with mock.patch.object(recovery, 'download_archive', return_value=body), \
+                        self.assertRaises(recovery.GitHubTransportError):
+                    recovery.recover_plan(UnavailableAPI(metadata, artifact), root / 'plan', COMMIT, token='read-only')
+                self.assertEqual((previous / 'recovery.json').read_bytes(), before)
+                self.assertFalse((root / 'plan' / 'recovery.json').exists())
+                self.assertFalse((root / 'plan' / 'recovery-status.json').exists())
+
+    def test_same_plan_retry_clears_unacknowledged_staging_without_quarantining_valid_artifact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            first_body, first = archive_package(original)
+            def next_slice(entries):
+                provenance = json.loads(entries['provenance.json'])
+                provenance['slice'] = 2
+                entries['provenance.json'] = coverage.report_json(provenance)
+            second_body, second = archive_package(original, mutate=next_slice)
+            second.update(id=502, name='skillspector-checkpoint-a1-p0-s2')
+            class TwoArtifacts(FakeActions):
+                def request(self, method, path, data=None):
+                    if path.startswith('actions/runs/101/artifacts?'):
+                        return {'total_count': 2, 'artifacts': [first, second]}
+                    return super().request(method, path, data)
+            def fail_second(identifier, _token):
+                if identifier == 502:
+                    raise urllib.error.URLError(TimeoutError('interrupted download'))
+                return first_body
+            with mock.patch.object(recovery, 'download_archive', side_effect=fail_second), self.assertRaises(urllib.error.URLError):
+                recovery.recover_plan(TwoArtifacts(run_metadata(), first), root / 'plan', COMMIT, token='read-only')
+            self.assertTrue((root / 'plan' / 'recovery' / '101-1-501').is_dir())
+            with mock.patch.object(recovery, 'download_archive', side_effect=lambda identifier, _token: first_body if identifier == 501 else second_body):
+                result = recovery.recover_plan(TwoArtifacts(run_metadata(), first), root / 'plan', COMMIT, token='read-only')
+            self.assertEqual(result['rejected'], [])
+            self.assertEqual(result['recovered_sources'], 1)
+            self.assertFalse((root / 'plan' / 'recovery').exists())
 
 
 class DeliveryStatusTests(unittest.TestCase):

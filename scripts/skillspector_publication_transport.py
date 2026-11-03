@@ -22,6 +22,27 @@ MAX_TREE_FILES = 100_000
 MAX_ERROR_BYTES = 8192
 
 
+class GitHubTransportError(PublicationError):
+    """Unavailable API evidence must never quarantine a valid checkpoint."""
+
+
+def safe_http_status(code):
+    # Return canonical literals, never text carried by an exception or response.
+    match code:
+        case 400: return "400"
+        case 401: return "401"
+        case 403: return "403"
+        case 404: return "404"
+        case 409: return "409"
+        case 422: return "422"
+        case 429: return "429"
+        case 500: return "500"
+        case 502: return "502"
+        case 503: return "503"
+        case 504: return "504"
+        case _: return "http_error"
+
+
 def validation_diagnostic(error):
     """Classify optional 422 details without echoing server-supplied content."""
     try:
@@ -50,8 +71,7 @@ def validation_diagnostic(error):
             ("code", {"missing", "missing_field", "invalid", "already_exists", "unprocessable", "custom"}),
             ("field", {"tree", "base_tree", "path", "mode", "type", "sha", "content", "encoding"}),
         ):
-            present = {row[key] for row in errors if isinstance(row, dict) and
-                       isinstance(row.get(key), str) and row[key] in allowed}
+            present = {label for label in allowed if any(isinstance(row, dict) and row.get(key) == label for row in errors)}
             if present:
                 labels.append(f"error_{key}s=" + ",".join(sorted(present)))
     return " ".join(labels)
@@ -188,24 +208,25 @@ class GitHub:
         request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORY}/{path}",
                                          data=body, headers=headers, method=method)
         safe_retry = method == "GET" or method == "POST" and path in {"git/trees", "git/blobs"}
+        operation = "read" if method == "GET" else "create" if method == "POST" else "update"
+        target = "actions" if route.startswith("actions/") else "ancestry" if route.startswith("compare/") else "git_data" if route.startswith("git/") else "api"
         for attempt in range(3):
             remaining = self._deadline - self._clock()
-            require(remaining > 0, "GitHub publication transport budget exhausted; prior report retained")
-            request_id, status, retry, delay = "unknown", "transport", False, 2 ** attempt
-            details = ""
+            if remaining <= 0:
+                raise GitHubTransportError("GitHub coverage transport budget exhausted; prior report retained")
+            status, retry, delay = "transport", False, 2 ** attempt
             try:
                 with self._open(request, timeout=min(30, remaining)) as response:
                     payload = response.read(MAX_API_BYTES + 1)
-                require(len(payload) <= MAX_API_BYTES, "GitHub response exceeds limit")
-                return parse_json_bytes(payload, "GitHub coverage response", max_bytes=MAX_API_BYTES)
-            except urllib.error.HTTPError as error:
-                status = str(error.code)
                 try:
-                    candidate = error.headers.get("X-GitHub-Request-Id", "")
-                    if isinstance(candidate, str) and 0 < len(candidate) <= 100:
-                        # Server headers are untrusted and may echo credentials.
-                        # Correlate retries without ever logging their raw value.
-                        request_id = "sha256:" + hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:16]
+                    require(len(payload) <= MAX_API_BYTES, "GitHub response exceeds limit")
+                    return parse_json_bytes(payload, "GitHub coverage response", max_bytes=MAX_API_BYTES)
+                except (PublicationError, ValueError, TypeError, RecursionError):
+                    # Parser errors can include arbitrary response keys or text.
+                    raise GitHubTransportError("GitHub coverage response invalid; prior report retained") from None
+            except urllib.error.HTTPError as error:
+                status = safe_http_status(error.code)
+                try:
                     if error.code == 404 and method == "GET":
                         return None
                     diagnostic = b""
@@ -216,10 +237,6 @@ class GitHub:
                             # A truncated optional error body must not mask the
                             # HTTP status or cause us to print response content.
                             pass
-                    if error.code == 422:
-                        details = " " + validation_diagnostic(error) + f" request_bytes={len(body or b'')}"
-                        if path == "git/trees" and isinstance(data, dict) and isinstance(data.get("tree"), list):
-                            details += f" tree_entries={len(data['tree'])}"
                     raw_delay = error.headers.get("Retry-After")
                     pacing = error.code == 429 or error.code == 403 and (
                         raw_delay is not None or b"secondary rate limit" in diagnostic)
@@ -235,12 +252,12 @@ class GitHub:
                     except (OSError, http.client.HTTPException):
                         pass
             except (urllib.error.URLError, TimeoutError, ConnectionError,
-                    http.client.RemoteDisconnected, http.client.IncompleteRead) as error:
+                    http.client.RemoteDisconnected, http.client.IncompleteRead, OSError, http.client.HTTPException) as error:
                 retry = safe_retry and self._transient(error)
-            diagnostic = (f"GitHub coverage request failed method={method} path={path} "
-                          f"status={status} request_id={request_id} attempt={attempt + 1}/3" + details)
+            diagnostic = (f"GitHub coverage request failed operation={operation} target={target} "
+                          f"status={status} attempt={attempt + 1}/3")
             if not retry or attempt == 2 or self._clock() + delay >= self._deadline:
-                raise PublicationError(diagnostic) from None
-            print(diagnostic + "; bounded retry", file=sys.stderr)
+                raise GitHubTransportError(diagnostic) from None
+            print("GitHub coverage transient failure; bounded retry", file=sys.stderr)
             self._sleep(delay)
         raise AssertionError("unreachable GitHub retry loop")

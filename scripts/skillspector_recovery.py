@@ -24,7 +24,7 @@ from scripts import skillspector_coverage_v3 as coverage
 from scripts import skillspector_reports as scanner
 from scripts.directory_publication import PublicationError, canonical_json, parse_timestamp, require
 from scripts.publish_skillspector_reports import REPOSITORY
-from scripts.skillspector_publication_transport import GitHub
+from scripts.skillspector_publication_transport import GitHub, GitHubTransportError
 
 WORKFLOW = ".github/workflows/skillspector-reports.yml"
 ARTIFACT = re.compile(r"skillspector-checkpoint-(?:a([1-9][0-9]{0,3})-)?p([0-7])-s([1-3])\Z")
@@ -228,16 +228,25 @@ def trusted_run(run, workflow_id):
 
 def trusted_main_run(github, run, workflow_id, *, main_sha=None, ancestry=None):
     """A tag named main cannot supply code outside the actual main history."""
+    if run is None or not isinstance(run, dict):
+        raise GitHubTransportError("GitHub producing-run evidence unavailable; recovery deferred")
     trusted_run(run, workflow_id)
     if main_sha is None:
         main = github.request("GET", "git/ref/heads/main")
-        require(isinstance(main, dict) and isinstance(main.get("object"), dict), "main branch ref is unavailable")
+        if not isinstance(main, dict) or not isinstance(main.get("object"), dict):
+            raise GitHubTransportError("GitHub main-branch evidence unavailable; recovery deferred")
         main_sha = main["object"].get("sha")
-    require(isinstance(main_sha, str) and coverage.SHA.fullmatch(main_sha), "invalid explicit main head")
+    if not isinstance(main_sha, str) or not coverage.SHA.fullmatch(main_sha):
+        raise GitHubTransportError("GitHub main-branch evidence invalid; recovery deferred")
     if run["head_sha"] != main_sha and (ancestry is None or run["head_sha"] not in ancestry):
         comparison = github.request("GET", f"compare/{run['head_sha']}...{main_sha}?per_page=1")
-        require(isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"} and
-                comparison.get("base_commit", {}).get("sha") == run["head_sha"] and
+        if not isinstance(comparison, dict) or comparison.get("status") not in {"ahead", "identical", "behind", "diverged"}:
+            raise GitHubTransportError("GitHub ancestry evidence unavailable; recovery deferred")
+        if comparison["status"] in {"ahead", "identical"} and not all(
+                isinstance(comparison.get(key), dict) and isinstance(comparison[key].get("sha"), str) and
+                coverage.SHA.fullmatch(comparison[key]["sha"]) for key in ("base_commit", "merge_base_commit")):
+            raise GitHubTransportError("GitHub ancestry evidence invalid; recovery deferred")
+        require(comparison["status"] in {"ahead", "identical"} and comparison.get("base_commit", {}).get("sha") == run["head_sha"] and
                 comparison.get("merge_base_commit", {}).get("sha") == run["head_sha"],
                 "producing source is outside the explicit main branch history")
         if ancestry is not None:
@@ -376,9 +385,11 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     require(isinstance(workflow, dict), "canonical recovery workflow unavailable")
     workflow_id = integer(workflow.get("id"), "workflow id")
     main = github.request("GET", "git/ref/heads/main")
-    require(isinstance(main, dict) and isinstance(main.get("object"), dict), "main branch ref is unavailable")
+    if not isinstance(main, dict) or not isinstance(main.get("object"), dict):
+        raise GitHubTransportError("GitHub main-branch evidence unavailable; recovery deferred")
     main_sha, ancestry = main["object"].get("sha"), set()
-    require(isinstance(main_sha, str) and coverage.SHA.fullmatch(main_sha), "invalid explicit main head")
+    if not isinstance(main_sha, str) or not coverage.SHA.fullmatch(main_sha):
+        raise GitHubTransportError("GitHub main-branch evidence invalid; recovery deferred")
     validate_state(state)
     acknowledged = {(r["run_id"], r["run_attempt"]): r for r in state["runs"]}
     cursor = state.get("cursor") or {"before": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "page": 1, "offset": 0}
@@ -424,6 +435,7 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                     require(0 < info.file_size <= MAX_PROVENANCE_BYTES, "checkpoint provenance exceeds bound")
                     envelope = scanner.parse_scanner_json(archive.read(info), "checkpoint provenance")
                 attempt = integer(envelope.get("run_attempt"), "checkpoint run attempt")
+                require(attempt <= run["run_attempt"], "checkpoint run attempt differs")
                 producing = run if attempt == run["run_attempt"] else trusted_main_run(github, github.request("GET",
                     f"actions/runs/{run['id']}/attempts/{attempt}"), workflow_id, main_sha=main_sha, ancestry=ancestry)
                 require(attempt <= run["run_attempt"] and producing["id"] == run["id"], "checkpoint run attempt differs")
@@ -436,6 +448,8 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                     rejected.append({"artifact_id": identifier, "reason": reason})
                 else:
                     artifact_acks[identifier] = {"id": identifier, "digest": artifact["digest"]}
+            except GitHubTransportError:
+                raise
             except (PublicationError, ValueError, KeyError, TypeError, RecursionError, zipfile.BadZipFile):
                 # A permanently bad immutable artifact must not starve independent work.
                 reason = "expired_checkpoint" if artifact.get("expired") is True else "invalid_checkpoint"
@@ -469,6 +483,8 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                 next_cursor = {"before": cursor["before"], "page": page, "offset": index}
                 try:
                     trusted_main_run(github, run, workflow_id, main_sha=main_sha, ancestry=ancestry)
+                except GitHubTransportError:
+                    raise
                 except (PublicationError, TypeError, ValueError):
                     identifier = run.get("id") if isinstance(run, dict) else None
                     safe_id = identifier if type(identifier) is int and 0 < identifier < 2**63 else None
@@ -505,6 +521,9 @@ def recover_plan(github, plan_dir, source_commit, *, token, current_id=None):
     previous = coverage.read_bundle(plan_dir / "previous")
     state = read_state(plan_dir / "previous" / STATE_FILE)
     staged = plan_dir / "recovery"
+    if staged.exists() or staged.is_symlink():
+        require(staged.is_dir() and not staged.is_symlink(), "recovery staging must be regular")
+        shutil.rmtree(staged)  # Failed read-only attempts have no receipt; remote originals remain intact.
     new_state, summary = collect(github, staged, state, token=token, current_id=current_id)
     # A rerun of prepare can recover the same run's earlier acknowledged slices.
     if int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")) > 1 and current_id is not None:
@@ -546,6 +565,9 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
     env = os.environ if environment is None else environment
     if int(env.get("GITHUB_RUN_ATTEMPT", "1")) <= 1:
         return 0
+    summary = scanner.read_report_json(plan_dir / "coverage.json", max_bytes=coverage.MAX_DISCOVERY_BYTES)
+    if env.get("SCAN_CORPUS") == "controlled" or summary.get("catalog", {}).get("mode") == "controlled_immutable_regression":
+        return 0
     require(env.get("GITHUB_REF") == "refs/heads/main", "same-run production resume requires main")
     workflow = github.request("GET", "actions/workflows/skillspector-reports.yml")
     run_id, attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
@@ -556,6 +578,9 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
     selection = coverage.load_selection(plan_dir / "selection.json")
     digest = coverage.sha256_digest(canonical_json(selection))
     staged, candidates = plan_dir / "same-run-resume", []
+    if staged.exists() or staged.is_symlink():
+        require(staged.is_dir() and not staged.is_symlink(), "same-run staging must be regular")
+        shutil.rmtree(staged)
     staged.mkdir(parents=True, exist_ok=True)
     download = fetch_archive or download_archive
     downloaded = 0

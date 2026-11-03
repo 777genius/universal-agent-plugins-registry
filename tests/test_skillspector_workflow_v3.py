@@ -28,7 +28,7 @@ WORKFLOW = ROOT / '.github/workflows/skillspector-reports.yml'
 
 
 def expression_value(expression: str, *, repository='777genius/universal-agent-plugins-registry',
-                     ref='refs/heads/main', selected_corpus='catalog'):
+                     ref='refs/heads/main', selected_corpus='catalog', run_attempt=2):
     """Evaluate this workflow's simple publication condition as a truth table.
 
     Reject new expression features so changes to the publication boundary must
@@ -36,14 +36,15 @@ def expression_value(expression: str, *, repository='777genius/universal-agent-p
     """
     expression = expression.removeprefix('${{').removesuffix('}}').strip()
     expression = expression.replace('github.repository', 'repository').replace('github.ref', 'ref')
+    expression = expression.replace('github.run_attempt', 'run_attempt')
     expression = expression.replace('inputs.corpus', 'selected_corpus').replace('steps.config.outputs.corpus', 'selected_corpus').replace('needs.prepare.outputs.corpus', 'selected_corpus').replace('&&', ' and ').replace('||', ' or ')
     tree = ast.parse(expression, mode='eval')
     allowed = (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.Compare, ast.Eq, ast.NotEq,
-               ast.Name, ast.Constant, ast.Load)
+               ast.Name, ast.Constant, ast.Load, ast.Gt)
     if any(not isinstance(node, allowed) for node in ast.walk(tree)):
         raise AssertionError('Publication condition needs an explicit test update')
     return eval(compile(tree, '<workflow bounded expression>', 'eval'), {'__builtins__': {}},
-        {'repository': repository, 'ref': ref, 'selected_corpus': selected_corpus})
+        {'repository': repository, 'ref': ref, 'selected_corpus': selected_corpus, 'run_attempt': run_attempt})
 
 
 def gate(expression, **context):
@@ -218,6 +219,10 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         self.assertIn("needs.prepare.outputs.corpus != 'controlled'", publish['if'])
         self.assertEqual(recovery.execution_config('schedule')['maximum_attempts'], '128')
         self.assertEqual(recovery.execution_config('workflow_dispatch', maximum_attempts='512')['scan_budget_seconds'], '2100')
+        self.assertEqual(self.workflow['concurrency']['group'],
+            "skillspector-static-reports-${{ github.event_name == 'pull_request' && github.sha || github.ref }}")
+        self.assertEqual(self.workflow['concurrency']['queue'], 'max')
+        self.assertEqual(self.workflow['concurrency']['cancel-in-progress'], 'false')
 
     def test_job_retry_artifact_names_are_unique_and_keep_original_prepare_output(self):
         jobs = self.workflow['jobs']
@@ -233,6 +238,10 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         resume = next(step for step in jobs['scan']['steps'] if step.get('id') == 'resume')
         self.assertIn("github.ref == 'refs/heads/main'", resume['if'])
         self.assertIn('github.run_attempt > 1', resume['if'])
+        self.assertIn("needs.prepare.outputs.corpus != 'controlled'", resume['if'])
+        for selected in ('catalog', 'controlled'):
+            self.assertEqual(gate(resume['if'], selected_corpus=selected, run_attempt=2), selected == 'catalog')
+            self.assertFalse(gate(resume['if'], selected_corpus=selected, run_attempt=1))
         for step in jobs['scan']['steps']:
             if step.get('id', '').startswith('scan'):
                 self.assertIn("steps.resume.outcome == 'success'", step['if'])

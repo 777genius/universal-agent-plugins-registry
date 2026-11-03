@@ -315,9 +315,15 @@ is included in both staging and status limits. Reconciliation diagnostics have
 separate counters for equivalent and conflicting independent executions and at
 most 32 source examples.
 Recovery cursor queries allow validated percent escapes only in the query;
-repository routes retain their strict path boundary. Retry diagnostics expose
-HTTP status and fixed categories/counts, and use a SHA-256 correlation
-fingerprint instead of logging a server-provided request identifier verbatim.
+repository routes retain their strict path boundary. Retry logs use fixed
+literal text. Terminal transport errors contain only canonical operation,
+target and HTTP-status labels plus the local attempt counter; request paths,
+queries, response headers, parser keys, payloads and response-body details are
+never included. Exhausted transport budgets and invalid or oversized API JSON
+raise a separate transport error. Unavailable API evidence defers recovery
+before cursor or quarantine receipts advance; it does not classify an immutable
+checkpoint as invalid. Retrying the same local plan clears unacknowledged
+staging and rereads the preserved remote artifacts.
 
 Recovered outcomes enter the new selection only through exact immutable source
 identity, current scanner/policy and consecutive attempt lineage. Original scan
@@ -365,7 +371,8 @@ job-only rerun still uses the correct original plan. A retried main scan first
 authenticates and restores the latest earlier-attempt checkpoint for its exact
 partition and selection; sources already recovered by a rerun of prepare are
 not restored or counted twice. Same-run resume logs `restored_sources`
-separately from recovered-root counts.
+separately from recovered-root counts. Controlled main job retries skip
+production resume both in the workflow condition and at the CLI boundary.
 
 A path-scoped pull request canary uses the same pinned real scanner, checkpoint
 packaging, assembly and publication validation with one controlled partition,
@@ -374,6 +381,10 @@ resolves this configuration for all downstream jobs. PR analysis runs on hosted
 Ubuntu with read-only permissions, fetches no production prior bundle, and is
 excluded from both direct production publication and production recovery. The
 controlled corpus remains immutable.
+Read-only PR canaries group concurrency by their exact commit SHA, so an
+obsolete PR commit cannot hold feedback for newer changes in its queue. Reruns
+of one commit stay grouped. Main and manual-dispatch runs retain the existing
+ref-based serialization, `queue: max` and `cancel-in-progress: false`.
 
 The actual controlled PR canary [run 41668642584](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/41668642584)
 produced a real eight-outcome checkpoint. Its archive SHA-256 was
