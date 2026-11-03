@@ -95,10 +95,7 @@ def verify(scanner: Path, *, baseline: bool, real_skill: Path | None = None) -> 
         (root / "SKILL.md").write_text("# fixture\n", encoding="utf-8")
         (root / "docs").mkdir()
         (root / "docs/guide.md").write_text("# present\n", encoding="utf-8")
-        try:
-            (root / "symlink").symlink_to(root / "docs", target_is_directory=True)
-        except OSError:
-            pass
+        (root / "symlink").symlink_to(root / "docs", target_is_directory=True)
         known = ["SKILL.md", "docs/guide.md"]
         cases = (
             ('"VERSION": "1.0.0",\n', ("missing",) if baseline else ()),
