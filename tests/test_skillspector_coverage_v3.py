@@ -315,17 +315,19 @@ class QueueTests(unittest.TestCase):
                 source["revision"] = "d" * 40
             fresh = [item(id=f"fixture/fresh{n}", path=f"skills/fresh{n}") for n in range(30)]
             selected = {"schema_version": 1, "sources": [*fresh, *changed, retry, current]}
-            planned = coverage.plan_attempts(selected, prior, 0, 1, 21)
+            planned = coverage.plan_attempts(selected, prior, 0, 1, 41)
             planned_ids = [source["id"] for source in planned]
             new_count = len(set(planned_ids) & {source["id"] for source in fresh})
             changed_count = len(set(planned_ids) & {source["id"] for source in changed})
-            self.assertEqual(len(planned_ids), 21)
-            self.assertEqual(len(set(planned_ids)), 21)
+            self.assertEqual(len(planned_ids), 41)
+            self.assertEqual(len(set(planned_ids)), 41)
             self.assertIn(retry["id"], planned_ids)
             self.assertNotIn(current["id"], planned_ids)
-            self.assertGreaterEqual(new_count, 1)
-            self.assertGreaterEqual(changed_count, 2 * new_count)
-            self.assertEqual(planned, coverage.plan_attempts(selected, prior, 0, 1, 21))
+            # Reserve a complete 16-root new-plugin window while still
+            # preferring outdated subjects within the same total budget.
+            self.assertGreaterEqual(new_count, coverage.MAX_COHERENT_PLUGIN_ROOTS)
+            self.assertGreater(changed_count, new_count)
+            self.assertEqual(planned, coverage.plan_attempts(selected, prior, 0, 1, 41))
 
     def test_large_repository_does_not_hide_a_small_plugin_in_the_same_partition(self):
         bulk = [item(id=f"bulk/skill{n}", repository="fixture/bulk", path=f"skills/skill{n}") for n in range(40)]

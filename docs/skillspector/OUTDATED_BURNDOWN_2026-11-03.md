@@ -8,7 +8,7 @@ Most current partial checks represent genuine static-analysis limitations: 4,676
 
 ## Scope
 
-With the same bounded per-partition attempt and wall-clock budgets, move up to half of the otherwise evenly allocated new-Skill slots to the **changed** lane when it has available historical/source-changed work. Keep the entire due-retry allocation and nonzero new-Skill slots. This speeds up the visible `Outdated` cohort without concealing pending work or modifying scanner evidence, source identity, policy digest, retries, durable checkpoints, or publication rules.
+With the same bounded per-partition attempt and wall-clock budgets, move up to half of the otherwise evenly allocated new-Skill slots to the **changed** lane when it has available historical/source-changed work. Always preserve at least 16 new admissions when that many were originally allocated, so a coherent small plugin can still fit. Keep the entire due-retry allocation and nonzero new-Skill slots. This speeds up the visible `Outdated` cohort without concealing pending work or modifying scanner evidence, source identity, policy digest, retries, durable checkpoints, or publication rules.
 
 Do not change the default 256-attempt limit, two-hour schedule, eight worker partitions, 2,100-second budgets, or historical eligibility. The active new-policy production run #41715686633 may complete under the preceding scheduling order; only a run actually built from this change can establish its throughput.
 

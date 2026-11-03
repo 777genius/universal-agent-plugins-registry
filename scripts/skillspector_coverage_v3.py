@@ -390,7 +390,11 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
     # rescanned. When both queues are deep, use half of the new-only allowance
     # for that existing backlog. Due retries keep their original quota, and
     # new Skills still receive bounded, nonzero admission on every pass.
-    refresh = min(quotas["new"] // 2, len(lanes["changed"]) - quotas["changed"])
+    # A 16-root new plugin must still fit its original admission window;
+    # do not cut that window in half just to prefer older individual roots.
+    refresh = min(quotas["new"] // 2,
+                  max(0, quotas["new"] - MAX_COHERENT_PLUGIN_ROOTS),
+                  len(lanes["changed"]) - quotas["changed"])
     quotas["new"] -= refresh
     quotas["changed"] += refresh
     queues = {key: fair_lane(values, previous, quotas[key]) for key, values in lanes.items()}
