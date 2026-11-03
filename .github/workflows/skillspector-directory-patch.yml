@@ -53,8 +53,16 @@ jobs:
             scanner/.venv/bin/skillspector daisyui/skills/daisyui \
             source/plugins/cloudflare/skills/cloudflare
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: rorkai/app-store-connect-cli-skills
+          ref: 7de1ef7cc831f62d205dfa589063f3831f66391b
+          sparse-checkout: skills/asc-workflow
+          persist-credentials: false
+          path: real-asc
+
       # Diagnostic-only candidate: must not run in the production scan workflow.
       - name: Reproduce known VERSION reference false positive on original pinned scanner
-        run: scanner/.venv/bin/python source/scripts/patch_skillspector_json_version_refs.py scanner --baseline
+        run: scanner/.venv/bin/python source/scripts/patch_skillspector_json_version_refs.py scanner --baseline --real-skill real-asc/skills/asc-workflow
       - name: Test exact JSON VERSION candidate and adversarial CLI without promoting policy
-        run: python3 source/scripts/patch_skillspector_json_version_refs.py scanner --verify
+        run: python3 source/scripts/patch_skillspector_json_version_refs.py scanner --verify --real-skill real-asc/skills/asc-workflow
