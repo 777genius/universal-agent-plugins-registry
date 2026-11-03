@@ -120,6 +120,15 @@ def validate_manifest(manifest, *, current_policy=False):
         check_counts(plugin)
     for key in coverage:
         require(sum(plugin[key] for plugin in manifest["plugin_coverage"]) <= coverage[key], "plugin totals exceed coverage")
+    if "execution_summary" in manifest:
+        execution = manifest["execution_summary"]
+        count = execution["partition_count"]
+        received, missing = execution["received_partitions"], execution["missing_partitions"]
+        require(received == sorted(set(received)) and missing == sorted(set(missing)) and
+                not set(received) & set(missing) and set(received) | set(missing) == set(range(count)),
+                "execution partitions do not partition the expected workers")
+        require(execution["attempted_sources"] <= coverage["selected"] and
+                execution["recovered_sources"] <= coverage["selected"], "execution source counts exceed selection")
     return manifest
 
 
@@ -650,11 +659,72 @@ def validate_worker(worker, selection, source_commit):
     return worker
 
 
+def coalesce_workers(workers, selection, source_commit, *, expected_partition_count=None):
+    """Accept cumulative checkpoints only when their outcomes extend exactly."""
+    require(isinstance(workers, (list, tuple)) and bool(workers), "worker artifacts required")
+    require(expected_partition_count is None or type(expected_partition_count) is int and
+            1 <= expected_partition_count <= MAX_PARTITIONS, "invalid expected partition count")
+    by_partition = {}
+    count = expected_partition_count
+    for value in workers:
+        validate_worker(value, selection, source_commit)
+        part = value["partition"]
+        if count is None:
+            count = part["count"]
+        require(part["count"] == count, "worker partition count differs from preparation")
+        prior = by_partition.get(part["index"])
+        if prior is not None:
+            short, long = sorted((prior, value), key=lambda entry: len(entry["attempts"]))
+            require(short["attempts"] == long["attempts"][:len(short["attempts"])],
+                    "conflicting cumulative worker checkpoints")
+            if len(short["attempts"]) < len(long["attempts"]):
+                require(short["generated_at"] <= long["generated_at"], "worker checkpoint timestamp regresses")
+                value = long
+            else:
+                value = max((prior, value), key=lambda entry: entry["generated_at"])
+        by_partition[part["index"]] = value
+    return [by_partition[index] for index in sorted(by_partition)], count
+
+
+def apply_outcome(records, attempts, item, outcome, *, replay=False):
+    """Commit one record/retry transaction while retaining useful failed-scan fallback."""
+    attempt, new = outcome["attempt"], outcome["record"]
+    identifier = item["id"]
+    old_attempt, old_record = attempts.get(identifier), records.get(identifier)
+    if replay and old_attempt is not None and attempt["attempt_count"] <= old_attempt["attempt_count"]:
+        if attempt["attempt_count"] == old_attempt["attempt_count"]:
+            require(attempt == old_attempt, "recovered attempt conflicts with persisted progress")
+            if old_record is not None and old_record["status"] == new["status"]:
+                controls = {"freshness", "target_revision", "retry", "attempt_history"}
+                require({key: value for key, value in old_record.items() if key not in controls} ==
+                        {key: value for key, value in new.items() if key not in controls},
+                        "recovered record conflicts with persisted evidence")
+        else:
+            final = attempt["history"][-1]
+            require(final in old_attempt["history"], "recovered older attempt has no persisted lineage")
+        return False
+    require(old_attempt is None or attempt["last_attempted_at"] >= old_attempt["last_attempted_at"],
+            "worker regresses progress")
+    require(attempt["attempt_count"] == (old_attempt["attempt_count"] + 1 if old_attempt else 1),
+            "attempt count is not consecutive")
+    require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
+            "worker attempt lineage differs")
+    if new["status"] == "error" and old_record is not None and old_record["status"] != "error":
+        record = old_record
+    else:
+        record = copy.deepcopy(new)
+        record["freshness"] = "current"
+    records[identifier] = record
+    attempts[identifier] = copy.deepcopy(attempt)
+    return True
+
+
 def shard_document(repository, records):
     return {"schema_version": 3, "scanner": SCANNER, "profile": PROFILE, "repository": repository, "records": records}
 
 
-def merge_reports(selection, previous, workers, *, source_commit, output_dir, discovery_summary=None):
+def merge_reports(selection, previous, workers, *, source_commit, output_dir, discovery_summary=None,
+                  expected_partition_count=None, allow_partial_workers=False, recovered_sources=0):
     validate_selection(selection)
     require(SHA.fullmatch(source_commit) is not None and workers, "source commit and worker artifacts required")
     summary = discovery_summary
@@ -669,10 +739,12 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     aliases = (summary or {}).get("repository_aliases", [])
     records, attempts = previous_records(previous, selection, repository_aliases=aliases), compatible_attempts(previous, selection)
     expected = {item["id"]: item for item in selection["sources"]}
+    require(type(allow_partial_workers) is bool and (not allow_partial_workers or expected_partition_count is not None),
+            "partial assembly requires an independently expected partition count")
+    workers, expected_count = coalesce_workers(workers, selection, source_commit,
+                                             expected_partition_count=expected_partition_count)
     partitions, seen = set(), set()
-    expected_count = workers[0]["partition"]["count"]
     for worker in workers:
-        validate_worker(worker, selection, source_commit)
         part = worker["partition"]
         require(part["count"] == expected_count and part["index"] not in partitions, "inconsistent worker partitions")
         partitions.add(part["index"])
@@ -681,18 +753,8 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
             identifier = attempt["id"]
             require(identifier not in seen, "repeated attempt across partitions")
             seen.add(identifier)
-            old_attempt, old_record = attempts.get(identifier), records.get(identifier)
-            require(old_attempt is None or attempt["last_attempted_at"] >= old_attempt["last_attempted_at"], "worker regresses progress")
-            require(attempt["attempt_count"] == (old_attempt["attempt_count"] + 1 if old_attempt else 1), "attempt count is not consecutive")
-            # An acquisition/scan failure must not erase useful prior evidence.
-            if new["status"] == "error" and old_record is not None and old_record["status"] != "error":
-                record = old_record
-            else:
-                record = copy.deepcopy(new)
-                record["freshness"] = "current"
-            records[identifier] = record
-            attempts[identifier] = copy.deepcopy(attempt)
-    require(partitions == set(range(expected_count)), "missing worker partition")
+            apply_outcome(records, attempts, expected[identifier], outcome)
+    require(allow_partial_workers or partitions == set(range(expected_count)), "missing worker partition")
     current_ids = {identifier for state in (summary or {}).get("source_states", []) if state["current"] for identifier in state["selected_ids"]}
     historical_ids = {identifier for state in (summary or {}).get("source_states", []) if not state["current"]
                       for identifier in state["selected_ids"]} - current_ids
@@ -740,18 +802,78 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
         "scope": "selected_sources", "scanner": SCANNER, "profile": PROFILE, "profiles": list(scanner.PROFILES.values()),
         "selection_digest": selection_hash, "coverage": contract.analysis_counts(selection, records),
         "plugin_coverage": contract.plugin_counts(selection, records), "shards": descriptors,
+        "execution_summary": {"partition_count": expected_count, "received_partitions": sorted(partitions),
+            "missing_partitions": sorted(set(range(expected_count)) - partitions),
+            "attempted_sources": len(seen), "recovered_sources": recovered_sources},
         **{key: (summary or {}).get(key, None if key == "catalog_coverage" else []) for key in
            ("source_states", "plugin_states", "repository_aliases", "catalog_coverage")}}
     validate_manifest(manifest, current_policy=True)
     write_bounded(output_dir / "selection.json", selection, MAX_SELECTION_BYTES)
     write_bounded(output_dir / "attempts.json", {"schema_version": 3, "source_commit": source_commit,
         "generated_at": generated, "selection_digest": selection_hash, "attempts": sorted(attempts.values(), key=lambda value: value["id"]),
-        "queue_cursor": ((previous or {}).get("queue_cursor", 0) + max(1, len(seen))) % 3}, MAX_STATE_BYTES)
+        "queue_cursor": ((previous or {}).get("queue_cursor", 0) + len(seen)) % 3}, MAX_STATE_BYTES)
     if summary is not None:
         write_bounded(output_dir / "coverage.json", summary, MAX_DISCOVERY_BYTES)
     write_bounded(output_dir / "index.json", manifest, MAX_MANIFEST_BYTES)
     read_bundle(output_dir)
     return manifest
+
+
+def recover_previous(selection, previous, recovery_bundles, *, source_commit, discovery_summary, output_dir):
+    """Reconcile authenticated older-run outcomes at exact currently selected identities.
+
+    The transport authenticates producing runs/artifacts before this pure boundary.
+    Original selection, discovery and worker validation are repeated here. Nothing
+    becomes current solely because it was present in an older artifact.
+    """
+    validate_selection(selection)
+    validate_discovery_summary(discovery_summary, selection, source_commit)
+    aliases = verified_aliases(previous, selection, discovery_summary)
+    records = previous_records(previous, selection, repository_aliases=aliases)
+    attempts = compatible_attempts(previous, selection)
+    targets = {source_digest(item): item for item in selection["sources"]}
+    require(len(targets) == len(selection["sources"]), "ambiguous recovery target identity")
+    outcomes = []
+    identities = {}
+    for batch in recovery_bundles:
+        original_selection, original_summary = batch["selection"], batch["discovery"]
+        original_commit = batch.get("source_commit", original_summary["source_commit"])
+        validate_selection(original_selection)
+        validate_discovery_summary(original_summary, original_selection, original_commit)
+        require(original_summary.get("catalog", {}).get("mode") != "controlled_immutable_regression",
+                "controlled regression artifacts cannot recover production evidence")
+        workers, _ = coalesce_workers(batch["workers"], original_selection, original_commit)
+        original_items = {item["id"]: item for item in original_selection["sources"]}
+        for worker in workers:
+            for value in worker["attempts"]:
+                original = original_items[value["attempt"]["id"]]
+                target = targets.get(source_digest(original))
+                if target is None:
+                    continue
+                outcome = copy.deepcopy(value)
+                for key in ("attempt", "record"):
+                    outcome[key]["id"] = target["id"]
+                identity = (source_digest(target), outcome["attempt"]["attempt_count"])
+                require(identity not in identities or identities[identity] == outcome,
+                        "conflicting recovered outcomes")
+                if identity not in identities:
+                    identities[identity] = outcome
+                    outcomes.append((target, outcome))
+    applied, recovered_ids = 0, set()
+    for item, outcome in sorted(outcomes, key=lambda value: (
+            value[1]["attempt"]["last_attempted_at"], value[1]["attempt"]["attempt_count"], value[0]["id"])):
+        if apply_outcome(records, attempts, item, outcome, replay=True):
+            applied += 1
+            recovered_ids.add(item["id"])
+    aligned = {"manifest": {"schema_version": 3, "scanner": SCANNER, "profile": PROFILE,
+            "profiles": list(scanner.PROFILES.values()), "repository_aliases": aliases},
+        "selection": selection, "records": records, "attempts": attempts,
+        "queue_cursor": ((previous or {}).get("queue_cursor", 0) + applied) % 3}
+    empty = {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),
+        "selection_digest": sha256_digest(canonical_json(selection)), "scanner": SCANNER, "profile": PROFILE,
+        "partition": {"index": 0, "count": 1}, "attempts": []}
+    return merge_reports(selection, aligned, [empty], source_commit=source_commit, output_dir=output_dir,
+        discovery_summary=discovery_summary, expected_partition_count=1, recovered_sources=len(recovered_ids))
 
 
 def main():
@@ -769,6 +891,8 @@ def main():
     merge = commands.add_parser("merge")
     merge.add_argument("--workers", type=Path, nargs="+", required=True)
     merge.add_argument("--output-dir", type=Path, required=True)
+    merge.add_argument("--expected-partition-count", type=int)
+    merge.add_argument("--allow-partial-workers", action="store_true")
     for command in (scan, merge):
         command.add_argument("--selection", type=Path, required=True)
         command.add_argument("--previous-dir", type=Path)
@@ -792,7 +916,8 @@ def main():
         else:
             workers = [read_json(path, max_bytes=MAX_WORKER_BYTES) for path in args.workers]
             manifest = merge_reports(selection, previous, workers, source_commit=args.source_commit,
-                output_dir=args.output_dir, discovery_summary=summary)
+                output_dir=args.output_dir, discovery_summary=summary,
+                expected_partition_count=args.expected_partition_count, allow_partial_workers=args.allow_partial_workers)
             print(json.dumps(manifest["coverage"], sort_keys=True))
         return 0
     except (PublicationError, CheckpointYield, OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError) as error:

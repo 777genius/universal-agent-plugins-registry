@@ -148,7 +148,7 @@ as “Not checked.”
 
 ## Publication and UI
 
-A read-only assembly job verifies every partition, the generated selection,
+A read-only assembly job verifies each available partition, the generated selection,
 scanner and profiles, timestamps, retry state, and coverage counts. A separate
 main-only publication job has contents-write permission and validates the exact
 artifact again before passing `GITHUB_TOKEN` to the publisher command. It
@@ -164,11 +164,12 @@ independent of the 20,000-root inventory:
 | --- | --- |
 | Manifest | 16 MiB; at most 10,000 shard descriptors |
 | Repository shard | 8 MiB and at most 256 records |
-| Referenced shards in aggregate | 256 MiB |
+| Referenced shards in aggregate | 512 MiB |
 | Generated selection | 32 MiB |
 | Attempt state | 64 MiB |
 | Discovery summary | 16 MiB |
 | Worker artifact | 32 MiB |
+| Recovery acknowledgement control | 1 MiB; at most 512 retained run attempts |
 
 Large repositories split into multiple shards. Content-addressed paths and
 SHA-256 identify their exact bytes. The publisher preserves supported v1/v2
@@ -218,13 +219,88 @@ command modules remain for compatibility tests; normal workflow commands use v3.
 ## Verification and operation
 
 Manual dispatch on a feature branch with `corpus=catalog`, `discovery_pages=1`,
-and `maximum_attempts=8` gives a bounded real integration run through discovery,
+`maximum_attempts=8`, and `scan_budget_seconds=300` gives a bounded real integration run through discovery,
 immutable acquisition, the actual scanner, assembly, and publication validation.
 It cannot publish. `corpus=controlled` runs the checked-in immutable regression
 corpus as an artifact and cannot replace catalog data, including on `main`.
 Scheduled and normal main-push runs use 50 pages and 128 attempts per partition.
+The scanner budget defaults to 2,100 seconds per partition, divided into three
+700-second invocations. Each invocation resumes the validated cumulative local
+checkpoint, adds at most 43 outcomes (three when the total attempt cap is eight),
+and uploads a separately named immutable checkpoint artifact. The total attempt
+cap remains 128 or eight. Manual 300- and 600-second budgets use one invocation;
+600 seconds leaves enough admission room for the full extended profile and
+preparation allowance. Small catalog runs still download the existing report
+snapshot and pay discovery/assembly costs; the scanner budget does not bound
+that separate I/O. Controlled smoke runs avoid the prior snapshot cost.
 Independent review and CI precede merge; production verification separately
 checks the actual published data and live desktop/mobile rendering.
+
+## Durable checkpoints and recovery
+
+The scanner atomically writes an initial empty worker and replaces it after
+each completed outcome, keeping the record and its consecutive attempt history
+together. An interrupted replacement leaves the previous complete checkpoint.
+Completed outcomes are not dependent on later source success or cleanup. The
+workflow packages the last valid checkpoint after a failed scan step, uploads
+it with `always()`, and allows assembly after failed scan partitions when
+preparation succeeded. Assembly requires an independently supplied expected
+partition count and explicit partial-worker acceptance. Missing partitions
+remain pending and retain prior evidence; execution diagnostics report them.
+
+Each scan step has a 15-minute timeout; the 55-minute scan job reserves ten
+minutes beyond all three step ceilings for setup, packaging and upload. The
+cooperative 700-second budget is shorter again. A hard runner loss can still
+lose work since the last remotely acknowledged slice; a local atomic file
+cannot survive destruction of that runner. A completed remote upload is the
+durability boundary. Artifact retention is explicitly 90 days. Recovery must
+run within that window; expiration of unacknowledged artifacts is reported as
+an operator error, not silently interpreted as successful delivery.
+
+Every checkpoint package contains only the bounded original selection,
+discovery summary, cumulative worker and provenance manifest. Their digests,
+sizes, exact file set and regular-file types are verified. Recovery checks the
+GitHub artifact archive SHA-256 independently from the internal file digests.
+Archive paths, duplicates, symlinks and excess expansion are rejected, and
+artifact redirects never forward the API Authorization header.
+
+Main catalog preparation automatically discovers the oldest unacknowledged
+canonical main runs in the 90-day window, reading at most 500 run entries and
+replaying at most eight artifact-producing runs per preparation. Downloads
+have a finite 1 GiB aggregate compressed-byte budget and 128 MiB archive limit.
+The read-only Actions token authenticates the actual repository, workflow,
+original main branch, head SHA, event, run attempt and artifact metadata.
+Feature-branch artifacts cannot become production evidence after their commit
+is merged. Controlled corpus and obsolete-policy artifacts are acknowledged
+with explicit exclusion reasons and are never recovered as current analysis.
+Malformed current-policy evidence stops recovery visibly for operator review.
+
+Recovered outcomes enter the new selection only through exact immutable source
+identity, current scanner/policy and consecutive attempt lineage. Original scan
+times and findings remain intact. A changed revision stays pending/historical.
+The new valid bundle is used as the prior state by scanning and assembly, so an
+acknowledged completed attempt does not run or increment again. Recovery state
+is included in the optional `recovery.json` control file after a valid merge;
+the public pointer and its acknowledgements advance in one atomic publication.
+Already acknowledged runs are not downloaded again. Neither recovery transport
+nor assembly receives contents-write permission.
+
+The publisher retains both obsolete-main checks and non-force report-branch
+updates. It emits a structured delivery status and Actions summary. Supersession
+returns success only when the report has a validated remote acknowledgement for
+its actual current run/attempt, naming `superseded_with_durable_recovery`.
+Without that receipt it returns exit status 3. Publication errors return status
+1, with `failed_with_durable_recovery` when a receipt exists. The next main
+catalog preparation automatically retries eligible retained evidence; a branch
+or controlled run cannot use this route to publish. Production success still
+requires observing the public report commit and current coverage counts.
+
+Operators can inspect the workflow checkpoint artifacts, `recovery-status.json`
+in the plan artifact and the published `recovery.json` acknowledgements, then
+dispatch a 300/600-second main catalog scan to retry promptly. To inspect the
+commands locally, run `python3 -m scripts.skillspector_recovery --help` and its
+`pack`, `recover` or `acknowledge` subcommand help. A failed recovery never
+deletes the earlier public bundle or remote artifacts.
 
 The paired UAP `landing/scripts/skillspector-live-smoke.mjs` is explicitly enabled
 with `UAP_E2E_LIVE_SKILLSPECTOR=1`. It checks the deployed site, real manifest,

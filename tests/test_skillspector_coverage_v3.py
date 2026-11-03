@@ -868,10 +868,10 @@ class PublicationTests(unittest.TestCase):
                 self.assertFalse(any(method == "PATCH" for method, _, _ in github.calls))
 
 
-    def test_superseded_scheduled_publisher_exits_green_without_masking_other_errors(self):
+    def test_supersession_without_durable_recovery_has_distinct_failure_status(self):
         argv = ["skillspector", "publish", "--report-dir", "/unused-fixture", "--source-commit", COMMIT]
         for failure, expected in (
-            (publisher.SupersededCoverage("main changed during coverage publication"), 0),
+            (publisher.SupersededCoverage("main changed during coverage publication"), 3),
             (PublicationError("uploaded publication tree identity differs"), 1),
         ):
             with self.subTest(failure=type(failure).__name__):

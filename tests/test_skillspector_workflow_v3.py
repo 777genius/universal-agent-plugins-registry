@@ -4,6 +4,7 @@ import ast
 import copy
 import json
 import tempfile
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -53,7 +54,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         for name in ('prepare', 'scan', 'assemble'):
             with self.subTest(job=name):
                 self.assertEqual(jobs[name]['runs-on'], "${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}")
-                self.assertEqual(jobs[name]['permissions'], {'contents': 'read'})
+                self.assertEqual(jobs[name]['permissions'], {'contents': 'read', 'actions': 'read'})
         # All configured-runner phases depend on the original repository gate.
         self.assertIn("github.repository == '777genius/universal-agent-plugins-registry'", jobs['prepare']['if'])
         self.assertEqual(jobs['scan']['needs'], 'prepare')
@@ -72,9 +73,9 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                             selected_corpus=selected), repository == '777genius/universal-agent-plugins-registry'
                             and ref == 'refs/heads/main' and selected != 'controlled')
         self.assertEqual(publish['needs'], 'assemble')
-        self.assertEqual(self.workflow['permissions'], {'contents':'read'})
+        self.assertEqual(self.workflow['permissions'], {'contents':'read', 'actions':'read'})
         for name, job in self.workflow['jobs'].items():
-            self.assertEqual(job['permissions'], {'contents':'write' if name == 'publish' else 'read'})
+            self.assertEqual(job['permissions'], {'contents': 'write'} if name == 'publish' else {'contents': 'read', 'actions': 'read'})
 
     def test_controlled_run_starts_fresh_and_cannot_reuse_production_cache(self):
         prepare = self.workflow['jobs']['prepare']
@@ -136,6 +137,56 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         self.assertLess(check,write)
         self.assertNotIn('GITHUB_TOKEN', publish[check].get('env',{}))
         self.assertEqual(publish[write]['env']['GITHUB_TOKEN'], '${{ github.token }}')
+
+    def test_slice_configuration_executes_with_bounded_total_budgets(self):
+        scan = self.workflow['jobs']['scan']
+        configure = next(step for step in scan['steps'] if step.get('id') == 'slices')
+        expected = {(2100, 128): (3, 700, 43), (2100, 8): (3, 700, 3),
+                    (600, 8): (1, 600, 8), (300, 8): (1, 300, 8)}
+        for (budget, attempts), values in expected.items():
+            with self.subTest(budget=budget, attempts=attempts), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / 'outputs'
+                subprocess.run(['bash', '-eu', '-c', configure['run']], check=True,
+                    env={'TOTAL_BUDGET': str(budget), 'MAXIMUM_ATTEMPTS': str(attempts), 'GITHUB_OUTPUT': str(output)})
+                result = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                self.assertEqual(tuple(int(result[name]) for name in ('count', 'budget', 'attempts')), values)
+                self.assertLessEqual(int(result['count']) * int(result['budget']), budget)
+        slices = [step for step in scan['steps'] if step.get('id', '').startswith('scan')]
+        self.assertEqual(len(slices), 3)
+        self.assertGreaterEqual(int(scan['timeout-minutes']) - sum(int(step['timeout-minutes']) for step in slices), 10)
+        for step in slices:
+            self.assertIn('--slice-attempts', step['run'])
+            self.assertIn('--budget-seconds "${SLICE_BUDGET}"', step['run'])
+
+    def test_failed_scan_keeps_pack_upload_later_slice_and_assembly_reachable(self):
+        jobs = self.workflow['jobs']
+        steps = {step.get('id'): step for step in jobs['scan']['steps'] if step.get('id')}
+        # These status functions suppress Actions' implicit success() gate.
+        for index in (1, 2, 3):
+            self.assertIn('!cancelled()', steps[f'scan{index}']['if'])
+            self.assertIn('always()', steps[f'pack{index}']['if'])
+            upload = next(step for step in jobs['scan']['steps']
+                          if step.get('with', {}).get('name') == f'skillspector-checkpoint-p${{{{ matrix.partition }}}}-s{index}')
+            self.assertIn('always()', upload['if'])
+            self.assertIn(f"steps.pack{index}.outcome == 'success'", upload['if'])
+            self.assertEqual(upload['with']['retention-days'], '90')
+        self.assertIn('always()', jobs['assemble']['if'])
+        self.assertIn("needs.prepare.result == 'success'", jobs['assemble']['if'])
+        merge = next(step['run'] for step in jobs['assemble']['steps'] if 'skillspector_coverage_v3 merge' in step.get('run', ''))
+        self.assertIn('--allow-partial-workers', merge)
+        self.assertIn('--expected-partition-count "${{ needs.prepare.outputs.partition_count }}"', merge)
+        self.assertIn('skillspector-checkpoint-*/worker.json', merge)
+
+    def test_only_main_catalog_runs_can_recover_or_acknowledge_production_inputs(self):
+        for job in ('prepare', 'assemble'):
+            operation = ' recover ' if job == 'prepare' else ' acknowledge '
+            step = next(step for step in self.workflow['jobs'][job]['steps']
+                        if operation in step.get('run', ''))
+            for branch in ('refs/heads/main', 'refs/heads/feature'):
+                for selected in ('catalog', 'controlled'):
+                    self.assertEqual(gate(step['if'], ref=branch, selected_corpus=selected),
+                                     branch == 'refs/heads/main' and selected == 'catalog')
+            self.assertEqual(step['env']['GITHUB_TOKEN'], '${{ github.token }}')
 
 
 class ControlledCorpusPreparationTests(unittest.TestCase):

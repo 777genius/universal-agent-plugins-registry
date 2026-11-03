@@ -31,11 +31,11 @@ MAX_API_BYTES = 32 << 20
 MAX_TREE_UPLOAD_BYTES = 8 << 20
 CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "selection.json": coverage.MAX_SELECTION_BYTES, "attempts.json": coverage.MAX_STATE_BYTES,
-    "coverage.json": coverage.MAX_DISCOVERY_BYTES}
+    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 1 << 20}
 
 
 class SupersededCoverage(PublicationError):
-    """A completed scan for an older main is safely skipped, not a failed publication."""
+    """The public pointer cannot advance; acknowledged checkpoints need recovery."""
 
 
 read_json = scanner.read_report_json
@@ -88,9 +88,12 @@ def previous(github, output_dir, *, fetch=raw_file):
 
     def download(item):
         relative, maximum = item
-        contents = fetch(head, relative, maximum, optional=relative == "coverage.json", version=version)
+        contents = fetch(head, relative, maximum, optional=relative in {"coverage.json", "recovery.json"}, version=version)
         if contents is not None:
             document = parse_report(contents, "previous " + relative, max_bytes=maximum)
+            if relative == "recovery.json":
+                from scripts.skillspector_recovery import validate_state
+                validate_state(document)
             coverage.write_bounded(output_dir / relative, document, maximum)
 
     # This process only copies static JSON; scanner subprocesses are in separate serial jobs.
@@ -122,7 +125,36 @@ def validate_directory(directory, source_commit):
     if "coverage.json" in present:
         summary = read_json(directory / "coverage.json", max_bytes=coverage.MAX_DISCOVERY_BYTES)
         coverage.validate_discovery_summary(summary, bundle["selection"], source_commit)
+    if "recovery.json" in present:
+        from scripts.skillspector_recovery import read_state
+        read_state(directory / "recovery.json")
     return bundle
+
+
+def durable_receipt(directory, source_commit):
+    """Only an authenticated, uploaded current run acknowledgement permits defer."""
+    from scripts.skillspector_recovery import read_state
+    try:
+        state = read_state(directory / "recovery.json")
+    except (PublicationError, OSError, ValueError, KeyError, TypeError, RecursionError):
+        return False
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    return bool(run_id.isdecimal() and attempt.isdecimal() and any(
+        row["run_id"] == int(run_id) and row["run_attempt"] == int(attempt) and
+        row["head_sha"] == source_commit and row["artifacts"] for row in state["runs"]))
+
+
+def delivery_status(status, source_commit, *, path=None, report_commit=None):
+    value = {"schema_version": 1, "status": status, "source_commit": source_commit,
+             "report_commit": report_commit}
+    if path is not None:
+        coverage.write_bounded(path, value, 4096)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as stream:
+            stream.write(f"\nSkillSpector delivery: **{status}**. Source `{source_commit}`.\n")
+    print(canonical_json(value).decode())
 
 
 def publish(github, directory, source_commit, *, fetch=raw_file):
@@ -257,6 +289,7 @@ def main():
         operation = commands.add_parser(name)
         operation.add_argument("--report-dir", type=Path, required=True)
         operation.add_argument("--source-commit", required=True)
+        operation.add_argument("--status-file", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "previous":
@@ -266,12 +299,19 @@ def main():
         else:
             token = os.environ.get("GITHUB_TOKEN", "")
             require(bool(token), "publication token is missing")
-            print(publish(GitHub(token), args.report_dir, args.source_commit))
+            commit = publish(GitHub(token), args.report_dir, args.source_commit)
+            delivery_status("published", args.source_commit, path=args.status_file, report_commit=commit)
         return 0
     except SupersededCoverage as error:
+        recoverable = durable_receipt(args.report_dir, args.source_commit)
+        delivery_status("superseded_with_durable_recovery" if recoverable else "superseded_without_recovery",
+                        args.source_commit, path=args.status_file)
         print(f"SkillSpector coverage superseded: {error}; previous publication retained", file=sys.stderr)
-        return 0
+        return 0 if recoverable else 3
     except (PublicationError, OSError, ValueError, KeyError, TypeError, RecursionError, urllib.error.URLError) as error:
+        if args.command == "publish":
+            delivery_status("failed_with_durable_recovery" if durable_receipt(args.report_dir, args.source_commit) else "failed",
+                            args.source_commit, path=args.status_file)
         print(f"SkillSpector coverage publication failed: {error}", file=sys.stderr)
         return 1
 
