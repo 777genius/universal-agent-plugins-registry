@@ -151,8 +151,8 @@ def verify(scanner: Path, *, baseline: bool) -> None:
             root.mkdir()
             source = root / "SKILL.md"
             source.write_text(
-                "---\\nname: version-only\\ndescription: Verify standalone metadata.\\n---\\n"
-                '"VERSION": "1.0.0",\\n',
+                "---\nname: version-only\ndescription: Verify standalone metadata.\n---\n"
+                '"VERSION": "1.0.0",\n',
                 encoding="utf-8",
             )
             before = source.read_bytes()
