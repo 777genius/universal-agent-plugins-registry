@@ -257,6 +257,13 @@ an explicit worker list bound to the current run, attempt and selection rather
 than assuming that a single match creates a named subdirectory. Unexpected,
 stale-attempt and symlink files are rejected.
 
+A failed-job retry keeps validated prepared progress when an earlier checkpoint
+has the same or a lower attempt count from an independent execution. Resume
+does not acknowledge that skipped artifact. If its alternate evidence was
+outside preparation's bounded window, the next normal recovery can still
+reconcile its original findings; a regression verifies that an unseen warning
+is retained as an explicit conflict rather than discarded.
+
 Each scan step has a 15-minute timeout; the 55-minute scan job reserves ten
 minutes beyond all three step ceilings for setup, packaging and upload. The
 cooperative 700-second budget is shorter again. A hard runner loss can still
@@ -312,8 +319,8 @@ bounded recovery batch.
 The same-run preparation retry can stage up to 1,728 packages: eight prior runs
 and one current run, each with at most 192 artifacts. This extra retry allowance
 is included in both staging and status limits. Reconciliation diagnostics have
-separate counters for equivalent and conflicting independent executions and at
-most 32 source examples.
+separate counters for equivalent executions, conflicting independent executions
+and unavailable predecessors, with at most 32 source examples in total.
 Recovery cursor queries allow validated percent escapes only in the query;
 repository routes retain their strict path boundary. Retry logs use fixed
 literal text. Terminal transport errors contain only canonical operation,
@@ -329,8 +336,24 @@ Recovered outcomes enter the new selection only through exact immutable source
 identity, current scanner/policy and consecutive attempt lineage. Original scan
 times and findings remain intact. A changed revision stays pending/historical.
 Snapshots from one producing run/attempt must extend an exact prefix; conflicting
-snapshots or missing retry predecessors are rejected. Separate authenticated
-executions can differ in timings while producing identical normalized analysis.
+snapshots and untrusted or structurally incomplete retry histories are rejected.
+An authenticated execution with an exact, complete, self-consistent current-epoch
+history suffix can arrive before its predecessor artifact because recovery reads
+a bounded window. The suffix contains the current attempt count's entries;
+older policy or revision epochs may legitimately remain as a bounded history
+prefix and are preserved exactly. The production history census found this
+older prefix in 3,393 of 6,491 current records, so whole-history length is not
+used as a substitute for current-epoch lineage validation.
+Recovery preserves its actual attempt count and history, marks the evidence
+uncertain, and continues independent healthy work and cursor progress. The
+original report cannot qualify as complete or No remarks while this uncertainty
+remains. A later actual parent can supply useful prior content after a child
+acquisition error without changing the child's latest error, count or history;
+the uncertainty remains until a fresh scan resolves it. A real nine-packed-run
+regression exercises this window boundary and proves that the parent can arrive
+in the following preparation without resetting counts or repeating a fatal
+recovery loop. Separate authenticated executions can differ in timings while
+producing identical normalized analysis.
 Those duplicates preserve the original published scan and history, comparing
 source content digest, exit state/code, coverage and findings substantively.
 When independent executions disagree, recovery retains an original report with

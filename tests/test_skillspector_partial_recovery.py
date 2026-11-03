@@ -182,13 +182,17 @@ class RecoveryTests(unittest.TestCase):
                 with self.assertRaises(PublicationError):
                     self.recover(Path(directory), selection, batches)
 
-    def authentic_batch(self, selection, run_id, second, *, warning=None, previous=None, exit_code=None):
+    def authentic_batch(self, selection, run_id, second, *, warning=None, previous=None, exit_code=None,
+                        status="complete", reason=None, profile_id="static-standard-v3"):
         with mock.patch.object(coverage.scanner, "now", return_value=f"2020-01-01T00:00:{second:02d}Z"):
-            value = record(selection["sources"][0])
+            value = record(selection["sources"][0], status, reason, profile_id)
             if warning is not None:
                 raw = upstream_report()
                 raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": warning,
                                   "location": {"file": "SKILL.md", "start_line": 1}}]
+                if status == "partial":
+                    raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
+                    raw["analysis_completeness"]["ledger_exceptions"] = [{"reason_code": reason or "static_parse_limit", "message": "Bounded fixture limitation."}]
                 value = coverage.scanner.normalize_report_v3(value, json.dumps(raw).encode(), 1, Path("/source"))
             if exit_code is not None:
                 value["execution"]["exit_code"] = exit_code
@@ -274,6 +278,7 @@ class RecoveryTests(unittest.TestCase):
                 self.recover(root / "same-origin", selection, [first, corrupted])
             baseline = self.recover(root / "first", selection, [first])
             retry = self.authentic_batch(selection, 2, 1, previous=baseline)
+            retry.pop("execution_origin")
             with self.assertRaisesRegex(PublicationError, "missing predecessor"):
                 self.recover(root / "gap", selection, [retry])
             exit_one = self.authentic_batch(selection, 3, 2, exit_code=1)
@@ -336,6 +341,197 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(result["records"][subject["id"]]["status"], "partial")
             self.assertIn("recovery_conflict", coverage.reason_codes(result["records"][subject["id"]]))
             self.assertEqual(result["attempts"][subject["id"]]["attempt_count"], 1)
+
+    def test_missing_parent_seeds_uncertain_original_history_and_fresh_scan_resolves_it(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = self.authentic_batch(selection, 1, 0, status="partial", reason="runtime_limit")
+            prior = self.recover(root / "parent", selection, [parent])
+            child = self.authentic_batch(selection, 2, 1, previous=prior, profile_id="static-extended-v3")
+            original = child["workers"][0]["attempts"][0]
+            seeded = self.recover(root / "seeded", selection, [child])
+            value, attempt = seeded["records"][subject["id"]], seeded["attempts"][subject["id"]]
+            for key in ("source", "scanned_at", "report_digest", "findings", "execution"):
+                self.assertEqual(value[key], original["record"][key])
+            self.assertEqual((value["status"], attempt["attempt_count"], attempt["status"]), ("partial", 2, "complete"))
+            self.assertFalse(value["coverage"]["grouping_complete"])
+            self.assertTrue(value["findings_truncated"])
+            self.assertIn("recovery_predecessor_unavailable", coverage.reason_codes(value))
+            self.assertEqual(attempt["history"], original["attempt"]["history"])
+            self.assertEqual(attempt["next_profile"], "static-extended-v3")
+            repeat = self.recover(root / "repeat", selection, [child], seeded)
+            self.assertEqual(repeat["records"], seeded["records"])
+            self.assertEqual(repeat["attempts"], seeded["attempts"])
+            actual_fresh = self.authentic_batch(selection, 3, 2, previous=seeded, profile_id="static-extended-v3")
+            recovered_fresh = self.recover(root / "recovered-fresh", selection, [actual_fresh], seeded)
+            self.assertEqual(recovered_fresh["records"][subject["id"]]["status"], "complete")
+            self.assertNotIn("recovery_predecessor_unavailable", coverage.reason_codes(recovered_fresh["records"][subject["id"]]))
+            self.assertEqual(recovered_fresh["attempts"][subject["id"]]["attempt_count"], 3)
+            orphan_chain = self.recover(root / "same-batch-orphans", selection, [child, actual_fresh])
+            self.assertEqual(orphan_chain["records"][subject["id"]]["status"], "partial")
+            changed = {**subject, "revision": "b" * 40}
+            changed_selection = {"schema_version": 1, "sources": [changed]}
+            new_source = self.authentic_batch(changed_selection, 4, 3)
+            new_epoch = self.recover(root / "new-source", changed_selection, [new_source], seeded)
+            self.assertEqual(new_epoch["records"][subject["id"]]["status"], "complete")
+            self.assertEqual(new_epoch["attempts"][subject["id"]]["attempt_count"], 1)
+            fresh = worker(selection, [record(subject, profile_id="static-extended-v3")], seeded)
+            coverage.merge_reports(selection, seeded, [fresh], source_commit=COMMIT, output_dir=root / "fresh")
+            resolved = coverage.read_bundle(root / "fresh")
+            self.assertEqual(resolved["records"][subject["id"]]["status"], "complete")
+            self.assertNotIn("recovery_predecessor_unavailable", coverage.reason_codes(resolved["records"][subject["id"]]))
+            late = self.recover(root / "late-parent", selection, [parent], resolved)
+            self.assertEqual(late["records"], resolved["records"])
+
+    def test_late_warning_parent_backfills_error_child_and_failed_fresh_scan_preserves_it(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = self.authentic_batch(selection, 1, 0, status="partial", reason="runtime_limit", warning="Preserve this warning.")
+            prior = self.recover(root / "parent", selection, [parent])
+            child = self.authentic_batch(selection, 2, 1, status="error", reason="acquisition_failed",
+                previous=prior, profile_id="static-extended-v3")
+            original = child["workers"][0]["attempts"][0]
+            seeded = self.recover(root / "child", selection, [child])
+            self.assertEqual(seeded["records"][subject["id"]]["status"], "error")
+            attempt = seeded["attempts"][subject["id"]]
+            self.assertEqual(attempt["history"], original["attempt"]["history"])
+            self.assertEqual(attempt["next_profile"], original["attempt"]["next_profile"])
+            self.assertGreaterEqual(attempt["next_attempt_at"], original["attempt"]["next_attempt_at"])
+            early_error = worker(selection, [record(subject, "error", "acquisition_failed", "static-extended-v3")], seeded)
+            coverage.merge_reports(selection, seeded, [early_error], source_commit=COMMIT, output_dir=root / "early-error")
+            before_parent = coverage.read_bundle(root / "early-error")
+            self.assertEqual(before_parent["records"][subject["id"]]["status"], "error")
+            self.assertIn("recovery_predecessor_unavailable", coverage.reason_codes(before_parent["records"][subject["id"]]))
+            late_after_error = self.recover(root / "late-after-error", selection, [parent], before_parent)
+            self.assertEqual(late_after_error["records"][subject["id"]]["findings"], prior["records"][subject["id"]]["findings"])
+            self.assertEqual(late_after_error["attempts"], before_parent["attempts"])
+            self.assertEqual(late_after_error["records"][subject["id"]]["retry"]["latest_status"], "error")
+            recovered_error = self.authentic_batch(selection, 3, 2, previous=seeded, status="error",
+                reason="acquisition_failed", profile_id="static-extended-v3")
+            recovered_failure = self.recover(root / "recovered-error", selection, [recovered_error], seeded)
+            self.assertIn("recovery_predecessor_unavailable", coverage.reason_codes(recovered_failure["records"][subject["id"]]))
+            recovered = self.recover(root / "late", selection, [parent], seeded)
+            value = recovered["records"][subject["id"]]
+            for key in ("source", "report_digest", "findings", "scanned_at", "execution"):
+                self.assertEqual(value[key], prior["records"][subject["id"]][key])
+            self.assertEqual(value["retry"]["latest_status"], "error")
+            self.assertEqual(recovered["attempts"], seeded["attempts"])
+            self.assertIn("recovery_predecessor_unavailable", coverage.reason_codes(value))
+            fresh_error = worker(selection, [record(subject, "error", "acquisition_failed", "static-extended-v3")], recovered)
+            coverage.merge_reports(selection, recovered, [fresh_error], source_commit=COMMIT, output_dir=root / "failure")
+            failed = coverage.read_bundle(root / "failure")
+            self.assertEqual(failed["records"][subject["id"]]["findings"], value["findings"])
+            self.assertEqual(failed["records"][subject["id"]]["status"], "partial")
+            self.assertEqual(failed["attempts"][subject["id"]]["attempt_count"], 3)
+
+    def test_persisted_count_two_reconciles_independent_equivalent_and_divergent_forks(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            a1 = self.recover(root / "a1", selection, [self.authentic_batch(selection, 1, 0)])
+            a2 = self.authentic_batch(selection, 2, 1, previous=a1)
+            published = self.recover(root / "a2", selection, [a2], a1)
+            b1 = self.recover(root / "b1", selection, [self.authentic_batch(selection, 3, 2)])
+            b2 = self.authentic_batch(selection, 4, 3, previous=b1)
+            same = self.recover(root / "same", selection, [b2], published)
+            self.assertEqual(same["records"], published["records"])
+            self.assertEqual(same["attempts"], published["attempts"])
+            dirty = self.authentic_batch(selection, 5, 4, previous=b1, warning="Independent warning.")
+            changed = self.recover(root / "dirty", selection, [dirty], published)
+            self.assertEqual(changed["records"][subject["id"]]["status"], "partial")
+            self.assertEqual(changed["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(changed["attempts"][subject["id"]]["history"], published["attempts"][subject["id"]]["history"])
+            again = self.recover(root / "repeat", selection, [dirty], changed)
+            self.assertEqual(again["records"], changed["records"])
+            self.assertEqual(again["attempts"], changed["attempts"])
+
+    def test_unavailable_parent_does_not_reset_four_attempt_cap_or_admit_truncated_history(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = None
+            for index in range(3):
+                with mock.patch.object(coverage.scanner, "now", return_value=f"2020-01-01T00:00:{index:02d}Z"):
+                    prior = bundle(root / f"parent-{index}", selection, [record(subject)], prior)
+            fourth = self.authentic_batch(selection, 10, 4, previous=prior)
+            result = self.recover(root / "fourth", selection, [fourth])
+            attempt = result["attempts"][subject["id"]]
+            self.assertEqual((attempt["attempt_count"], attempt["disposition"]), (4, "exhausted"))
+            self.assertEqual(attempt["history"], fourth["workers"][0]["attempts"][0]["attempt"]["history"])
+            self.assertEqual(coverage.plan_attempts(selection, result, 0, 1, 128), [])
+            self.assertEqual(result["records"][subject["id"]]["status"], "partial")
+            invalid = copy.deepcopy(fourth)
+            invalid["workers"][0]["attempts"][0]["attempt"]["history"].pop(0)
+            with self.assertRaises(PublicationError):
+                self.recover(root / "truncated", selection, [invalid])
+
+    def test_current_epoch_history_suffix_preserves_real_older_profile_prefix_and_backfill(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        parent = self.authentic_batch(selection, 1, 1, status="partial", reason="runtime_limit", warning="Original parent warning.")
+        parent_outcome = parent["workers"][0]["attempts"][0]
+        legacy = copy.deepcopy(parent_outcome["attempt"]["history"][0])
+        legacy.update(at="2019-01-01T00:00:00Z")
+        legacy["profile"]["digest"] = "sha256:" + "a" * 64
+        parent_outcome["attempt"] = coverage.make_attempt(subject, parent_outcome["record"],
+            previous_record={"attempt_history": [legacy]}, at=parent_outcome["attempt"]["last_attempted_at"])
+        coverage.validate_worker(parent["workers"][0], selection, COMMIT)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = self.recover(root / "parent", selection, [parent])
+            self.assertEqual(prior["attempts"][subject["id"]]["history"], parent_outcome["attempt"]["history"])
+            child = self.authentic_batch(selection, 2, 2, previous=prior, status="error",
+                reason="acquisition_failed", profile_id="static-extended-v3")
+            original = child["workers"][0]["attempts"][0]["attempt"]
+            self.assertEqual((original["attempt_count"], len(original["history"])), (2, 3))
+            seeded = self.recover(root / "seeded", selection, [child])
+            self.assertEqual(seeded["attempts"][subject["id"]]["history"], original["history"])
+            backfilled = self.recover(root / "backfilled", selection, [parent], seeded)
+            self.assertEqual(backfilled["records"][subject["id"]]["findings"], parent_outcome["record"]["findings"])
+            self.assertEqual(backfilled["attempts"][subject["id"]]["history"], original["history"])
+            self.assertEqual(backfilled["records"][subject["id"]]["retry"]["latest_status"], "error")
+            tampered = copy.deepcopy(child)
+            tampered["workers"][0]["attempts"][0]["attempt"]["history"][-2]["profile"]["digest"] = legacy["profile"]["digest"]
+            with self.assertRaises(PublicationError):
+                self.recover(root / "bad-epoch", selection, [tampered])
+            originless = copy.deepcopy(child)
+            originless.pop("execution_origin")
+            with self.assertRaises(PublicationError):
+                self.recover(root / "originless", selection, [originless])
+
+    def test_late_parent_epoch_matches_after_old_prefix_rolls_out_of_bounded_history(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        parent = self.authentic_batch(selection, 1, 1, status="partial", reason="runtime_limit", warning="Retain parent warning.")
+        original = parent["workers"][0]["attempts"][0]
+        prefix = []
+        for second in range(7):
+            entry = copy.deepcopy(original["attempt"]["history"][0])
+            entry["at"] = f"2019-01-01T00:00:{second:02d}Z"
+            entry["profile"]["digest"] = "sha256:" + "a" * 64
+            prefix.append(entry)
+        original["attempt"] = coverage.make_attempt(subject, original["record"],
+            previous_record={"attempt_history": prefix}, at=original["attempt"]["last_attempted_at"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = self.recover(root / "parent", selection, [parent])
+            child = self.authentic_batch(selection, 2, 2, previous=prior, status="error",
+                reason="acquisition_failed", profile_id="static-extended-v3")
+            original_child = child["workers"][0]["attempts"][0]["attempt"]
+            self.assertEqual(len(original_child["history"]), 8)
+            seeded = self.recover(root / "seeded", selection, [child])
+            recovered = self.recover(root / "late", selection, [parent], seeded)
+            value = recovered["records"][subject["id"]]
+            self.assertEqual(value["findings"], original["record"]["findings"])
+            self.assertEqual(recovered["attempts"][subject["id"]]["history"], original_child["history"])
+            self.assertIn("recovery_predecessor_unavailable", coverage.reason_codes(value))
+            self.assertEqual(value["retry"]["latest_status"], "error")
 
 
 if __name__ == "__main__":

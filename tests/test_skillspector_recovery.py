@@ -154,7 +154,8 @@ class CheckpointTransportTests(unittest.TestCase):
             'rejected': [{'artifact_id': 2**63 - 1 - index, 'reason': 'excluded_controlled'} for index in range(artifact_rows)] +
                         [{'run_id': 2**63 - 1 - index, 'reason': 'untrusted_run'} for index in range(500)]}
         summary['reconciliation'] = {'equivalent_executions': 20000, 'conflicting_executions': 20000,
-            'examples': [{'id': 'x' * 512, 'reason': 'recovery_conflict',
+            'missing_predecessor_executions': 20000,
+            'examples': [{'id': 'x' * 512, 'reason': 'recovery_predecessor_unavailable',
                           'execution_origin': {'run_id': 2**63 - 1, 'run_attempt': 2**63 - 1}} for _ in range(32)]}
         self.assertEqual(len(summary['rejected']), 2228)
         self.assertLess(len(coverage.report_json(summary)), recovery.MAX_STATUS_BYTES)
@@ -529,6 +530,43 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(count, 0)
             self.assertFalse(output.exists())
 
+    def test_skipped_same_count_resume_keeps_unseen_warning_artifact_recoverable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            selection = json.loads((original / 'selection.json').read_text())
+            subject = selection['sources'][0]
+            with mock.patch.object(coverage.scanner, 'now', return_value='2026-11-03T08:00:00Z'):
+                independent = worker(selection, [record(subject)])
+            coverage.merge_reports(selection, None, [independent], source_commit=COMMIT,
+                                   output_dir=root / 'plan' / 'previous')
+            raw = fixtures.upstream_report()
+            raw['issues'] = [{'id': 'PI1', 'severity': 'HIGH', 'explanation': 'Retain the unseen warning.',
+                              'location': {'file': 'SKILL.md', 'start_line': 1}}]
+            adverse = coverage.scanner.normalize_report_v3(record(subject), json.dumps(raw).encode(), 1, Path('/source'))
+            coverage.write_bounded(root / 'adverse-worker.json', worker(selection, [adverse]), coverage.MAX_WORKER_BYTES)
+            recovery.pack(root / 'plan', root / 'adverse-worker.json', root / 'adverse-package', slice_index=1, environment={
+                'GITHUB_REPOSITORY': recovery.REPOSITORY, 'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '1',
+                'GITHUB_SHA': COMMIT, 'GITHUB_REF_NAME': 'main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'SCAN_CORPUS': 'catalog'})
+            body, artifact = archive_package(root / 'adverse-package')
+            output = root / 'resumed.json'
+            count = recovery.restore_current(FakeActions(run_metadata(run_attempt=2), artifact), root / 'plan', output,
+                token='read-only', partition=0, fetch_archive=lambda *_: body,
+                environment={'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': COMMIT})
+            self.assertEqual(count, 0)
+            self.assertFalse(output.exists())
+            self.assertFalse((root / 'plan' / 'recovery.json').exists())
+            self.assertFalse((root / 'plan' / 'previous' / 'recovery.json').exists())
+            with mock.patch.object(recovery, 'download_archive', return_value=body):
+                result = recovery.recover_plan(FakeActions(run_metadata(), artifact), root / 'plan', COMMIT, token='read-only')
+            recovered = coverage.read_bundle(root / 'plan' / 'previous')['records'][subject['id']]
+            self.assertEqual(result['reconciliation']['conflicting_executions'], 1)
+            self.assertEqual(recovered['finding_count'], 1)
+            self.assertEqual(recovered['status'], 'partial')
+            self.assertIn('recovery_conflict', coverage.reason_codes(recovered))
+            self.assertEqual(recovery.read_state(root / 'plan' / 'recovery.json')['runs'][0]['artifacts'],
+                             [{'id': artifact['id'], 'digest': artifact['digest']}])
+
     def test_controlled_main_job_retry_never_requests_production_resume_artifacts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -597,6 +635,90 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(result['rejected'], [])
             self.assertEqual(result['recovered_sources'], 1)
             self.assertFalse((root / 'plan' / 'recovery').exists())
+
+    def test_nine_packed_runs_advance_window_and_backfill_late_parent_without_resetting_child(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subjects = [item(id=f'fixture/root-{index}', path=f'skills/root-{index}') for index in range(8)]
+            selection = {'schema_version': 1, 'sources': subjects}
+            summary = fixtures.QueueTests().discovery_summary(selection)
+            with mock.patch.object(coverage.scanner, 'now', return_value='2026-11-02T17:00:00Z'):
+                parent_record = record(subjects[0], 'partial', 'runtime_limit')
+                parent_worker = worker(selection, [parent_record])
+                coverage.merge_reports(selection, None, [parent_worker], source_commit=COMMIT,
+                    output_dir=root / 'parent-baseline', discovery_summary=summary)
+            parent = coverage.read_bundle(root / 'parent-baseline')
+            with mock.patch.object(coverage.scanner, 'now', return_value='2026-11-02T18:00:00Z'):
+                child_record = record(subjects[0], 'error', 'acquisition_failed', 'static-extended-v3')
+                child_worker = worker(selection, [child_record], parent)
+                healthy = [worker(selection, [record(subject)]) for subject in subjects[1:]]
+            original_child_attempt = copy.deepcopy(child_worker['attempts'][0]['attempt'])
+            workers = [child_worker, *healthy, parent_worker]
+            run_ids = list(range(900, 891, -1))
+            runs, artifacts, bodies = [], {}, {}
+            for index, (run_id, value) in enumerate(zip(run_ids, workers)):
+                plan = root / f'origin-{run_id}'
+                plan.mkdir()
+                coverage.write_bounded(plan / 'selection.json', selection, coverage.MAX_SELECTION_BYTES)
+                coverage.write_bounded(plan / 'coverage.json', summary, coverage.MAX_DISCOVERY_BYTES)
+                coverage.write_bounded(plan / 'worker.json', value, coverage.MAX_WORKER_BYTES)
+                packaged = plan / 'packaged'
+                recovery.pack(plan, plan / 'worker.json', packaged, slice_index=1, environment={
+                    'GITHUB_REPOSITORY': recovery.REPOSITORY, 'GITHUB_RUN_ID': str(run_id), 'GITHUB_RUN_ATTEMPT': '1',
+                    'GITHUB_SHA': COMMIT, 'GITHUB_REF_NAME': 'main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'SCAN_CORPUS': 'catalog'})
+                body, artifact = archive_package(packaged)
+                artifact.update(id=10000 + run_id, workflow_run={'id': run_id, 'head_sha': COMMIT, 'head_branch': 'main'})
+                artifacts[run_id], bodies[artifact['id']] = artifact, body
+                runs.append(run_metadata(id=run_id, created_at=f'2026-11-02T19:{9 - index:02d}:00Z'))
+            class WindowAPI(FakeActions):
+                def request(self, method, path, data=None):
+                    if path.startswith('actions/workflows/9/runs?'):
+                        return {'workflow_runs': runs}
+                    if path.startswith('actions/runs/') and '/artifacts?' in path:
+                        run_id = int(path.split('/')[2])
+                        return {'total_count': 1, 'artifacts': [artifacts[run_id]]}
+                    return super().request(method, path, data)
+            plan = root / 'current-plan'
+            plan.mkdir()
+            coverage.write_bounded(plan / 'selection.json', selection, coverage.MAX_SELECTION_BYTES)
+            coverage.write_bounded(plan / 'coverage.json', summary, coverage.MAX_DISCOVERY_BYTES)
+            api, downloaded = WindowAPI(run_metadata(), None), []
+            def download(identifier, _token):
+                downloaded.append(identifier)
+                return bodies[identifier]
+            with mock.patch.object(recovery, 'download_archive', side_effect=download):
+                first = recovery.recover_plan(api, plan, COMMIT, token='read-only')
+            first_bundle = coverage.read_bundle(plan / 'previous')
+            first_attempt = first_bundle['attempts'][subjects[0]['id']]
+            self.assertEqual(first_attempt['attempt_count'], 2)
+            self.assertEqual(first_attempt['history'], original_child_attempt['history'])
+            self.assertEqual(first['cursor']['offset'], 8)
+            self.assertEqual(first['reconciliation']['missing_predecessor_executions'], 1)
+            self.assertEqual(first_bundle['manifest']['coverage']['complete'], 7)
+            self.assertNotEqual(first_bundle['records'][subjects[0]['id']]['status'], 'complete')
+            self.assertEqual(len(downloaded), 8)
+            # Publication carries receipts with the newly validated prior bundle.
+            shutil.copyfile(plan / 'recovery.json', plan / 'previous' / 'recovery.json')
+            with mock.patch.object(recovery, 'download_archive', side_effect=download):
+                second = recovery.recover_plan(api, plan, COMMIT, token='read-only')
+            second_bundle = coverage.read_bundle(plan / 'previous')
+            attempt = second_bundle['attempts'][subjects[0]['id']]
+            retained = second_bundle['records'][subjects[0]['id']]
+            self.assertEqual(attempt['attempt_count'], 2)
+            self.assertEqual(attempt['history'], original_child_attempt['history'])
+            self.assertEqual(attempt['status'], 'error')
+            self.assertEqual(retained['source']['content_digest'], parent_record['source']['content_digest'])
+            self.assertEqual(retained['retry']['latest_status'], 'error')
+            self.assertNotEqual(retained['status'], 'complete')
+            self.assertIsNone(second['cursor'])
+            self.assertEqual(len(downloaded), 9)
+            shutil.copyfile(plan / 'recovery.json', plan / 'previous' / 'recovery.json')
+            with mock.patch.object(recovery, 'download_archive', side_effect=download):
+                third = recovery.recover_plan(api, plan, COMMIT, token='read-only')
+            self.assertEqual(third['recovered_sources'], 0)
+            self.assertEqual(len(downloaded), 9)
+            self.assertEqual(coverage.read_bundle(plan / 'previous')['attempts'][subjects[0]['id']]['attempt_count'], 2)
 
 
 class DeliveryStatusTests(unittest.TestCase):

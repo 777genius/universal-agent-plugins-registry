@@ -717,8 +717,13 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
     else:
         record = copy.deepcopy(new)
         record["freshness"] = "current"
+    persisted_attempt = copy.deepcopy(attempt)
+    if old_attempt is not None and old_record is not None and predecessor_uncertain(old_record) and new["status"] == "error":
+        # A later failed execution cannot resolve an unavailable predecessor,
+        # even when both the old and new report contain no acquired content.
+        mark_missing_predecessor(record, persisted_attempt)
     records[identifier] = record
-    attempts[identifier] = copy.deepcopy(attempt)
+    attempts[identifier] = persisted_attempt
     return True
 
 
@@ -843,6 +848,38 @@ def recovery_history_contains(history, entries):
         for index in range(len(history) - len(entries) + 1))
 
 
+def mark_recovery_uncertainty(record, attempt, reason, message):
+    """Limit publication and schedule bounded work without changing real scan history."""
+    scanner.add_coverage_reason(record, reason, message)
+    scanner.add_coverage_reason(record, "normalization_truncated",
+        "Recovery evidence is not fully represented as one complete original report; a fresh scan is required.")
+    if record["status"] != "error":
+        record["status"] = record["coverage"]["status"] = "partial"
+        record["findings_truncated"] = True
+        record["coverage"]["grouping_complete"] = False
+    operational = {"recovery_conflict", "recovery_conflict_attempt_limit",
+        "recovery_predecessor_unavailable", "recovery_predecessor_unavailable_attempt_limit"}
+    if attempt["reason"] not in operational:
+        can_retry = attempt["attempt_count"] < contract.RETRY_POLICY["maximum_attempts_per_identity"]
+        profile = record["profile"]["id"]
+        next_profile = attempt["next_profile"] or (profile if profile in scanner.PROFILES else attempt["profile"]["id"])
+        next_at = max(scanner.now(), attempt["next_attempt_at"] or attempt["last_attempted_at"])
+        attempt.update(disposition="scheduled" if can_retry else "exhausted",
+            reason=reason if can_retry else reason + "_attempt_limit",
+            next_attempt_at=next_at if can_retry else None,
+            next_profile=next_profile if can_retry else None)
+
+
+def predecessor_uncertain(record):
+    return any(reason["code"] == "recovery_predecessor_unavailable" for reason in record["coverage"]["reasons"])
+
+
+def mark_missing_predecessor(record, attempt):
+    mark_recovery_uncertainty(record, attempt, "recovery_predecessor_unavailable",
+        "An authenticated execution has a complete original attempt history, but its predecessor report was "
+        "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
+
+
 def quarantine_recovery(records, attempts, item, outcome):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
@@ -863,27 +900,10 @@ def quarantine_recovery(records, attempts, item, outcome):
                 len(record["findings"]), record["execution"]["state"] != "failed", report_json(original))
 
     retained = copy.deepcopy(max((old, new), key=rank))
-    scanner.add_coverage_reason(retained, "recovery_conflict",
+    mark_recovery_uncertainty(retained, attempts[identifier], "recovery_conflict",
         "Independent authenticated executions disagree. This original report is retained; "
         "other authenticated outcomes are not fully represented. Their immutable checkpoint artifacts remain available.")
-    if retained["status"] != "error":
-        retained["status"] = retained["coverage"]["status"] = "partial"
-        retained["findings_truncated"] = True
-        retained["coverage"]["grouping_complete"] = False
-        scanner.add_coverage_reason(retained, "normalization_truncated",
-            "Conflicting independent execution evidence cannot be represented as one complete original report.")
     records[identifier] = retained
-    attempt = attempts[identifier]
-    # Preserve completed scan history, fingerprints, counts and execution status.
-    # Only the operational scheduling decision changes, within the existing cap.
-    if attempt["reason"] not in {"recovery_conflict", "recovery_conflict_attempt_limit"}:
-        can_retry = attempt["attempt_count"] < contract.RETRY_POLICY["maximum_attempts_per_identity"]
-        next_profile = attempt["next_profile"] or retained["profile"]["id"]
-        next_at = max(scanner.now(), attempt["next_attempt_at"] or attempt["last_attempted_at"])
-        attempt.update(disposition="scheduled" if can_retry else "exhausted",
-            reason="recovery_conflict" if can_retry else "recovery_conflict_attempt_limit",
-            next_attempt_at=next_at if can_retry else None,
-            next_profile=next_profile if can_retry else None)
 
 
 def recover_previous(selection, previous, recovery_bundles, *, source_commit, discovery_summary, output_dir,
@@ -902,7 +922,8 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
     targets = {source_digest(item): item for item in selection["sources"]}
     require(len(targets) == len(selection["sources"]), "ambiguous recovery target identity")
     diagnostics = {} if diagnostics is None else diagnostics
-    diagnostics.update(equivalent_executions=0, conflicting_executions=0, examples=[])
+    diagnostics.update(equivalent_executions=0, conflicting_executions=0,
+        missing_predecessor_executions=0, examples=[])
     outcomes, grouped, seen_outcomes = [], {}, set()
     identities = {}
     # Prefix strictness applies to each actual producing run/attempt, including
@@ -961,36 +982,83 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     require(attempt == make_attempt(target, outcome["record"], parent,
                         {"attempt_history": prefix}, at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                     outcomes.append((target, outcome, origin))
-    # A fork can have its own valid retry predecessor. Require that actual
-    # predecessor, or an already persisted history, rather than resetting counts.
+    # Authentication and a complete, self-consistent original history can retain
+    # higher-count evidence when a bounded window has not yet acquired its parent.
+    # It remains explicitly uncertain, and never restarts its counter at one.
+    unanchored = set()
+    uncertain_ids = set()  # Only newly unanchored evidence in this recovery batch propagates.
     for item, outcome, origin in outcomes:
         attempt = outcome["attempt"]
         if attempt["attempt_count"] == 1:
             continue
         persisted = attempts.get(item["id"])
         prefix = attempt["history"][:-1]
-        known = persisted is not None and (recovery_history_contains(persisted["history"], attempt["history"]) or
+        epoch = attempt["history"][-attempt["attempt_count"]:]
+        represented = epoch if origin is not None else attempt["history"]
+        known = persisted is not None and (recovery_history_contains(persisted["history"], represented) or
             persisted["attempt_count"] == attempt["attempt_count"] - 1 and persisted["history"][-len(prefix):] == prefix)
         known = known or bool(prefix) and any(parent["attempt"]["attempt_count"] == attempt["attempt_count"] - 1 and
             parent["attempt"]["history"][-len(prefix):] == prefix
             for parent_item, parent, _ in outcomes if parent_item["id"] == item["id"])
-        # An independently authenticated run can fork an attempt already
-        # published at the same or higher count. Reconcile its evidence below
-        # without accepting an unknown predecessor for newer attempts.
-        fork = origin is not None and persisted is not None and (
-            persisted["attempt_count"] >= attempt["attempt_count"])
-        require(known or fork, "recovered attempt count is not consecutive: missing predecessor")
+        if not known and origin is not None and persisted is not None and persisted["attempt_count"] >= attempt["attempt_count"]:
+            continue  # Independent authenticated forks use reconciliation below.
+        if not known:
+            require(origin is not None and len(epoch) == attempt["attempt_count"] and
+                    all(entry["profile"] in scanner.PROFILES.values() for entry in epoch),
+                    "recovered attempt count is not consecutive: missing predecessor")
+            unanchored.add(sha256_digest(report_json(outcome)))
+            uncertain_ids.add(item["id"])
     applied, recovered_ids = 0, set()
     for item, outcome, origin in sorted(outcomes, key=lambda value: (
             value[1]["attempt"]["last_attempted_at"], value[1]["attempt"]["attempt_count"], value[0]["id"],
             sha256_digest(report_json(value[1])))):
         old_attempt, old_record = attempts.get(item["id"]), records.get(item["id"])
+        if origin is not None and old_attempt is None and outcome["attempt"]["attempt_count"] == 1:
+            # A new identity may legitimately carry older source/policy history.
+            # Its current epoch has no retry predecessor; preserve the verified
+            # original prefix instead of recomputing it from an unrelated snapshot.
+            attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
+            if old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
+                records[item["id"]] = copy.deepcopy(outcome["record"])
+                records[item["id"]]["freshness"] = "current"
+            if item["id"] in uncertain_ids:
+                mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
+            applied += 1
+            recovered_ids.add(item["id"])
+            continue
+        if sha256_digest(report_json(outcome)) in unanchored and (old_attempt is None or
+                outcome["attempt"]["attempt_count"] > old_attempt["attempt_count"]):
+            identifier = item["id"]
+            attempts[identifier] = copy.deepcopy(outcome["attempt"])
+            if old_record is None or old_record["status"] == "error":
+                records[identifier] = copy.deepcopy(outcome["record"])
+                records[identifier]["freshness"] = "current"
+            elif outcome["record"]["status"] != "error":
+                quarantine_recovery(records, attempts, item, outcome)
+            mark_missing_predecessor(records[identifier], attempts[identifier])
+            diagnostics["missing_predecessor_executions"] += 1
+            if len(diagnostics["examples"]) < 32:
+                diagnostics["examples"].append({"id": identifier, "reason": "recovery_predecessor_unavailable",
+                    "execution_origin": copy.deepcopy(origin)})
+            applied += 1
+            recovered_ids.add(identifier)
+            continue
         if origin is not None and old_attempt is not None:
             attempt = outcome["attempt"]
+            scheduling = {"reason", "disposition", "next_attempt_at", "next_profile"}
+            if predecessor_uncertain(old_record) and \
+                    {key: value for key, value in old_attempt.items() if key not in scheduling} == \
+                    {key: value for key, value in attempt.items() if key not in scheduling}:
+                continue  # Exact original execution replay; retain its existing uncertainty/schedule.
             if attempt == old_attempt and outcome["record"]["status"] == "error" and old_record["status"] != "error":
                 continue  # Exact replay of a failure already retaining useful prior evidence.
             if attempt["attempt_count"] < old_attempt["attempt_count"] and \
-                    recovery_history_contains(old_attempt["history"], attempt["history"]):
+                    recovery_history_contains(old_attempt["history"], attempt["history"][-attempt["attempt_count"]:]):
+                if old_record["status"] == "error" and predecessor_uncertain(old_record) and outcome["record"]["status"] != "error":
+                    records[item["id"]] = copy.deepcopy(outcome["record"])
+                    records[item["id"]]["freshness"] = "current"
+                    mark_missing_predecessor(records[item["id"]], old_attempt)
+                    recovered_ids.add(item["id"])
                 continue
             follows = attempt["attempt_count"] == old_attempt["attempt_count"] + 1 and \
                 old_attempt["history"][-len(attempt["history"][:-1]):] == attempt["history"][:-1]
@@ -999,6 +1067,8 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     diagnostics["equivalent_executions"] += 1
                 else:
                     quarantine_recovery(records, attempts, item, outcome)
+                    if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
+                        mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                     diagnostics["conflicting_executions"] += 1
                     if len(diagnostics["examples"]) < 32:
                         diagnostics["examples"].append({"id": item["id"], "reason": "recovery_conflict",
@@ -1007,6 +1077,8 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
         if apply_outcome(records, attempts, item, outcome, replay=True):
             applied += 1
             recovered_ids.add(item["id"])
+            if item["id"] in uncertain_ids:
+                mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
     aligned = {"manifest": {"schema_version": 3, "scanner": SCANNER, "profile": PROFILE,
             "profiles": list(scanner.PROFILES.values()), "repository_aliases": aliases},
         "selection": selection, "records": records, "attempts": attempts,

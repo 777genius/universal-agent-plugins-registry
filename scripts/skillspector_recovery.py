@@ -532,7 +532,8 @@ def recover_plan(github, plan_dir, source_commit, *, token, current_id=None):
         summary["runs"] += own["runs"]
     batches = load_recovery_batches(staged)
     summary["recovered_sources"] = 0
-    summary["reconciliation"] = {"equivalent_executions": 0, "conflicting_executions": 0, "examples": []}
+    summary["reconciliation"] = {"equivalent_executions": 0, "conflicting_executions": 0,
+                                 "missing_predecessor_executions": 0, "examples": []}
     if batches:
         selection = coverage.load_selection(plan_dir / "selection.json")
         discovery = scanner.read_report_json(plan_dir / "coverage.json", max_bytes=coverage.MAX_DISCOVERY_BYTES)
@@ -619,8 +620,10 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
     for outcome in workers[0]["attempts"]:
         old = persisted.get(outcome["attempt"]["id"])
         if old is not None and old["attempt_count"] >= outcome["attempt"]["attempt_count"]:
-            # Preparation already reconciled independent main runs. A
-            # retry's earlier checkpoint cannot replace published progress.
+            # Preparation already reconciled independent main runs. A retry's
+            # earlier checkpoint cannot replace published progress. This does
+            # not acknowledge its artifact: unseen alternate evidence remains
+            # eligible for the next normal preparation's reconciliation.
             continue
         remaining.append(outcome)
     if not remaining:
