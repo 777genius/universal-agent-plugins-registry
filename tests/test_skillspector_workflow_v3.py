@@ -15,6 +15,7 @@ from scripts import prepare_skillspector_corpus as corpus
 from scripts import publish_skillspector_coverage_v3 as publisher
 from scripts import skillspector_coverage_v3 as coverage
 from scripts import skillspector_reports as scanner
+from scripts import skillspector_recovery as recovery
 from scripts.directory_publication import PublicationError
 
 
@@ -31,7 +32,7 @@ def expression_value(expression: str, *, repository='777genius/universal-agent-p
     """
     expression = expression.removeprefix('${{').removesuffix('}}').strip()
     expression = expression.replace('github.repository', 'repository').replace('github.ref', 'ref')
-    expression = expression.replace('inputs.corpus', 'selected_corpus').replace('&&', ' and ').replace('||', ' or ')
+    expression = expression.replace('inputs.corpus', 'selected_corpus').replace('steps.config.outputs.corpus', 'selected_corpus').replace('needs.prepare.outputs.corpus', 'selected_corpus').replace('&&', ' and ').replace('||', ' or ')
     tree = ast.parse(expression, mode='eval')
     allowed = (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.Compare, ast.Eq, ast.NotEq,
                ast.Name, ast.Constant, ast.Load)
@@ -53,7 +54,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         jobs = self.workflow['jobs']
         for name in ('prepare', 'scan', 'assemble'):
             with self.subTest(job=name):
-                self.assertEqual(jobs[name]['runs-on'], "${{ vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}")
+                self.assertEqual(jobs[name]['runs-on'], "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}")
                 self.assertEqual(jobs[name]['permissions'], {'contents': 'read', 'actions': 'read'})
         # All configured-runner phases depend on the original repository gate.
         self.assertIn("github.repository == '777genius/universal-agent-plugins-registry'", jobs['prepare']['if'])
@@ -72,7 +73,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                         self.assertEqual(gate(publish['if'], repository=repository, ref=ref,
                             selected_corpus=selected), repository == '777genius/universal-agent-plugins-registry'
                             and ref == 'refs/heads/main' and selected != 'controlled')
-        self.assertEqual(publish['needs'], 'assemble')
+        self.assertEqual(set(publish['needs']), {'prepare', 'assemble'})
         self.assertEqual(self.workflow['permissions'], {'contents':'read', 'actions':'read'})
         for name, job in self.workflow['jobs'].items():
             self.assertEqual(job['permissions'], {'contents': 'write'} if name == 'publish' else {'contents': 'read', 'actions': 'read'})
@@ -91,8 +92,9 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         outputs = self.workflow['jobs']['prepare']['outputs']
         for selected in ('controlled', 'catalog', ''):
             with self.subTest(corpus=selected):
-                count = int(expression_value(outputs['partition_count'], selected_corpus=selected))
-                partitions = json.loads(expression_value(outputs['partitions'], selected_corpus=selected))
+                config = recovery.execution_config('workflow_dispatch', corpus=selected)
+                count = int(config['partition_count'])
+                partitions = json.loads(config['partitions'])
                 self.assertEqual(count, 1 if selected == 'controlled' else 8)
                 self.assertEqual(partitions, list(range(count)))
         scan = self.workflow['jobs']['scan']
@@ -128,10 +130,11 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         self.assertIn('scripts.skillspector_coverage_v3 merge', commands)
         self.assertIn('scripts.publish_skillspector_coverage_v3 check', commands)
         uploaded = next(s for s in assemble['steps'] if s.get('uses','').startswith('actions/upload-artifact@'))
-        self.assertEqual(uploaded['with']['name'], 'skillspector-static-report-v3')
+        self.assertEqual(uploaded['with']['name'], 'skillspector-static-report-v3-a${{ github.run_attempt }}')
         publish = self.workflow['jobs']['publish']['steps']
         downloaded = next(s for s in publish if s.get('uses','').startswith('actions/download-artifact@'))
-        self.assertEqual(downloaded['with']['name'], uploaded['with']['name'])
+        self.assertEqual(uploaded['with']['name'], 'skillspector-static-report-v3-a${{ github.run_attempt }}')
+        self.assertEqual(downloaded['with']['name'], '${{ needs.assemble.outputs.report_artifact }}')
         check = next(i for i,s in enumerate(publish) if 'scripts.publish_skillspector_coverage_v3 check' in s.get('run',''))
         write = next(i for i,s in enumerate(publish) if 'scripts.publish_skillspector_coverage_v3 publish' in s.get('run',''))
         self.assertLess(check,write)
@@ -166,7 +169,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
             self.assertIn('!cancelled()', steps[f'scan{index}']['if'])
             self.assertIn('always()', steps[f'pack{index}']['if'])
             upload = next(step for step in jobs['scan']['steps']
-                          if step.get('with', {}).get('name') == f'skillspector-checkpoint-p${{{{ matrix.partition }}}}-s{index}')
+                          if step.get('with', {}).get('name') == f'skillspector-checkpoint-a${{{{ github.run_attempt }}}}-p${{{{ matrix.partition }}}}-s{index}')
             self.assertIn('always()', upload['if'])
             self.assertIn(f"steps.pack{index}.outcome == 'success'", upload['if'])
             self.assertEqual(upload['with']['retention-days'], '90')
@@ -187,6 +190,46 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                     self.assertEqual(gate(step['if'], ref=branch, selected_corpus=selected),
                                      branch == 'refs/heads/main' and selected == 'catalog')
             self.assertEqual(step['env']['GITHUB_TOKEN'], '${{ github.token }}')
+
+    def test_pr_canary_has_one_effective_controlled_short_configuration(self):
+        self.assertIn('pull_request', self.workflow['on'])
+        self.assertIn('.github/workflows/skillspector-reports.yml', self.workflow['on']['pull_request']['paths'])
+        config = recovery.execution_config('pull_request', corpus='catalog', maximum_attempts='512',
+            scan_budget_seconds='2100', discovery_pages='50')
+        self.assertEqual(config, {'corpus': 'controlled', 'maximum_attempts': '8', 'scan_budget_seconds': '300',
+            'discovery_pages': '1', 'partition_count': '1', 'partitions': '[0]'})
+        prepare = self.workflow['jobs']['prepare']
+        for key in ('corpus', 'maximum_attempts', 'scan_budget_seconds', 'partition_count', 'partitions'):
+            self.assertEqual(prepare['outputs'][key], '${{ steps.config.outputs.' + key + ' }}')
+        for job in ('prepare', 'scan', 'assemble'):
+            self.assertIn("github.event_name == 'pull_request' && 'ubuntu-24.04'", self.workflow['jobs'][job]['runs-on'])
+            self.assertEqual(self.workflow['jobs'][job]['permissions'], {'contents': 'read', 'actions': 'read'})
+        for step in self.workflow['jobs']['scan']['steps']:
+            if step.get('id', '').startswith('scan'):
+                self.assertEqual(step['env']['MAXIMUM_ATTEMPTS'], '${{ needs.prepare.outputs.maximum_attempts }}')
+        publish = self.workflow['jobs']['publish']
+        self.assertIn("github.ref == 'refs/heads/main'", publish['if'])
+        self.assertIn("needs.prepare.outputs.corpus != 'controlled'", publish['if'])
+        self.assertEqual(recovery.execution_config('schedule')['maximum_attempts'], '128')
+        self.assertEqual(recovery.execution_config('workflow_dispatch', maximum_attempts='512')['scan_budget_seconds'], '2100')
+
+    def test_job_retry_artifact_names_are_unique_and_keep_original_prepare_output(self):
+        jobs = self.workflow['jobs']
+        uploaded_plan = next(step for step in jobs['prepare']['steps']
+                             if step.get('uses', '').startswith('actions/upload-artifact@'))
+        self.assertEqual(uploaded_plan['with']['name'], 'skillspector-plan-a${{ github.run_attempt }}')
+        self.assertEqual(jobs['prepare']['outputs']['plan_artifact'], uploaded_plan['with']['name'])
+        for job in ('scan', 'assemble'):
+            downloaded = next(step for step in jobs[job]['steps'] if step.get('with', {}).get('name') == '${{ needs.prepare.outputs.plan_artifact }}')
+            self.assertIn('download-artifact', downloaded['uses'])
+        downloads = [step for step in jobs['assemble']['steps'] if 'pattern' in step.get('with', {})]
+        self.assertEqual(downloads[0]['with']['pattern'], 'skillspector-checkpoint-a${{ github.run_attempt }}-*')
+        resume = next(step for step in jobs['scan']['steps'] if step.get('id') == 'resume')
+        self.assertIn("github.ref == 'refs/heads/main'", resume['if'])
+        self.assertIn('github.run_attempt > 1', resume['if'])
+        for step in jobs['scan']['steps']:
+            if step.get('id', '').startswith('scan'):
+                self.assertIn("steps.resume.outcome == 'success'", step['if'])
 
 
 class ControlledCorpusPreparationTests(unittest.TestCase):

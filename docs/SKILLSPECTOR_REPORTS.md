@@ -169,7 +169,8 @@ independent of the 20,000-root inventory:
 | Attempt state | 64 MiB |
 | Discovery summary | 16 MiB |
 | Worker artifact | 32 MiB |
-| Recovery acknowledgement control | 1 MiB; at most 512 retained run attempts |
+| Recovery acknowledgement control | 8 MiB; at most 4,096 retained run attempts |
+| Publication preparation lease | 4 KiB |
 
 Large repositories split into multiple shards. Content-addressed paths and
 SHA-256 identify their exact bytes. The publisher preserves supported v1/v2
@@ -224,11 +225,14 @@ immutable acquisition, the actual scanner, assembly, and publication validation.
 It cannot publish. `corpus=controlled` runs the checked-in immutable regression
 corpus as an artifact and cannot replace catalog data, including on `main`.
 Scheduled and normal main-push runs use 50 pages and 128 attempts per partition.
+Manual dispatch also offers finite 256/512 attempt caps with the same 2,100-second
+maximum work budget; the normal default remains 128 until larger measured runs
+justify changing it.
 The scanner budget defaults to 2,100 seconds per partition, divided into three
 700-second invocations. Each invocation resumes the validated cumulative local
 checkpoint, adds at most 43 outcomes (three when the total attempt cap is eight),
 and uploads a separately named immutable checkpoint artifact. The total attempt
-cap remains 128 or eight. Manual 300- and 600-second budgets use one invocation;
+cap remains the selected finite cap across all three invocations. Manual 300- and 600-second budgets use one invocation;
 600 seconds leaves enough admission room for the full extended profile and
 preparation allowance. Small catalog runs still download the existing report
 snapshot and pay discovery/assembly costs; the scanner budget does not bound
@@ -264,29 +268,42 @@ GitHub artifact archive SHA-256 independently from the internal file digests.
 Archive paths, duplicates, symlinks and excess expansion are rejected, and
 artifact redirects never forward the API Authorization header.
 
-Main catalog preparation automatically discovers the oldest unacknowledged
-canonical main runs in the 90-day window, reading at most 500 run entries and
-replaying at most eight artifact-producing runs per preparation. Downloads
+Main catalog preparation automatically walks unacknowledged canonical main
+runs in the 90-day window. Each preparation reads at most five pages of 100 run
+entries and replays at most eight artifact-producing runs. A published cursor
+preserves the created-at anchor, page and offset, so newly arriving runs cannot
+reset the walk or hide older entries beyond the first 500. After exhausting an
+anchored cycle, the next preparation starts a fresh cycle for new arrivals.
+Legacy runs without checkpoint packages do not fill acknowledgement storage. Downloads
 have a finite 1 GiB aggregate compressed-byte budget and 128 MiB archive limit.
 The read-only Actions token authenticates the actual repository, workflow,
 original main branch, head SHA, event, run attempt and artifact metadata.
 Feature-branch artifacts cannot become production evidence after their commit
 is merged. Controlled corpus and obsolete-policy artifacts are acknowledged
 with explicit exclusion reasons and are never recovered as current analysis.
-Malformed current-policy evidence stops recovery visibly for operator review.
+Malformed, expired, controlled and obsolete-policy artifacts receive bounded
+quarantine reasons in the recovery status and acknowledgements. Their invalid
+outcomes are excluded while independent valid artifacts continue to recover.
+Transient transport failures remain failures and do not permanently quarantine
+a recoverable network request.
 
 Recovered outcomes enter the new selection only through exact immutable source
 identity, current scanner/policy and consecutive attempt lineage. Original scan
 times and findings remain intact. A changed revision stays pending/historical.
 The new valid bundle is used as the prior state by scanning and assembly, so an
-acknowledged completed attempt does not run or increment again. Recovery state
-is included in the optional `recovery.json` control file after a valid merge;
+acknowledged completed attempt does not run or increment again. Recovery state, the cursor and quarantine diagnostics
+are included in the optional `recovery.json` control file after a valid merge;
 the public pointer and its acknowledgements advance in one atomic publication.
 Already acknowledged runs are not downloaded again. Neither recovery transport
 nor assembly receives contents-write permission.
 
 The publisher retains both obsolete-main checks and non-force report-branch
-updates. It emits a structured delivery status and Actions summary. Supersession
+updates. Preparation records the exact observed report-branch SHA in
+`publication-base.json`; assembly carries that lease into the candidate bundle.
+A same-main candidate cannot overwrite a newer report assembled after its prior
+snapshot, even when its generated timestamp is newer. Missing or mismatched
+leases defer existing-branch publication before writes. An exact byte-identical
+published retry remains idempotent. It emits a structured delivery status and Actions summary. Supersession
 returns success only when the report has a validated remote acknowledgement for
 its actual current run/attempt, naming `superseded_with_durable_recovery`.
 Without that receipt it returns exit status 3. Publication errors return status
@@ -294,6 +311,21 @@ Without that receipt it returns exit status 3. Publication errors return status
 catalog preparation automatically retries eligible retained evidence; a branch
 or controlled run cannot use this route to publish. Production success still
 requires observing the public report commit and current coverage counts.
+
+Checkpoint, plan and final report artifact names include the Actions run
+attempt. Prepare/report output names are passed to dependent jobs, so a failed
+job-only rerun still uses the correct original plan. A retried main scan first
+authenticates and restores the latest earlier-attempt checkpoint for its exact
+partition and selection; sources already recovered by a rerun of prepare are
+not restored or counted twice.
+
+A path-scoped pull request canary uses the same pinned real scanner, checkpoint
+packaging, assembly and publication validation with one controlled partition,
+eight maximum attempts and a 300-second scanner budget. One preparation output
+resolves this configuration for all downstream jobs. PR analysis runs on hosted
+Ubuntu with read-only permissions, fetches no production prior bundle, and is
+excluded from both direct production publication and production recovery. The
+controlled corpus remains immutable.
 
 Operators can inspect the workflow checkpoint artifacts, `recovery-status.json`
 in the plan artifact and the published `recovery.json` acknowledgements, then

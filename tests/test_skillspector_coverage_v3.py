@@ -853,6 +853,7 @@ class PublicationTests(unittest.TestCase):
                 publisher.v2.PREFIX + "shards/" + "d" * 64 + ".json"]
             tree = [{"path": path, "mode": "100644", "type": "blob", "sha": "d" * 40} for path in legacy_paths]
             tree.append({"path": "unrelated.py", "mode": "100644", "type": "blob", "sha": "e" * 40})
+            coverage.write_bounded(root / "publication-base.json", {"schema_version": 1, "report_commit": "a" * 40}, 4096)
             github = FakeGitHub(Path(directory) / "git", old={"tree": tree})
             result = publisher.publish(github, root, COMMIT, fetch=lambda *args, **kwargs: None)
             self.assertEqual(len(result), 40)

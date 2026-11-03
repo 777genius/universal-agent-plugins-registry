@@ -511,6 +511,8 @@ class TransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "reports"
             bundle(root, {"schema_version": 1, "sources": [source]}, [record(source)])
+            publisher.coverage.write_bounded(root / "publication-base.json",
+                {"schema_version": 1, "report_commit": "a" * 40}, 4096)
             with self.assertRaisesRegex(PublicationError, "status=422.*error_category=validation_failed"):
                 publisher.publish(client, root, COMMIT, fetch=lambda *args, **kwargs: None)
         self.assertEqual([request.get_method() for request, _ in self.requests], ["GET", "GET", "GET", "POST"])

@@ -31,7 +31,8 @@ MAX_API_BYTES = 32 << 20
 MAX_TREE_UPLOAD_BYTES = 8 << 20
 CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "selection.json": coverage.MAX_SELECTION_BYTES, "attempts.json": coverage.MAX_STATE_BYTES,
-    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 1 << 20}
+    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 8 << 20,
+    "publication-base.json": 4096}
 
 
 class SupersededCoverage(PublicationError):
@@ -68,9 +69,12 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
 
 def previous(github, output_dir, *, fetch=raw_file):
     ref = github.request("GET", f"git/ref/heads/{BRANCH}")
+    head = ref["object"]["sha"] if ref else None
+    require(head is None or coverage.SHA.fullmatch(head), "invalid report branch head")
+    # This is the observed preparation lease, never the previous report's own lease.
+    coverage.write_bounded(output_dir / "publication-base.json", {"schema_version": 1, "report_commit": head}, 4096)
     if ref is None:
         return None
-    head = ref["object"]["sha"]
     require(coverage.SHA.fullmatch(head) is not None, "invalid report branch head")
     body = fetch(head, "index.json", coverage.MAX_MANIFEST_BYTES, optional=True)
     version = 3
@@ -83,7 +87,7 @@ def previous(github, output_dir, *, fetch=raw_file):
     coverage.validate_manifest(manifest)
     output_dir.mkdir(parents=True, exist_ok=True)
     coverage.write_bounded(output_dir / "index.json", manifest, coverage.MAX_MANIFEST_BYTES)
-    files = [(name, maximum) for name, maximum in CONTROL_FILES.items() if name != "index.json"]
+    files = [(name, maximum) for name, maximum in CONTROL_FILES.items() if name not in {"index.json", "publication-base.json"}]
     files.extend((part["path"], part["bytes"]) for part in manifest["shards"])
 
     def download(item):
@@ -128,7 +132,22 @@ def validate_directory(directory, source_commit):
     if "recovery.json" in present:
         from scripts.skillspector_recovery import read_state
         read_state(directory / "recovery.json")
+    if "publication-base.json" in present:
+        publication_base(directory)
     return bundle
+
+
+def publication_base(directory):
+    path = directory / "publication-base.json"
+    if not path.exists():
+        return None
+    require(path.is_file() and not path.is_symlink(), "publication baseline must be regular")
+    value = scanner.read_report_json(path, max_bytes=4096)
+    coverage.v2.exact(value, ("schema_version", "report_commit"), "publication baseline")
+    require(value["schema_version"] == 1 and (value["report_commit"] is None or
+            isinstance(value["report_commit"], str) and coverage.SHA.fullmatch(value["report_commit"])),
+            "invalid publication baseline")
+    return value
 
 
 def durable_receipt(directory, source_commit):
@@ -141,7 +160,7 @@ def durable_receipt(directory, source_commit):
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
     return bool(run_id.isdecimal() and attempt.isdecimal() and any(
-        row["run_id"] == int(run_id) and row["run_attempt"] == int(attempt) and
+        row["run_id"] == int(run_id) and row["run_attempt"] <= int(attempt) and
         row["head_sha"] == source_commit and row["artifacts"] for row in state["runs"]))
 
 
@@ -185,6 +204,10 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
                 duplicate_publication = True
             if current_at < previous_at:
                 raise SupersededCoverage("newer coverage is already published")
+        if not duplicate_publication:
+            base = publication_base(directory)
+            if base is None or base["report_commit"] != head:
+                raise SupersededCoverage("report branch advanced since preparation or baseline is missing")
         tree = github.request("GET", f"git/trees/{head}?recursive=1")
         require(tree is not None and tree.get("truncated") is False, "report tree is unavailable or truncated")
         for item in tree["tree"]:
@@ -206,6 +229,10 @@ def publish(github, directory, source_commit, *, fetch=raw_file):
             require(old_entries.get(PREFIX + relative) == blob_sha,
                     "identical report publication file differs")
         return head
+    if head is None:
+        base = publication_base(directory)
+        if base is not None and base["report_commit"] is not None:
+            raise SupersededCoverage("report branch changed since preparation")
     entries = {}
     # Keep every supported v1/v2 control and content-addressed shard byte exact.
     # Older clients can continue using the last complete legacy publication.
