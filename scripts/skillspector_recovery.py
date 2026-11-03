@@ -493,6 +493,11 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                 require(artifact.get("expired") is False, "checkpoint expired")
                 require(type(size) is int and 0 < size <= MAX_ARCHIVE_BYTES, "checkpoint archive exceeds limit")
                 body = fetch_archive(identifier, token)
+                # An interrupted HTTPS stream may return a short ZIP without an I/O
+                # exception. Never quarantine a valid immutable checkpoint on that
+                # transport evidence; leave its cursor/receipt unchanged for retry.
+                if len(body) != size:
+                    raise GitHubTransportError("GitHub checkpoint download incomplete; recovery deferred")
                 bytes_read += len(body)
                 require(bytes_read <= MAX_TOTAL_BYTES, "recovery download budget exceeded")
                 with zipfile.ZipFile(io.BytesIO(body)) as archive:

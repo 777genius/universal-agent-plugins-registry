@@ -443,6 +443,26 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(len(recovery.load_recovery_batches(root / 'second')), 1)
             self.assertEqual(next_state['runs'][0]['run_id'], 101)
 
+    def test_short_checkpoint_download_defers_without_quarantine_and_recovers_on_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            body, artifact = archive_package(package(root))
+            state = {'schema_version': 1, 'runs': []}
+            # Reproduce an interrupted HTTP read returning an intact prefix.
+            # The artifact listing still advertises the full immutable ZIP size.
+            with self.assertRaisesRegex(recovery.GitHubTransportError, 'checkpoint download incomplete'):
+                recovery.collect(FakeActions(run_metadata(), artifact), root / 'truncated', state,
+                    token='read-only', fetch_archive=lambda *_: body[:-1], now=NOW)
+            self.assertEqual(state, {'schema_version': 1, 'runs': []})
+            self.assertFalse((root / 'truncated' / '101-1-501').exists())
+            restored, status = recovery.collect(FakeActions(run_metadata(), artifact), root / 'retried', state,
+                token='read-only', fetch_archive=lambda *_: body, now=NOW)
+            self.assertEqual(status['status'], 'ready')
+            self.assertEqual(restored['runs'][0]['rejections'], [])
+            self.assertEqual(restored['runs'][0]['artifacts'],
+                             [{'id': artifact['id'], 'digest': artifact['digest']}])
+            self.assertEqual(len(recovery.load_recovery_batches(root / 'retried')), 1)
+
     def test_malformed_newer_artifact_is_quarantined_without_starving_valid_older_work(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
