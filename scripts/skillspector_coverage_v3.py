@@ -862,8 +862,17 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 existing = identities.get(identity)
                 if existing is not None:
                     prior = existing["attempt"]
-                    require(prior["fingerprint"] == outcome["attempt"]["fingerprint"],
-                            "conflicting recovered outcomes")
+                    # The retry fingerprint intentionally excludes some display
+                    # fields. Never equate changed findings/source/inventory merely
+                    # because the coarse fingerprint happens to match.
+                    volatile = {"scanned_at", "execution", "report_digest",
+                                "freshness", "retry", "attempt_history"}
+                    original = {key: value for key, value in existing["record"].items()
+                                if key not in volatile}
+                    incoming = {key: value for key, value in outcome["record"].items()
+                                if key not in volatile}
+                    require(prior["fingerprint"] == outcome["attempt"]["fingerprint"] and
+                            original == incoming, "conflicting recovered outcomes")
                     # Same scan result from independent runs: keep newest
                     # execution evidence deterministically, not both attempts.
                     if prior["last_attempted_at"] >= outcome["attempt"]["last_attempted_at"]:
