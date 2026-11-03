@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from scripts import skillspector_coverage_v3 as coverage
 from scripts.directory_publication import PublicationError
 from tests import test_skillspector_coverage_v3 as fixtures
 from tests.test_skillspector_coverage_v3 import COMMIT, bundle, record, worker
-from tests.test_skillspector_reports import item
+from tests.test_skillspector_reports import item, upstream_report
 
 
 def partition_worker(selection, values, *, count, previous=None):
@@ -82,6 +83,21 @@ class PartialMergeTests(unittest.TestCase):
             with self.assertRaisesRegex(PublicationError, "do not partition"):
                 coverage.validate_manifest(manifest)
 
+    def test_current_run_recovery_count_survives_final_assembly_and_is_bounded(self):
+        value = partition_worker(self.selection, [record(self.sources[0])], count=2)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = coverage.merge_reports(self.selection, None, [value], source_commit=COMMIT,
+                output_dir=root / "valid", allow_partial_workers=True, expected_partition_count=2,
+                recovered_sources=1)
+            self.assertEqual(manifest["execution_summary"]["recovered_sources"], 1)
+            for invalid in (-1, 3, True):
+                with self.subTest(count=invalid), self.assertRaisesRegex(PublicationError, "invalid recovered source"):
+                    coverage.merge_reports(self.selection, None, [value], source_commit=COMMIT,
+                        output_dir=root / "invalid", allow_partial_workers=True, expected_partition_count=2,
+                        recovered_sources=invalid)
+            self.assertFalse((root / "invalid").exists())
+
 
 class RecoveryTests(unittest.TestCase):
     def summary(self, selection, source_commit=COMMIT):
@@ -116,31 +132,6 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(duplicate["attempts"], recovered["attempts"])
             self.assertEqual(duplicate["queue_cursor"], recovered["queue_cursor"])
             self.assertEqual(duplicate["manifest"]["execution_summary"]["recovered_sources"], 0)
-
-    def test_independent_main_runs_with_same_fingerprint_dedupe_without_wedging(self):
-        subject = item()
-        selection = {"schema_version": 1, "sources": [subject]}
-        with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T09:00:00Z"):
-            first = self.batch(selection, [record(subject)])
-        with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T09:05:00Z"):
-            second = self.batch(selection, [record(subject)])
-        earlier = first["workers"][0]["attempts"][0]["attempt"]
-        later = second["workers"][0]["attempts"][0]["attempt"]
-        self.assertEqual(earlier["fingerprint"], later["fingerprint"])
-        self.assertNotEqual(earlier["last_attempted_at"], later["last_attempted_at"])
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            result = self.recover(root / "coalesced", selection, [first, second])
-            self.assertEqual(result["attempts"][subject["id"]]["last_attempted_at"],
-                             later["last_attempted_at"])
-            baseline = self.recover(root / "original", selection, [first])
-            duplicate = self.recover(root / "persisted", selection, [second], baseline)
-            self.assertEqual(duplicate["attempts"], baseline["attempts"])
-            self.assertEqual(duplicate["manifest"]["execution_summary"]["recovered_sources"], 0)
-            with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T09:10:00Z"):
-                divergent = self.batch(selection, [record(subject, "partial", "runtime_limit")])
-            with self.assertRaisesRegex(PublicationError, "conflicting recovered outcomes"):
-                self.recover(root / "divergent", selection, [first, divergent])
 
     def test_changed_revision_is_not_promoted_and_source_discovery_remains_historical(self):
         old = item()
@@ -190,6 +181,142 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(batches=batches), tempfile.TemporaryDirectory() as directory:
                 with self.assertRaises(PublicationError):
                     self.recover(Path(directory), selection, batches)
+
+    def authentic_batch(self, selection, run_id, second, *, warning=None, previous=None, exit_code=None):
+        with mock.patch.object(coverage.scanner, "now", return_value=f"2020-01-01T00:00:{second:02d}Z"):
+            value = record(selection["sources"][0])
+            if warning is not None:
+                raw = upstream_report()
+                raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": warning,
+                                  "location": {"file": "SKILL.md", "start_line": 1}}]
+                value = coverage.scanner.normalize_report_v3(value, json.dumps(raw).encode(), 1, Path("/source"))
+            if exit_code is not None:
+                value["execution"]["exit_code"] = exit_code
+            batch = self.batch(selection, [value], previous)
+        batch["execution_origin"] = {"run_id": run_id, "run_attempt": 1}
+        return batch
+
+    def test_independent_equivalent_executions_preserve_published_evidence_and_counts(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(selection, 1, 0)
+        second = self.authentic_batch(selection, 2, 1)
+        second["workers"][0]["attempts"][0]["record"]["report_digest"] = "sha256:" + "b" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "published", selection, [first])
+            recovered = self.recover(root / "recovered", selection, [second], baseline)
+            self.assertEqual(recovered["records"], baseline["records"])
+            self.assertEqual(recovered["attempts"], baseline["attempts"])
+            self.assertEqual(recovered["queue_cursor"], baseline["queue_cursor"])
+            self.assertEqual(recovered["manifest"]["execution_summary"]["recovered_sources"], 0)
+            both = self.recover(root / "both", selection, [second, first])
+            self.assertEqual(both["attempts"], baseline["attempts"])
+
+    def test_independent_clean_and_dirty_conflicts_keep_original_warning_and_bounded_retry(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        clean = self.authentic_batch(selection, 1, 0)
+        dirty = self.authentic_batch(selection, 2, 1, warning="An actual preserved warning.")
+        original = dirty["workers"][0]["attempts"][0]["record"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, batches in enumerate(([clean, dirty], [dirty, clean])):
+                recovered = self.recover(root / f"order-{index}", selection, batches)
+                value = recovered["records"][subject["id"]]
+                self.assertEqual(value["status"], "partial")
+                self.assertFalse(value["coverage"]["grouping_complete"])
+                self.assertTrue(value["findings_truncated"])
+                self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(value))
+                for key in ("source", "scanned_at", "report_digest", "findings", "execution"):
+                    self.assertEqual(value[key], original[key])
+                self.assertEqual(recovered["attempts"][subject["id"]]["attempt_count"], 1)
+                self.assertEqual(recovered["attempts"][subject["id"]]["history"], clean["workers"][0]["attempts"][0]["attempt"]["history"])
+                self.assertEqual(coverage.plan_attempts(selection, recovered, 0, 1, 128), [subject])
+                replay = self.recover(root / f"replay-{index}", selection, batches, recovered)
+                self.assertEqual(replay["records"], recovered["records"])
+                self.assertEqual(replay["attempts"], recovered["attempts"])
+            for index, (published, incoming) in enumerate(((clean, dirty), (dirty, clean))):
+                baseline = self.recover(root / f"prior-{index}", selection, [published])
+                recovered = self.recover(root / f"fork-{index}", selection, [incoming], baseline)
+                self.assertEqual(recovered["records"][subject["id"]]["findings"], original["findings"])
+                self.assertEqual(recovered["attempts"][subject["id"]]["history"], baseline["attempts"][subject["id"]]["history"])
+
+    def test_disjoint_warnings_and_same_fingerprint_different_evidence_are_not_collapsed(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        left = self.authentic_batch(selection, 1, 0, warning="First warning.")
+        right = self.authentic_batch(selection, 2, 1, warning="Distinct warning.")
+        metadata = copy.deepcopy(left)
+        metadata["execution_origin"]["run_id"] = 3
+        metadata["workers"][0]["attempts"][0]["record"]["skill_name"] = "different normalized evidence"
+        self.assertEqual(left["workers"][0]["attempts"][0]["attempt"]["fingerprint"],
+                         metadata["workers"][0]["attempts"][0]["attempt"]["fingerprint"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            a = self.recover(root / "a", selection, [left, right])
+            b = self.recover(root / "b", selection, [right, left])
+            self.assertEqual(a["records"], b["records"])
+            self.assertIn("not fully represented", a["records"][subject["id"]]["coverage"]["reasons"][-2]["message"])
+            value = self.recover(root / "metadata", selection, [left, metadata])["records"][subject["id"]]
+            self.assertEqual(value["status"], "partial")
+            self.assertIn("recovery_conflict", coverage.reason_codes(value))
+
+    def test_same_origin_conflicts_missing_predecessor_and_exit_code_difference_remain_distinct(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(selection, 1, 0)
+        corrupted = copy.deepcopy(first)
+        corrupted["workers"][0]["attempts"][0]["record"]["skill_name"] = "corrupt prefix"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(PublicationError, "conflicting cumulative"):
+                self.recover(root / "same-origin", selection, [first, corrupted])
+            baseline = self.recover(root / "first", selection, [first])
+            retry = self.authentic_batch(selection, 2, 1, previous=baseline)
+            with self.assertRaisesRegex(PublicationError, "missing predecessor"):
+                self.recover(root / "gap", selection, [retry])
+            exit_one = self.authentic_batch(selection, 3, 2, exit_code=1)
+            changed = self.recover(root / "exit", selection, [first, exit_one])
+            self.assertIn("recovery_conflict", coverage.reason_codes(changed["records"][subject["id"]]))
+
+    def test_quarantine_preserves_exhausted_attempt_history_and_reports_bounded_diagnostics(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = None
+            for index in range(4):
+                with mock.patch.object(coverage.scanner, "now", return_value=f"2020-01-01T00:00:{index:02d}Z"):
+                    previous = bundle(root / f"history-{index}", selection, [record(subject)], previous)
+            original = copy.deepcopy(previous["attempts"][subject["id"]])
+            dirty = self.authentic_batch(selection, 99, 10, warning="Retain the adverse evidence.")
+            diagnostics = {}
+            coverage.recover_previous(selection, previous, [dirty], source_commit="d" * 40,
+                discovery_summary=self.summary(selection, "d" * 40), output_dir=root / "result", diagnostics=diagnostics)
+            result = coverage.read_bundle(root / "result")
+            attempt = result["attempts"][subject["id"]]
+            self.assertEqual(attempt["attempt_count"], 4)
+            self.assertEqual(attempt["history"], original["history"])
+            self.assertEqual(attempt["status"], original["status"])
+            self.assertEqual(attempt["disposition"], "exhausted")
+            self.assertEqual(coverage.plan_attempts(selection, result, 0, 1, 128), [])
+            self.assertEqual(diagnostics["conflicting_executions"], 1)
+            self.assertEqual(diagnostics["examples"][0]["execution_origin"], {"run_id": 99, "run_attempt": 1})
+
+    def test_a_retry_on_an_independent_fork_uses_its_verified_predecessor(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(selection, 1, 0)
+        branch = self.authentic_batch(selection, 2, 1, warning="Branch warning.")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            branch_base = self.recover(root / "branch", selection, [branch])
+            child = self.authentic_batch(selection, 3, 2, warning="Later branch warning.", previous=branch_base)
+            result = self.recover(root / "fork", selection, [child, first, branch])
+            self.assertEqual(result["records"][subject["id"]]["status"], "partial")
+            self.assertIn("recovery_conflict", coverage.reason_codes(result["records"][subject["id"]]))
+            self.assertEqual(result["attempts"][subject["id"]]["attempt_count"], 1)
 
 
 if __name__ == "__main__":

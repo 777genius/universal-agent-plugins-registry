@@ -5,6 +5,10 @@ import copy
 import json
 import tempfile
 import subprocess
+import os
+import sys
+import zipfile
+import io
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -177,43 +181,10 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         self.assertIn("needs.prepare.result == 'success'", jobs['assemble']['if'])
         merge = next(step['run'] for step in jobs['assemble']['steps'] if 'skillspector_coverage_v3 merge' in step.get('run', ''))
         self.assertIn('--allow-partial-workers', merge)
+        self.assertIn('--recovered-sources "${recovered_sources}"', merge)
         self.assertIn('--expected-partition-count "${{ needs.prepare.outputs.partition_count }}"', merge)
+        self.assertIn('scripts.skillspector_recovery list-workers', merge)
         self.assertIn('--workers "${workers[@]}"', merge)
-
-    def test_assembly_accepts_flat_and_nested_checkpoint_downloads(self):
-        # download-artifact can flatten exactly one matching artifact, but it
-        # creates per-artifact directories when several checkpoints match.
-        merge = next(step['run'] for step in self.workflow['jobs']['assemble']['steps']
-                     if 'skillspector_coverage_v3 merge' in step.get('run', ''))
-        setup = merge.split('python3 -m scripts.skillspector_coverage_v3 merge', 1)[0]
-        self.assertIn('shopt -s nullglob', setup)
-        self.assertIn('--workers "${workers[@]}"', merge)
-        for layout in ('flat', 'nested', 'multiple', 'missing'):
-            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as temporary:
-                artifact_root = Path(temporary) / 'skillspector-workers'
-                artifact_root.mkdir()
-                if layout == 'flat':
-                    paths = [artifact_root / 'worker.json']
-                elif layout == 'nested':
-                    paths = [artifact_root / 'skillspector-checkpoint-a1-p0-s1' / 'worker.json']
-                elif layout == 'multiple':
-                    paths = [artifact_root / f'skillspector-checkpoint-a1-p{index}-s1' / 'worker.json'
-                             for index in (0, 1)]
-                else:
-                    paths = []
-                for path in paths:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text('{}')
-                process = subprocess.run(
-                    ['bash', '-eu', '-c', setup + '\nprintf "%s\\n" "${workers[@]}"'],
-                    env={'RUNNER_TEMP': temporary}, capture_output=True, text=True,
-                )
-                if not paths:
-                    self.assertNotEqual(process.returncode, 0)
-                    self.assertIn('No SkillSpector checkpoint worker', process.stderr)
-                else:
-                    self.assertEqual(process.returncode, 0, process.stderr)
-                    self.assertEqual(set(process.stdout.splitlines()), {str(path) for path in paths})
 
     def test_only_main_catalog_runs_can_recover_or_acknowledge_production_inputs(self):
         for job in ('prepare', 'assemble'):
@@ -265,6 +236,31 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         for step in jobs['scan']['steps']:
             if step.get('id', '').startswith('scan'):
                 self.assertIn("steps.resume.outcome == 'success'", step['if'])
+
+    def test_real_merge_shell_handles_flat_single_artifact_zip_and_named_multiple_layout(self):
+        from tests.test_skillspector_recovery import package, archive_package
+        merge = next(step['run'] for step in self.workflow['jobs']['assemble']['steps']
+                     if 'skillspector_coverage_v3 merge' in step.get('run', ''))
+        command = merge.replace('${{ needs.prepare.outputs.partition_count }}', '1')
+        for nested in (False, True):
+            with self.subTest(nested=nested), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                original = package(root)
+                archive, _ = archive_package(original)
+                (root / 'plan').rename(root / 'skillspector-plan')
+                destination = root / 'skillspector-workers'
+                if nested:
+                    destination /= 'skillspector-checkpoint-a1-p0-s1'
+                with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+                    zipped.extractall(destination)
+                env = {**os.environ, 'RUNNER_TEMP': str(root), 'SOURCE_COMMIT': 'c' * 40,
+                       'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '1',
+                       'PATH': str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH']}
+                result = subprocess.run(['bash', '-eu', '-c', command], cwd=ROOT, env=env,
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads((root / 'skillspector-report' / 'index.json').read_text())
+                self.assertEqual(manifest['coverage']['complete'], 1)
 
 
 class ControlledCorpusPreparationTests(unittest.TestCase):

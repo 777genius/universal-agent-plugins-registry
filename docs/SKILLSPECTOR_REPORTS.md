@@ -169,7 +169,7 @@ independent of the 20,000-root inventory:
 | Attempt state | 64 MiB |
 | Discovery summary | 16 MiB |
 | Worker artifact | 32 MiB |
-| Recovery acknowledgement control | 8 MiB; at most 4,096 retained run attempts |
+| Recovery acknowledgement control | 32 MiB; at most 1,024 retained run attempts and 192 total artifact dispositions per run |
 | Publication preparation lease | 4 KiB |
 
 Large repositories split into multiple shards. Content-addressed paths and
@@ -251,6 +251,11 @@ it with `always()`, and allows assembly after failed scan partitions when
 preparation succeeded. Assembly requires an independently supplied expected
 partition count and explicit partial-worker acceptance. Missing partitions
 remain pending and retain prior evidence; execution diagnostics report them.
+Assembly validates both supported download layouts: a single flat four-file
+checkpoint package and multiple artifact-named package directories. It builds
+an explicit worker list bound to the current run, attempt and selection rather
+than assuming that a single match creates a named subdirectory. Unexpected,
+stale-attempt and symlink files are rejected.
 
 Each scan step has a 15-minute timeout; the 55-minute scan job reserves ten
 minutes beyond all three step ceilings for setup, packaging and upload. The
@@ -274,10 +279,24 @@ entries and replays at most eight artifact-producing runs. A published cursor
 preserves the created-at anchor, page and offset, so newly arriving runs cannot
 reset the walk or hide older entries beyond the first 500. After exhausting an
 anchored cycle, the next preparation starts a fresh cycle for new arrivals.
-Legacy runs without checkpoint packages do not fill acknowledgement storage. Downloads
+Legacy runs without checkpoint packages do not fill acknowledgement storage.
+The 32 MiB acknowledgement limit accommodates the serialized declared worst
+case of 1,024 run attempts with 192 accepted or quarantined artifact identifiers
+each, using bounded 64-bit identifiers. This covers 360 six-hourly runs over
+90 days plus 664 manual/push attempts. The limit is a ceiling, not a reserved
+allocation; a 400-run, 24-artifact case occupies about 1 MiB. Both oversized files
+and malformed controls are rejected by strict publication validation. Reading
+older valid acknowledgement caches permits a finite repair envelope of 64 MiB
+and 2,048 run attempts, then compacts to the strict 32 MiB/1,024-run budget by
+age, count and encoded size. The anchored cursor is preserved. Evicting an old
+acknowledgement can cause idempotent artifact rechecks; it does not remove
+published scan evidence or erase pending work. Downloads
 have a finite 1 GiB aggregate compressed-byte budget and 128 MiB archive limit.
 The read-only Actions token authenticates the actual repository, workflow,
 original main branch, head SHA, event, run attempt and artifact metadata.
+The producing SHA must also belong to the history of the explicit
+`refs/heads/main` SHA. Exact-SHA ancestry comparisons avoid treating a separate
+tag named `main` as authority to run unreviewed code.
 Feature-branch artifacts cannot become production evidence after their commit
 is merged. Controlled corpus and obsolete-policy artifacts are acknowledged
 with explicit exclusion reasons and are never recovered as current analysis.
@@ -286,12 +305,40 @@ quarantine reasons in the recovery status and acknowledgements. Their invalid
 outcomes are excluded while independent valid artifacts continue to recover.
 Transient transport failures remain failures and do not permanently quarantine
 a recoverable network request.
+The bounded recovery status has a separate 256 KiB limit, covering the complete
+declared quarantine workload, 500 rejected run rows and a current-run retry's
+additional 192 artifact rows; diagnostic size cannot abort an otherwise valid
+bounded recovery batch.
+The same-run preparation retry can stage up to 1,728 packages: eight prior runs
+and one current run, each with at most 192 artifacts. This extra retry allowance
+is included in both staging and status limits. Reconciliation diagnostics have
+separate counters for equivalent and conflicting independent executions and at
+most 32 source examples.
+Recovery cursor queries allow validated percent escapes only in the query;
+repository routes retain their strict path boundary. Retry diagnostics expose
+HTTP status and fixed categories/counts, and use a SHA-256 correlation
+fingerprint instead of logging a server-provided request identifier verbatim.
 
 Recovered outcomes enter the new selection only through exact immutable source
 identity, current scanner/policy and consecutive attempt lineage. Original scan
 times and findings remain intact. A changed revision stays pending/historical.
+Snapshots from one producing run/attempt must extend an exact prefix; conflicting
+snapshots or missing retry predecessors are rejected. Separate authenticated
+executions can differ in timings while producing identical normalized analysis.
+Those duplicates preserve the original published scan and history, comparing
+source content digest, exit state/code, coverage and findings substantively.
+When independent executions disagree, recovery retains an original report with
+warnings and exposes the disagreement as partial analysis with incomplete
+grouping and normalization. Other original outcomes remain in their immutable
+checkpoint artifacts. Diagnostics retain at most 32 examples. Recovery does not
+reset scan counts or history: a bounded fresh retry preserves the existing
+backoff/escalation policy, and the four-attempt cap remains exhausted once
+reached.
 The new valid bundle is used as the prior state by scanning and assembly, so an
-acknowledged completed attempt does not run or increment again. Recovery state, the cursor and quarantine diagnostics
+acknowledged completed attempt does not run or increment again. The exact count
+of uniquely recovered roots is saved in the current preparation status and
+passed into final assembly's `execution_summary.recovered_sources`; it is not
+copied from an older publication. Recovery state, the cursor and quarantine diagnostics
 are included in the optional `recovery.json` control file after a valid merge;
 the public pointer and its acknowledgements advance in one atomic publication.
 Already acknowledged runs are not downloaded again. Neither recovery transport
@@ -317,7 +364,8 @@ attempt. Prepare/report output names are passed to dependent jobs, so a failed
 job-only rerun still uses the correct original plan. A retried main scan first
 authenticates and restores the latest earlier-attempt checkpoint for its exact
 partition and selection; sources already recovered by a rerun of prepare are
-not restored or counted twice.
+not restored or counted twice. Same-run resume logs `restored_sources`
+separately from recovered-root counts.
 
 A path-scoped pull request canary uses the same pinned real scanner, checkpoint
 packaging, assembly and publication validation with one controlled partition,
@@ -326,6 +374,15 @@ resolves this configuration for all downstream jobs. PR analysis runs on hosted
 Ubuntu with read-only permissions, fetches no production prior bundle, and is
 excluded from both direct production publication and production recovery. The
 controlled corpus remains immutable.
+
+The actual controlled PR canary [run 41668642584](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/41668642584)
+produced a real eight-outcome checkpoint. Its archive SHA-256 was
+`befe1795f58a2b0b8bd8194a8c237a4b176db79a4f0290000706e9b1980fcfc6`.
+Validating the downloaded flat archive through worker discovery, real merge and
+the publisher's artifact check produced 15 selected roots: two complete, six
+partial and seven pending. The same workflow shell has regression coverage for
+flat and named directory layouts. Branch artifacts remain validation evidence;
+this observation does not claim production publication.
 
 Operators can inspect the workflow checkpoint artifacts, `recovery-status.json`
 in the plan artifact and the published `recovery.json` acknowledgements, then

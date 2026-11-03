@@ -76,10 +76,8 @@ class FakeActions:
             raise AssertionError("recovery transport must be read only")
         if path == "actions/workflows/skillspector-reports.yml":
             return {"id": 9}
-        if path == "git/ref/heads/main":
-            return {"object": {"sha": COMMIT}}
-        if path == f"compare/{self.run['head_sha']}...{COMMIT}":
-            return {"status": "identical", "merge_base_commit": {"sha": self.run["head_sha"]}}
+        if path == 'git/ref/heads/main':
+            return {'object': {'sha': COMMIT}}
         if path.startswith("actions/workflows/9/runs?"):
             return {"workflow_runs": [self.run]}
         if path == "actions/runs/101":
@@ -92,6 +90,163 @@ class FakeActions:
 
 
 class CheckpointTransportTests(unittest.TestCase):
+    def test_run_sha_must_belong_to_explicit_main_history_even_with_main_branch_label(self):
+        class AncestryAPI:
+            def __init__(self, status, merge_base):
+                self.status, self.merge_base, self.calls = status, merge_base, []
+            def request(self, method, path):
+                self.calls.append((method, path))
+                if path == 'git/ref/heads/main':
+                    return {'object': {'sha': 'd' * 40}}
+                if path == f'compare/{COMMIT}...{"d" * 40}?per_page=1':
+                    return {'status': self.status, 'base_commit': {'sha': COMMIT},
+                            'merge_base_commit': {'sha': self.merge_base}}
+                raise AssertionError(path)
+        ancestral = AncestryAPI('ahead', COMMIT)
+        self.assertEqual(recovery.trusted_main_run(ancestral, run_metadata(), 9)['head_sha'], COMMIT)
+        self.assertEqual(ancestral.calls[0], ('GET', 'git/ref/heads/main'))
+        self.assertIn(('GET', f'compare/{COMMIT}...{"d" * 40}?per_page=1'), ancestral.calls)
+        for status, merge_base in [('diverged', 'e' * 40), ('behind', 'e' * 40), ('ahead', 'e' * 40)]:
+            # A workflow dispatched from a tag also named main can claim this metadata.
+            with self.subTest(status=status, merge_base=merge_base), self.assertRaises(PublicationError):
+                recovery.trusted_main_run(AncestryAPI(status, merge_base), run_metadata(head_branch='main'), 9)
+
+    def test_single_flat_and_multiple_named_checkpoint_download_layouts_are_validated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            body, _ = archive_package(original)
+            selection = json.loads((original / 'selection.json').read_text())
+            missing = root / 'missing'
+            missing.mkdir()
+            with self.assertRaises(PublicationError):
+                recovery.assembly_worker_paths(missing, selection, COMMIT, run_id=101, run_attempt=1)
+            flat = root / 'flat'
+            with zipfile.ZipFile(io.BytesIO(body)) as archive:
+                archive.extractall(flat)
+            self.assertEqual(recovery.assembly_worker_paths(flat, selection, COMMIT, run_id=101, run_attempt=1), [flat / 'worker.json'])
+            multiple = root / 'multiple'
+            for index in (1, 2):
+                target = multiple / f'skillspector-checkpoint-a1-p0-s{index}'
+                with zipfile.ZipFile(io.BytesIO(body)) as archive:
+                    archive.extractall(target)
+                provenance = json.loads((target / 'provenance.json').read_text())
+                provenance['slice'] = index
+                (target / 'provenance.json').write_bytes(coverage.report_json(provenance))
+            paths = recovery.assembly_worker_paths(multiple, selection, COMMIT, run_id=101, run_attempt=1)
+            self.assertEqual(len(paths), 2)
+            (multiple / 'unrelated').mkdir()
+            with self.assertRaises(PublicationError):
+                recovery.assembly_worker_paths(multiple, selection, COMMIT, run_id=101, run_attempt=1)
+            (multiple / 'unrelated').rmdir()
+            with self.assertRaises(PublicationError):
+                recovery.assembly_worker_paths(multiple, selection, COMMIT, run_id=101, run_attempt=2)
+            (flat / 'unexpected.json').symlink_to(flat / 'worker.json')
+            with self.assertRaises(PublicationError):
+                recovery.assembly_worker_paths(flat, selection, COMMIT, run_id=101, run_attempt=1)
+
+    def test_maximum_quarantine_status_including_own_retry_extension_fits_and_writes(self):
+        artifact_rows = (recovery.MAX_RECOVERY_RUNS + 1) * recovery.MAX_RUN_ARTIFACTS
+        summary = {'status': 'deferred', 'runs': recovery.MAX_RECOVERY_RUNS + 1, 'bytes': recovery.MAX_TOTAL_BYTES,
+            'retention_days': 90, 'maximum_runs_per_prepare': recovery.MAX_RECOVERY_RUNS,
+            'cursor': {'before': '2026-11-02T17:00:00Z', 'page': 10000, 'offset': 99}, 'recovered_sources': 20000,
+            'rejected': [{'artifact_id': 2**63 - 1 - index, 'reason': 'excluded_controlled'} for index in range(artifact_rows)] +
+                        [{'run_id': 2**63 - 1 - index, 'reason': 'untrusted_run'} for index in range(500)]}
+        summary['reconciliation'] = {'equivalent_executions': 20000, 'conflicting_executions': 20000,
+            'examples': [{'id': 'x' * 512, 'reason': 'recovery_conflict',
+                          'execution_origin': {'run_id': 2**63 - 1, 'run_attempt': 2**63 - 1}} for _ in range(32)]}
+        self.assertEqual(len(summary['rejected']), 2228)
+        self.assertLess(len(coverage.report_json(summary)), recovery.MAX_STATUS_BYTES)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'recovery-status.json'
+            coverage.write_bounded(path, summary, recovery.MAX_STATUS_BYTES)
+            self.assertEqual(coverage.read_json(path, max_bytes=recovery.MAX_STATUS_BYTES), summary)
+            with self.assertRaises(PublicationError):
+                coverage.write_bounded(path, {'padding': 'x' * recovery.MAX_STATUS_BYTES}, recovery.MAX_STATUS_BYTES)
+
+    def test_acknowledgement_capacity_covers_400_runs_and_the_declared_worst_case(self):
+        def state(run_count, artifact_count):
+            return {'schema_version': 1, 'cursor': None, 'runs': [
+                {'run_id': 2**63 - 1 - index, 'run_attempt': 2**63 - 1, 'head_sha': 'f' * 40,
+                 'created_at': '2026-11-02T17:00:00Z', 'complete': True, 'rejections': [],
+                 'artifacts': [{'id': 2**63 - 1 - index * artifact_count - number,
+                                'digest': 'sha256:' + 'f' * 64} for number in range(artifact_count)]}
+                for index in range(run_count)]}
+        ordinary = state(400, 24)
+        recovery.validate_state(ordinary)
+        self.assertLess(len(coverage.canonical_json(ordinary)), recovery.MAX_STATE_BYTES)
+        worst = state(recovery.MAX_RUNS, recovery.MAX_RUN_ARTIFACTS)
+        worst['runs'].sort(key=lambda row: (row['created_at'], row['run_id'], row['run_attempt']))
+        recovery.validate_state(worst)
+        encoded = coverage.report_json(worst)
+        self.assertLess(len(encoded), recovery.MAX_STATE_BYTES)
+        self.assertEqual(publisher.CONTROL_FILES['recovery.json'], recovery.MAX_STATE_BYTES)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'recovery.json'
+            path.write_bytes(encoded)
+            self.assertEqual(recovery.read_state(path), worst)
+            path.write_bytes(b' ' * (recovery.MAX_STATE_BYTES * 2 + 1))
+            with self.assertRaises(PublicationError):
+                recovery.read_state(path)
+        with self.assertRaises(PublicationError):
+            recovery.validate_state(state(recovery.MAX_RUNS + 1, 1))
+        conflicting = state(1, 1)
+        conflicting['runs'][0]['rejections'] = [{'id': conflicting['runs'][0]['artifacts'][0]['id'], 'reason': 'invalid_checkpoint'}]
+        with self.assertRaises(PublicationError):
+            recovery.validate_state(conflicting)
+
+    def test_acknowledgement_limits_compact_oldest_and_repair_finite_oversize(self):
+        def row(identifier):
+            return {'run_id': identifier, 'run_attempt': 1, 'head_sha': COMMIT,
+                    'created_at': '2026-11-02T17:00:00Z',
+                    'artifacts': [{'id': identifier, 'digest': 'sha256:' + 'f' * 64}]}
+        with mock.patch.object(recovery, 'MAX_STATE_BYTES', 1800), mock.patch.object(recovery, 'MAX_RUNS', 6), \
+                tempfile.TemporaryDirectory() as temporary:
+            state = {'schema_version': 1, 'runs': [], 'cursor': {'before': '2026-11-02T18:00:00Z', 'page': 6, 'offset': 0}}
+            for identifier in range(1, 18):
+                state = recovery.merge_state(state, {'schema_version': 1, 'runs': [row(identifier)]}, now=NOW)
+                self.assertLessEqual(len(coverage.canonical_json(state)), recovery.MAX_STATE_BYTES)
+                self.assertLessEqual(len(state['runs']), 6)
+            self.assertEqual(state['runs'][-1]['run_id'], 17)
+            self.assertEqual(state['cursor']['page'], 6)
+            self.assertNotIn(1, [entry['run_id'] for entry in state['runs']])
+            legacy = {'schema_version': 1, 'runs': [row(identifier) for identifier in range(21, 31)]}
+            self.assertGreater(len(coverage.canonical_json(legacy)), recovery.MAX_STATE_BYTES)
+            self.assertLessEqual(len(coverage.canonical_json(legacy)), recovery.MAX_STATE_BYTES * 2)
+            path = Path(temporary) / 'recovery.json'
+            path.write_bytes(coverage.canonical_json(legacy))
+            repaired = recovery.read_state(path)
+            self.assertLessEqual(len(coverage.canonical_json(repaired)), recovery.MAX_STATE_BYTES)
+            self.assertEqual(repaired['runs'][-1]['run_id'], 30)
+
+    def test_rerun_staging_accepts_eight_prior_runs_plus_one_current_run(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            staged = root / 'staged'
+            staged.mkdir()
+            bound = (recovery.MAX_RECOVERY_RUNS + 1) * recovery.MAX_RUN_ARTIFACTS
+            self.assertEqual(bound, 1728)
+            for index in range(bound):
+                shutil.copytree(original, staged / str(index))
+            self.assertEqual(len(recovery.load_recovery_batches(staged)), bound)
+            (staged / 'over-bound').mkdir()
+            with self.assertRaises(PublicationError):
+                recovery.load_recovery_batches(staged)
+
+    def test_malformed_rejected_run_identifier_is_bounded_and_not_echoed(self):
+        class MalformedAPI(FakeActions):
+            def request(self, method, path, data=None):
+                if path.startswith('actions/workflows/9/runs?'):
+                    return {'workflow_runs': [run_metadata(id='private-token-' + 'x' * 10000), None]}
+                return super().request(method, path, data)
+        with tempfile.TemporaryDirectory() as temporary:
+            _, status = recovery.collect(MalformedAPI(run_metadata(), None), Path(temporary),
+                {'schema_version': 1, 'runs': []}, token='read-only', now=NOW)
+            self.assertEqual(status['rejected'], [{'run_id': None, 'reason': 'untrusted_run'}] * 2)
+            self.assertNotIn(b'private-token', coverage.report_json(status))
+
     def test_authenticated_roundtrip_keeps_exact_outcome_and_source_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -103,75 +258,14 @@ class CheckpointTransportTests(unittest.TestCase):
             loaded = recovery.load_recovery_batches(target.parent)
             self.assertEqual(loaded[0]["selection"], batch["selection"])
             self.assertEqual(loaded[0]["source_commit"], COMMIT)
+            self.assertEqual(loaded[0]['execution_origin'], {'run_id': 101, 'run_attempt': 1})
 
     def test_actual_main_origin_is_required_even_when_json_claims_main(self):
         for changes in ({"head_branch": "feature"}, {"workflow_id": 10}, {"path": ".github/workflows/foreign.yml"},
                         {"repository": {"full_name": "someone/fork"}}, {"head_repository": {"full_name": "someone/fork"}},
-                        {"event": "pull_request"}, {"status": "in_progress"}):
+                        {"repository": None}, {"head_repository": None}, {"event": "pull_request"}, {"status": "in_progress"}):
             with self.subTest(changes=changes), self.assertRaises(PublicationError):
-                recovery.trusted_run(FakeActions(run_metadata(**changes), None), run_metadata(**changes), 9)
-
-    def test_main_named_tag_cannot_authorize_recovered_checkpoints(self):
-        run = run_metadata()
-        api = FakeActions(run, None)
-        original = api.request
-
-        def malicious_tag(method, path, data=None):
-            if path.startswith("compare/"):
-                # A run dispatched against a tag called main can report the
-                # same head_branch as the protected branch, but is not ancestral.
-                return {"status": "diverged", "merge_base_commit": {"sha": "f" * 40}}
-            return original(method, path, data)
-
-        api.request = malicious_tag
-        with self.assertRaisesRegex(PublicationError, "protected main history"):
-            recovery.trusted_run(api, run, 9)
-        self.assertIn(("GET", "git/ref/heads/main"), api.calls)
-        legitimate = FakeActions(run, None)
-        self.assertEqual(recovery.trusted_run(legitimate, run, 9), run)
-        self.assertIn(("GET", f"compare/{COMMIT}...{COMMIT}"), legitimate.calls)
-
-    def test_production_transport_accepts_only_sha_to_sha_ancestry_comparisons(self):
-        from scripts.skillspector_publication_transport import GitHub
-        requested = []
-
-        def open_request(request, timeout):
-            requested.append(request.full_url)
-            return io.BytesIO(b'{"status":"identical"}')
-
-        github = GitHub(opener=open_request)
-        self.assertEqual(
-            github.request("GET", f"compare/{COMMIT}...{COMMIT}")["status"], "identical")
-        self.assertEqual(
-            requested, [f"https://api.github.com/repos/{recovery.REPOSITORY}/compare/{COMMIT}...{COMMIT}"])
-        for unsafe in ("compare/../main", "compare/abc...main", "git/ref/heads/../secrets"):
-            with self.subTest(path=unsafe), self.assertRaises(PublicationError):
-                github.request("GET", unsafe)
-        self.assertEqual(len(requested), 1)
-
-    def test_acknowledgement_limits_evict_oldest_and_repair_bounded_oversize(self):
-        def row(identifier):
-            return {"run_id": identifier, "run_attempt": 1, "head_sha": COMMIT,
-                    "created_at": "2026-11-02T17:00:00Z",
-                    "artifacts": [{"id": identifier, "digest": "sha256:" + "f" * 64}]}
-
-        with mock.patch.object(recovery, "MAX_STATE_BYTES", 1800), \
-                mock.patch.object(recovery, "MAX_RUNS", 6), tempfile.TemporaryDirectory() as temporary:
-            state = {"schema_version": 1, "runs": []}
-            for identifier in range(1, 18):
-                state = recovery.merge_state(state, {"schema_version": 1, "runs": [row(identifier)]}, now=NOW)
-                self.assertLessEqual(len(recovery.canonical_json(state)), recovery.MAX_STATE_BYTES)
-                self.assertLessEqual(len(state["runs"]), 6)
-            self.assertEqual(state["runs"][-1]["run_id"], 17)
-            self.assertNotIn(1, [entry["run_id"] for entry in state["runs"]])
-            legacy = {"schema_version": 1, "runs": [row(identifier) for identifier in range(21, 31)]}
-            self.assertGreater(len(recovery.canonical_json(legacy)), recovery.MAX_STATE_BYTES)
-            self.assertLessEqual(len(recovery.canonical_json(legacy)), recovery.MAX_STATE_BYTES * 2)
-            source = Path(temporary) / "recovery.json"
-            source.write_bytes(recovery.canonical_json(legacy))
-            repaired = recovery.read_state(source)
-            self.assertLessEqual(len(recovery.canonical_json(repaired)), recovery.MAX_STATE_BYTES)
-            self.assertEqual(repaired["runs"][-1]["run_id"], 30)
+                recovery.trusted_run(run_metadata(**changes), 9)
 
     def test_branch_controlled_and_wrong_attempt_packages_cannot_recover(self):
         for kwargs, run in (({"branch": "feature"}, run_metadata()),
@@ -299,6 +393,7 @@ class CheckpointTransportTests(unittest.TestCase):
             coverage.write_bounded(new_plan / "coverage.json", summary, coverage.MAX_DISCOVERY_BYTES)
             with mock.patch.object(recovery, "download_archive", return_value=body):
                 recovery.recover_plan(FakeActions(run_metadata(), artifact), new_plan, next_commit, token="read-only")
+            self.assertEqual(json.loads((new_plan / 'recovery-status.json').read_text())['recovered_sources'], 1)
             restored = coverage.read_bundle(new_plan / "previous")
             original_worker = json.loads((old / "worker.json").read_text())
             outcome = original_worker["attempts"][0]
@@ -381,6 +476,20 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text())['attempts'], json.loads((original / 'worker.json').read_text())['attempts'])
             self.assertIn(('GET', 'actions/runs/101/attempts/1'), api.calls)
 
+    def test_same_run_resume_rejects_noninteger_artifact_id_before_download_or_path_use(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            _, artifact = archive_package(original)
+            artifact['id'] = '../outside'
+            download = mock.Mock()
+            with self.assertRaises(PublicationError):
+                recovery.restore_current(FakeActions(run_metadata(run_attempt=2), artifact), root / 'plan', root / 'resumed.json',
+                    token='read-only', partition=0, fetch_archive=download, environment={'GITHUB_RUN_ID': '101',
+                        'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': COMMIT})
+            download.assert_not_called()
+            self.assertFalse((root / 'outside').exists())
+
     def test_retry_after_prepare_recovery_does_not_restore_the_same_attempt_twice(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -462,6 +571,32 @@ class DeliveryStatusTests(unittest.TestCase):
             (root / "recovery.json").write_text('{"schema_version":1,"runs":[{}]}')
             with self.assertRaises(PublicationError):
                 publisher.validate_directory(root, COMMIT)
+
+    def test_previous_download_uses_finite_repair_budget_then_writes_strict_compacted_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            selection = {'schema_version': 1, 'sources': [item()]}
+            bundle(root / 'published', selection, [record(selection['sources'][0])])
+            legacy = {'schema_version': 1, 'runs': [{'run_id': index, 'run_attempt': 1, 'head_sha': COMMIT,
+                'created_at': '2026-11-02T17:00:00Z', 'artifacts': [{'id': index, 'digest': 'sha256:' + 'f' * 64}]}
+                for index in range(1, 11)]}
+            observed = []
+            def fetch(_head, relative, maximum, **_kwargs):
+                if relative == 'recovery.json':
+                    observed.append(maximum)
+                    return coverage.canonical_json(legacy)
+                path = root / 'published' / relative
+                return path.read_bytes() if path.exists() else None
+            api = mock.Mock()
+            api.request.return_value = {'object': {'sha': 'a' * 40}}
+            with mock.patch.object(recovery, 'MAX_STATE_BYTES', 1800), mock.patch.object(recovery, 'MAX_RUNS', 6), \
+                    mock.patch.dict(publisher.CONTROL_FILES, {'recovery.json': 1800}):
+                publisher.previous(api, root / 'downloaded', fetch=fetch)
+                self.assertEqual(observed, [3600])
+                self.assertLessEqual((root / 'downloaded' / 'recovery.json').stat().st_size, 1800)
+                repaired = recovery.read_state(root / 'downloaded' / 'recovery.json')
+                self.assertEqual(repaired['runs'][-1]['run_id'], 10)
+                self.assertLessEqual(len(repaired['runs']), 6)
 
 
 if __name__ == "__main__":

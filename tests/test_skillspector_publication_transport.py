@@ -324,9 +324,41 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(result["sha"], "a" * 40)
         self.assertEqual(self.clock.sleeps, [1])
         self.assertEqual(self.requests[0][0].data, self.requests[1][0].data)
-        self.assertIn("method=POST path=git/trees status=502 request_id=ABCD:1234", output.getvalue())
+        self.assertIn("method=POST path=git/trees status=502 request_id=sha256:3db4a2c12df24d71", output.getvalue())
         self.assertNotIn("secret-token", output.getvalue())
         self.assertNotIn("response body", output.getvalue())
+
+    def test_untrusted_request_id_and_exception_text_are_never_logged_in_plaintext(self):
+        echoed = 'server-echo-secret-token'
+        client = self.client([http_error(502, {'X-GitHub-Request-Id': echoed}, echoed.encode()), {'ok': True}])
+        output = io.StringIO()
+        with redirect_stderr(output):
+            self.assertEqual(client.request('GET', 'git/ref/heads/main'), {'ok': True})
+        self.assertNotIn('secret-token', output.getvalue())
+        self.assertNotIn(echoed, output.getvalue())
+        self.assertIn('request_id=sha256:' + hashlib.sha256(echoed.encode()).hexdigest()[:16], output.getvalue())
+
+    def test_encoded_recovery_cursor_query_is_accepted_but_malformed_escapes_are_rejected(self):
+        path = 'actions/workflows/9/runs?branch=main&status=completed&per_page=100&page=6&created=%3C%3D2026-11-03T00%3A00%3A00Z'
+        client = self.client([{'workflow_runs': []}])
+        self.assertEqual(client.request('GET', path), {'workflow_runs': []})
+        self.assertTrue(self.requests[0][0].full_url.endswith(path))
+        for malformed in ('actions/runs?created=%', 'actions/runs?created=%0G', 'actions/runs?created=%3',
+                          'actions/%2Fruns?created=1', 'actions/../runs?created=1'):
+            with self.subTest(path=malformed), self.assertRaises(PublicationError):
+                client.request('GET', malformed)
+
+    def test_production_transport_accepts_only_sha_to_sha_ancestry_comparisons(self):
+        sha_path = 'compare/' + 'a' * 40 + '...' + 'b' * 40
+        for path in (sha_path, sha_path + '?per_page=1', 'contents/.github/workflows/skillspector-reports.yml',
+                     'contents/schemas/skillspector-manifest-v3.schema.json'):
+            with self.subTest(path=path):
+                client = self.client([{'ok': True}])
+                self.assertEqual(client.request('GET', path), {'ok': True})
+        for path in ('compare/../main', 'compare/abc...main', 'compare/' + 'a' * 40 + '...main',
+                     'git/ref/heads/../secrets', 'git/ref/heads/./main'):
+            with self.subTest(path=path), self.assertRaises(PublicationError):
+                self.client([]).request('GET', path)
 
     def test_only_three_safe_retries_and_strict_global_budget(self):
         client = self.client([http_error(503) for _ in range(3)])
@@ -364,7 +396,7 @@ class TransportTests(unittest.TestCase):
         def broken_read(*_args): raise TimeoutError()
         error.read = broken_read
         client = self.client([error])
-        with self.assertRaisesRegex(PublicationError, "status=403 request_id=SAFE:123"):
+        with self.assertRaisesRegex(PublicationError, "status=403 request_id=sha256:4b611a25c86318cf"):
             client.request("GET", "git/ref/heads/main")
         self.assertEqual(len(self.requests), 1)
 
@@ -395,7 +427,7 @@ class TransportTests(unittest.TestCase):
         with redirect_stderr(output), self.assertRaises(PublicationError) as raised:
             client.request("POST", "git/trees", payload)
         diagnostic = str(raised.exception)
-        self.assertIn("status=422 request_id=SAFE:422 attempt=1/3", diagnostic)
+        self.assertIn("status=422 request_id=sha256:c958508290a110a7 attempt=1/3", diagnostic)
         self.assertIn("error_category=validation_failed error_count=5", diagnostic)
         self.assertIn("error_codes=invalid,missing_field error_fields=content,sha", diagnostic)
         self.assertIn(f"request_bytes={len(canonical_json(payload))} tree_entries=1", diagnostic)
@@ -445,7 +477,7 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(PublicationError) as raised:
                     client.request("POST", "git/trees", {"tree": []})
                 diagnostic = str(raised.exception)
-                self.assertIn("status=422 request_id=SAFE:422", diagnostic)
+                self.assertIn("status=422 request_id=sha256:c958508290a110a7", diagnostic)
                 self.assertIn("diagnostic_body=" + expected, diagnostic)
                 self.assertNotIn("private-scanner-content", diagnostic)
                 self.assertNotIn("secret-token", diagnostic)
@@ -466,7 +498,7 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(PublicationError) as raised:
                     client.request("POST", "git/trees", {"tree": []})
                 diagnostic = str(raised.exception)
-                self.assertIn("status=422 request_id=SAFE:422", diagnostic)
+                self.assertIn("status=422 request_id=sha256:c958508290a110a7", diagnostic)
                 self.assertIn("diagnostic_body=unreadable", diagnostic)
                 self.assertNotIn("secret-token", diagnostic)
                 self.assertNotIn("private-scanner-content", diagnostic)
@@ -489,7 +521,7 @@ class TransportTests(unittest.TestCase):
         finally:
             error.close = close
         diagnostic = str(raised.exception)
-        self.assertIn("status=422 request_id=SAFE:422 attempt=1/3", diagnostic)
+        self.assertIn("status=422 request_id=sha256:c958508290a110a7 attempt=1/3", diagnostic)
         self.assertIn("error_category=validation_failed", diagnostic)
         self.assertNotIn("private-scanner-content", diagnostic)
         self.assertNotIn("secret-token", diagnostic)

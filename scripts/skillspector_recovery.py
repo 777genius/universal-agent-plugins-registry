@@ -29,10 +29,11 @@ from scripts.skillspector_publication_transport import GitHub
 WORKFLOW = ".github/workflows/skillspector-reports.yml"
 ARTIFACT = re.compile(r"skillspector-checkpoint-(?:a([1-9][0-9]{0,3})-)?p([0-7])-s([1-3])\Z")
 STATE_FILE = "recovery.json"
-MAX_STATE_BYTES = 8 << 20
-MAX_RUNS = 4096
+MAX_STATE_BYTES = 32 << 20
+MAX_RUNS = 1024
 MAX_RUN_ARTIFACTS = 192
 MAX_LIST_PAGES = 5
+MAX_STATUS_BYTES = 256 << 10
 MAX_RECOVERY_RUNS = 8
 MAX_ARCHIVE_BYTES = 128 << 20
 MAX_TOTAL_BYTES = 1 << 30
@@ -44,7 +45,7 @@ MAX_PROVENANCE_BYTES = 16 << 10
 
 
 def integer(value, label):
-    require(type(value) is int and value > 0, "invalid " + label)
+    require(type(value) is int and 0 < value < 2**63, "invalid " + label)
     return value
 
 
@@ -75,6 +76,7 @@ def validate_state(value, *, max_bytes=None, max_runs=None):
         require(key not in seen and coverage.SHA.fullmatch(run["head_sha"]), "duplicate or invalid recovery run")
         seen.add(key)
         coverage.v2.timestamp(run["created_at"], "recovery.created_at")
+        require(len(run["created_at"]) <= 32, "recovery timestamp exceeds bound")
         require(isinstance(run["artifacts"], list) and len(run["artifacts"]) <= MAX_RUN_ARTIFACTS, "invalid acknowledged artifacts")
         ids = set()
         for artifact in run["artifacts"]:
@@ -82,6 +84,10 @@ def validate_state(value, *, max_bytes=None, max_runs=None):
             require(integer(artifact["id"], "artifact id") not in ids and
                     re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"]), "invalid artifact acknowledgement")
             ids.add(artifact["id"])
+        rejected_ids = [row["id"] for row in run.get("rejections", [])]
+        require(len(rejected_ids) == len(set(rejected_ids)) and not ids.intersection(rejected_ids) and
+                len(ids) + len(rejected_ids) <= MAX_RUN_ARTIFACTS,
+                "recovery artifact disposition count differs")
     require(len(canonical_json(value)) <= max_bytes, "recovery acknowledgements exceed limit")
     return value
 
@@ -102,7 +108,7 @@ def compact_state(value, *, now=None):
         result["cursor"] = value["cursor"]
     # Exact canonical encoding size, without repeatedly serializing a large list.
     total = len(canonical_json({**result, "runs": []}))
-    sizes = [len(canonical_json(run)) for run in ordered]
+    sizes = [len(canonical_json(run)) - 1 for run in ordered]
     total += sum(sizes) + max(0, len(ordered) - 1)
     start = 0
     while start < len(ordered) and (len(ordered) - start > MAX_RUNS or total > MAX_STATE_BYTES):
@@ -182,7 +188,8 @@ def validate_provenance(value, documents, *, allow_unsupported_policy=False):
             "checkpoint corpus differs")
     require(not scanner.has_public_credentials(worker), "checkpoint contains unredacted report text")
     return {"selection": selection, "discovery": summary, "source_commit": value["head_sha"], "workers": [worker],
-            "unsupported_policy": unsupported}
+            "unsupported_policy": unsupported,
+            "execution_origin": {"run_id": value["run_id"], "run_attempt": value["run_attempt"]}}
 
 
 def pack(plan_dir, worker_path, output_dir, *, slice_index, environment=None):
@@ -206,8 +213,9 @@ def pack(plan_dir, worker_path, output_dir, *, slice_index, environment=None):
     return value
 
 
-def trusted_run(github, run, workflow_id):
-    require(isinstance(run, dict) and run.get("repository", {}).get("full_name") == REPOSITORY and
+def trusted_run(run, workflow_id):
+    require(isinstance(run, dict) and isinstance(run.get("repository"), dict) and
+            isinstance(run.get("head_repository"), dict) and run.get("repository", {}).get("full_name") == REPOSITORY and
             run.get("head_repository", {}).get("full_name") == REPOSITORY and run.get("workflow_id") == workflow_id and
             run.get("path") == WORKFLOW and run.get("head_branch") == "main" and
             run.get("event") in {"push", "schedule", "workflow_dispatch"} and run.get("status") == "completed" and
@@ -215,17 +223,57 @@ def trusted_run(github, run, workflow_id):
     integer(run.get("id"), "run id")
     integer(run.get("run_attempt"), "run attempt")
     coverage.v2.timestamp(run.get("created_at"), "run.created_at")
-    # A tag called "main" also appears as head_branch=main. Resolve the actual
-    # branch ref to its SHA and prove ancestry, never compare against a ref name.
-    main_ref = github.request("GET", "git/ref/heads/main")
-    main_sha = (main_ref or {}).get("object", {}).get("sha")
-    require(isinstance(main_sha, str) and coverage.SHA.fullmatch(main_sha),
-            "protected main branch cannot be authenticated")
-    comparison = github.request("GET", f"compare/{run['head_sha']}...{main_sha}")
-    require(isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"} and
-            (comparison.get("merge_base_commit") or {}).get("sha") == run["head_sha"],
-            "recovery requires a producing commit in protected main history")
     return run
+
+
+def trusted_main_run(github, run, workflow_id, *, main_sha=None, ancestry=None):
+    """A tag named main cannot supply code outside the actual main history."""
+    trusted_run(run, workflow_id)
+    if main_sha is None:
+        main = github.request("GET", "git/ref/heads/main")
+        require(isinstance(main, dict) and isinstance(main.get("object"), dict), "main branch ref is unavailable")
+        main_sha = main["object"].get("sha")
+    require(isinstance(main_sha, str) and coverage.SHA.fullmatch(main_sha), "invalid explicit main head")
+    if run["head_sha"] != main_sha and (ancestry is None or run["head_sha"] not in ancestry):
+        comparison = github.request("GET", f"compare/{run['head_sha']}...{main_sha}?per_page=1")
+        require(isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"} and
+                comparison.get("base_commit", {}).get("sha") == run["head_sha"] and
+                comparison.get("merge_base_commit", {}).get("sha") == run["head_sha"],
+                "producing source is outside the explicit main branch history")
+        if ancestry is not None:
+            ancestry.add(run["head_sha"])
+    return run
+
+
+def assembly_worker_paths(directory, selection, source_commit, *, run_id, run_attempt):
+    """Accept the downloader's flat single-artifact or named multi-artifact layout."""
+    require(directory.is_dir() and not directory.is_symlink(), "worker download directory must be regular")
+    entries = sorted(directory.iterdir())
+    require(0 < len(entries) <= 24, "worker download count exceeds bound")
+    allowed = set(FILES) | {"provenance.json"}
+    flat = (directory / "worker.json").exists()
+    packages = [directory] if flat else entries
+    if flat:
+        require({path.name for path in entries} == allowed, "flat checkpoint contains unexpected files")
+    result = []
+    for package in packages:
+        require(package.is_dir() and not package.is_symlink(), "checkpoint package must be a regular directory")
+        match = None if flat else ARTIFACT.fullmatch(package.name)
+        require(flat or match is not None and match[1] is not None and int(match[1]) == run_attempt,
+                "checkpoint directory belongs to another run attempt")
+        require({path.name for path in package.iterdir()} == allowed, "checkpoint package files differ")
+        for path in package.iterdir():
+            require(path.is_file() and not path.is_symlink(), "checkpoint package files must be regular")
+        provenance = scanner.read_report_json(package / "provenance.json", max_bytes=MAX_PROVENANCE_BYTES)
+        documents = {name: scanner.read_bytes_bounded(package / name, maximum) for name, maximum in FILES.items()}
+        batch = validate_provenance(provenance, documents)
+        require(provenance["run_id"] == run_id and provenance["run_attempt"] == run_attempt and
+                provenance["head_sha"] == source_commit and batch["selection"] == selection,
+                "checkpoint does not belong to the current prepared run")
+        require(flat or provenance["partition"] == int(match[2]) and provenance["slice"] == int(match[3]),
+                "checkpoint directory partition/slice differs")
+        result.append(package / "worker.json")
+    return result
 
 
 class StripRedirectCredentials(urllib.request.HTTPRedirectHandler):
@@ -282,8 +330,6 @@ def unpack_archive(body, artifact, run, output_dir, *, allow_controlled=False, a
             "checkpoint cannot cross branch/corpus/run attempt boundary")
     require(not output_dir.exists(), "recovery staging path already exists")
     output_dir.mkdir(parents=True)
-    # Filenames at the filesystem sink must originate from our fixed policy,
-    # never from a ZIP member string, even after allowlist validation.
     for name in FILES:
         (output_dir / name).write_bytes(documents[name])
     coverage.write_bounded(output_dir / "provenance.json", provenance, MAX_PROVENANCE_BYTES)
@@ -293,7 +339,7 @@ def unpack_archive(body, artifact, run, output_dir, *, allow_controlled=False, a
 def load_recovery_batches(directory):
     require(directory.is_dir() and not directory.is_symlink(), "recovery staging must be regular")
     children = sorted(directory.iterdir())
-    require(len(children) <= MAX_RECOVERY_RUNS * MAX_RUN_ARTIFACTS, "recovery staging exceeds artifact bound")
+    require(len(children) <= (MAX_RECOVERY_RUNS + 1) * MAX_RUN_ARTIFACTS, "recovery staging exceeds artifact bound")
     batches = []
     for child in children:
         require(child.is_dir() and not child.is_symlink(), "invalid recovery staging entry")
@@ -329,6 +375,10 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     workflow = github.request("GET", "actions/workflows/skillspector-reports.yml")
     require(isinstance(workflow, dict), "canonical recovery workflow unavailable")
     workflow_id = integer(workflow.get("id"), "workflow id")
+    main = github.request("GET", "git/ref/heads/main")
+    require(isinstance(main, dict) and isinstance(main.get("object"), dict), "main branch ref is unavailable")
+    main_sha, ancestry = main["object"].get("sha"), set()
+    require(isinstance(main_sha, str) and coverage.SHA.fullmatch(main_sha), "invalid explicit main head")
     validate_state(state)
     acknowledged = {(r["run_id"], r["run_attempt"]): r for r in state["runs"]}
     cursor = state.get("cursor") or {"before": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "page": 1, "offset": 0}
@@ -374,8 +424,8 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                     require(0 < info.file_size <= MAX_PROVENANCE_BYTES, "checkpoint provenance exceeds bound")
                     envelope = scanner.parse_scanner_json(archive.read(info), "checkpoint provenance")
                 attempt = integer(envelope.get("run_attempt"), "checkpoint run attempt")
-                producing = run if attempt == run["run_attempt"] else trusted_run(github, github.request("GET",
-                    f"actions/runs/{run['id']}/attempts/{attempt}"), workflow_id)
+                producing = run if attempt == run["run_attempt"] else trusted_main_run(github, github.request("GET",
+                    f"actions/runs/{run['id']}/attempts/{attempt}"), workflow_id, main_sha=main_sha, ancestry=ancestry)
                 require(attempt <= run["run_attempt"] and producing["id"] == run["id"], "checkpoint run attempt differs")
                 target = directory / f"{run['id']}-{attempt}-{identifier}"
                 batch = unpack_archive(body, artifact, producing, target, allow_controlled=True, allow_unsupported_policy=True)
@@ -400,7 +450,7 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     if current_run is not None:
         run = github.request("GET", f"actions/runs/{integer(current_run, 'current run')}")
         require(run and run.get("id") == current_run, "current acknowledgement run differs")
-        run = trusted_run(github, {**run, "status": "completed"}, workflow_id)
+        run = trusted_main_run(github, {**run, "status": "completed"}, workflow_id, main_sha=main_sha, ancestry=ancestry)
         process(run, force=True)
         next_cursor = state.get("cursor")
     else:
@@ -418,9 +468,11 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                 run = listed[index]
                 next_cursor = {"before": cursor["before"], "page": page, "offset": index}
                 try:
-                    trusted_run(github, run, workflow_id)
+                    trusted_main_run(github, run, workflow_id, main_sha=main_sha, ancestry=ancestry)
                 except (PublicationError, TypeError, ValueError):
-                    rejected.append({"run_id": run.get("id"), "reason": "untrusted_run"})
+                    identifier = run.get("id") if isinstance(run, dict) else None
+                    safe_id = identifier if type(identifier) is int and 0 < identifier < 2**63 else None
+                    rejected.append({"run_id": safe_id, "reason": "untrusted_run"})
                     continue
                 if parse_timestamp(run["created_at"], "created_at") < cutoff:
                     finished = True
@@ -460,11 +512,15 @@ def recover_plan(github, plan_dir, source_commit, *, token, current_id=None):
         summary["rejected"].extend(own["rejected"])
         summary["runs"] += own["runs"]
     batches = load_recovery_batches(staged)
+    summary["recovered_sources"] = 0
+    summary["reconciliation"] = {"equivalent_executions": 0, "conflicting_executions": 0, "examples": []}
     if batches:
         selection = coverage.load_selection(plan_dir / "selection.json")
         discovery = scanner.read_report_json(plan_dir / "coverage.json", max_bytes=coverage.MAX_DISCOVERY_BYTES)
-        coverage.recover_previous(selection, previous, batches, source_commit=source_commit,
-            discovery_summary=discovery, output_dir=plan_dir / "previous-recovered")
+        recovered = coverage.recover_previous(selection, previous, batches, source_commit=source_commit,
+            discovery_summary=discovery, output_dir=plan_dir / "previous-recovered",
+            diagnostics=summary["reconciliation"])
+        summary["recovered_sources"] = recovered["execution_summary"]["recovered_sources"]
         # The plan already carries the complete prior bundle to every worker.
         # Replace it after validation instead of uploading a second ~300 MiB copy.
         coverage.read_bundle(plan_dir / "previous-recovered")
@@ -480,7 +536,7 @@ def recover_plan(github, plan_dir, source_commit, *, token, current_id=None):
         if old_dir.exists():
             shutil.rmtree(old_dir)
     coverage.write_bounded(plan_dir / STATE_FILE, new_state, MAX_STATE_BYTES)
-    coverage.write_bounded(plan_dir / "recovery-status.json", summary, 32 << 10)
+    coverage.write_bounded(plan_dir / "recovery-status.json", summary, MAX_STATUS_BYTES)
     shutil.rmtree(staged)
     return summary
 
@@ -494,7 +550,7 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
     workflow = github.request("GET", "actions/workflows/skillspector-reports.yml")
     run_id, attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
     metadata = github.request("GET", f"actions/runs/{run_id}")
-    run = trusted_run(github, {**metadata, "status": "completed"}, workflow["id"])
+    run = trusted_main_run(github, {**metadata, "status": "completed"}, workflow["id"])
     require(run["id"] == run_id and run["run_attempt"] == attempt and run["head_sha"] == env["GITHUB_SHA"],
             "same-run checkpoint source differs")
     selection = coverage.load_selection(plan_dir / "selection.json")
@@ -517,7 +573,7 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
             provenance = scanner.parse_scanner_json(archive.read(info), "same-run provenance")
         old_attempt = integer(provenance.get("run_attempt"), "earlier run attempt")
         require(old_attempt < attempt, "same-run resume cannot use current/future attempt")
-        producing = trusted_run(github, github.request("GET", f"actions/runs/{run_id}/attempts/{old_attempt}"), workflow["id"])
+        producing = trusted_main_run(github, github.request("GET", f"actions/runs/{run_id}/attempts/{old_attempt}"), workflow["id"])
         target = staged / str(artifact_id)
         batch = unpack_archive(body, artifact, producing, target)
         candidate = batch["workers"][0]
@@ -566,6 +622,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("configure")
+    listing = commands.add_parser("list-workers")
+    listing.add_argument("--directory", type=Path, required=True)
+    listing.add_argument("--selection", type=Path, required=True)
+    listing.add_argument("--source-commit", required=True)
+    listing.add_argument("--run-id", type=int, required=True)
+    listing.add_argument("--run-attempt", type=int, required=True)
     package = commands.add_parser("pack")
     package.add_argument("--plan-dir", type=Path, required=True)
     package.add_argument("--worker", type=Path, required=True)
@@ -590,6 +652,10 @@ def main():
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
                 for key, value in config.items():
                     stream.write(f"{key}={value}\n")
+        elif args.command == "list-workers":
+            paths = assembly_worker_paths(args.directory, coverage.load_selection(args.selection), args.source_commit,
+                run_id=args.run_id, run_attempt=args.run_attempt)
+            print("\n".join(str(path) for path in paths))
         elif args.command == "pack":
             pack(args.plan_dir, args.worker, args.output_dir, slice_index=args.slice)
         else:
@@ -597,7 +663,9 @@ def main():
             require(bool(token), "read-only Actions token is missing")
             github = GitHub(token)
             if args.command == "resume-current":
-                restore_current(github, args.plan_dir, args.worker, token=token, partition=args.partition)
+                restored = restore_current(github, args.plan_dir, args.worker, token=token, partition=args.partition)
+                print(canonical_json({"status": "resumed" if restored else "no_resume_needed",
+                    "restored_sources": restored, "partition": args.partition}).decode())
             elif args.command == "recover":
                 require(os.environ.get("GITHUB_REF") == "refs/heads/main", "production recovery requires main")
                 result = recover_plan(github, args.plan_dir, args.source_commit, token=token,

@@ -31,7 +31,7 @@ MAX_API_BYTES = 32 << 20
 MAX_TREE_UPLOAD_BYTES = 8 << 20
 CONTROL_FILES = {"index.json": coverage.MAX_MANIFEST_BYTES,
     "selection.json": coverage.MAX_SELECTION_BYTES, "attempts.json": coverage.MAX_STATE_BYTES,
-    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 16 << 20,
+    "coverage.json": coverage.MAX_DISCOVERY_BYTES, "recovery.json": 32 << 20,
     "publication-base.json": 4096}
 
 
@@ -92,9 +92,10 @@ def previous(github, output_dir, *, fetch=raw_file):
 
     def download(item):
         relative, maximum = item
-        contents = fetch(head, relative, maximum, optional=relative in {"coverage.json", "recovery.json"}, version=version)
+        read_maximum = maximum * 2 if relative == "recovery.json" else maximum
+        contents = fetch(head, relative, read_maximum, optional=relative in {"coverage.json", "recovery.json"}, version=version)
         if contents is not None:
-            document = parse_report(contents, "previous " + relative, max_bytes=maximum)
+            document = parse_report(contents, "previous " + relative, max_bytes=read_maximum)
             if relative == "recovery.json":
                 from scripts.skillspector_recovery import compact_state
                 document = compact_state(document)
@@ -130,8 +131,8 @@ def validate_directory(directory, source_commit):
         summary = read_json(directory / "coverage.json", max_bytes=coverage.MAX_DISCOVERY_BYTES)
         coverage.validate_discovery_summary(summary, bundle["selection"], source_commit)
     if "recovery.json" in present:
-        from scripts.skillspector_recovery import read_state
-        read_state(directory / "recovery.json")
+        from scripts.skillspector_recovery import validate_state
+        validate_state(scanner.read_report_json(directory / "recovery.json", max_bytes=CONTROL_FILES["recovery.json"]))
     if "publication-base.json" in present:
         publication_base(directory)
     return bundle

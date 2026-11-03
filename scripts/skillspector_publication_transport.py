@@ -170,12 +170,14 @@ class GitHub:
                 errno.EPIPE, errno.EHOSTUNREACH, errno.ENETUNREACH})
 
     def request(self, method, path, data=None):
-        # History validation needs GitHub's SHA...SHA compare notation. Keep
-        # dots forbidden everywhere else, including arbitrary path traversal.
-        compare = method == "GET" and re.fullmatch(r"compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}", path)
-        require(method in {"GET", "POST", "PATCH"} and
-                (re.fullmatch(r"[A-Za-z0-9/?.=&_-]{1,200}", path) or compare),
+        require(isinstance(path, str) and len(path) <= 200, "invalid GitHub publication request")
+        route, query_separator, query = path.partition("?")
+        require(method in {"GET", "POST", "PATCH"} and re.fullmatch(r"[A-Za-z0-9/._-]{1,200}", route) and
+                all(part not in {"", ".", ".."} for part in route.split("/")) and
+                (not query_separator or re.fullmatch(r"(?:[A-Za-z0-9/.,=&_-]|%[0-9A-Fa-f]{2}){1,200}", query)),
                 "invalid GitHub publication request")
+        require(not route.startswith("compare/") or re.fullmatch(r"compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}", route),
+                "ancestry comparison requires two exact commit SHAs")
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                    "User-Agent": "uap-skillspector-coverage"}
         if self.token:
@@ -199,9 +201,11 @@ class GitHub:
             except urllib.error.HTTPError as error:
                 status = str(error.code)
                 try:
-                    candidate = error.headers.get("X-GitHub-Request-Id", "unknown")
-                    if re.fullmatch(r"[A-Za-z0-9:._-]{1,100}", candidate) and not (self.token and self.token in candidate):
-                        request_id = candidate
+                    candidate = error.headers.get("X-GitHub-Request-Id", "")
+                    if isinstance(candidate, str) and 0 < len(candidate) <= 100:
+                        # Server headers are untrusted and may echo credentials.
+                        # Correlate retries without ever logging their raw value.
+                        request_id = "sha256:" + hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:16]
                     if error.code == 404 and method == "GET":
                         return None
                     diagnostic = b""
