@@ -7,6 +7,7 @@ the immutable pinned scanner after its existing directory maintenance patch.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -17,6 +18,7 @@ from pathlib import Path
 UPSTREAM_SHA = "f3b25697d76256998ca9d42c198d256258d4c035"
 REFERENCES_BLOB = "ceb6efaae6dd8739823ee4313476e9dc310f5f3c"
 PATCH_ID = "uap-json-version-canary-v1"
+REAL_SKILL_BLOB = "121e813665d7fe7512e4a59ad0c341b92d8d124c"
 
 # Only a whole JSON field line with a three-component numeric VERSION value.
 # No generic semver, IP, property or path suppression is permitted.
@@ -84,7 +86,7 @@ def apply_patch(scanner: Path) -> None:
     print(f"Applied experimental {PATCH_ID}; production policy unchanged")
 
 
-def verify(scanner: Path, *, baseline: bool) -> None:
+def verify(scanner: Path, *, baseline: bool, real_skill: Path | None = None) -> None:
     sys.path.insert(0, str(scanner / "src"))
     from skillspector.references import resolve_bundle_references_with_metadata
 
@@ -124,6 +126,42 @@ def verify(scanner: Path, *, baseline: bool) -> None:
             if actual != statuses:
                 raise AssertionError((source, actual, statuses, result.records))
         print(f"Verified {'unpatched baseline' if baseline else PATCH_ID} adversarial resolver cases")
+
+    if real_skill is not None:
+        source = real_skill / "SKILL.md"
+        if source.is_symlink() or not source.is_file():
+            raise AssertionError("Pinned real Skill is not a regular file")
+        body = source.read_bytes()
+        blob = hashlib.sha1(b"blob " + str(len(body)).encode("ascii") + b"\0" + body).hexdigest()
+        if blob != REAL_SKILL_BLOB:
+            raise AssertionError(("Real source SHA differs", blob))
+        lines = body.decode("utf-8").splitlines()
+        if len(lines) < 153 or lines[152].strip() != '"VERSION": "1.0.0",':
+            raise AssertionError("Real immutable VERSION line 153 differs")
+        inventory = [
+            item.relative_to(real_skill).as_posix()
+            for item in real_skill.rglob("*")
+            if item.is_file() and not item.is_symlink()
+        ]
+        if len(inventory) > 2048:
+            raise AssertionError("Real source inventory unexpectedly large")
+        result = resolve_bundle_references_with_metadata(
+            real_skill, source_path="SKILL.md",
+            source_text=body.decode("utf-8"), known_paths=inventory,
+        )
+        if not result.complete:
+            raise AssertionError(("Real source extraction incomplete", result.limitations))
+        version_refs = [
+            item for item in result.records
+            if item["line"] == 153 and '"VERSION": "1.0.0"' in item["evidence"]
+        ]
+        if baseline and not (len(version_refs) == 1 and
+                             version_refs[0]["status"] == "missing" and
+                             str(version_refs[0]["reference_kind"]) == "quoted_or_code"):
+            raise AssertionError(("Real baseline did not reproduce false reference", version_refs))
+        if not baseline and version_refs:
+            raise AssertionError(("Corrected real source retains false reference", version_refs))
+        print(f"Verified immutable asc-workflow VERSION case, baseline={baseline}")
 
     if not baseline:
         with tempfile.TemporaryDirectory(prefix="skillspector-version-cli-") as home:
@@ -197,19 +235,24 @@ def verify(scanner: Path, *, baseline: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("scanner", type=Path)
+    parser.add_argument("--real-skill", type=Path)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--check-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.baseline or args.check_only:
-        verify(args.scanner.resolve(), baseline=args.baseline)
+        verify(args.scanner.resolve(), baseline=args.baseline,
+               real_skill=args.real_skill.resolve() if args.real_skill else None)
         return
     apply_patch(args.scanner.resolve())
     if args.verify:
-        subprocess.run(
-            [str(args.scanner.resolve() / ".venv/bin/python"), str(Path(__file__).resolve()),
-             str(args.scanner.resolve()), "--check-only"], check=True,
-        )
+        command = [
+            str(args.scanner.resolve() / ".venv/bin/python"),
+            str(Path(__file__).resolve()), str(args.scanner.resolve()), "--check-only",
+        ]
+        if args.real_skill is not None:
+            command.extend(["--real-skill", str(args.real_skill.resolve())])
+        subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":
