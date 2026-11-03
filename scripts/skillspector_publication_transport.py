@@ -170,7 +170,11 @@ class GitHub:
                 errno.EPIPE, errno.EHOSTUNREACH, errno.ENETUNREACH})
 
     def request(self, method, path, data=None):
-        require(method in {"GET", "POST", "PATCH"} and re.fullmatch(r"[A-Za-z0-9/?.=&_-]{1,200}", path),
+        # History validation needs GitHub's SHA...SHA compare notation. Keep
+        # dots forbidden everywhere else, including arbitrary path traversal.
+        compare = method == "GET" and re.fullmatch(r"compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}", path)
+        require(method in {"GET", "POST", "PATCH"} and
+                (re.fullmatch(r"[A-Za-z0-9/?.=&_-]{1,200}", path) or compare),
                 "invalid GitHub publication request")
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                    "User-Agent": "uap-skillspector-coverage"}

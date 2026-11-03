@@ -131,6 +131,24 @@ class CheckpointTransportTests(unittest.TestCase):
         self.assertEqual(recovery.trusted_run(legitimate, run, 9), run)
         self.assertIn(("GET", f"compare/{COMMIT}...{COMMIT}"), legitimate.calls)
 
+    def test_production_transport_accepts_only_sha_to_sha_ancestry_comparisons(self):
+        from scripts.skillspector_publication_transport import GitHub
+        requested = []
+
+        def open_request(request, timeout):
+            requested.append(request.full_url)
+            return io.BytesIO(b'{"status":"identical"}')
+
+        github = GitHub(opener=open_request)
+        self.assertEqual(
+            github.request("GET", f"compare/{COMMIT}...{COMMIT}")["status"], "identical")
+        self.assertEqual(
+            requested, [f"https://api.github.com/repos/{recovery.REPOSITORY}/compare/{COMMIT}...{COMMIT}"])
+        for unsafe in ("compare/../main", "compare/abc...main", "git/ref/heads/../secrets"):
+            with self.subTest(path=unsafe), self.assertRaises(PublicationError):
+                github.request("GET", unsafe)
+        self.assertEqual(len(requested), 1)
+
     def test_acknowledgement_limits_evict_oldest_and_repair_bounded_oversize(self):
         def row(identifier):
             return {"run_id": identifier, "run_attempt": 1, "head_sha": COMMIT,
