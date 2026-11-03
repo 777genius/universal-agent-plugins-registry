@@ -42,6 +42,7 @@ FILES = {"selection.json": coverage.MAX_SELECTION_BYTES,
          "coverage.json": coverage.MAX_DISCOVERY_BYTES,
          "worker.json": coverage.MAX_WORKER_BYTES}
 MAX_PROVENANCE_BYTES = 16 << 10
+MAX_CONSUMED_BYTES = 24 * MAX_PROVENANCE_BYTES + 4096
 
 
 def integer(value, label):
@@ -285,6 +286,58 @@ def assembly_worker_paths(directory, selection, source_commit, *, run_id, run_at
     return result
 
 
+def write_consumed_checkpoints(paths, output, *, source_commit, run_id, run_attempt):
+    """Bind acknowledgement to the exact packages supplied to successful merge."""
+    require(0 < len(paths) <= 24, "consumed checkpoint count exceeds bound")
+    packages = {}
+    for path in paths:
+        provenance = scanner.read_report_json(path.parent / "provenance.json", max_bytes=MAX_PROVENANCE_BYTES)
+        name = f"skillspector-checkpoint-a{run_attempt}-p{provenance['partition']}-s{provenance['slice']}"
+        require(name not in packages and provenance["run_id"] == run_id and
+                provenance["run_attempt"] == run_attempt and provenance["head_sha"] == source_commit,
+                "consumed checkpoint identity differs")
+        packages[name] = provenance
+    value = {"schema_version": 1, "source_commit": source_commit, "run_id": run_id,
+             "run_attempt": run_attempt, "checkpoints": packages}
+    coverage.write_bounded(output, value, MAX_CONSUMED_BYTES)
+    return value
+
+
+def read_consumed_checkpoints(path, *, source_commit, run_id, run_attempt, selection_digest):
+    require(path.is_file() and not path.is_symlink(), "consumed checkpoint manifest must be regular")
+    value = scanner.read_report_json(path, max_bytes=MAX_CONSUMED_BYTES)
+    coverage.v2.exact(value, ("schema_version", "source_commit", "run_id", "run_attempt", "checkpoints"),
+                      "consumed checkpoint manifest")
+    require(value["schema_version"] == 1 and value["source_commit"] == source_commit and
+            value["run_id"] == run_id and value["run_attempt"] == run_attempt and
+            isinstance(value["checkpoints"], dict) and len(value["checkpoints"]) <= 24,
+            "consumed checkpoint manifest identity differs")
+    for name, provenance in value["checkpoints"].items():
+        match = ARTIFACT.fullmatch(name)
+        coverage.v2.exact(provenance, ("schema_version", "repository", "workflow", "run_id", "run_attempt", "head_branch",
+            "head_sha", "event", "corpus", "partition", "slice", "files"), "consumed checkpoint provenance")
+        require(match is not None and match[1] is not None and int(match[1]) == run_attempt and
+                isinstance(provenance, dict) and provenance.get("run_id") == run_id and
+                provenance.get("run_attempt") == run_attempt and provenance.get("head_sha") == source_commit and
+                provenance.get("schema_version") == 1 and provenance.get("repository") == REPOSITORY and
+                provenance.get("workflow") == WORKFLOW and provenance.get("head_branch") == "main" and
+                provenance.get("corpus") == "catalog" and provenance.get("event") in {"push", "schedule", "workflow_dispatch"} and
+                provenance.get("partition") == int(match[2]) and provenance.get("slice") == int(match[3]) and
+                len(canonical_json(provenance)) <= MAX_PROVENANCE_BYTES,
+                "consumed checkpoint provenance differs")
+        require(isinstance(provenance["files"], dict) and set(provenance["files"]) == set(FILES),
+                "consumed checkpoint files differ")
+        for filename, maximum in FILES.items():
+            row = provenance["files"][filename]
+            coverage.v2.exact(row, ("bytes", "digest"), "consumed checkpoint file")
+            require(type(row["bytes"]) is int and 0 < row["bytes"] <= maximum and
+                    isinstance(row["digest"], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", row["digest"]),
+                    "consumed checkpoint file identity differs")
+        require(provenance["files"]["selection.json"]["digest"] == selection_digest,
+                "consumed checkpoint selection differs")
+    return value["checkpoints"]
+
+
 class StripRedirectCredentials(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, newurl):
         require(newurl.startswith("https://"), "artifact redirect must use HTTPS")
@@ -378,7 +431,7 @@ def run_artifacts(github, run_id):
 
 
 def collect(github, directory, state, *, token, current_run=None, current_id=None, fetch_archive=None, now=None,
-            current_attempt_only=False):
+            consumed_checkpoints=None):
     """Advance a persistent created-at anchored cursor despite newer arrivals."""
     now = now or datetime.now(timezone.utc)
     fetch_archive = fetch_archive or download_archive
@@ -392,6 +445,8 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     if not isinstance(main_sha, str) or not coverage.SHA.fullmatch(main_sha):
         raise GitHubTransportError("GitHub main-branch evidence invalid; recovery deferred")
     validate_state(state)
+    require(consumed_checkpoints is None or current_run is not None,
+            "consumed checkpoint acknowledgement requires the current run")
     acknowledged = {(r["run_id"], r["run_attempt"]): r for r in state["runs"]}
     cursor = state.get("cursor") or {"before": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "page": 1, "offset": 0}
     cutoff = now - timedelta(days=RETENTION_DAYS)
@@ -413,18 +468,22 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
             return False
         artifacts = run_artifacts(github, run["id"])
         if not artifacts:
+            if consumed_checkpoints is not None:
+                accepted.append({"run_id": run["id"], "run_attempt": run["run_attempt"], "head_sha": run["head_sha"],
+                    "created_at": run["created_at"], "artifacts": (old or {}).get("artifacts", []),
+                    "rejections": (old or {}).get("rejections", []), "complete": False})
             return True  # Cursor advances; empty legacy runs do not fill acknowledgement state.
         artifact_acks = {row["id"]: row for row in (old or {}).get("artifacts", [])}
         quarantine = {row["id"]: row for row in (old or {}).get("rejections", [])}
-        complete = True
+        # Assembly cannot close an unfinished run's inventory. A later completed
+        # preparation must inspect it again, including late-visible artifacts.
+        complete = consumed_checkpoints is None
         for artifact in sorted(artifacts, key=lambda a: a["name"]):
             identifier = integer(artifact.get("id"), "artifact id")
             if identifier in artifact_acks or identifier in quarantine:
                 continue
-            # Assembly only consumed the active attempt. Leave an older checkpoint
-            # unacknowledged if a retry skipped it; normal recovery must revisit it.
-            if current_attempt_only and int(ARTIFACT.fullmatch(artifact["name"])[1] or "1") != run["run_attempt"]:
-                complete = False
+            if consumed_checkpoints is not None and artifact["name"] not in consumed_checkpoints:
+                deferred = True
                 continue
             size = artifact.get("size_in_bytes")
             if type(size) is int and 0 < size <= MAX_ARCHIVE_BYTES and bytes_read + size > MAX_TOTAL_BYTES:
@@ -447,6 +506,10 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                 require(attempt <= run["run_attempt"] and producing["id"] == run["id"], "checkpoint run attempt differs")
                 target = directory / f"{run['id']}-{attempt}-{identifier}"
                 batch = unpack_archive(body, artifact, producing, target, allow_controlled=True, allow_unsupported_policy=True)
+                if consumed_checkpoints is not None and envelope != consumed_checkpoints[artifact["name"]]:
+                    shutil.rmtree(target)
+                    deferred = True
+                    continue  # Valid alternate evidence was not supplied to this merge.
                 if envelope.get("corpus") == "controlled" or batch["unsupported_policy"]:
                     shutil.rmtree(target)
                     reason = "excluded_controlled" if envelope.get("corpus") == "controlled" else "unsupported_policy"
@@ -662,6 +725,7 @@ def main():
     listing.add_argument("--source-commit", required=True)
     listing.add_argument("--run-id", type=int, required=True)
     listing.add_argument("--run-attempt", type=int, required=True)
+    listing.add_argument("--consumed-manifest", type=Path)
     package = commands.add_parser("pack")
     package.add_argument("--plan-dir", type=Path, required=True)
     package.add_argument("--worker", type=Path, required=True)
@@ -673,6 +737,7 @@ def main():
     ack = commands.add_parser("acknowledge")
     ack.add_argument("--plan-dir", type=Path, required=True)
     ack.add_argument("--report-dir", type=Path, required=True)
+    ack.add_argument("--consumed-manifest", type=Path, required=True)
     resume = commands.add_parser("resume-current")
     resume.add_argument("--plan-dir", type=Path, required=True)
     resume.add_argument("--worker", type=Path, required=True)
@@ -689,6 +754,9 @@ def main():
         elif args.command == "list-workers":
             paths = assembly_worker_paths(args.directory, coverage.load_selection(args.selection), args.source_commit,
                 run_id=args.run_id, run_attempt=args.run_attempt)
+            if args.consumed_manifest is not None:
+                write_consumed_checkpoints(paths, args.consumed_manifest, source_commit=args.source_commit,
+                    run_id=args.run_id, run_attempt=args.run_attempt)
             print("\n".join(str(path) for path in paths))
         elif args.command == "pack":
             pack(args.plan_dir, args.worker, args.output_dir, slice_index=args.slice)
@@ -706,9 +774,17 @@ def main():
                     current_id=int(os.environ["GITHUB_RUN_ID"]))
                 print(canonical_json(result).decode())
             else:
+                run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+                consumed = read_consumed_checkpoints(args.consumed_manifest, source_commit=os.environ["GITHUB_SHA"],
+                    run_id=run_id, run_attempt=attempt, selection_digest=coverage.sha256_digest(
+                        scanner.read_bytes_bounded(args.plan_dir / "selection.json", coverage.MAX_SELECTION_BYTES)))
                 state = read_state(args.plan_dir / STATE_FILE)
-                state, summary = collect(github, args.plan_dir / "acknowledged", state, token=token,
-                    current_run=int(os.environ["GITHUB_RUN_ID"]), current_attempt_only=True)
+                staged = args.plan_dir / "acknowledged"
+                if staged.exists() or staged.is_symlink():
+                    require(staged.is_dir() and not staged.is_symlink(), "acknowledgement staging must be regular")
+                    shutil.rmtree(staged)
+                state, summary = collect(github, staged, state, token=token,
+                    current_run=run_id, consumed_checkpoints=consumed)
                 coverage.write_bounded(args.report_dir / STATE_FILE, state, MAX_STATE_BYTES)
         return 0
     except (PublicationError, OSError, ValueError, KeyError, TypeError, RecursionError, zipfile.BadZipFile,

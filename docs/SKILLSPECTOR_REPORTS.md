@@ -262,7 +262,21 @@ has the same or a lower attempt count from an independent execution. Resume
 does not acknowledge that skipped artifact. If its alternate evidence was
 outside preparation's bounded window, the next normal recovery can still
 reconcile its original findings; a regression verifies that an unseen warning
-is retained as an explicit conflict rather than discarded.
+is retained as an explicit conflict rather than discarded, including the actual
+CLI acknowledgement step between resume and the next preparation.
+
+Strict worker discovery writes a private, bounded consumption manifest alongside
+the exact worker paths supplied to merge. After successful merge and publication
+validation, acknowledgement uses that manifest and independently authenticates
+each matching remote ZIP. An artifact receives a receipt only when its complete
+provenance, original file digests, current run/attempt/source and exact selection
+match the consumed package. Earlier or same-attempt artifacts not selected for
+merge receive neither an acknowledgement nor a rejection. Existing preparation
+receipts and its cursor are preserved. Current-run receipts remain incomplete,
+even if all currently visible artifacts were consumed: the run is unfinished and
+additional uploads may become visible later. The next completed-run preparation
+reconciles that evidence before closing the receipt. The private consumption
+manifest is not part of the published report schema.
 
 Each scan step has a 15-minute timeout; the 55-minute scan job reserves ten
 minutes beyond all three step ceilings for setup, packaging and upload. The

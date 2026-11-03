@@ -557,19 +557,29 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertFalse((root / 'plan' / 'recovery.json').exists())
             self.assertFalse((root / 'plan' / 'previous' / 'recovery.json').exists())
-            # An acknowledgement must not consume a skipped earlier-attempt
-            # warning; next preparation must still reconcile the original artifact.
-            with mock.patch.object(recovery, 'download_archive', return_value=body) as download:
-                state, _ = recovery.collect(FakeActions(run_metadata(run_attempt=2), artifact),
-                    root / 'ack-staged', {'schema_version': 1, 'runs': []}, token='read-only',
-                    current_run=101, current_attempt_only=True)
-                download.assert_not_called()
-            self.assertEqual(state['runs'][0]['artifacts'], [])
-            self.assertIs(state['runs'][0]['complete'], False)
-            coverage.write_bounded(root / 'plan' / 'previous' / 'recovery.json', state, recovery.MAX_STATE_BYTES)
+            # Actual assembly consumed an empty current-attempt checkpoint;
+            # the skipped older warning was never part of its merge argv.
+            coverage.write_bounded(root / 'empty-worker.json', worker(selection), coverage.MAX_WORKER_BYTES)
+            recovery.pack(root / 'plan', root / 'empty-worker.json', root / 'current-package', slice_index=1, environment={
+                'GITHUB_REPOSITORY': recovery.REPOSITORY, 'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '2',
+                'GITHUB_SHA': COMMIT, 'GITHUB_REF_NAME': 'main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'SCAN_CORPUS': 'catalog'})
+            consumed = root / 'plan' / 'consumed-checkpoints.json'
+            paths = recovery.assembly_worker_paths(root / 'current-package', selection, COMMIT, run_id=101, run_attempt=2)
+            recovery.write_consumed_checkpoints(paths, consumed, source_commit=COMMIT, run_id=101, run_attempt=2)
+            api = FakeActions(run_metadata(run_attempt=2), artifact)
+            with mock.patch.object(recovery, 'GitHub', return_value=api), \
+                    mock.patch.object(recovery, 'download_archive', return_value=body), \
+                    mock.patch.dict('os.environ', {'GITHUB_TOKEN': 'read-only', 'GITHUB_RUN_ID': '101',
+                        'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': COMMIT}), \
+                    mock.patch('sys.argv', ['skillspector_recovery', 'acknowledge', '--plan-dir', str(root / 'plan'),
+                        '--report-dir', str(root / 'plan' / 'previous'), '--consumed-manifest', str(consumed)]):
+                self.assertEqual(recovery.main(), 0)
+            receipt = recovery.read_state(root / 'plan' / 'previous' / 'recovery.json')['runs'][0]
+            self.assertEqual(receipt['artifacts'], [])
+            self.assertEqual(receipt['rejections'], [])
+            self.assertFalse(receipt['complete'])
             with mock.patch.object(recovery, 'download_archive', return_value=body):
-                result = recovery.recover_plan(FakeActions(run_metadata(run_attempt=2), artifact),
-                    root / 'plan', COMMIT, token='read-only')
+                result = recovery.recover_plan(api, root / 'plan', COMMIT, token='read-only')
             recovered = coverage.read_bundle(root / 'plan' / 'previous')['records'][subject['id']]
             self.assertEqual(result['reconciliation']['conflicting_executions'], 1)
             self.assertEqual(recovered['finding_count'], 1)
@@ -577,6 +587,103 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertIn('recovery_conflict', coverage.reason_codes(recovered))
             self.assertEqual(recovery.read_state(root / 'plan' / 'recovery.json')['runs'][0]['artifacts'],
                              [{'id': artifact['id'], 'digest': artifact['digest']}])
+            self.assertTrue(recovery.read_state(root / 'plan' / 'recovery.json')['runs'][0]['complete'])
+
+    def test_ack_only_consumes_selected_packages_and_defers_same_attempt_or_late_evidence(self):
+        for late, mismatch in ((False, False), (True, False), (False, True)):
+            with self.subTest(late=late, mismatch=mismatch), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                original = package(root)
+                selection = json.loads((original / 'selection.json').read_text())
+                coverage.merge_reports(selection, None, [worker(selection, [record(selection['sources'][0])])],
+                    source_commit=COMMIT, output_dir=root / 'plan' / 'previous')
+                raw = fixtures.upstream_report()
+                raw['issues'] = [{'id': 'PI1', 'severity': 'HIGH', 'explanation': 'Preserve the unconsumed current warning.',
+                    'location': {'file': 'SKILL.md', 'start_line': 1}}]
+                warning = coverage.scanner.normalize_report_v3(record(selection['sources'][0]), json.dumps(raw).encode(), 1, Path('/source'))
+                bodies, artifacts = {}, []
+                for index, values in ((1, []), (2, [warning])):
+                    coverage.write_bounded(root / f'worker-{index}.json', worker(selection, values), coverage.MAX_WORKER_BYTES)
+                    recovery.pack(root / 'plan', root / f'worker-{index}.json', root / f'package-{index}', slice_index=index,
+                        environment={'GITHUB_REPOSITORY': recovery.REPOSITORY, 'GITHUB_RUN_ID': '101',
+                            'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': COMMIT, 'GITHUB_REF_NAME': 'main',
+                            'GITHUB_EVENT_NAME': 'workflow_dispatch', 'SCAN_CORPUS': 'catalog'})
+                    body, artifact = archive_package(root / f'package-{index}')
+                    artifact.update(id=500 + index, name=f'skillspector-checkpoint-a2-p0-s{index}')
+                    bodies[artifact['id']] = body
+                    artifacts.append(artifact)
+                if mismatch:
+                    # The API name matches, but its valid ZIP differs from the
+                    # package actually selected for assembly.
+                    provenance = json.loads((root / 'package-2' / 'provenance.json').read_text())
+                    provenance['slice'] = 1
+                    coverage.write_bounded(root / 'package-2' / 'provenance.json', provenance, recovery.MAX_PROVENANCE_BYTES)
+                    body, artifact = archive_package(root / 'package-2')
+                    artifact.update(id=501, name='skillspector-checkpoint-a2-p0-s1')
+                    artifacts, bodies = [artifact], {501: body}
+                consumed = root / 'plan' / 'consumed-checkpoints.json'
+                paths = recovery.assembly_worker_paths(root / 'package-1', selection, COMMIT, run_id=101, run_attempt=2)
+                recovery.write_consumed_checkpoints(paths, consumed, source_commit=COMMIT, run_id=101, run_attempt=2)
+                prior = {'schema_version': 1, 'runs': [{'run_id': 99, 'run_attempt': 1, 'head_sha': COMMIT,
+                    'created_at': '2026-11-02T17:00:00Z', 'artifacts': [{'id': 400, 'digest': 'sha256:' + 'a' * 64}]}],
+                    'cursor': {'before': '2026-11-03T00:00:00Z', 'page': 1, 'offset': 0}}
+                coverage.write_bounded(root / 'plan' / 'recovery.json', prior, recovery.MAX_STATE_BYTES)
+                class VisibilityAPI(FakeActions):
+                    visible = artifacts[:1] if late else artifacts
+                    def request(self, method, path, data=None):
+                        if path.startswith('actions/runs/101/artifacts?'):
+                            return {'total_count': len(self.visible), 'artifacts': self.visible}
+                        return super().request(method, path, data)
+                api, downloaded = VisibilityAPI(run_metadata(run_attempt=2), None), []
+                def download(identifier, _token):
+                    downloaded.append(identifier)
+                    return bodies[identifier]
+                with mock.patch.object(recovery, 'GitHub', return_value=api), \
+                        mock.patch.object(recovery, 'download_archive', side_effect=download), \
+                        mock.patch.dict('os.environ', {'GITHUB_TOKEN': 'read-only', 'GITHUB_RUN_ID': '101',
+                            'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': COMMIT}), \
+                        mock.patch('sys.argv', ['skillspector_recovery', 'acknowledge', '--plan-dir', str(root / 'plan'),
+                            '--report-dir', str(root / 'plan' / 'previous'), '--consumed-manifest', str(consumed)]):
+                    self.assertEqual(recovery.main(), 0)
+                state = recovery.read_state(root / 'plan' / 'previous' / 'recovery.json')
+                current = next(row for row in state['runs'] if row['run_id'] == 101)
+                self.assertFalse(current['complete'])
+                self.assertEqual(current['rejections'], [])
+                self.assertEqual([row['id'] for row in current['artifacts']], [] if mismatch else [501])
+                self.assertEqual(state['cursor'], prior['cursor'])
+                self.assertIn(prior['runs'][0], state['runs'])
+                self.assertEqual(downloaded, [501])
+                api.visible = artifacts
+                with mock.patch.object(recovery, 'download_archive', side_effect=download):
+                    result = recovery.recover_plan(api, root / 'plan', COMMIT, token='read-only')
+                value = coverage.read_bundle(root / 'plan' / 'previous')['records'][selection['sources'][0]['id']]
+                self.assertEqual(value['finding_count'], 1)
+                self.assertEqual(value['status'], 'partial')
+                self.assertEqual(result['reconciliation']['conflicting_executions'], 1)
+                closed = next(row for row in recovery.read_state(root / 'plan' / 'recovery.json')['runs'] if row['run_id'] == 101)
+                self.assertTrue(closed['complete'])
+
+    def test_consumed_manifest_rejects_wrong_identity_oversize_and_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package(root)
+            selection = coverage.load_selection(root / 'plan' / 'selection.json')
+            paths = recovery.assembly_worker_paths(root / 'package', selection, COMMIT, run_id=101, run_attempt=1)
+            manifest = root / 'consumed.json'
+            recovery.write_consumed_checkpoints(paths, manifest, source_commit=COMMIT, run_id=101, run_attempt=1)
+            digest = coverage.sha256_digest((root / 'plan' / 'selection.json').read_bytes())
+            with self.assertRaises(PublicationError):
+                recovery.read_consumed_checkpoints(manifest, source_commit=COMMIT, run_id=101, run_attempt=2, selection_digest=digest)
+            with self.assertRaises(PublicationError):
+                recovery.read_consumed_checkpoints(manifest, source_commit=COMMIT, run_id=101, run_attempt=1,
+                    selection_digest='sha256:' + '0' * 64)
+            link = root / 'link.json'
+            link.symlink_to(manifest)
+            with self.assertRaises(PublicationError):
+                recovery.read_consumed_checkpoints(link, source_commit=COMMIT, run_id=101, run_attempt=1, selection_digest=digest)
+            manifest.write_bytes(b' ' * (recovery.MAX_CONSUMED_BYTES + 1))
+            with self.assertRaises(PublicationError):
+                recovery.read_consumed_checkpoints(manifest, source_commit=COMMIT, run_id=101, run_attempt=1, selection_digest=digest)
 
     def test_controlled_main_job_retry_never_requests_production_resume_artifacts(self):
         with tempfile.TemporaryDirectory() as temporary:

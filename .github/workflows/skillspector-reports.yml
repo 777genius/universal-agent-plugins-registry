@@ -379,7 +379,8 @@ jobs:
           worker_list=$(python3 -m scripts.skillspector_recovery list-workers \
             --directory "${RUNNER_TEMP}/skillspector-workers" \
             --selection "${RUNNER_TEMP}/skillspector-plan/selection.json" --source-commit "${SOURCE_COMMIT}" \
-            --run-id "${GITHUB_RUN_ID}" --run-attempt "${GITHUB_RUN_ATTEMPT}")
+            --run-id "${GITHUB_RUN_ID}" --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --consumed-manifest "${RUNNER_TEMP}/skillspector-plan/consumed-checkpoints.json")
           mapfile -t workers <<< "${worker_list}"
           python3 -m scripts.skillspector_coverage_v3 merge \
             --selection "${RUNNER_TEMP}/skillspector-plan/selection.json" \
@@ -401,7 +402,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 -m scripts.skillspector_recovery acknowledge \
-            --plan-dir "${RUNNER_TEMP}/skillspector-plan" --report-dir "${RUNNER_TEMP}/skillspector-report"
+            --plan-dir "${RUNNER_TEMP}/skillspector-plan" --report-dir "${RUNNER_TEMP}/skillspector-report" \
+            --consumed-manifest "${RUNNER_TEMP}/skillspector-plan/consumed-checkpoints.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: skillspector-static-report-v3-a${{ github.run_attempt }}

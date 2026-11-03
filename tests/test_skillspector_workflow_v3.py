@@ -198,6 +198,20 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                                      branch == 'refs/heads/main' and selected == 'catalog')
             self.assertEqual(step['env']['GITHUB_TOKEN'], '${{ github.token }}')
 
+    def test_acknowledgement_uses_only_manifest_selected_before_successful_merge(self):
+        steps = self.workflow['jobs']['assemble']['steps']
+        merge_index = next(index for index, step in enumerate(steps) if 'skillspector_coverage_v3 merge' in step.get('run', ''))
+        ack_index = next(index for index, step in enumerate(steps) if 'skillspector_recovery acknowledge' in step.get('run', ''))
+        merge, ack = steps[merge_index], steps[ack_index]
+        argument = '--consumed-manifest "${RUNNER_TEMP}/skillspector-plan/consumed-checkpoints.json"'
+        self.assertIn(argument, merge['run'])
+        self.assertIn(argument, ack['run'])
+        self.assertLess(merge['run'].index('list-workers'), merge['run'].index('skillspector_coverage_v3 merge'))
+        self.assertIn('publish_skillspector_coverage_v3 check', merge['run'])
+        self.assertGreater(ack_index, merge_index)
+        self.assertNotIn('always()', ack['if'])
+        self.assertNotIn('continue-on-error', merge)
+
     def test_pr_canary_has_one_effective_controlled_short_configuration(self):
         self.assertIn('pull_request', self.workflow['on'])
         self.assertIn('.github/workflows/skillspector-reports.yml', self.workflow['on']['pull_request']['paths'])

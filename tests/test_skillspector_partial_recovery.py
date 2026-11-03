@@ -258,13 +258,33 @@ class RecoveryTests(unittest.TestCase):
                          metadata["workers"][0]["attempts"][0]["attempt"]["fingerprint"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            a = self.recover(root / "a", selection, [left, right])
-            b = self.recover(root / "b", selection, [right, left])
+            with mock.patch.object(coverage.scanner, "now", return_value="2020-01-01T00:01:00Z"):
+                a = self.recover(root / "a", selection, [left, right])
+                b = self.recover(root / "b", selection, [right, left])
             self.assertEqual(a["records"], b["records"])
             self.assertIn("not fully represented", a["records"][subject["id"]]["coverage"]["reasons"][-2]["message"])
             value = self.recover(root / "metadata", selection, [left, metadata])["records"][subject["id"]]
             self.assertEqual(value["status"], "partial")
             self.assertIn("recovery_conflict", coverage.reason_codes(value))
+
+    def test_conflicting_recovery_counts_changed_source_once_and_replay_zero(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        clean = self.authentic_batch(selection, 1, 0)
+        dirty = self.authentic_batch(selection, 2, 1, warning="Recovered adverse evidence.")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = self.recover(root / "published", selection, [clean])
+            recovered = self.recover(root / "recovered", selection, [dirty], published)
+            self.assertEqual(recovered["manifest"]["execution_summary"]["recovered_sources"], 1)
+            self.assertEqual(recovered["records"][subject["id"]]["finding_count"], 1)
+            self.assertEqual(recovered["records"][subject["id"]]["status"], "partial")
+            self.assertEqual(recovered["attempts"][subject["id"]]["history"],
+                             published["attempts"][subject["id"]]["history"])
+            replay = self.recover(root / "replay", selection, [dirty], recovered)
+            self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+            self.assertEqual(replay["records"], recovered["records"])
+            self.assertEqual(replay["attempts"], recovered["attempts"])
 
     def test_same_origin_conflicts_missing_predecessor_and_exit_code_difference_remain_distinct(self):
         subject = item()

@@ -1066,10 +1066,12 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 if recovery_analysis(old_record) == recovery_analysis(outcome["record"]):
                     diagnostics["equivalent_executions"] += 1
                 else:
+                    before = copy.deepcopy((old_record, old_attempt))
                     quarantine_recovery(records, attempts, item, outcome)
-                    recovered_ids.add(item["id"])
                     if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                         mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
+                    if (records[item["id"]], attempts[item["id"]]) != before:
+                        recovered_ids.add(item["id"])
                     diagnostics["conflicting_executions"] += 1
                     if len(diagnostics["examples"]) < 32:
                         diagnostics["examples"].append({"id": item["id"], "reason": "recovery_conflict",
