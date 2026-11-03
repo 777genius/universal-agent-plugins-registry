@@ -501,8 +501,17 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
                     envelope = scanner.parse_scanner_json(archive.read(info), "checkpoint provenance")
                 attempt = integer(envelope.get("run_attempt"), "checkpoint run attempt")
                 require(attempt <= run["run_attempt"], "checkpoint run attempt differs")
-                producing = run if attempt == run["run_attempt"] else trusted_main_run(github, github.request("GET",
-                    f"actions/runs/{run['id']}/attempts/{attempt}"), workflow_id, main_sha=main_sha, ancestry=ancestry)
+                if attempt == run["run_attempt"]:
+                    producing = run
+                else:
+                    earlier = github.request("GET", f"actions/runs/{run['id']}/attempts/{attempt}")
+                    # Incomplete GitHub 200 metadata is unavailable evidence,
+                    # not a permanently corrupt immutable checkpoint.
+                    fields = ("id", "run_attempt", "head_sha", "head_branch", "event", "status",
+                              "created_at", "path", "workflow_id", "repository", "head_repository")
+                    if not isinstance(earlier, dict) or any(field not in earlier for field in fields):
+                        raise GitHubTransportError("GitHub producing-attempt metadata incomplete; recovery deferred")
+                    producing = trusted_main_run(github, earlier, workflow_id, main_sha=main_sha, ancestry=ancestry)
                 require(attempt <= run["run_attempt"] and producing["id"] == run["id"], "checkpoint run attempt differs")
                 target = directory / f"{run['id']}-{attempt}-{identifier}"
                 batch = unpack_archive(body, artifact, producing, target, allow_controlled=True, allow_unsupported_policy=True)

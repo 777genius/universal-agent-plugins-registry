@@ -697,7 +697,7 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertFalse((root / 'resumed.json').exists())
 
     def test_unavailable_ancestry_or_earlier_attempt_api_preserves_receipt_and_cursor(self):
-        for failure_point in ('ancestry_503', 'ancestry_missing', 'attempt_503', 'attempt_missing'):
+        for failure_point in ('ancestry_503', 'ancestry_missing', 'attempt_503', 'attempt_missing', 'attempt_incomplete'):
             with self.subTest(failure_point=failure_point), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 original = package(root)
@@ -713,6 +713,8 @@ class CheckpointTransportTests(unittest.TestCase):
                         if failure_point.startswith('ancestry') and path == 'git/ref/heads/main':
                             return {'object': {'sha': 'd' * 40}}
                         if path.startswith('compare/') or path == 'actions/runs/101/attempts/1':
+                            if failure_point == 'attempt_incomplete':
+                                return {'id': 101, 'run_attempt': 1}
                             if failure_point.endswith('missing'):
                                 return None
                             raise recovery.GitHubTransportError('GitHub API unavailable; recovery deferred')
