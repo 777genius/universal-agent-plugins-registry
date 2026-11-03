@@ -29,7 +29,7 @@ on:
       - "docs/skillspector/controlled-sources-*.json"
       - ".github/workflows/skillspector-reports.yml"
   schedule:
-    - cron: "19 */6 * * *"
+    - cron: "19 */2 * * *"
   workflow_dispatch:
     inputs:
       discovery_pages:
@@ -46,7 +46,7 @@ on:
         description: "Maximum fresh scan attempts per partition"
         type: choice
         options: ["128", "256", "512", "8"]
-        default: "128"
+        default: "256"
       scan_budget_seconds:
         description: "Total cooperative scanner budget per partition (300/600 for manual checks)"
         type: choice

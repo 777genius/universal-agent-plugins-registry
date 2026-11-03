@@ -721,7 +721,7 @@ def execution_config(event, *, corpus="", maximum_attempts="", scan_budget_secon
     if event == "pull_request":
         corpus, maximum_attempts, scan_budget_seconds, discovery_pages = "controlled", "8", "300", "1"
     corpus = corpus or "catalog"
-    attempts, budget, pages = int(maximum_attempts or "128"), int(scan_budget_seconds or "2100"), int(discovery_pages or "50")
+    attempts, budget, pages = int(maximum_attempts or "256"), int(scan_budget_seconds or "2100"), int(discovery_pages or "50")
     require(corpus in {"catalog", "controlled"} and attempts in {8, 128, 256, 512} and
             budget in {300, 600, 2100} and pages in {1, 50}, "unsupported scan configuration")
     return {"corpus": corpus, "maximum_attempts": str(attempts), "scan_budget_seconds": str(budget),
