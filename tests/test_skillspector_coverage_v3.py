@@ -313,7 +313,12 @@ class QueueTests(unittest.TestCase):
             changed = copy.deepcopy(old)
             for source in changed:
                 source["revision"] = "d" * 40
-            fresh = [item(id=f"fixture/fresh{n}", path=f"skills/fresh{n}") for n in range(30)]
+            # Put a real 15-Skill plugin first: a small queue reweighting must
+            # not fragment a group that originally fits in one new-Skill window.
+            plugin = [item(id=f"plugin:fixture/fresh-group/s{n}", kind="plugin_skill",
+                           repository="fixture/fresh-group", path=f"plugins/fresh/skills/s{n}",
+                           plugin_path="plugins/fresh") for n in range(15)]
+            fresh = [*plugin, *(item(id=f"fixture/fresh{n}", path=f"skills/fresh{n}") for n in range(15))]
             selected = {"schema_version": 1, "sources": [*fresh, *changed, retry, current]}
             planned = coverage.plan_attempts(selected, prior, 0, 1, 41)
             planned_ids = [source["id"] for source in planned]
@@ -326,6 +331,7 @@ class QueueTests(unittest.TestCase):
             # Reserve a complete 16-root new-plugin window while still
             # preferring outdated subjects within the same total budget.
             self.assertGreaterEqual(new_count, coverage.MAX_COHERENT_PLUGIN_ROOTS)
+            self.assertTrue(all(source["id"] in planned_ids for source in plugin))
             self.assertGreater(changed_count, new_count)
             self.assertEqual(planned, coverage.plan_attempts(selected, prior, 0, 1, 41))
 

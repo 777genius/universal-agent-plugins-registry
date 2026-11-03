@@ -14,7 +14,7 @@ Do not change the default 256-attempt limit, two-hour schedule, eight worker par
 
 ## Verification and stop conditions
 
-- The new regression creates 30 historical current targets, 30 new targets, a scheduled retry, and an already-current report. Under 21 slots it expects more historical refreshes, at least one new source, the due retry, no duplicate selection, and unchanged matching report reuse.
+- The new regression creates 30 historical current targets, 30 new targets, a scheduled retry, and an already-current report. Under 41 slots it expects more historical refreshes, at least one new source, the due retry, no duplicate selection, and unchanged matching report reuse.
 - Existing lane fairness, retry backoff, immutable-source, plugin grouping, checkpoint/resume and publication tests must remain green.
 - PR CI must include a real pinned-scanner canary; merge only with passing validation/reviews. The next main production run must publish verified evidence, and its completion counts must be reported without claiming that all historical or partial sources are resolved.
 
