@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "scripts/patch_skillspector_directory_references.py"
+      - "scripts/patch_skillspector_json_version_refs.py"
       - "scripts/test_skillspector_directory_patch_e2e.py"
       - "scripts/skillspector_reports.py"
       - "scripts/skillspector_coverage_v3.py"
@@ -51,3 +52,9 @@ jobs:
           python3 source/scripts/test_skillspector_directory_patch_e2e.py \
             scanner/.venv/bin/skillspector daisyui/skills/daisyui \
             source/plugins/cloudflare/skills/cloudflare
+
+      # Diagnostic-only candidate: must not run in the production scan workflow.
+      - name: Reproduce known VERSION reference false positive on original pinned scanner
+        run: scanner/.venv/bin/python source/scripts/patch_skillspector_json_version_refs.py scanner --baseline
+      - name: Test exact JSON VERSION candidate and adversarial CLI without promoting policy
+        run: python3 source/scripts/patch_skillspector_json_version_refs.py scanner --verify
