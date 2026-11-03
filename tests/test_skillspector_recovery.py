@@ -506,6 +506,29 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(count, 0)
             self.assertFalse(output.exists())
 
+    def test_retry_skips_independent_equal_count_progress_recovered_during_prepare(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            body, artifact = archive_package(original)
+            selection = json.loads((original / "selection.json").read_text())
+            candidate = json.loads((original / "worker.json").read_text())
+            with mock.patch.object(coverage.scanner, "now", return_value="2026-11-03T08:00:00Z"):
+                independent = worker(selection, [record(selection["sources"][0])])
+            self.assertNotEqual(
+                candidate["attempts"][0]["attempt"]["last_attempted_at"],
+                independent["attempts"][0]["attempt"]["last_attempted_at"])
+            coverage.merge_reports(selection, None, [independent], source_commit=COMMIT,
+                                   output_dir=root / "plan" / "previous")
+            output = root / "resumed.json"
+            count = recovery.restore_current(FakeActions(run_metadata(run_attempt=2), artifact),
+                root / "plan", output, token="read-only", partition=0,
+                fetch_archive=lambda *_: body,
+                environment={"GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "2",
+                             "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": COMMIT})
+            self.assertEqual(count, 0)
+            self.assertFalse(output.exists())
+
     def test_controlled_main_job_retry_never_requests_production_resume_artifacts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

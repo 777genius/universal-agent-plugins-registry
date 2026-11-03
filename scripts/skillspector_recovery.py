@@ -619,8 +619,8 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
     for outcome in workers[0]["attempts"]:
         old = persisted.get(outcome["attempt"]["id"])
         if old is not None and old["attempt_count"] >= outcome["attempt"]["attempt_count"]:
-            require(old == outcome["attempt"] or outcome["attempt"]["history"][-1] in old["history"],
-                    "same-run outcome conflicts with recovered prior state")
+            # Preparation already reconciled independent main runs. A
+            # retry's earlier checkpoint cannot replace published progress.
             continue
         remaining.append(outcome)
     if not remaining:

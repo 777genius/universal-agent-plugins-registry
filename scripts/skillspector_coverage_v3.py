@@ -963,7 +963,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     outcomes.append((target, outcome, origin))
     # A fork can have its own valid retry predecessor. Require that actual
     # predecessor, or an already persisted history, rather than resetting counts.
-    for item, outcome, _ in outcomes:
+    for item, outcome, origin in outcomes:
         attempt = outcome["attempt"]
         if attempt["attempt_count"] == 1:
             continue
@@ -974,7 +974,12 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
         known = known or bool(prefix) and any(parent["attempt"]["attempt_count"] == attempt["attempt_count"] - 1 and
             parent["attempt"]["history"][-len(prefix):] == prefix
             for parent_item, parent, _ in outcomes if parent_item["id"] == item["id"])
-        require(known, "recovered attempt count is not consecutive: missing predecessor")
+        # An independently authenticated run can fork an attempt already
+        # published at the same or higher count. Reconcile its evidence below
+        # without accepting an unknown predecessor for newer attempts.
+        fork = origin is not None and persisted is not None and (
+            persisted["attempt_count"] >= attempt["attempt_count"])
+        require(known or fork, "recovered attempt count is not consecutive: missing predecessor")
     applied, recovered_ids = 0, set()
     for item, outcome, origin in sorted(outcomes, key=lambda value: (
             value[1]["attempt"]["last_attempted_at"], value[1]["attempt"]["attempt_count"], value[0]["id"],

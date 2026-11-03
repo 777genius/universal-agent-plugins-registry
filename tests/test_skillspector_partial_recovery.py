@@ -304,6 +304,25 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(diagnostics["conflicting_executions"], 1)
             self.assertEqual(diagnostics["examples"][0]["execution_origin"], {"run_id": 99, "run_attempt": 1})
 
+    def test_authenticated_same_count_retry_fork_reconciles_without_stalling_prepare(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        original = self.authentic_batch(selection, 50, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior = self.recover(root / "prior", selection, [original])
+            clean = self.authentic_batch(selection, 51, 1, previous=prior)
+            dirty = self.authentic_batch(selection, 52, 2, warning="Independent second-attempt finding.", previous=prior)
+            published = self.recover(root / "published", selection, [clean], prior)
+            self.assertEqual(published["attempts"][subject["id"]]["attempt_count"], 2)
+            recovered = self.recover(root / "recovered", selection, [dirty], published)
+            self.assertEqual(recovered["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertIn("recovery_conflict", coverage.reason_codes(recovered["records"][subject["id"]]))
+            self.assertEqual(recovered["records"][subject["id"]]["status"], "partial")
+            replay = self.recover(root / "replay", selection, [dirty], recovered)
+            self.assertEqual(replay["records"], recovered["records"])
+            self.assertEqual(replay["attempts"], recovered["attempts"])
+
     def test_a_retry_on_an_independent_fork_uses_its_verified_predecessor(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
