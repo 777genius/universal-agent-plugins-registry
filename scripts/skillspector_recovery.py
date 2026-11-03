@@ -282,8 +282,10 @@ def unpack_archive(body, artifact, run, output_dir, *, allow_controlled=False, a
             "checkpoint cannot cross branch/corpus/run attempt boundary")
     require(not output_dir.exists(), "recovery staging path already exists")
     output_dir.mkdir(parents=True)
-    for name, contents in documents.items():
-        (output_dir / name).write_bytes(contents)
+    # Filenames at the filesystem sink must originate from our fixed policy,
+    # never from a ZIP member string, even after allowlist validation.
+    for name in FILES:
+        (output_dir / name).write_bytes(documents[name])
     coverage.write_bounded(output_dir / "provenance.json", provenance, MAX_PROVENANCE_BYTES)
     return batch
 
@@ -505,7 +507,8 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
         match = ARTIFACT.fullmatch(artifact["name"])
         if int(match[2]) != partition or match[1] is not None and int(match[1]) >= attempt:
             continue
-        body = download(artifact["id"], token)
+        artifact_id = integer(artifact.get("id"), "artifact id")
+        body = download(artifact_id, token)
         downloaded += len(body)
         require(downloaded <= MAX_TOTAL_BYTES, "same-run resume download bound exceeded")
         with zipfile.ZipFile(io.BytesIO(body)) as archive:
@@ -515,7 +518,7 @@ def restore_current(github, plan_dir, worker_path, *, token, partition, environm
         old_attempt = integer(provenance.get("run_attempt"), "earlier run attempt")
         require(old_attempt < attempt, "same-run resume cannot use current/future attempt")
         producing = trusted_run(github, github.request("GET", f"actions/runs/{run_id}/attempts/{old_attempt}"), workflow["id"])
-        target = staged / str(artifact["id"])
+        target = staged / str(artifact_id)
         batch = unpack_archive(body, artifact, producing, target)
         candidate = batch["workers"][0]
         if candidate["selection_digest"] == digest:
