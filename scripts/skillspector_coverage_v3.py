@@ -28,7 +28,10 @@ from scripts.directory_publication import PublicationError, canonical_json, form
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
 
 SCANNER, PROFILE = scanner.SCANNER, contract.PROFILE
-MAX_SOURCES, MAX_PARTITIONS, MAX_ATTEMPTS = 20_000, v2.MAX_PARTITIONS, v2.MAX_ATTEMPTS
+MAX_SOURCES, MAX_PARTITIONS = 20_000, v2.MAX_PARTITIONS
+# Broader manual admission shares the same deadline/output budgets. Keep normal
+# admission unchanged until a real larger run measures its useful throughput.
+MAX_ATTEMPTS, DEFAULT_ATTEMPTS = 512, v2.MAX_ATTEMPTS
 MAX_MANIFEST_BYTES, MAX_STATE_BYTES = 16 << 20, 64 << 20
 MAX_SHARD_BYTES, MAX_SELECTION_BYTES = v2.MAX_SHARD_BYTES, v2.MAX_SELECTION_BYTES
 MAX_DISCOVERY_BYTES, MAX_WORKER_BYTES = v2.MAX_DISCOVERY_BYTES, v2.MAX_WORKER_BYTES
@@ -539,7 +542,7 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
 
 
 def scan_partition(selection, executable, previous, *, source_commit, partition_index=0,
-                   partition_count=MAX_PARTITIONS, maximum_attempts=MAX_ATTEMPTS,
+                    partition_count=MAX_PARTITIONS, maximum_attempts=DEFAULT_ATTEMPTS,
                     budget_seconds=2100, mirror_root=None, discovery_summary=None,
                     checkpoint=None, resume=None, slice_attempts=None):
     validate_selection(selection)
@@ -883,7 +886,7 @@ def main():
     scan.add_argument("--scanner", type=Path, required=True)
     scan.add_argument("--partition-index", type=int, required=True)
     scan.add_argument("--partition-count", type=int, default=MAX_PARTITIONS)
-    scan.add_argument("--maximum-attempts", type=int, default=MAX_ATTEMPTS)
+    scan.add_argument("--maximum-attempts", type=int, default=DEFAULT_ATTEMPTS)
     scan.add_argument("--slice-attempts", type=int)
     scan.add_argument("--budget-seconds", type=int, default=2100)
     scan.add_argument("--mirror-root", type=Path)

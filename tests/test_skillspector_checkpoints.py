@@ -133,6 +133,24 @@ class CheckpointTests(unittest.TestCase):
         self.assertGreaterEqual(result["generated_at"], result["attempts"][0]["attempt"]["last_attempted_at"])
         coverage.validate_worker(result, self.selection, COMMIT)
 
+    def test_larger_manual_admission_does_not_bypass_wallclock_or_v2_limits(self):
+        sources = [item(id=f"fixture/{index}", path=f"skills/skill-{index}") for index in range(513)]
+        selection = {"schema_version": 1, "sources": sources}
+        self.assertEqual(len(coverage.plan_attempts(selection, None, 0, 1, 512)), 512)
+        self.assertEqual(coverage.DEFAULT_ATTEMPTS, 128)
+        self.assertEqual(coverage.v2.MAX_ATTEMPTS, 128)
+        with self.assertRaises(PublicationError):
+            coverage.plan_attempts(selection, None, 0, 1, 513)
+        with mock.patch.object(scanner, "verify_scanner"), \
+             mock.patch.object(coverage, "PinnedRepository") as acquire:
+            result = coverage.scan_partition(selection, Path("/scanner"), None, source_commit=COMMIT,
+                partition_count=1, maximum_attempts=512, budget_seconds=1)
+            self.assertEqual(result["attempts"], [])
+            acquire.assert_not_called()
+            with self.assertRaisesRegex(PublicationError, "invalid scan budget"):
+                coverage.scan_partition(selection, Path("/scanner"), None, source_commit=COMMIT,
+                    partition_count=1, maximum_attempts=512, budget_seconds=2101)
+
 
 if __name__ == "__main__":
     unittest.main()
