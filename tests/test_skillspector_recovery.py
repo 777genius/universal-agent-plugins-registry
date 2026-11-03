@@ -557,8 +557,19 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertFalse((root / 'plan' / 'recovery.json').exists())
             self.assertFalse((root / 'plan' / 'previous' / 'recovery.json').exists())
+            # An acknowledgement must not consume a skipped earlier-attempt
+            # warning; next preparation must still reconcile the original artifact.
+            with mock.patch.object(recovery, 'download_archive', return_value=body) as download:
+                state, _ = recovery.collect(FakeActions(run_metadata(run_attempt=2), artifact),
+                    root / 'ack-staged', {'schema_version': 1, 'runs': []}, token='read-only',
+                    current_run=101, current_attempt_only=True)
+                download.assert_not_called()
+            self.assertEqual(state['runs'][0]['artifacts'], [])
+            self.assertIs(state['runs'][0]['complete'], False)
+            coverage.write_bounded(root / 'plan' / 'previous' / 'recovery.json', state, recovery.MAX_STATE_BYTES)
             with mock.patch.object(recovery, 'download_archive', return_value=body):
-                result = recovery.recover_plan(FakeActions(run_metadata(), artifact), root / 'plan', COMMIT, token='read-only')
+                result = recovery.recover_plan(FakeActions(run_metadata(run_attempt=2), artifact),
+                    root / 'plan', COMMIT, token='read-only')
             recovered = coverage.read_bundle(root / 'plan' / 'previous')['records'][subject['id']]
             self.assertEqual(result['reconciliation']['conflicting_executions'], 1)
             self.assertEqual(recovered['finding_count'], 1)

@@ -377,7 +377,8 @@ def run_artifacts(github, run_id):
     return result
 
 
-def collect(github, directory, state, *, token, current_run=None, current_id=None, fetch_archive=None, now=None):
+def collect(github, directory, state, *, token, current_run=None, current_id=None, fetch_archive=None, now=None,
+            current_attempt_only=False):
     """Advance a persistent created-at anchored cursor despite newer arrivals."""
     now = now or datetime.now(timezone.utc)
     fetch_archive = fetch_archive or download_archive
@@ -419,6 +420,11 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
         for artifact in sorted(artifacts, key=lambda a: a["name"]):
             identifier = integer(artifact.get("id"), "artifact id")
             if identifier in artifact_acks or identifier in quarantine:
+                continue
+            # Assembly only consumed the active attempt. Leave an older checkpoint
+            # unacknowledged if a retry skipped it; normal recovery must revisit it.
+            if current_attempt_only and int(ARTIFACT.fullmatch(artifact["name"])[1] or "1") != run["run_attempt"]:
+                complete = False
                 continue
             size = artifact.get("size_in_bytes")
             if type(size) is int and 0 < size <= MAX_ARCHIVE_BYTES and bytes_read + size > MAX_TOTAL_BYTES:
@@ -702,7 +708,7 @@ def main():
             else:
                 state = read_state(args.plan_dir / STATE_FILE)
                 state, summary = collect(github, args.plan_dir / "acknowledged", state, token=token,
-                    current_run=int(os.environ["GITHUB_RUN_ID"]))
+                    current_run=int(os.environ["GITHUB_RUN_ID"]), current_attempt_only=True)
                 coverage.write_bounded(args.report_dir / STATE_FILE, state, MAX_STATE_BYTES)
         return 0
     except (PublicationError, OSError, ValueError, KeyError, TypeError, RecursionError, zipfile.BadZipFile,

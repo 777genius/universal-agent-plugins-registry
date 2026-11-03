@@ -1067,6 +1067,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     diagnostics["equivalent_executions"] += 1
                 else:
                     quarantine_recovery(records, attempts, item, outcome)
+                    recovered_ids.add(item["id"])
                     if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                         mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                     diagnostics["conflicting_executions"] += 1
