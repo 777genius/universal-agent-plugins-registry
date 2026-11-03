@@ -143,6 +143,42 @@ def verify(scanner: Path, *, baseline: bool) -> None:
                 raise AssertionError("CLI incorrectly marked complete or mutated source")
             print("Verified pinned scanner CLI remains Partial for real missing reference")
 
+        # Independent positive end-to-end proof: with only VERSION metadata and
+        # no missing files, the actual patched CLI must complete inspection.
+        # A resolver-only green check is not evidence of a fully checked Skill.
+        with tempfile.TemporaryDirectory(prefix="skillspector-version-complete-") as home:
+            root = Path(home) / "source"
+            root.mkdir()
+            source = root / "SKILL.md"
+            source.write_text(
+                "---\\nname: version-only\\ndescription: Verify standalone metadata.\\n---\\n"
+                '"VERSION": "1.0.0",\\n',
+                encoding="utf-8",
+            )
+            before = source.read_bytes()
+            result = subprocess.run(
+                [str(scanner / ".venv/bin/skillspector"), "scan", str(root),
+                 "--no-llm", "--format", "json", "--fail-on-incomplete"],
+                cwd=home,
+                env={"PATH": os.defpath, "HOME": home, "LANG": "C.UTF-8",
+                     "PYTHONNOUSERSITE": "1", "LANGCHAIN_TRACING_V2": "false",
+                     "LANGSMITH_TRACING": "false", "SKILLSPECTOR_OSV_TIMEOUT": "3",
+                     "SKILLSPECTOR_MAX_WORKFLOW_SECONDS": "55"},
+                capture_output=True, timeout=110, check=False,
+            )
+            if result.returncode != 0 or not result.stdout:
+                raise AssertionError(("VERSION-only Skill not fully inspected",
+                                      result.returncode, result.stderr.decode(errors="replace")[-900:]))
+            report = json.loads(result.stdout)
+            coverage = report["analysis_completeness"]
+            if not coverage["is_complete"] or coverage["status"] != "complete":
+                raise AssertionError(("VERSION-only scan remained incomplete", coverage))
+            if any("1.0.0" in ref["evidence"] for ref in coverage["references"]):
+                raise AssertionError(("False VERSION reference survived CLI scan", coverage["references"]))
+            if source.read_bytes() != before:
+                raise AssertionError("Scanner changed the input Skill")
+            print("Verified pinned scanner CLI fully inspects VERSION-only Skill")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
