@@ -205,7 +205,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text('{}')
                 process = subprocess.run(
-                    ['bash', '-eu', '-c', setup + '\\nprintf "%s\\n" "${workers[@]}"'],
+                    ['bash', '-eu', '-c', setup + '\nprintf "%s\\n" "${workers[@]}"'],
                     env={'RUNNER_TEMP': temporary}, capture_output=True, text=True,
                 )
                 if not paths:
