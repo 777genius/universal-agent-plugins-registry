@@ -386,6 +386,13 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
     order = contract.RETRY_POLICY["queue_lanes"]
     cursor = (previous or {}).get("queue_cursor", 0)
     quotas = lane_quotas(lanes, order, cursor, maximum_attempts)
+    # Changed source/profile evidence is honestly displayed as Outdated until
+    # rescanned. When both queues are deep, use half of the new-only allowance
+    # for that existing backlog. Due retries keep their original quota, and
+    # new Skills still receive bounded, nonzero admission on every pass.
+    refresh = min(quotas["new"] // 2, len(lanes["changed"]) - quotas["changed"])
+    quotas["new"] -= refresh
+    quotas["changed"] += refresh
     queues = {key: fair_lane(values, previous, quotas[key]) for key, values in lanes.items()}
     # The chosen per-lane prefix already contains coherent plugin groups.
     # Interleave execution across lanes, rather than letting a 15-Skill group

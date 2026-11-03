@@ -299,6 +299,34 @@ class QueueTests(unittest.TestCase):
             planned = coverage.plan_attempts({"schema_version": 1, "sources": sources}, prior, 0, 1, 3)
             self.assertEqual({subject["id"] for subject in planned}, {"fixture/new0", "fixture/retry", "fixture/changed"})
 
+    def test_outdated_backlog_is_prioritized_without_starving_new_or_due_retries(self):
+        # The last immutable census has many more older reports than never-
+        # checked roots. Scheduling-only priority must not change scan policy.
+        old = [item(id=f"fixture/old{n}", path=f"skills/old{n}") for n in range(30)]
+        retry = item(id="fixture/retry-priority", path="skills/retry-priority")
+        current = item(id="fixture/current", path="skills/current")
+        original = {"schema_version": 1, "sources": [*old, retry, current]}
+        with tempfile.TemporaryDirectory() as directory:
+            prior = bundle(Path(directory), original,
+                [*(record(source) for source in old),
+                 record(retry, "partial", "runtime_limit"), record(current)])
+            changed = copy.deepcopy(old)
+            for source in changed:
+                source["revision"] = "d" * 40
+            fresh = [item(id=f"fixture/fresh{n}", path=f"skills/fresh{n}") for n in range(30)]
+            selected = {"schema_version": 1, "sources": [*fresh, *changed, retry, current]}
+            planned = coverage.plan_attempts(selected, prior, 0, 1, 21)
+            planned_ids = [source["id"] for source in planned]
+            new_count = len(set(planned_ids) & {source["id"] for source in fresh})
+            changed_count = len(set(planned_ids) & {source["id"] for source in changed})
+            self.assertEqual(len(planned_ids), 21)
+            self.assertEqual(len(set(planned_ids)), 21)
+            self.assertIn(retry["id"], planned_ids)
+            self.assertNotIn(current["id"], planned_ids)
+            self.assertGreaterEqual(new_count, 1)
+            self.assertGreaterEqual(changed_count, 2 * new_count)
+            self.assertEqual(planned, coverage.plan_attempts(selected, prior, 0, 1, 21))
+
     def test_large_repository_does_not_hide_a_small_plugin_in_the_same_partition(self):
         bulk = [item(id=f"bulk/skill{n}", repository="fixture/bulk", path=f"skills/skill{n}") for n in range(40)]
         plugin = item(id="plugin:fixture/marketing/campaign", repository="fixture/bulk", kind="plugin_skill",
