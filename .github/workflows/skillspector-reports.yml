@@ -371,13 +371,25 @@ jobs:
           if [ -f "${RUNNER_TEMP}/skillspector-plan/previous-recovered/index.json" ]; then
             previous="${RUNNER_TEMP}/skillspector-plan/previous-recovered"
           fi
+          # The artifact download action can flatten a single match into the root;
+          # multiple matches retain per-artifact directories. Accept both layouts.
+          shopt -s nullglob
+          workers=( "${RUNNER_TEMP}"/skillspector-workers/skillspector-checkpoint-*/worker.json )
+          if [ -f "${RUNNER_TEMP}/skillspector-workers/worker.json" ]; then
+            workers+=( "${RUNNER_TEMP}/skillspector-workers/worker.json" )
+          fi
+          if [ "${#workers[@]}" -eq 0 ]; then
+            echo "::error::No SkillSpector checkpoint worker was downloaded" >&2
+            exit 1
+          fi
+
           python3 -m scripts.skillspector_coverage_v3 merge \
             --selection "${RUNNER_TEMP}/skillspector-plan/selection.json" \
             --discovery-summary "${RUNNER_TEMP}/skillspector-plan/coverage.json" \
             --previous-dir "${previous}" \
             --source-commit "${SOURCE_COMMIT}" \
             --expected-partition-count "${{ needs.prepare.outputs.partition_count }}" --allow-partial-workers \
-            --workers "${RUNNER_TEMP}"/skillspector-workers/skillspector-checkpoint-*/worker.json \
+            --workers "${workers[@]}" \
             --output-dir "${RUNNER_TEMP}/skillspector-report"
           if [ -f "${previous}/publication-base.json" ]; then
             cp "${previous}/publication-base.json" "${RUNNER_TEMP}/skillspector-report/publication-base.json"
