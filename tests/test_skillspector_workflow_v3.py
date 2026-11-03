@@ -231,7 +231,12 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         publish = self.workflow['jobs']['publish']
         self.assertIn("github.ref == 'refs/heads/main'", publish['if'])
         self.assertIn("needs.prepare.outputs.corpus != 'controlled'", publish['if'])
-        self.assertEqual(recovery.execution_config('schedule')['maximum_attempts'], '128')
+        # Faster backlog admission changes neither worker time budgets nor scanner policy.
+        self.assertEqual(self.workflow['on']['schedule'], [{'cron': '19 */2 * * *'}])
+        self.assertEqual(self.workflow['on']['workflow_dispatch']['inputs']['maximum_attempts']['default'], '256')
+        for event in ('push', 'schedule', 'workflow_dispatch'):
+            self.assertEqual(recovery.execution_config(event)['maximum_attempts'], '256')
+            self.assertEqual(recovery.execution_config(event)['scan_budget_seconds'], '2100')
         self.assertEqual(recovery.execution_config('workflow_dispatch', maximum_attempts='512')['scan_budget_seconds'], '2100')
         self.assertEqual(self.workflow['concurrency']['group'],
             "skillspector-static-reports-${{ github.event_name == 'pull_request' && github.sha || github.ref }}")
