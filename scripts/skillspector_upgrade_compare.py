@@ -185,6 +185,21 @@ def main() -> None:
                 raise AssertionError(("Scanner mutated out-of-root target", name))
             results[name] = reports
 
+    # Preserve measured results before fail-closed safety assertions, so a
+    # real false Complete produces an inspectable CI artifact, not a lost test.
+    evidence = {
+        "format": "uap.skillspector.release-comparison.v1",
+        "input_sha256": fingerprints,
+        "immutable_real_skill_blob": oid,
+        "scanner_versions": versions,
+        "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
+        "results": results,
+        "production_policy_changed": False,
+    }
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(evidence, indent=2, sort_keys=True))
+
     for name, reports in results.items():
         complete = reports["complete_control"]
         missing = reports["true_missing_executable"]
@@ -201,18 +216,7 @@ def main() -> None:
             if record["is_complete"] or record["status"] == "complete":
                 raise AssertionError(("False Complete for uninspectable input", name, fixture, record))
 
-    evidence = {
-        "format": "uap.skillspector.release-comparison.v1",
-        "input_sha256": fingerprints,
-        "immutable_real_skill_blob": oid,
-        "scanner_versions": versions,
-        "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
-        "results": results,
-        "production_policy_changed": False,
-    }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps(evidence, indent=2, sort_keys=True))
+
 
 
 if __name__ == "__main__":
