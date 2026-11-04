@@ -1,33 +1,69 @@
-# SkillSpector v2.13.3 migration: bounded, evidence-first canary
+# SkillSpector fork v2.13.3: pinned, fail-closed upgrade canary
 
-## Baseline (immutable evidence)
+## Baseline and discovered regression
 
-- Current Registry scanner: NVIDIA/SkillSpector **v2.13.1** at `f3b25697d76256998ca9d42c198d256258d4c035`, with the pinned directory-reference maintenance patch.
-- Upgrade candidate: upstream release **v2.13.3** at `38a1dfe93325d2f8bfcd4f8d0241eed706334915` (released 2026-11-02).
-- Published Registry report commit `c0ef077c3f4abc0df39054d6c3a1f7265cf5476c`, source `6212d52ece6bcfefebb35c1420dbe694b087e9f3`.
-- Validated all **2,035** actual manifest-listed shards (SHA-256, byte length and record count); **17,743** unique records. Current: **5,813 Complete / 11,574 Partial / 48 Error**; 391 selected Pending (308 stale).
-- **10,881** current Partial records include `reference_missing`; **8,006** have that code as their only reported reason. **3,444** current Partial include `analyzer_incomplete`, **2,719** `static_parse_limit`; reason counts overlap.
-- The new upstream releases improve some false shell/static-parser limits, but do **not** claim to solve genuine missing files, runtime-generated dependencies, opaque content or arbitrary skill execution.
+- Registry production uses NVIDIA/SkillSpector **2.13.1** commit
+  `f3b25697d76256998ca9d42c198d256258d4c035`, plus its existing
+  `uap-directory-inventory-v1` maintenance patch.
+- The unmodified upstream **2.13.3**
+  (`38a1dfe93325d2f8bfcd4f8d0241eed706334915`) does **not** fix
+  JSON `VERSION` reference extraction or external-path completeness.
+- Hosted original comparison run
+  [41918916064](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/41918916064)
+  proved both original versions falsely reported `Complete` for the
+  explicit `[outside script](../outside-runner.sh)` reference while preserving
+  missing-executable and symlink/directory incompleteness. The result remains a
+  regression; never classify that old success as accepted security coverage.
+- Current **candidate** is an immutable user-owned fork SHA
+  `777genius/SkillSpector@2f98691b5011ead927446bde157caec99270c0b5`,
+  stacked on upstream v2.13.3. The fork adds narrow JSON `VERSION`
+  extraction correction and conservative `referenced_uninspected` ledger
+  accounting for out-of-bundle Markdown parent traversal, preserving rejected
+  status and no outside-file reads. Candidate is NOT yet production qualified.
 
-## Strict scope of this PR
+## Published evidence, not promises
 
-A read-only, no-LLM hosted CI comparison at two immutable upstream SHAs, using identical inputs, fixed process/static analyzer budgets, and true fail-on-incomplete behavior. Test control (no references), a true missing executable (must remain Partial), a JSON VERSION literal, a typed data-field table, and the immutable real asc-workflow Skill at `rorkai/app-store-connect-cli-skills@7de1ef7cc831f62d205dfa589063f3831f66391b` (verified SKILL.md Git blob `121e813665d7fe7512e4a59ad0c341b92d8d124c`). Retain JSON evidence only, no raw untrusted source or secrets.
+Published Registry snapshot at `c0ef077c3f4abc0df39054d6c3a1f7265cf5476c`
+contained **2,035 SHA-256-verified shards**, **17,743** distinct records,
+**5,813 Complete, 11,574 Partial, 48 Error**, and 391 selected Pending.
+The 10,881 `reference_missing` Partial cohort includes many real references;
+one diagnostic found only 11 strict VERSION rows in nine records. No candidate
+upgrade has yet improved the published count.
 
-**This PR MUST NOT change production scanner SHA, report profiles, selection, scheduling, retry policy, statuses or signed publications.** Both upstream checkouts receive the same conservative pinned directory-reference maintenance logic, with separate immutable commit/blob/anchor verification for v2.13.3. Upstream 2.13.3 references.py is byte-identical to 2.13.1; build_context.py differs only by .mjs/.cjs extension recognition. This is still a diagnostic, not a production rollout or full scanner-equivalence proof.
+## Read-only acceptance
 
-## Implementation/review risks
+1. Immutable real `asc-workflow` Git source at
+   `7de1ef7cc831f62d205dfa589063f3831f66391b`, SHA1 blob
+   `121e813665d7fe7512e4a59ad0c341b92d8d124c`; both scans
+   use the **same exact unchanged inputs**, no LLM and strict incompleteness.
+2. Verify source tree/path/symlink SHA-256 fingerprints before/after each scan;
+   verify both scanner release strings and fork checkout immutable commit/module
+   blobs. Apply precisely the same vetted conservative directory-inventory
+   compatibility patch to both scanner checkouts.
+3. Reproduce production false Complete on traversal as negative baseline,
+   and require the **fork** to return `Partial` with
+   `referenced_uninspected`. Both must keep an actually missing executable,
+   uninspected directory, external symlink and opaque input Partial.
+4. Reproduce false `VERSION` reference in the old release; require the
+   fork to return real `Complete` when that is the only issue.
+5. Publish machine-readable comparison JSON even when a safety gate fails.
+   Fail hosted CI when any fork regression is observed; do not weaken tests
+   to make old raw 2.13.3 pass.
 
-1. **Correctness (critical):** Do not call any input Complete merely because an upstream parser no longer emits `reference_missing`. Verify inspected inventory, real missing executable, symlinks, traversal, directory references and opaque inputs independently on pinned real Git sources.
-2. **Safety (critical):** Scanner is static/no-LLM and never executes Skill code; check that the new release retains safe acquisition, analysis limits and no credential leakage. No suppression baselines or bypassed certificate checks.
-3. **Compatibility (high):** v2.13.3 scanner and raw findings may differ. Existing v3 consumer and Registry validation have two specific current profiles and explicit scanner identity. A production change requires versioned policy + compatibility design, not silently blessing old records or globally reclassifying them.
-4. **Throughput (high):** Changing profile globally may make 17k current records Outdated. Measure a bounded source cohort first, and avoid resetting historical evidence or retry state; preserve CAS and durable checkpoints.
+## Release/rollout gates — not part of this diagnostic PR
 
-## Next gates before any production upgrade
+- Complete exact-head hosted CLI comparison, inspect artifact and independently
+  review scanner+Registry+UAP findings in two critical review rounds.
+- Prove producer and consumer schema compatibility, including rejected PARTIAL
+  reference records and `referenced_uninspected`, without equating fully
+  examined content with installation safety.
+- Introduce versioned scanner/profile identity and bounded cohort rollout.
+  Preserve immutable old shards, retry history, proper current/stale status
+  and publication compare-and-swap. Never mass relabel already scanned records.
+- Only after a safe production boundary run real 8/8 scan/assemble/publish,
+  validate immutable hashes and signed references, then consumer Chromium/API
+  E2E. No cancellation or duplicate expensive full scans.
 
-1. Successful exact-head hosted canary with machine-readable before/after evidence; analyze *reasons and findings*, not merely total Complete.
-2. Two independent critical review rounds (correctness/false-complete; security/CAS/compatibility), fix findings and retest exact HEAD.
-3. Controlled real-Git acquisition E2E with both scanners, necessary production maintenance patch compatibility, transitive/reference/opaque adversarial cases and immutable source SHA verification.
-4. Version the new scanner/profile identity; coordinate Registry schema, per-source reuse semantics and UAP consumer.
-5. Measured cohort rollout and real 8/8 -> assemble -> publish -> immutable shard integrity read-back -> Chromium/API E2E. No mass status suppression.
-
-**Goal:** increase genuinely complete scans without faking status; full Complete for every third-party Skill is not a valid claim when the author ships missing/unscannable inputs.
+**Non-goals:** blanket suppression of missing references; executing untrusted
+skill scripts; falsely marking all 17k third-party Skills Complete;
+unrelated UAP installation or signed-directory policy changes.
