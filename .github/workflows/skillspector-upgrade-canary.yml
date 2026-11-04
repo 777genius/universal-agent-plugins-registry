@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "scripts/skillspector_upgrade_compare.py"
+      - "scripts/patch_skillspector_directory_references.py"
       - "scripts/patch_skillspector_directory_refs_2133_canary.py"
       - ".github/workflows/skillspector-upgrade-canary.yml"
 

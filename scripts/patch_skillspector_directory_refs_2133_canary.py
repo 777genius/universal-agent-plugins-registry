@@ -63,7 +63,8 @@ def apply(scanner: Path) -> None:
     replacements: dict[Path, str] = {}
     for path, (before, after) in PATCHES.items():
         target = scanner / path
-        if target.is_symlink() or target.parent.is_symlink() or not target.is_file():
+        if (target.is_symlink() or target.parent.is_symlink()
+                or not target.resolve().is_relative_to(scanner) or not target.is_file()):
             raise RuntimeError(f"Missing or symlinked scanner module: {path}")
         if git("rev-parse", f"HEAD:{path}") != EXPECTED_BLOBS[path]:
             raise RuntimeError(f"Unexpected immutable source blob: {path}")

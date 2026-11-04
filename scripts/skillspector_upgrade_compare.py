@@ -187,34 +187,36 @@ def main() -> None:
         fingerprints = {name: input_fingerprint(inputs / name) for name in FIXTURES}
         fingerprints["real_asc_workflow"] = input_fingerprint(source.parent)
         outside_fingerprint = hashlib.sha256((inputs / "outside-runner.sh").read_bytes()).hexdigest()
-        for name, scanner in scanners.items():
-            reports = {}
-            for fixture in FIXTURES:
-                root = inputs / fixture
-                reports[fixture] = scan(scanner, root)
-                if input_fingerprint(root) != fingerprints[fixture]:
-                    raise AssertionError(("Scanner mutated its fixture", name, fixture))
-            reports["real_asc_workflow"] = scan(scanner, source.parent)
-            if input_fingerprint(source.parent) != fingerprints["real_asc_workflow"]:
-                raise AssertionError(("Scanner mutated pinned real skill", name))
-            if hashlib.sha256((inputs / "outside-runner.sh").read_bytes()).hexdigest() != outside_fingerprint:
-                raise AssertionError(("Scanner mutated out-of-root target", name))
-            results[name] = reports
+        try:
+            for name, scanner in scanners.items():
+                reports = {}
+                results[name] = reports
+                for fixture in FIXTURES:
+                    root = inputs / fixture
+                    reports[fixture] = scan(scanner, root)
+                    if input_fingerprint(root) != fingerprints[fixture]:
+                        raise AssertionError(("Scanner mutated its fixture", name, fixture))
+                reports["real_asc_workflow"] = scan(scanner, source.parent)
+                if input_fingerprint(source.parent) != fingerprints["real_asc_workflow"]:
+                    raise AssertionError(("Scanner mutated pinned real skill", name))
+                if hashlib.sha256((inputs / "outside-runner.sh").read_bytes()).hexdigest() != outside_fingerprint:
+                    raise AssertionError(("Scanner mutated out-of-root target", name))
+    
+        finally:
+            # Retain all completed CLI measurements when a later scan fails or times out.
+            evidence = {
+                "format": "uap.skillspector.release-comparison.v1",
+                "input_sha256": fingerprints,
+                "immutable_real_skill_blob": oid,
+                "scanner_versions": versions,
+                "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
+                "results": results,
+                "production_policy_changed": False,
+                "candidate_fork_sha": "e4f2c91fcde6efb9375d0dbc51afb3caf831dd0a",
+            }
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    # Preserve measured results before fail-closed safety assertions, so a
-    # real false Complete produces an inspectable CI artifact, not a lost test.
-    evidence = {
-        "format": "uap.skillspector.release-comparison.v1",
-        "input_sha256": fingerprints,
-        "immutable_real_skill_blob": oid,
-        "scanner_versions": versions,
-        "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
-        "results": results,
-        "production_policy_changed": False,
-        "candidate_fork_sha": "e4f2c91fcde6efb9375d0dbc51afb3caf831dd0a",
-    }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(evidence, indent=2, sort_keys=True))
 
     for name, reports in results.items():
@@ -230,8 +232,16 @@ def main() -> None:
     for name, reports in results.items():
         for fixture in ("directory_uninspected", "symlink_outside_root", "opaque_binary"):
             record = reports[fixture]
-            if record["is_complete"] or record["status"] == "complete":
-                raise AssertionError(("False Complete for uninspectable input", name, fixture, record))
+            if (record["status"] != "partial" or record["is_complete"]
+                    or record["exit_code"] != 1):
+                raise AssertionError(("Uninspectable input must stay Partial", name, fixture, record))
+
+    for name, reports in results.items():
+        record = reports["real_asc_workflow"]
+        if (record["status"] != "partial" or record["is_complete"]
+                or record["exit_code"] != 1
+                or "reference_missing" not in record["reason_counts"]):
+            raise AssertionError(("Pinned real skill lost incomplete-reference evidence", name, record))
 
     # A proven pre-existing false Complete is recorded as a baseline regression,
     # never accepted in the fork candidate. Do not weaken either side's real
@@ -263,6 +273,11 @@ def main() -> None:
             or record["rejected_partial_count"] < 1
         ):
             raise AssertionError(("Fork calls escaping dependency Complete", fixture, record))
+
+    # Do not introduce additional false missing paths from typed data documentation.
+    if (results["new"]["typed_data_field"]["missing_reference_count"] >
+            results["old"]["typed_data_field"]["missing_reference_count"]):
+        raise AssertionError(("Typed data field reference regression", results["new"]["typed_data_field"]))
 
     old_version = results["old"]["json_version_literal"]
     new_version = results["new"]["json_version_literal"]
