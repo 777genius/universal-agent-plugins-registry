@@ -319,6 +319,13 @@ def reference_evidence(record: dict, completeness: dict, root: Path, *, reason_k
                         "A linked directory has acquired files, but directory-wide contents and behavior were not fully inspected.",
                         path=value["source_path"], seen=reason_keys)
                     coverage["status"] = "partial"
+                elif value["status"] == "rejected" and value["disposition"] == "partial":
+                    # A local dependency outside the acquired bundle cannot be
+                    # treated as inspected, even if an upstream report omits its ledger event.
+                    add_coverage_reason(record, "referenced_uninspected",
+                        "A rejected local reference was not inspected within the selected bundle.",
+                        path=value["source_path"], seen=reason_keys)
+                    coverage["status"] = "partial"
                 elif value["status"] == "resolved" and value["disposition"] != "analyzed":
                     add_coverage_reason(record, "referenced_uninspected", "A referenced artifact was not completely inspected.",
                         path=value["source_path"], seen=reason_keys)
