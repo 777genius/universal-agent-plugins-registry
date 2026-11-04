@@ -28,8 +28,8 @@ jobs:
           path: scanner-old
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: NVIDIA/SkillSpector
-          ref: 38a1dfe93325d2f8bfcd4f8d0241eed706334915 # v2.13.3, canary only
+          repository: 777genius/SkillSpector
+          ref: 2f98691b5011ead927446bde157caec99270c0b5 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
           persist-credentials: false
           path: scanner-new
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,7 +49,7 @@ jobs:
           uv sync --directory scanner-new --frozen --no-dev --python 3.12
       - name: Match the exact production v2.13.1 reference maintenance patch
         run: python3 source/scripts/patch_skillspector_directory_references.py scanner-old --verify
-      - name: Preserve equivalent directory-reference coverage on v2.13.3
+      - name: Preserve equivalent directory-reference coverage on pinned fork
         run: python3 source/scripts/patch_skillspector_directory_refs_2133_canary.py scanner-new
       - name: Compare bounded real CLI coverage and retain true missing executable
         timeout-minutes: 12
