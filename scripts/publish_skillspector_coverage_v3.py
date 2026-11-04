@@ -64,10 +64,16 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
             with urllib.request.urlopen(request, timeout=30) as response:
                 body = response.read(maximum + 1)
         except urllib.error.HTTPError as error:
-            if error.code == 404 and optional:
+            code = error.code
+            # HTTPError may own a live response stream, even on optional 404.
+            try:
+                error.close()
+            except (OSError, http.client.HTTPException):
+                pass
+            if code == 404 and optional:
                 return None
-            if error.code not in {429, 500, 502, 503, 504} or attempt == 2:
-                raise PublicationError(f"Public coverage read failed (HTTP {error.code})") from None
+            if code not in {429, 500, 502, 503, 504} or attempt == 2:
+                raise PublicationError(f"Public coverage read failed (HTTP {code})") from None
         except (OSError, urllib.error.URLError, http.client.IncompleteRead) as error:
             if attempt == 2 or not GitHub._transient(error):
                 raise PublicationError("Public coverage read failed (transport)") from None
