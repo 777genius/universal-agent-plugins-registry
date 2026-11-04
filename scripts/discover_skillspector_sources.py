@@ -841,11 +841,12 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         # Revisit only v2 entries blocked by two-candidate ambiguity; on the
         # next run their v3 digest is stable, even if the trees differ.
         legacy_hints = listing_hints_digest(grouped[repo], resolver_version=2)
-        ambiguous_pair = any(
+        diagnostics = prior.get("diagnostics")
+        ambiguous_pair = isinstance(diagnostics, list) and any(
             isinstance(issue, dict) and issue.get("code") == "ambiguous_name" and
             (issue.get("count") == 2 or
              isinstance(issue.get("candidates"), list) and len(issue["candidates"]) == 2)
-            for issue in prior.get("diagnostics", []) if isinstance(prior.get("diagnostics"), list)
+            for issue in diagnostics
         )
         if prior.get("hints_digest") == legacy_hints and not ambiguous_pair:
             hints = legacy_hints
