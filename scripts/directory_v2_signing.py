@@ -42,6 +42,8 @@ def validate_v2_product_ownership(snapshot: dict[str, Any]) -> None:
             owner = selectors.setdefault(name, product_id)
             require(owner == product_id,
                     f"v2 selector {name!r} belongs to both {owner} and {product_id}")
+        require(product["default_distribution"] in product["distributions"],
+                "v2 default distribution is not owned by product")
         for distribution_id in product["distributions"]:
             target = distributions.get(distribution_id)
             require(target is not None and target["product_id"] == product_id,

@@ -78,6 +78,14 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "v2 selector"):
             sign_snapshot_v2(second, "test-current", self.private)
 
+    def test_v2_default_distribution_must_belong_to_selected_product(self):
+        candidate = copy.deepcopy(self.snapshot)
+        # A syntactically valid selector outside the owner's distribution set
+        # must not be signed as an installable default.
+        candidate["products"][0]["default_distribution"] = "foreign/distribution"
+        with self.assertRaisesRegex(PublicationError, "v2 default distribution"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
     def test_project_runtime_proof_must_match_exact_canonical_closure(self):
         candidate = copy.deepcopy(self.snapshot)
         policy = candidate["distributions"][0]["release_policies"][0]
