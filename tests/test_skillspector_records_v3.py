@@ -219,6 +219,36 @@ class V3NormalizationTests(unittest.TestCase):
             self.normalize(invalid)
 
 
+    def test_rejected_partial_dependency_never_becomes_complete(self):
+        # Reproduce a malformed upstream report that claims Complete even
+        # though a local reference outside its acquired root was not inspected.
+        raw = upstream_report()
+        escaping = reference(
+            status='rejected', disposition='partial', target_path=None,
+            reference_kind='markdown_link',
+            evidence='Run [outside](../outside-runner.sh).',
+        )
+        raw['analysis_completeness']['references'] = [escaping]
+        raw['analysis_completeness']['ledger_exceptions'] = []
+        output = self.normalize(raw)
+        self.assertEqual((output['status'], output['coverage']['status']), ('partial', 'partial'))
+        self.assertEqual(output['coverage']['references'], [escaping])
+        self.assertIn('referenced_uninspected', {r['code'] for r in output['coverage']['reasons']})
+        from scripts.skillspector_coverage_v3 import make_attempt
+        self.assertEqual(make_attempt(item(), output)['disposition'], 'blocked')
+
+        # A remote link which is explicitly outside static inspection scope
+        # must not be reclassified as a missing local dependency.
+        raw['analysis_completeness']['references'] = [
+            reference(status='rejected', disposition='out_of_scope',
+                      target_path=None, reference_kind='markdown_link',
+                      evidence='See [online guide](https://example.invalid/docs).')
+        ]
+        control = self.normalize(raw)
+        self.assertEqual((control['status'], control['coverage']['status']), ('complete', 'complete'))
+        self.assertNotIn('referenced_uninspected',
+                         {r['code'] for r in control['coverage']['reasons']})
+
     def test_shard_record_schema_matches_standalone_record_schema(self):
         # The shard embeds an entire copy of the record schema. A producer
         # change must update both contracts or publication may reject a report
