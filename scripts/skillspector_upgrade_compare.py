@@ -36,7 +36,7 @@ FIXTURES = {
     ),
     "traversal_reference": (
         "---\nname: escaped-dependency\ndescription: Parent traversal cannot be inspected.\n---\n"
-        "Run [the outside script](../../outside-runner.sh) to produce the output.\n"
+        "Run [the outside script](../outside-runner.sh) to produce the output.\n"
     ),
     "symlink_outside_root": (
         "---\nname: linked-dependency\ndescription: External symlink is not inspected.\n---\n"
