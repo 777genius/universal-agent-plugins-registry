@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "scripts/skillspector_upgrade_compare.py"
+      - "scripts/patch_skillspector_directory_refs_2133_canary.py"
       - ".github/workflows/skillspector-upgrade-canary.yml"
 
 permissions:
@@ -48,6 +49,8 @@ jobs:
           uv sync --directory scanner-new --frozen --no-dev --python 3.12
       - name: Match the exact production v2.13.1 reference maintenance patch
         run: python3 source/scripts/patch_skillspector_directory_references.py scanner-old --verify
+      - name: Preserve equivalent directory-reference coverage on v2.13.3
+        run: python3 source/scripts/patch_skillspector_directory_refs_2133_canary.py scanner-new
       - name: Compare bounded real CLI coverage and retain true missing executable
         timeout-minutes: 12
         run: |
