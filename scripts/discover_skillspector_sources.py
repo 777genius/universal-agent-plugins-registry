@@ -731,11 +731,9 @@ def resolve_plugin_inventory(plugins, previous, previous_summary, api, budget, w
     return [outcomes[index] for index in range(len(plugins))], [list(key) for key in order]
 
 
-def listing_hints_digest(listings):
-    # A resolver upgrade must re-evaluate old missing/ambiguous mappings even
-    # when the catalog and revision did not change. This also prevents old
-    # cached diagnostics without candidate paths from surviving indefinitely.
-    return sha256_digest(canonical_json({"resolver_version": RESOLVER_VERSION,
+def listing_hints_digest(listings, *, resolver_version=RESOLVER_VERSION):
+    # The version binds the exact rules used to resolve one immutable listing.
+    return sha256_digest(canonical_json({"resolver_version": resolver_version,
         "listings": sorted(listings, key=lambda source: (source["skillId"], source["name"]))}))
 
 
@@ -839,6 +837,18 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         prior = cache.get(repo, {})
         if not isinstance(prior, dict):
             prior = {}
+        # Preserve still-valid v2 cache entries for resolved/unrelated names.
+        # Revisit only v2 entries blocked by two-candidate ambiguity; on the
+        # next run their v3 digest is stable, even if the trees differ.
+        legacy_hints = listing_hints_digest(grouped[repo], resolver_version=2)
+        ambiguous_pair = any(
+            isinstance(issue, dict) and issue.get("code") == "ambiguous_name" and
+            (issue.get("count") == 2 or
+             isinstance(issue.get("candidates"), list) and len(issue["candidates"]) == 2)
+            for issue in prior.get("diagnostics", []) if isinstance(prior.get("diagnostics"), list)
+        )
+        if prior.get("hints_digest") == legacy_hints and not ambiguous_pair:
+            hints = legacy_hints
         prior_sources = previous_by_id
         ids = prior.get("selected_ids")
         if prior.get("revision") == revision and prior.get("hints_digest") == hints and isinstance(ids, list) and \
