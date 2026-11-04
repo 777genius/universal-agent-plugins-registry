@@ -55,9 +55,12 @@ def prepare_v2_user_bootstrap(
     projected["source_commit"] = source_commit
     projected["generated_at"] = format_timestamp(current)
     projected["expires_at"] = format_timestamp(current + timedelta(days=30))
-    projected["distributions"] = [
-        legacy_user_v2_distribution(item, installer_version)
-        for item in source["distributions"]
-    ]
+    try:
+        projected["distributions"] = [
+            legacy_user_v2_distribution(item, installer_version)
+            for item in source["distributions"]
+        ]
+    except ValueError as error:
+        raise PublicationError("signed v2 bootstrap grant is invalid: " + str(error)) from error
     validate_snapshot_v2(projected)
     return projected
