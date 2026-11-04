@@ -29,7 +29,7 @@ on:
       - "docs/skillspector/controlled-sources-*.json"
       - ".github/workflows/skillspector-reports.yml"
   schedule:
-    - cron: "19 * * * *"
+    - cron: "19 */3 * * *"
   workflow_dispatch:
     inputs:
       discovery_pages:
