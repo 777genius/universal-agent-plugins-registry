@@ -892,7 +892,8 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                 if sources is not None:
                     resolved[repo] = sources
                     resolution_cache[repo] = entry
-            except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+            except (DiscoveryError, BridgeError, PublicationError, CheckpointYield, OSError,
+                    ValueError, UnicodeError, subprocess.SubprocessError):
                 diagnostics.append({"code": "repository_acquisition_failed", "repository": repo})
 
     candidates = []

@@ -498,6 +498,19 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(state["selected_ids"], [previous[0]["id"]])
         validate_discovery_summary(summary, selection, "b" * 40)
 
+    def test_git_tree_read_limit_is_isolated_and_not_cached_as_ambiguity(self):
+        previous = [item(id="owner/repo/demo")]
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository"), \
+             mock.patch.object(discovery, "resolve_listings",
+                               side_effect=PublicationError("repository tree exceeds limit")):
+            selection, summary = self.run_discovery([listing()], previous=previous)
+        self.assertEqual(selection["sources"], previous)
+        self.assertEqual(summary["diagnostic_counts"]["repository_acquisition_failed"], 1)
+        self.assertNotIn("owner/repo", summary["resolution_cache"])
+        self.assertEqual(summary["source_states"][0]["state"], "historical")
+        self.assertFalse(summary["source_states"][0]["current"])
+
     def test_cache_requires_both_exact_pin_and_candidate_digest(self):
         row = item(id="owner/repo/demo")
         hint_digest = discovery.listing_hints_digest([listing()])
