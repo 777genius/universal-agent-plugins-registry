@@ -103,6 +103,18 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
             sign_snapshot_v2(candidate, "test-current", self.private)
 
+    def test_v2_expiry_contract_matches_go_reader_thirty_days(self):
+        modified = copy.deepcopy(self.snapshot)
+        from datetime import datetime, timedelta, timezone
+        generated = datetime.fromisoformat(modified["generated_at"].replace("Z", "+00:00"))
+        modified["expires_at"] = (generated + timedelta(days=31)).astimezone(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.assertRaisesRegex(PublicationError, "snapshot lifetime"):
+            sign_snapshot_v2(modified, "test-current", self.private)
+        modified["expires_at"] = (generated + timedelta(days=30)).astimezone(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sign_snapshot_v2(modified, "test-current", self.private)
+
     def test_v2_project_grant_cannot_borrow_user_runtime_proof(self):
         modified = copy.deepcopy(self.snapshot)
         grant = modified["distributions"][0]["release_policies"][0]["targets"][0]

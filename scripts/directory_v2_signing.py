@@ -53,7 +53,7 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
     validate_with_schema(snapshot, SNAPSHOT_SCHEMA)
     generated = parse_timestamp(snapshot["generated_at"], "generated_at")
     expires = parse_timestamp(snapshot["expires_at"], "expires_at")
-    require(generated < expires <= generated + timedelta(days=31), "invalid v2 snapshot lifetime")
+    require(generated < expires <= generated + timedelta(days=30), "invalid v2 snapshot lifetime")
     require(snapshot["sequence"] >= 1, "invalid v2 sequence")
     products = {item["id"]: item for item in snapshot["products"]}
     require(len(products) == len(snapshot["products"]), "duplicate v2 products")
