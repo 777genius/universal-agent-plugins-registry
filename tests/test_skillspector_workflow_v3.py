@@ -231,8 +231,8 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         publish = self.workflow['jobs']['publish']
         self.assertIn("github.ref == 'refs/heads/main'", publish['if'])
         self.assertIn("needs.prepare.outputs.corpus != 'controlled'", publish['if'])
-        # An hourly queue drains backlogs without changing worker budgets or scan evidence.
-        self.assertEqual(self.workflow['on']['schedule'], [{'cron': '19 * * * *'}])
+        # Do not accumulate hourly work behind a measured multi-hour production scan.
+        self.assertEqual(self.workflow['on']['schedule'], [{'cron': '19 */3 * * *'}])
         self.assertEqual(self.workflow['on']['workflow_dispatch']['inputs']['maximum_attempts']['default'], '256')
         for event in ('push', 'schedule', 'workflow_dispatch'):
             self.assertEqual(recovery.execution_config(event)['maximum_attempts'], '256')
