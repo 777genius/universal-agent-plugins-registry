@@ -1,4 +1,4 @@
-"""Cryptographic separation of the experimental scoped Directory protocol."""
+"""Real offline Ed25519 v1/v2 isolation and bootstrap-signature refusals."""
 from __future__ import annotations
 
 import copy
@@ -9,51 +9,68 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-
-from directory_publication import PublicationError, ed25519_public_bytes, ed25519_verify, signature_message
+from directory_publication import PublicationError, ed25519_private_key, load_public_keys
 from directory_v2_contract import legacy_user_v2_distribution
-from directory_v2_signing import sign_v2_snapshot, verify_v2_snapshot
+from directory_v2_signing import sign_snapshot_v2, verify_snapshot_v2
+
+FIXTURES = ROOT / "tests" / "fixtures" / "directory-publication"
 
 
-class DirectoryV2SigningTests(unittest.TestCase):
-    def snapshot(self):
-        source = json.loads((ROOT / "tests/fixtures/directory-publication/snapshot.json").read_text())
-        source["snapshot_schema_version"] = 2
-        source["sequence"] = 1
-        source["distributions"] = [
-            legacy_user_v2_distribution(item, "0.1.96") for item in source["distributions"]
+class V2SignedBundleTests(unittest.TestCase):
+    def setUp(self):
+        original = json.loads((FIXTURES / "snapshot.json").read_text())
+        original["snapshot_schema_version"] = 2
+        original["sequence"] = 1
+        original["distributions"] = [
+            legacy_user_v2_distribution(value, "0.1.96")
+            for value in original["distributions"]
         ]
-        return source
+        self.snapshot = original
+        seed = json.loads((FIXTURES / "test-private-seeds.json").read_text())
+        self.private = ed25519_private_key(seed["test-current"])
+        self.keys = load_public_keys(FIXTURES / "trusted-keys.json")
 
-    def test_v2_bytes_roundtrip_and_strict_domain_isolation(self):
-        seed = bytes(range(32))
-        public = ed25519_public_bytes(seed)
-        signed, envelope = sign_v2_snapshot(self.snapshot(), "test-current", seed)
-        result = verify_v2_snapshot(signed, envelope, {"test-current": public})
-        self.assertEqual(result["sequence"], 1)
-        self.assertTrue(all(g["scope"] == "user"
-                            for item in result["distributions"]
-                            for policy in item["release_policies"]
-                            for g in policy["targets"]))
-        signature = json.loads(envelope)["signature"]
-        import base64
-        with self.assertRaises(PublicationError):
-            ed25519_verify(public, signature_message(signed), base64.b64decode(signature))
-        with self.assertRaises(PublicationError):
-            verify_v2_snapshot(signed, envelope, {"other-key": public})
-        with self.assertRaises(PublicationError):
-            verify_v2_snapshot(signed + b" ", envelope, {"test-current": public})
+    def signed(self):
+        return sign_snapshot_v2(self.snapshot, "test-current", self.private)
 
-        damaged = json.loads(envelope)
-        damaged["signature_domain"] = "UAP-DIRECTORY-SNAPSHOT-ED25519-V1"
-        with self.assertRaises(PublicationError):
-            verify_v2_snapshot(signed, json.dumps(damaged).encode(), {"test-current": public})
+    def test_real_ed25519_roundtrip_and_tampering(self):
+        body, envelope = self.signed()
+        verified = verify_snapshot_v2(body, envelope, self.keys)
+        self.assertEqual(verified, self.snapshot)
+        with self.assertRaisesRegex(PublicationError, "digest mismatch"):
+            verify_snapshot_v2(body.replace(b'"Demo"', b'"Demu"', 1), envelope, self.keys)
+        corrupted = json.loads(envelope)
+        corrupted["sequence"] = 2
+        with self.assertRaisesRegex(PublicationError, "sequence mismatch"):
+            verify_snapshot_v2(body, json.dumps(corrupted, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n", self.keys)
+        with self.assertRaisesRegex(PublicationError, "unknown"):
+            verify_snapshot_v2(body, envelope, {"not-current": self.keys["test-current"]})
 
-    def test_v2_rejects_wrong_scope_without_signing(self):
-        changed = self.snapshot()
-        changed["distributions"][0]["release_policies"][0]["targets"][0]["scope"] = "workspace"
+    def test_v1_signature_domain_cannot_validate_v2_snapshot(self):
+        body, envelope = self.signed()
+        changed = json.loads(envelope)
+        changed["signature_domain"] = "UAP-DIRECTORY-SNAPSHOT-ED25519-V1"
         with self.assertRaises(PublicationError):
-            sign_v2_snapshot(changed, "test-current", bytes(range(32)))
+            verify_snapshot_v2(body, json.dumps(changed, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n", self.keys)
+        changed = json.loads(envelope)
+        changed["signature"] = "A" * 86 + "=="
+        with self.assertRaisesRegex(PublicationError, "invalid v2 Ed25519 signature"):
+            verify_snapshot_v2(body, json.dumps(changed, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n", self.keys)
+
+    def test_cross_release_evidence_and_unqualified_scope_refused(self):
+        modified = copy.deepcopy(self.snapshot)
+        modified["distributions"][0]["release_policies"][0]["targets"][0]["minimum_installer_version"] = "0.1.0"
+        with self.assertRaisesRegex(PublicationError, "lowered release installer floor"):
+            sign_snapshot_v2(modified, "test-current", self.private)
+        modified = copy.deepcopy(self.snapshot)
+        modified["distributions"][0]["release_policies"][0]["targets"][0]["scope"] = "project"
+        modified["distributions"][0]["release_policies"][0]["targets"][0]["client"] = "chatgpt"
+        with self.assertRaises(PublicationError):
+            sign_snapshot_v2(modified, "test-current", self.private)
+        modified = copy.deepcopy(self.snapshot)
+        modified["distributions"][0]["release_policies"][0]["targets"][0]["current_evidence"] = ["missing-id"]
+        with self.assertRaisesRegex(PublicationError, "missing evidence"):
+            sign_snapshot_v2(modified, "test-current", self.private)
 
 
 if __name__ == "__main__":
