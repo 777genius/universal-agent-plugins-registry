@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from directory_v2_contract import require_unique_scoped_grants
+from directory_v2_contract import legacy_user_v2_distribution, require_unique_scoped_grants
 
 
 class DirectoryV2GrantContractTests(unittest.TestCase):
@@ -37,6 +37,37 @@ class DirectoryV2GrantContractTests(unittest.TestCase):
                     grants.append(grant)
             policy["targets"] = grants
         return result
+
+
+    def test_legacy_bootstrap_projection_is_user_only_without_mutating_source(self):
+        source = json.loads((ROOT / "registry/directory.json").read_text())["distributions"]
+        for record in source:
+            original = copy.deepcopy(record)
+            converted = legacy_user_v2_distribution(record, "0.1.96")
+            self.validator.validate(converted)
+            self.assertEqual(record, original)
+            for policy in converted["release_policies"]:
+                require_unique_scoped_grants(policy)
+                self.assertTrue(all(g["scope"] == "user" for g in policy["targets"]))
+                self.assertTrue(all(tuple(map(int, g["minimum_installer_version"].split("."))) >= (0, 1, 96)
+                                    for g in policy["targets"]))
+                self.assertTrue(all(g["current_evidence"] == policy["current_evidence"]
+                                    for g in policy["targets"]))
+
+    def test_bootstrap_refuses_scope_or_floor_widening(self):
+        original = json.loads((ROOT / "registry/directory.json").read_text())["distributions"][0]
+        bad = copy.deepcopy(original)
+        bad["release_policies"][0]["targets"][0]["scopes"] = ["project"]
+        with self.assertRaisesRegex(ValueError, "non-user"):
+            legacy_user_v2_distribution(bad, "0.1.96")
+        bad = copy.deepcopy(original)
+        bad["release_policies"][0]["minimum_installer_version"] = "01.2.3"
+        with self.assertRaisesRegex(ValueError, "installer version"):
+            legacy_user_v2_distribution(bad, "0.1.96")
+        with self.assertRaisesRegex(ValueError, "reviewed v1"):
+            legacy_user_v2_distribution({"schema_version": 2}, "0.1.96")
+        with self.assertRaisesRegex(ValueError, "installer version"):
+            legacy_user_v2_distribution(original, "latest")
 
     def test_v1_stays_user_only_and_v2_accepts_scoped_policy(self):
         value = self.distribution()
