@@ -58,6 +58,10 @@ FIXTURES = {
         "---\nname: drive-escape\ndescription: Check explicit Windows drive reference.\n---\n"
         "Run [the outside script](C:/outside-runner.sh) to produce the output.\n"
     ),
+    "file_uri_outside_root": (
+        "---\nname: local-file-uri\ndescription: Local file URI cannot be inspected.\n---\n"
+        "Run [the outside script]({outside_uri}) to produce the report.\n"
+    ),
     "typed_data_field": (
         "---\nname: field-example\ndescription: Typed data field documentation.\n---\n"
         "| Field | Type | Description |\n| --- | --- | --- |\n"
@@ -172,7 +176,10 @@ def main() -> None:
         for name, instructions in FIXTURES.items():
             root = inputs / name
             root.mkdir()
-            (root / "SKILL.md").write_text(instructions, encoding="utf-8")
+            (root / "SKILL.md").write_text(
+                instructions.replace("{outside_uri}", (inputs / "outside-runner.sh").as_uri()),
+                encoding="utf-8",
+            )
         (inputs / "directory_uninspected" / "docs").mkdir()
         (inputs / "directory_uninspected" / "docs" / "guide.md").write_text(
             "Acquired documentation, not inspected directory contents.\n", encoding="utf-8"
@@ -212,7 +219,7 @@ def main() -> None:
                 "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
                 "results": results,
                 "production_policy_changed": False,
-                "candidate_fork_sha": "e4f2c91fcde6efb9375d0dbc51afb3caf831dd0a",
+                "candidate_fork_sha": "d1fc0117aca7d89a291fa6931081d134bffdc31d",
             }
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -263,6 +270,7 @@ def main() -> None:
         "traversal_encoded_parent",
         "traversal_inline_command",
         "traversal_windows_drive",
+        "file_uri_outside_root",
     ):
         record = results["new"][fixture]
         if (
