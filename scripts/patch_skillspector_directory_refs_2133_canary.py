@@ -43,9 +43,9 @@ PATCHES = PRODUCTION_PATCHES | {
     ),
 }
 
-EXPECTED_RELEASE = "2f98691b5011ead927446bde157caec99270c0b5"
+EXPECTED_RELEASE = "49b736689cecd4028906662a358f38f83824acb9"
 EXPECTED_BLOBS = {
-    "src/skillspector/references.py": "3cf53e63500cc57797311b643a84ef89b81f8fd9",
+    "src/skillspector/references.py": "27aaa8a9604df1735dc1198a479ccc1255abe993",
     "src/skillspector/nodes/build_context.py": "174887b736d1d5940cd1cf04b235210290702960",
 }
 

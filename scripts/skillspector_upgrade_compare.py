@@ -199,7 +199,7 @@ def main() -> None:
         "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
         "results": results,
         "production_policy_changed": False,
-        "candidate_fork_sha": "2f98691b5011ead927446bde157caec99270c0b5",
+        "candidate_fork_sha": "49b736689cecd4028906662a358f38f83824acb9",
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
