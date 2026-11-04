@@ -661,6 +661,14 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
         self.assertEqual([timeout for _, timeout in self.requests], [30, 30, 30])
         self.assertEqual(sleeper.call_args_list, [mock.call(1), mock.call(2)])
 
+    def test_connection_reset_is_retried_as_whole_immutable_read(self):
+        publisher, opener = self.client([ConnectionResetError("private-token"), b'{"ok":true}'])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.raw_file("a" * 40, "index.json", 64), b'{"ok":true}')
+        self.assertEqual(len(self.requests), 2)
+        sleeper.assert_called_once_with(1)
+
     def test_incomplete_read_discards_partial_response_before_retry(self):
         import http.client
         class Interrupted(Response):
