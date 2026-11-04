@@ -599,5 +599,134 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(self.clock.sleeps, [])
 
 
+class ImmutablePublicSnapshotReadTests(unittest.TestCase):
+    """Exercise real public snapshot read behavior with an offline, injected opener."""
+
+    def client(self, responses):
+        from scripts import publish_skillspector_coverage_v3 as publication
+        self.requests = []
+        def opener(request, timeout):
+            self.requests.append((request, timeout))
+            event = responses.pop(0)
+            if isinstance(event, Exception):
+                raise event
+            return event if isinstance(event, Response) else Response(event)
+        return publication, opener
+
+    def test_read_timeout_retries_whole_exact_sha_url_without_credentials(self):
+        publisher, opener = self.client([TimeoutError("private-token"), b'{"ok":true}'])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.raw_file("a" * 40, "index.json", 128), b'{"ok":true}')
+        self.assertEqual([timeout for _, timeout in self.requests], [30, 30])
+        self.assertEqual(self.requests[0][0].full_url, self.requests[1][0].full_url)
+        self.assertIn("/" + "a" * 40 + "/reports/skillspector/v3/index.json", self.requests[0][0].full_url)
+        self.assertFalse(any(key.lower() == "authorization" for key, _ in self.requests[0][0].header_items()))
+        sleeper.assert_called_once_with(1)
+
+    def test_transient_http_503_retries_and_optional_404_does_not(self):
+        retry_error = http_error(503)
+        retry_stream = retry_error.fp
+        publisher, opener = self.client([retry_error, b"{}"])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.raw_file("a" * 40, "index.json", 64), b"{}")
+        self.assertEqual(len(self.requests), 2)
+        self.assertTrue(retry_stream.closed)
+        sleeper.assert_called_once_with(1)
+        for optional in (True, False):
+            with self.subTest(optional=optional):
+                terminal_error = http_error(404)
+                terminal_stream = terminal_error.fp
+                publisher, opener = self.client([terminal_error])
+                with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+                     mock.patch.object(publisher.time, "sleep") as sleeper:
+                    if optional:
+                        self.assertIsNone(publisher.raw_file("a" * 40, "index.json", 64, optional=True))
+                    else:
+                        with self.assertRaisesRegex(PublicationError, r"HTTP 404"):
+                            publisher.raw_file("a" * 40, "index.json", 64)
+                self.assertEqual(len(self.requests), 1)
+                self.assertTrue(terminal_stream.closed)
+                sleeper.assert_not_called()
+
+    def test_http_429_requires_bounded_retry_after_instead_of_hammering(self):
+        retry_error = http_error(429, {"Retry-After": "2"})
+        stream = retry_error.fp
+        publisher, opener = self.client([retry_error, b"{}"])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.raw_file("a" * 40, "index.json", 64), b"{}")
+        self.assertTrue(stream.closed)
+        self.assertEqual(len(self.requests), 2)
+        sleeper.assert_called_once_with(2)
+
+        for headers in ({}, {"Retry-After": "999"}, {"Retry-After": "invalid"}):
+            with self.subTest(headers=headers):
+                terminal = http_error(429, headers)
+                stream = terminal.fp
+                publisher, opener = self.client([terminal])
+                with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+                     mock.patch.object(publisher.time, "sleep") as sleeper:
+                    with self.assertRaisesRegex(PublicationError, "HTTP 429"):
+                        publisher.raw_file("a" * 40, "index.json", 64)
+                self.assertTrue(stream.closed)
+                self.assertEqual(len(self.requests), 1)
+                sleeper.assert_not_called()
+
+    def test_exhausted_timeouts_are_bounded_and_sanitized(self):
+        publisher, opener = self.client([TimeoutError("private-token") for _ in range(3)])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            with self.assertRaises(PublicationError) as raised:
+                publisher.raw_file("a" * 40, "index.json", 64)
+        self.assertEqual(str(raised.exception), "Public coverage read failed (transport)")
+        self.assertNotIn("private-token", str(raised.exception))
+        self.assertEqual([timeout for _, timeout in self.requests], [30, 30, 30])
+        self.assertEqual(sleeper.call_args_list, [mock.call(1), mock.call(2)])
+
+    def test_connection_reset_is_retried_as_whole_immutable_read(self):
+        publisher, opener = self.client([ConnectionResetError("private-token"), b'{"ok":true}'])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.raw_file("a" * 40, "index.json", 64), b'{"ok":true}')
+        self.assertEqual(len(self.requests), 2)
+        sleeper.assert_called_once_with(1)
+
+    def test_incomplete_read_discards_partial_response_before_retry(self):
+        import http.client
+        class Interrupted(Response):
+            def read(self, _limit=-1):
+                raise http.client.IncompleteRead(b"partial-private-content", 12)
+
+        broken = Interrupted(b"partial-private-content")
+        publisher, opener = self.client([broken, b'{"complete":true}'])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            body = publisher.raw_file("a" * 40, "index.json", 64)
+        self.assertEqual(body, b'{"complete":true}')
+        self.assertTrue(broken.closed)
+        self.assertEqual(len(self.requests), 2)
+        sleeper.assert_called_once_with(1)
+
+    def test_nontransient_and_oversize_responses_never_retry(self):
+        publisher, opener = self.client([OSError("private-token")])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            with self.assertRaisesRegex(PublicationError, r"failed \(transport\)") as raised:
+                publisher.raw_file("a" * 40, "index.json", 64)
+        self.assertNotIn("private-token", str(raised.exception))
+        self.assertEqual(len(self.requests), 1)
+        sleeper.assert_not_called()
+
+        publisher, opener = self.client([b"abcdef"])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            with self.assertRaisesRegex(PublicationError, "exceeds limit"):
+                publisher.raw_file("a" * 40, "index.json", 4)
+        self.assertEqual(len(self.requests), 1)
+        sleeper.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
