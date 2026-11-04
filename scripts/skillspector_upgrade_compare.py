@@ -68,9 +68,12 @@ def scan(scanner: Path, root: Path) -> dict:
         )
     result = json.loads(done.stdout)
     coverage = result["analysis_completeness"]
-    reasons = Counter(
-        item.get("code", "unknown") for item in coverage.get("reasons", [])
-    )
+    # The actual CLI contract reports reasons in ledger_exceptions.reason_code,
+    # not in a top-level `reasons` list. Do not silently emit an empty reason census.
+    exceptions = coverage["ledger_exceptions"]
+    if not isinstance(exceptions, list) or any(not isinstance(item, dict) for item in exceptions):
+        raise AssertionError(("Malformed inspection ledger exceptions", root.name))
+    reasons = Counter(item.get("reason_code", "unknown") for item in exceptions)
     missing = Counter(
         item.get("reference_kind", "unknown")
         for item in coverage.get("references", [])
@@ -128,7 +131,8 @@ def main() -> None:
         if complete["status"] != "complete" or not complete["is_complete"] or complete["exit_code"] != 0:
             raise AssertionError(("Clean control must be Complete", name, complete))
         if (missing["status"] != "partial" or missing["is_complete"]
-                or missing["exit_code"] != 1 or "reference_missing" not in missing["reason_counts"]):
+                or missing["exit_code"] != 1 or "reference_missing" not in missing["reason_counts"]
+                or missing["missing_reference_kinds"].get("inline_command", 0) < 1):
             raise AssertionError(("Real missing executable must stay Partial", name, missing))
 
     evidence = {
