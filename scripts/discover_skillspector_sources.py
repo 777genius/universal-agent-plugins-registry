@@ -322,7 +322,7 @@ def bounded_tree(pinned, budget, paths=None):
     return b"".join(chunks)
 
 
-def skill_documents(pinned, budget, paths=None, *, plugin_path=None):
+def skill_documents(pinned, budget, paths=None, *, plugin_path=None, include_tree=False):
     """Read only bounded regular SKILL.md blobs; unrelated modes stay inert."""
     budget.check()
     # A published plugin installs only its immediate skills/* roots. Scope the
@@ -381,7 +381,7 @@ def skill_documents(pinned, budget, paths=None, *, plugin_path=None):
             invalid.append(path)
             continue
         names[name].append(str(PurePosixPath(path).parent).removeprefix("./") if "/" in path else "")
-    return dict(names), invalid
+    return (dict(names), invalid, raw) if include_tree else (dict(names), invalid)
 
 
 def listing_path(listing):
@@ -396,7 +396,7 @@ def listing_path(listing):
     return path.removesuffix("/SKILL.md")
 
 
-def identical_skill_roots(pinned, budget, paths):
+def identical_skill_roots(pinned, budget, paths, *, tree=None):
     """Select a canonical root only after proving whole pinned trees identical.
 
     The bounded Git listing includes every nested relative path, mode and blob
@@ -411,7 +411,12 @@ def identical_skill_roots(pinned, budget, paths):
     try:
         for root in roots:
             portable_path(root, "candidate skill path")
-        raw = bounded_tree(pinned, budget, roots)
+    except BridgeError:
+        return None
+    # The name index already read the complete bounded pinned Git tree.
+    # Reuse it for all pairs; an I/O failure is not a proven ambiguity.
+    raw = tree if tree is not None else bounded_tree(pinned, budget, roots)
+    try:
         if not raw or not raw.endswith(b"\0"):
             return None
         entries = {root: {} for root in roots}
@@ -419,17 +424,19 @@ def identical_skill_roots(pinned, budget, paths):
         for row in raw.split(b"\0"):
             if not row:
                 continue
+            metadata, encoded_path = row.split(b"\t", 1)
+            path = encoded_path.decode("utf-8")
+            owners = [root for root in roots if path.startswith(root + "/")]
+            if not owners and tree is not None:
+                continue  # Other roots were part of the full name-index inventory.
+            if len(owners) != 1:
+                return None
             count += 1
             if count > MAX_TREE_ENTRIES:
                 return None
-            metadata, encoded_path = row.split(b"\t", 1)
             mode, kind, oid = metadata.decode("ascii").split()
-            path = encoded_path.decode("utf-8")
             if kind != "blob" or mode not in {"100644", "100755"} or not SHA_RE.fullmatch(oid):
                 return None  # Symlinks, submodules and unsupported modes are never proven safe.
-            owners = [root for root in roots if path.startswith(root + "/")]
-            if len(owners) != 1:
-                return None
             root = owners[0]
             relative = path[len(root) + 1:]
             portable_path(relative, "candidate skill entry")
@@ -441,8 +448,7 @@ def identical_skill_roots(pinned, budget, paths):
         if (not first or not second or "skill.md" not in first or
                 "skill.md" not in second or first != second):
             return None
-    except (BridgeError, DiscoveryError, PublicationError, UnicodeError, ValueError,
-            OSError, subprocess.SubprocessError):
+    except (BridgeError, UnicodeError, ValueError):
         return None
     # With identical acquired bytes and file modes, either path yields the same
     # static-analysis input. Prefer shortest then lexical; record the real path.
@@ -475,8 +481,9 @@ def resolve_listings(repository, revision, listings, pinned, budget):
     if len(explicit) == len(listings):
         paths = {(path + "/" if path else "") + "SKILL.md" for path in explicit.values() if path is not None}
         names, invalid = skill_documents(pinned, budget, sorted(paths)) if paths else ({}, [])
+        tree = None
     else:
-        names, invalid = skill_documents(pinned, budget)
+        names, invalid, tree = skill_documents(pinned, budget, include_tree=True)
     for listing in listings:
         identity = f"{listing['source'].casefold()}/{listing['skillId']}"
         if identity in explicit:
@@ -493,7 +500,7 @@ def resolve_listings(repository, revision, listings, pinned, budget):
         else:
             paths = names.get(listing["name"], [])
             if len(paths) == 2:
-                proven = identical_skill_roots(pinned, budget, paths)
+                proven = identical_skill_roots(pinned, budget, paths, tree=tree)
                 if proven is not None:
                     paths = [proven]
         if len(paths) != 1:
@@ -849,7 +856,9 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
              isinstance(issue.get("candidates"), list) and len(issue["candidates"]) == 2)
             for issue in diagnostics
         )
-        if prior.get("hints_digest") == legacy_hints and not ambiguous_pair:
+        # A capped v2 diagnostic list may omit a selected ambiguity; recheck once.
+        truncated = isinstance(diagnostics, list) and len(diagnostics) >= MAX_DIAGNOSTICS
+        if prior.get("hints_digest") == legacy_hints and not (ambiguous_pair or truncated):
             hints = legacy_hints
         prior_sources = previous_by_id
         ids = prior.get("selected_ids")

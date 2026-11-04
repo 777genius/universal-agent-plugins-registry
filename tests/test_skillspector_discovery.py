@@ -567,6 +567,50 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(summary["source_states"][0]["reason"], "ambiguous_name")
         self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
 
+    def test_v2_capped_diagnostics_rechecks_hidden_selected_ambiguity(self):
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        prior = {"resolution_cache": {"owner/repo": {"revision": "a" * 40,
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [
+                {"code": "skill_not_found", "repository": "owner/repo",
+                 "id": f"owner/repo/missing-{i}"} for i in range(discovery.MAX_DIAGNOSTICS)]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned, \
+             mock.patch.object(discovery, "resolve_listings", return_value=([], [], {})):
+            _, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_called_once()
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"],
+                         discovery.listing_hints_digest([listing()]))
+
+    def test_duplicate_proof_git_read_failure_propagates_without_caching_ambiguity(self):
+        with mock.patch.object(discovery, "bounded_tree", side_effect=OSError("temporary git read")):
+            with self.assertRaisesRegex(OSError, "temporary git read"):
+                discovery.identical_skill_roots(mock.Mock(), WorkBudget(10),
+                    ["skills/demo", "plugins/agent/skills/demo"])
+
+    def test_duplicate_proof_uses_bounded_name_inventory_without_second_git_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, _ = fixture_repository(root)
+            source = root / "source"
+            copied = source / "plugins/agent/skills/demo"
+            shutil.copytree(source / "skills/demo", copied)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "mirrored content")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                original = discovery.bounded_tree
+                with mock.patch.object(discovery, "bounded_tree", wraps=original) as tree_read:
+                    rows, issues, _ = discovery.resolve_listings("owner/repo", revision,
+                        [listing(), listing(slug="second")], pinned, WorkBudget(20))
+                self.assertEqual(tree_read.call_count, 1)
+                self.assertEqual([row["path"] for row in rows], ["skills/demo", "skills/demo"])
+                self.assertEqual(issues, [])
+            finally:
+                pinned.close()
+
     def test_v2_three_candidate_ambiguity_not_needlessly_reacquired(self):
         old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
         issue = {"code": "ambiguous_name", "repository": "owner/repo",

@@ -31,6 +31,21 @@ recorded unresolved evidence; a changed source revision still invalidates
 their cache normally. The v3 entry is reused on later unchanged runs. No
 scanner/profile, published status, or evidence policy is changed.
 
+## Failure isolation and bounded lookup
+
+The existing complete bounded Git inventory needed for declared-name discovery
+is reused for the two-tree proof. This avoids repeating a subprocess/tree read
+for every duplicate candidate and makes duplicate checks independent of a
+second Git read or budget yield. A failed **first** Git tree read is never
+cached as an established ambiguous name; it leaves a retryable acquisition
+diagnostic, while previously published subject records are retained.
+
+One observed v2 cache entry (`affaan-m/ecc`) contains 256 capped diagnostics.
+A capped v2 list cannot establish that no historical selected ambiguity was
+omitted, so it is rechecked **once**; other unchanged v2 cache entries continue
+to be reused. Same-revision v3 results remain stable. These are only source
+identity rules, not scanner policy or Complete classification changes.
+
 ## Required E2E
 
 - Hermetic real Git object fixtures with **two truly identical nested directory trees** -> one selected current source; differing nested file, different mode, symlink or malformed Git tree -> ambiguous.
