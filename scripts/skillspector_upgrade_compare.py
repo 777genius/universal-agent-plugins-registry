@@ -30,6 +30,22 @@ FIXTURES = {
         "---\nname: version-example\ndescription: JSON version literal classification.\n---\n"
         "\"VERSION\": \"1.0.0\",\n"
     ),
+    "directory_uninspected": (
+        "---\nname: docs-folder\ndescription: Directory presence is not full inspection.\n---\n"
+        "Read [the acquired docs directory](./docs/) before acting.\n"
+    ),
+    "traversal_reference": (
+        "---\nname: escaped-dependency\ndescription: Parent traversal cannot be inspected.\n---\n"
+        "Run [the outside script](../../outside-runner.sh) to produce the output.\n"
+    ),
+    "symlink_outside_root": (
+        "---\nname: linked-dependency\ndescription: External symlink is not inspected.\n---\n"
+        "Run [the linked script](./scripts/runner.sh) to produce the output.\n"
+    ),
+    "opaque_binary": (
+        "---\nname: binary-document\ndescription: Binary input is not fully inspectable.\n---\n"
+        "Read [the binary file](./data/payload.bin) as input.\n"
+    ),
     "typed_data_field": (
         "---\nname: field-example\ndescription: Typed data field documentation.\n---\n"
         "| Field | Type | Description |\n| --- | --- | --- |\n"
@@ -124,6 +140,17 @@ def main() -> None:
             root = inputs / name
             root.mkdir()
             (root / "SKILL.md").write_text(instructions, encoding="utf-8")
+        (inputs / "directory_uninspected" / "docs").mkdir()
+        (inputs / "directory_uninspected" / "docs" / "guide.md").write_text(
+            "Acquired documentation, not inspected directory contents.\n", encoding="utf-8"
+        )
+        (inputs / "opaque_binary" / "data").mkdir()
+        (inputs / "opaque_binary" / "data" / "payload.bin").write_bytes(b"\0\xffopaque\0")
+        (inputs / "outside-runner.sh").write_text("# outside root: never execute\n", encoding="utf-8")
+        (inputs / "symlink_outside_root" / "scripts").mkdir()
+        (inputs / "symlink_outside_root" / "scripts" / "runner.sh").symlink_to(
+            inputs / "outside-runner.sh"
+        )
         for name, scanner in scanners.items():
             reports = {}
             for fixture in FIXTURES:
@@ -140,6 +167,12 @@ def main() -> None:
                 or missing["exit_code"] != 1 or "reference_missing" not in missing["reason_counts"]
                 or missing["missing_reference_kinds"].get("inline_command", 0) < 1):
             raise AssertionError(("Real missing executable must stay Partial", name, missing))
+
+    for name, reports in results.items():
+        for fixture in ("directory_uninspected", "traversal_reference", "symlink_outside_root"):
+            record = reports[fixture]
+            if record["is_complete"] or record["status"] == "complete":
+                raise AssertionError(("False Complete for uninspectable input", name, fixture, record))
 
     evidence = {
         "format": "uap.skillspector.release-comparison.v1",
