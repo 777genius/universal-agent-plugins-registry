@@ -12,7 +12,36 @@ import os
 import subprocess
 from pathlib import Path
 
-from patch_skillspector_directory_references import PATCHES, verify_resolver
+from patch_skillspector_directory_references import PATCHES as PRODUCTION_PATCHES, verify_resolver
+
+# The fork inserts out-of-bundle rejected/partial ledger evidence immediately
+# after the missing/ambiguous block. Apply the unchanged production directory
+# rule at that exact point without overwriting the additional fork evidence.
+FORK_LEDGER_BEFORE = '''            if reference["status"] in {"missing", "ambiguous"}
+        )
+        # The resolver retains rejected for parent-traversal links'''
+FORK_LEDGER_AFTER = '''            if reference["status"] in {"missing", "ambiguous"}
+        )
+        reference_events.extend(
+            ledger_event(
+                outcome=LedgerOutcome.PARTIAL,
+                record_type=LedgerRecordType.SYSTEM,
+                phase="reference_resolution",
+                path=primary_path,
+                start_line=int(reference["line"]),
+                end_line=int(reference["line"]),
+                reason=LedgerReason.REFERENCED_UNINSPECTED,
+            )
+            for reference in references
+            if reference["status"] == "uninspected"
+        )
+        # The resolver retains rejected for parent-traversal links'''
+PATCHES = PRODUCTION_PATCHES | {
+    "src/skillspector/nodes/build_context.py": (
+        FORK_LEDGER_BEFORE,
+        FORK_LEDGER_AFTER,
+    ),
+}
 
 EXPECTED_RELEASE = "2f98691b5011ead927446bde157caec99270c0b5"
 EXPECTED_BLOBS = {
