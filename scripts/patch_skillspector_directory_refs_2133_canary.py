@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Canary-only compatibility proof for the existing directory-reference patch.
 
-The v2.13.3 references.py blob is identical to production v2.13.1; its
-build_context.py differs only by two newly supported JavaScript extensions.
-Apply the *same* conservative inventory patch to both scanners to compare
-static-analysis behavior without introducing a new missing-directory variable.
+Check the immutable v2.13.3 fork with the independently reviewed JSON VERSION
+and out-of-bundle reference fixes. Apply the same conservative directory
+inventory patch to both scanner releases, preserving identical inventory rules.
 """
 from __future__ import annotations
 
@@ -15,10 +14,10 @@ from pathlib import Path
 
 from patch_skillspector_directory_references import PATCHES, verify_resolver
 
-EXPECTED_RELEASE = "38a1dfe93325d2f8bfcd4f8d0241eed706334915"
+EXPECTED_RELEASE = "2f98691b5011ead927446bde157caec99270c0b5"
 EXPECTED_BLOBS = {
-    "src/skillspector/references.py": "ceb6efaae6dd8739823ee4313476e9dc310f5f3c",
-    "src/skillspector/nodes/build_context.py": "a4faaba2739dc0ded1712495835d6bf56e79deb5",
+    "src/skillspector/references.py": "3cf53e63500cc57797311b643a84ef89b81f8fd9",
+    "src/skillspector/nodes/build_context.py": "174887b736d1d5940cd1cf04b235210290702960",
 }
 
 
@@ -31,7 +30,7 @@ def apply(scanner: Path) -> None:
         ).strip()
 
     if git("rev-parse", "HEAD") != EXPECTED_RELEASE:
-        raise RuntimeError("Canary scanner must be exact immutable v2.13.3")
+        raise RuntimeError("Canary scanner must be exact immutable vetted fork commit")
     replacements: dict[Path, str] = {}
     for path, (before, after) in PATCHES.items():
         target = scanner / path
@@ -64,7 +63,7 @@ def main() -> None:
          str(scanner), "--check-only"],
         check=True, timeout=60,
     )
-    print("v2.13.3 directory inventory patch matches the existing conservative acceptance")
+    print("Pinned fork directory inventory patch matches conservative acceptance")
 
 
 if __name__ == "__main__":
