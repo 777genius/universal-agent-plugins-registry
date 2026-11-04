@@ -57,6 +57,27 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "invalid v2 Ed25519 signature"):
             verify_snapshot_v2(body, json.dumps(changed, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n", self.keys)
 
+    def test_v2_signed_snapshot_refuses_cross_product_identity_theft(self):
+        second = copy.deepcopy(self.snapshot)
+        original = second["products"][0]
+        victim = copy.deepcopy(original)
+        victim["id"], victim["manifest_name"] = "other", "other"
+        victim["aliases"], victim["reserved_aliases"] = ["other"], ["other"]
+        # The duplicate distribution reference is structurally valid but must
+        # never authorize another product to claim its signed source.
+        second["products"].append(victim)
+        with self.assertRaisesRegex(PublicationError, "foreign distribution"):
+            sign_snapshot_v2(second, "test-current", self.private)
+
+        victim["distributions"] = ["owner/other"]
+        victim["default_distribution"] = "owner/other"
+        foreign = copy.deepcopy(second["distributions"][0])
+        foreign["id"], foreign["product_id"] = "owner/other", "other"
+        second["distributions"].append(foreign)
+        victim["aliases"] = [original["aliases"][0]]
+        with self.assertRaisesRegex(PublicationError, "v2 selector"):
+            sign_snapshot_v2(second, "test-current", self.private)
+
     def test_cross_release_evidence_and_unqualified_scope_refused(self):
         modified = copy.deepcopy(self.snapshot)
         modified["distributions"][0]["release_policies"][0]["targets"][0]["minimum_installer_version"] = "0.1.0"

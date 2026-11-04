@@ -29,6 +29,25 @@ def signature_message_v2(snapshot: bytes) -> bytes:
     return DOMAIN + len(snapshot).to_bytes(8, "big") + snapshot
 
 
+def validate_v2_product_ownership(snapshot: dict[str, Any]) -> None:
+    """Reject selector hijacking and cross-product distribution references."""
+    products = snapshot["products"]
+    distributions = {item["id"]: item for item in snapshot["distributions"]}
+    selectors: dict[str, str] = {}
+    for product in products:
+        product_id = product["id"]
+        names = [product_id, product["manifest_name"], *product["aliases"],
+                 *product["reserved_aliases"]]
+        for name in names:
+            owner = selectors.setdefault(name, product_id)
+            require(owner == product_id,
+                    f"v2 selector {name!r} belongs to both {owner} and {product_id}")
+        for distribution_id in product["distributions"]:
+            target = distributions.get(distribution_id)
+            require(target is not None and target["product_id"] == product_id,
+                    "v2 product claims a foreign distribution")
+
+
 def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
     """Check scoped identity and referenced evidence after structural schema."""
     validate_with_schema(snapshot, SNAPSHOT_SCHEMA)
@@ -40,6 +59,7 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
     require(len(products) == len(snapshot["products"]), "duplicate v2 products")
     distributions = {item["id"]: item for item in snapshot["distributions"]}
     require(len(distributions) == len(snapshot["distributions"]), "duplicate v2 distributions")
+    validate_v2_product_ownership(snapshot)
     evidence = {item["id"]: item for item in snapshot["evidence"]}
     require(len(evidence) == len(snapshot["evidence"]), "duplicate v2 evidence")
     selected: set[str] = set()
