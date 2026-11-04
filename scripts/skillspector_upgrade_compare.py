@@ -125,6 +125,10 @@ def scan(scanner: Path, root: Path) -> dict:
         "reason_counts": dict(sorted(reasons.items())),
         "missing_reference_kinds": dict(sorted(missing.items())),
         "missing_reference_count": sum(missing.values()),
+        "rejected_partial_count": sum(
+            item.get("status") == "rejected" and item.get("disposition") == "partial"
+            for item in coverage.get("references", [])
+        ),
         "finding_count": len(issues),
     }
 
@@ -229,6 +233,7 @@ def main() -> None:
         or new_traversal["is_complete"]
         or new_traversal["exit_code"] != 1
         or not new_traversal["reason_counts"].get("referenced_uninspected")
+        or new_traversal["rejected_partial_count"] < 1
     ):
         raise AssertionError(("Fork still calls out-of-root dependency Complete", new_traversal))
 
