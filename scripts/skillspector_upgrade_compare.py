@@ -68,6 +68,12 @@ def scan(scanner: Path, root: Path) -> dict:
         )
     result = json.loads(done.stdout)
     coverage = result["analysis_completeness"]
+    if result.get("execution_successful") is not True:
+        raise AssertionError(("Scanner did not finish execution", root.name))
+    # Public JSON reports expose issues, not the internal graph filtered_findings.
+    issues = result["issues"]
+    if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
+        raise AssertionError(("Malformed public findings", root.name))
     # The actual CLI contract reports reasons in ledger_exceptions.reason_code,
     # not in a top-level `reasons` list. Do not silently emit an empty reason census.
     exceptions = coverage["ledger_exceptions"]
@@ -86,7 +92,7 @@ def scan(scanner: Path, root: Path) -> dict:
         "reason_counts": dict(sorted(reasons.items())),
         "missing_reference_kinds": dict(sorted(missing.items())),
         "missing_reference_count": sum(missing.values()),
-        "finding_count": len(result.get("filtered_findings", [])),
+        "finding_count": len(issues),
     }
 
 
