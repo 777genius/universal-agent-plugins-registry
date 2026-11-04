@@ -54,6 +54,15 @@ FIXTURES = {
         "---\nname: inline-escape\ndescription: Check executable outside the bundle.\n---\n"
         "Run " + chr(96) + "python3 ../outside-runner.sh" + chr(96) + " to produce the output.\n"
     ),
+    "traversal_drive_relative": (
+        "---\nname: drive-relative\ndescription: Check local Windows drive dependency.\n---\n"
+        "Run [the outside script](C:../outside-runner.sh) to produce the output.\n"
+    ),
+    "traversal_python_option": (
+        "---\nname: option-escape\ndescription: Check interpreter option script dependency.\n---\n"
+        "Run " + chr(96) + "python3 -u ../outside-runner.sh" + chr(96)
+        + " to produce the output.\n"
+    ),
     "traversal_windows_drive": (
         "---\nname: drive-escape\ndescription: Check explicit Windows drive reference.\n---\n"
         "Run [the outside script](C:/outside-runner.sh) to produce the output.\n"
@@ -221,7 +230,7 @@ def main() -> None:
                 "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
                 "results": results,
                 "production_policy_changed": False,
-                "candidate_fork_sha": "6a40a5a6e8c58db2f9e7521a4937ca9be57a7774",
+                "candidate_fork_sha": "13963c56dfce8f708079018100ac24f32b85b9a7",
             }
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -272,6 +281,8 @@ def main() -> None:
         "traversal_encoded_parent",
         "traversal_inline_command",
         "traversal_windows_drive",
+        "traversal_drive_relative",
+        "traversal_python_option",
         "file_uri_outside_root",
     ):
         record = results["new"][fixture]

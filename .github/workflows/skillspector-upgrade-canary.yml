@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: 6a40a5a6e8c58db2f9e7521a4937ca9be57a7774 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
+          ref: 13963c56dfce8f708079018100ac24f32b85b9a7 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
           persist-credentials: false
           path: scanner-new
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,6 +48,27 @@ jobs:
           python3 -m pip install --disable-pip-version-check uv==0.13.4
           uv sync --directory scanner-old --frozen --no-dev --python 3.12
           uv sync --directory scanner-new --frozen --no-dev --python 3.12
+      - name: Run exact fork reference unit and lint suites
+        timeout-minutes: 10
+        run: |
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+          scanner-new/.venv/bin/python -m pytest -q \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py \
+            scanner-new/tests/test_json_version_references.py \
+            scanner-new/tests/test_reference_destinations.py \
+            scanner-new/tests/nodes/test_finalize_inspection_ledger.py
+          scanner-new/.venv/bin/ruff check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/src/skillspector/nodes/build_context.py \
+            scanner-new/src/skillspector/nodes/finalize_inspection_ledger.py \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py \
+            scanner-new/tests/nodes/test_finalize_inspection_ledger.py
+          scanner-new/.venv/bin/ruff format --check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/src/skillspector/nodes/build_context.py \
+            scanner-new/src/skillspector/nodes/finalize_inspection_ledger.py \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py \
+            scanner-new/tests/nodes/test_finalize_inspection_ledger.py
       - name: Match the exact production v2.13.1 reference maintenance patch
         run: python3 source/scripts/patch_skillspector_directory_references.py scanner-old --verify
       - name: Preserve equivalent directory-reference coverage on pinned fork
