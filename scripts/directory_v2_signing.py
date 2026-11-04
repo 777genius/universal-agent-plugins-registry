@@ -86,6 +86,10 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
             for grant in policy["targets"]:
                 floor = tuple(map(int, grant["minimum_installer_version"].split(".")))
                 require(floor >= policy_floor, "v2 grant lowered release installer floor")
+                closure = grant.get("canonical_closure")
+                if closure is not None and closure["eligible"]:
+                    closure_floor = tuple(map(int, closure["minimum_installer_version"].split(".")))
+                    require(closure_floor >= floor, "v2 closure lowered grant installer floor")
                 ids.update(grant["current_evidence"])
                 if grant["scope"] == "project":
                     require(grant["client"] != "chatgpt", "ChatGPT project grant is not qualified")
@@ -103,6 +107,12 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
                         for evidence_id in grant["current_evidence"]
                     )
                     require(qualified, "v2 project grant lacks qualified scoped runtime evidence")
+                    for evidence_id in grant["current_evidence"]:
+                        record = evidence.get(evidence_id)
+                        if record is not None and record["level"] != "schema":
+                            require(record.get("client") == grant["client"]
+                                    and record.get("scope") == "project",
+                                    "v2 project grant borrows evidence from another client or scope")
             for item in ids:
                 require(item in evidence, "v2 grant references missing evidence")
                 record = evidence[item]

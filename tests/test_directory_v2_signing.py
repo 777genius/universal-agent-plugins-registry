@@ -123,6 +123,33 @@ class V2SignedBundleTests(unittest.TestCase):
             timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         sign_snapshot_v2(modified, "test-current", self.private)
 
+    def test_v2_closure_floor_does_not_understate_grant_floor(self):
+        candidate = copy.deepcopy(self.snapshot)
+        grant = candidate["distributions"][0]["release_policies"][0]["targets"][0]
+        grant["canonical_closure"] = {
+            "eligible": True,
+            "closure_digest": "sha256:" + "a" * 64,
+            "minimum_installer_version": "0.1.0",
+        }
+        with self.assertRaisesRegex(PublicationError, "closure lowered grant installer floor"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        grant["canonical_closure"]["minimum_installer_version"] = grant["minimum_installer_version"]
+        sign_snapshot_v2(candidate, "test-current", self.private)
+
+    def test_v2_project_grant_rejects_unrelated_runtime_even_with_valid_proof(self):
+        candidate = copy.deepcopy(self.snapshot)
+        grant = candidate["distributions"][0]["release_policies"][0]["targets"][0]
+        grant["scope"] = "project"
+        runtime = copy.deepcopy(candidate["evidence"][0])
+        runtime.update(id="project-runtime", client=grant["client"], scope="project",
+                       level="runtime", outcome="passed")
+        foreign = copy.deepcopy(runtime)
+        foreign.update(id="foreign-user-runtime", scope="user")
+        candidate["evidence"].extend([runtime, foreign])
+        grant["current_evidence"] = [runtime["id"], foreign["id"]]
+        with self.assertRaisesRegex(PublicationError, "borrows evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
     def test_v2_project_grant_cannot_borrow_user_runtime_proof(self):
         modified = copy.deepcopy(self.snapshot)
         grant = modified["distributions"][0]["release_policies"][0]["targets"][0]
