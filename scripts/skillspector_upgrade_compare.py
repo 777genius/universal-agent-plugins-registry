@@ -195,6 +195,7 @@ def main() -> None:
         "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
         "results": results,
         "production_policy_changed": False,
+        "candidate_fork_sha": "2f98691b5011ead927446bde157caec99270c0b5",
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -211,10 +212,37 @@ def main() -> None:
             raise AssertionError(("Real missing executable must stay Partial", name, missing))
 
     for name, reports in results.items():
-        for fixture in ("directory_uninspected", "traversal_reference", "symlink_outside_root"):
+        for fixture in ("directory_uninspected", "symlink_outside_root", "opaque_binary"):
             record = reports[fixture]
             if record["is_complete"] or record["status"] == "complete":
                 raise AssertionError(("False Complete for uninspectable input", name, fixture, record))
+
+    # A proven pre-existing false Complete is recorded as a baseline regression,
+    # never accepted in the fork candidate. Do not weaken either side's real
+    # missing-script and uninspected-directory safety gates above.
+    old_traversal = results["old"]["traversal_reference"]
+    new_traversal = results["new"]["traversal_reference"]
+    if old_traversal["status"] != "complete" or not old_traversal["is_complete"]:
+        raise AssertionError(("Expected pinned production traversal bug changed", old_traversal))
+    if (
+        new_traversal["status"] != "partial"
+        or new_traversal["is_complete"]
+        or new_traversal["exit_code"] != 1
+        or not new_traversal["reason_counts"].get("referenced_uninspected")
+    ):
+        raise AssertionError(("Fork still calls out-of-root dependency Complete", new_traversal))
+
+    old_version = results["old"]["json_version_literal"]
+    new_version = results["new"]["json_version_literal"]
+    if old_version["missing_reference_count"] < 1 or old_version["is_complete"]:
+        raise AssertionError(("Pinned production VERSION false positive not reproduced", old_version))
+    if (
+        new_version["status"] != "complete"
+        or not new_version["is_complete"]
+        or new_version["missing_reference_count"] != 0
+        or new_version["exit_code"] != 0
+    ):
+        raise AssertionError(("Fork did not fix strict JSON VERSION false reference", new_version))
 
 
 
