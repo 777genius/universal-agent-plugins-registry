@@ -2,8 +2,8 @@
 """Discover bounded immutable static-scan subjects; never execute skill content.
 
 The catalog is a discovery hint. An explicit path is verified against its pinned
-Git tree and declared name; otherwise only an unambiguous declared name resolves
-a listing to a root. Partial acquisitions retain prior roots
+Git tree and declared name; otherwise a unique name or verified byte-identical
+duplicate roots resolve a listing to a root. Partial acquisitions retain prior roots
 as historical subjects and are explicitly reported, never called fresh scans.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ MAX_DOCUMENT_TOTAL_BYTES = 16 << 20
 MAX_DIAGNOSTICS = 256
 MAX_CANDIDATES = 64
 MAX_SOURCE_STATES = MAX_LISTINGS + MAX_ROOTS
-RESOLVER_VERSION = 2
+RESOLVER_VERSION = 3  # Recheck cached duplicate-name candidates for exact Git-tree equivalence.
 PLUGIN_RESOLVER_VERSION = 1
 PATH_RE = re.compile(r"^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -322,7 +322,7 @@ def bounded_tree(pinned, budget, paths=None):
     return b"".join(chunks)
 
 
-def skill_documents(pinned, budget, paths=None, *, plugin_path=None):
+def skill_documents(pinned, budget, paths=None, *, plugin_path=None, include_tree=False):
     """Read only bounded regular SKILL.md blobs; unrelated modes stay inert."""
     budget.check()
     # A published plugin installs only its immediate skills/* roots. Scope the
@@ -381,7 +381,7 @@ def skill_documents(pinned, budget, paths=None, *, plugin_path=None):
             invalid.append(path)
             continue
         names[name].append(str(PurePosixPath(path).parent).removeprefix("./") if "/" in path else "")
-    return dict(names), invalid
+    return (dict(names), invalid, raw) if include_tree else (dict(names), invalid)
 
 
 def listing_path(listing):
@@ -394,6 +394,65 @@ def listing_path(listing):
     if path == "SKILL.md":
         return ""
     return path.removesuffix("/SKILL.md")
+
+
+def identical_skill_roots(pinned, budget, paths, *, tree=None):
+    """Select a canonical root only after proving whole pinned trees identical.
+
+    The bounded Git listing includes every nested relative path, mode and blob
+    object ID. Matching SKILL.md alone must never resolve an ambiguous source.
+    """
+    if len(paths) != 2 or any(not path for path in paths):
+        return None
+    roots = sorted(paths)
+    if roots[0] == roots[1] or any(root.startswith(other + "/")
+                                     for root in roots for other in roots if root != other):
+        return None
+    try:
+        for root in roots:
+            portable_path(root, "candidate skill path")
+    except BridgeError:
+        return None
+    # The name index already read the complete bounded pinned Git tree.
+    # Reuse it for all pairs; an I/O failure is not a proven ambiguity.
+    raw = tree if tree is not None else bounded_tree(pinned, budget, roots)
+    try:
+        if not raw or not raw.endswith(b"\0"):
+            return None
+        entries = {root: {} for root in roots}
+        count = 0
+        for row in raw.split(b"\0"):
+            if not row:
+                continue
+            metadata, encoded_path = row.split(b"\t", 1)
+            path = encoded_path.decode("utf-8")
+            owners = [root for root in roots if path.startswith(root + "/")]
+            if not owners and tree is not None:
+                continue  # Other roots were part of the full name-index inventory.
+            if len(owners) != 1:
+                return None
+            count += 1
+            if count > MAX_TREE_ENTRIES:
+                return None
+            mode, kind, oid = metadata.decode("ascii").split()
+            if kind != "blob" or mode not in {"100644", "100755"} or not SHA_RE.fullmatch(oid):
+                return None  # Symlinks, submodules and unsupported modes are never proven safe.
+            root = owners[0]
+            relative = path[len(root) + 1:]
+            portable_path(relative, "candidate skill entry")
+            folded = relative.casefold()
+            if folded in entries[root]:
+                return None
+            entries[root][folded] = (relative, mode, oid)
+        first, second = (entries[root] for root in roots)
+        if (not first or not second or "skill.md" not in first or
+                "skill.md" not in second or first != second):
+            return None
+    except (BridgeError, UnicodeError, ValueError):
+        return None
+    # With identical acquired bytes and file modes, either path yields the same
+    # static-analysis input. Prefer shortest then lexical; record the real path.
+    return min(roots, key=lambda root: (len(root), root))
 
 
 def resolve_listings(repository, revision, listings, pinned, budget):
@@ -422,8 +481,9 @@ def resolve_listings(repository, revision, listings, pinned, budget):
     if len(explicit) == len(listings):
         paths = {(path + "/" if path else "") + "SKILL.md" for path in explicit.values() if path is not None}
         names, invalid = skill_documents(pinned, budget, sorted(paths)) if paths else ({}, [])
+        tree = None
     else:
-        names, invalid = skill_documents(pinned, budget)
+        names, invalid, tree = skill_documents(pinned, budget, include_tree=True)
     for listing in listings:
         identity = f"{listing['source'].casefold()}/{listing['skillId']}"
         if identity in explicit:
@@ -439,6 +499,10 @@ def resolve_listings(repository, revision, listings, pinned, budget):
             paths = [root]
         else:
             paths = names.get(listing["name"], [])
+            if len(paths) == 2:
+                proven = identical_skill_roots(pinned, budget, paths, tree=tree)
+                if proven is not None:
+                    paths = [proven]
         if len(paths) != 1:
             issue = {"code": "ambiguous_name" if paths else "skill_not_found", "repository": repository, "id": identity}
             if paths:
@@ -674,11 +738,9 @@ def resolve_plugin_inventory(plugins, previous, previous_summary, api, budget, w
     return [outcomes[index] for index in range(len(plugins))], [list(key) for key in order]
 
 
-def listing_hints_digest(listings):
-    # A resolver upgrade must re-evaluate old missing/ambiguous mappings even
-    # when the catalog and revision did not change. This also prevents old
-    # cached diagnostics without candidate paths from surviving indefinitely.
-    return sha256_digest(canonical_json({"resolver_version": RESOLVER_VERSION,
+def listing_hints_digest(listings, *, resolver_version=RESOLVER_VERSION):
+    # The version binds the exact rules used to resolve one immutable listing.
+    return sha256_digest(canonical_json({"resolver_version": resolver_version,
         "listings": sorted(listings, key=lambda source: (source["skillId"], source["name"]))}))
 
 
@@ -782,6 +844,22 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         prior = cache.get(repo, {})
         if not isinstance(prior, dict):
             prior = {}
+        # Preserve still-valid v2 cache for resolved/unselected names.
+        # Revisit v2 two-candidate ambiguity only for historical selected
+        # identities; unselected ambiguities must not exhaust discovery budget.
+        legacy_hints = listing_hints_digest(grouped[repo], resolver_version=2)
+        diagnostics = prior.get("diagnostics")
+        ambiguous_pair = isinstance(diagnostics, list) and any(
+            isinstance(issue, dict) and issue.get("code") == "ambiguous_name" and
+            issue.get("id") in previous_by_id and
+            (issue.get("count") == 2 or
+             isinstance(issue.get("candidates"), list) and len(issue["candidates"]) == 2)
+            for issue in diagnostics
+        )
+        # A capped v2 diagnostic list may omit a selected ambiguity; recheck once.
+        truncated = isinstance(diagnostics, list) and len(diagnostics) >= MAX_DIAGNOSTICS
+        if prior.get("hints_digest") == legacy_hints and not (ambiguous_pair or truncated):
+            hints = legacy_hints
         prior_sources = previous_by_id
         ids = prior.get("selected_ids")
         if prior.get("revision") == revision and prior.get("hints_digest") == hints and isinstance(ids, list) and \
@@ -814,7 +892,8 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
                 if sources is not None:
                     resolved[repo] = sources
                     resolution_cache[repo] = entry
-            except (DiscoveryError, BridgeError, CheckpointYield, OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+            except (DiscoveryError, BridgeError, PublicationError, CheckpointYield, OSError,
+                    ValueError, UnicodeError, subprocess.SubprocessError):
                 diagnostics.append({"code": "repository_acquisition_failed", "repository": repo})
 
     candidates = []

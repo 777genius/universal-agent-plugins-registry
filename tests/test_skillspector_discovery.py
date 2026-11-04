@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -206,6 +207,109 @@ class DocumentTests(unittest.TestCase):
             self.assertEqual(diagnostics[0]["candidates"], ["duplicate", "skills/demo"])
             self.assertEqual(diagnostics[0]["count"], 2)
 
+    def test_identical_mirrored_git_trees_resolve_without_name_guessing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, _ = fixture_repository(root)
+            source = root / "source"
+            primary = source / "skills/demo"
+            copied = source / "plugins/agent/skills/demo"
+            (primary / "references").mkdir()
+            (primary / "references/nested.md").write_text("nested content\n")
+            shutil.copytree(primary, copied)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "byte-identical mirrored roots")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, names = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(sorted(names["demo"]), [
+                    "plugins/agent/skills/demo", "skills/demo"])
+                self.assertEqual(issues, [])
+                self.assertEqual([row["path"] for row in rows], ["skills/demo"])
+                self.assertEqual([row["revision"] for row in rows], [revision])
+                # An explicit installation/catalog path never needs inference.
+                explicit, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing() | {
+                        "path": "plugins/agent/skills/demo/SKILL.md"}], pinned, WorkBudget(20))
+                self.assertEqual([row["path"] for row in explicit], [
+                    "plugins/agent/skills/demo"])
+                self.assertEqual(issues, [])
+            finally:
+                pinned.close()
+
+            # Identical primary SKILL.md does not prove unchanged support content.
+            (copied / "references/nested.md").write_text("changed nested dependency\n")
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "change only nested dependency")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(rows, [])
+                self.assertEqual([issue["code"] for issue in issues], ["ambiguous_name"])
+                self.assertEqual(issues[0]["count"], 2)
+            finally:
+                pinned.close()
+
+            # Equal bytes but a different executable mode also fail equality.
+            (copied / "references/nested.md").write_text("nested content\n")
+            (copied / "evil.py").chmod(0o644)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "change only executable mode")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(rows, [])
+                self.assertEqual([issue["code"] for issue in issues], ["ambiguous_name"])
+            finally:
+                pinned.close()
+
+    def test_symlink_and_untrusted_tree_rows_never_prove_equivalence(self):
+        # Even two equal symlink blobs are not executable/analyzable input proof.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, _ = fixture_repository(root)
+            source = root / "source"
+            primary = source / "skills/demo"
+            copied = source / "plugins/agent/skills/demo"
+            (primary / "alias.md").symlink_to("SKILL.md")
+            shutil.copytree(primary, copied, symlinks=True)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "mirrored uninspectable symlink")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(rows, [])
+                self.assertEqual([issue["code"] for issue in issues], ["ambiguous_name"])
+            finally:
+                pinned.close()
+
+        paths = ["left/demo", "right/demo"]
+        for corrupt in (
+            b"100644 blob " + b"a" * 40 + b"\tleft/demo/SKILL.md",  # Truncated
+            b"100644 blob " + b"a" * 40 + b"\t../escape/SKILL.md\0",
+            b"120000 blob " + b"a" * 40 + b"\tleft/demo/SKILL.md\0",
+        ):
+            with self.subTest(corrupt=corrupt), mock.patch.object(
+                discovery, "bounded_tree", return_value=corrupt
+            ):
+                self.assertIsNone(discovery.identical_skill_roots(mock.Mock(), WorkBudget(10), paths))
+
     def test_exact_path_resolves_duplicate_and_ignores_unrelated_oversized_document(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -394,6 +498,19 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(state["selected_ids"], [previous[0]["id"]])
         validate_discovery_summary(summary, selection, "b" * 40)
 
+    def test_git_tree_read_limit_is_isolated_and_not_cached_as_ambiguity(self):
+        previous = [item(id="owner/repo/demo")]
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository"), \
+             mock.patch.object(discovery, "resolve_listings",
+                               side_effect=PublicationError("repository tree exceeds limit")):
+            selection, summary = self.run_discovery([listing()], previous=previous)
+        self.assertEqual(selection["sources"], previous)
+        self.assertEqual(summary["diagnostic_counts"]["repository_acquisition_failed"], 1)
+        self.assertNotIn("owner/repo", summary["resolution_cache"])
+        self.assertEqual(summary["source_states"][0]["state"], "historical")
+        self.assertFalse(summary["source_states"][0]["current"])
+
     def test_cache_requires_both_exact_pin_and_candidate_digest(self):
         row = item(id="owner/repo/demo")
         hint_digest = discovery.listing_hints_digest([listing()])
@@ -409,6 +526,119 @@ class DiscoveryTests(unittest.TestCase):
              mock.patch.object(discovery, "PinnedRepository", side_effect=OSError()) as pinned:
             self.run_discovery([listing()], previous=[row], previous_summary=prior)
             pinned.assert_called_once()
+
+    def test_v2_resolved_cache_survives_targeted_upgrade_without_git_reads(self):
+        row = item(id="owner/repo/demo")
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        prior = {"resolution_cache": {"owner/repo": {"revision": row["revision"],
+            "hints_digest": old_hints, "selected_ids": [row["id"]], "diagnostics": []}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            selection, summary = self.run_discovery([listing()], previous=[row], previous_summary=prior)
+        pinned.assert_not_called()
+        self.assertEqual(selection["sources"], [row])
+        self.assertTrue(summary["complete"])
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
+
+    def test_v2_two_candidate_ambiguity_upgrades_once_then_reuses_v3(self):
+        row = item(id="owner/repo/demo")
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        prior = {"resolution_cache": {"owner/repo": {"revision": row["revision"],
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [{
+                "code": "ambiguous_name", "repository": "owner/repo", "id": row["id"],
+                "count": 2, "candidates": ["skills/demo", "plugins/demo"]}]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned, \
+             mock.patch.object(discovery, "resolve_listings", return_value=([row], [], {})) as resolved:
+            selection, summary = self.run_discovery([listing()], previous=[row], previous_summary=prior)
+        pinned.assert_called_once()
+        resolved.assert_called_once()
+        self.assertEqual(selection["sources"], [row])
+        current_hints = discovery.listing_hints_digest([listing()])
+        self.assertNotEqual(current_hints, old_hints)
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], current_hints)
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            repeated, checked = self.run_discovery([listing()], previous=selection["sources"], previous_summary=summary)
+        pinned.assert_not_called()
+        self.assertEqual(repeated["sources"], [row])
+        self.assertEqual(checked["resolution_cache"]["owner/repo"]["hints_digest"], current_hints)
+
+    def test_v2_unselected_two_candidate_ambiguity_does_not_reload_repository(self):
+        row = item(id="owner/repo/demo")
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        issue = {"code": "ambiguous_name", "repository": "owner/repo",
+            "id": row["id"], "count": 2,
+            "candidates": ["skills/demo", "plugins/demo"]}
+        prior = {"resolution_cache": {"owner/repo": {"revision": row["revision"],
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [issue]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            selection, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_not_called()
+        self.assertEqual(selection["sources"], [])
+        self.assertEqual(summary["source_states"][0]["reason"], "ambiguous_name")
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
+
+    def test_v2_capped_diagnostics_rechecks_hidden_selected_ambiguity(self):
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        prior = {"resolution_cache": {"owner/repo": {"revision": "a" * 40,
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [
+                {"code": "skill_not_found", "repository": "owner/repo",
+                 "id": f"owner/repo/missing-{i}"} for i in range(discovery.MAX_DIAGNOSTICS)]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned, \
+             mock.patch.object(discovery, "resolve_listings", return_value=([], [], {})):
+            _, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_called_once()
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"],
+                         discovery.listing_hints_digest([listing()]))
+
+    def test_duplicate_proof_git_read_failure_propagates_without_caching_ambiguity(self):
+        with mock.patch.object(discovery, "bounded_tree", side_effect=OSError("temporary git read")):
+            with self.assertRaisesRegex(OSError, "temporary git read"):
+                discovery.identical_skill_roots(mock.Mock(), WorkBudget(10),
+                    ["skills/demo", "plugins/agent/skills/demo"])
+
+    def test_duplicate_proof_uses_bounded_name_inventory_without_second_git_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, _ = fixture_repository(root)
+            source = root / "source"
+            copied = source / "plugins/agent/skills/demo"
+            shutil.copytree(source / "skills/demo", copied)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "mirrored content")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                original = discovery.bounded_tree
+                with mock.patch.object(discovery, "bounded_tree", wraps=original) as tree_read:
+                    rows, issues, _ = discovery.resolve_listings("owner/repo", revision,
+                        [listing(), listing(slug="second")], pinned, WorkBudget(20))
+                self.assertEqual(tree_read.call_count, 1)
+                self.assertEqual([row["path"] for row in rows], ["skills/demo", "skills/demo"])
+                self.assertEqual(issues, [])
+            finally:
+                pinned.close()
+
+    def test_v2_three_candidate_ambiguity_not_needlessly_reacquired(self):
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        issue = {"code": "ambiguous_name", "repository": "owner/repo",
+            "id": "owner/repo/demo", "count": 3,
+            "candidates": ["one", "two", "three"]}
+        prior = {"resolution_cache": {"owner/repo": {"revision": "a" * 40,
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [issue]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            selection, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_not_called()
+        self.assertEqual(selection["sources"], [])
+        self.assertEqual(summary["source_states"][0]["reason"], "ambiguous_name")
+        self.assertEqual(summary["source_states"][0]["candidates"], issue["candidates"])
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
 
     def test_resolver_upgrade_revisits_cached_ambiguity_to_retain_candidates(self):
         prior = {"resolution_cache": {"owner/repo": {"revision": "a" * 40,

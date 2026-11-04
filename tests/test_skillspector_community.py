@@ -302,7 +302,8 @@ class CommunityInventoryTests(unittest.TestCase):
 
         with mock.patch.object(discovery, 'repository_states', side_effect=states), \
              mock.patch.object(discovery, 'PinnedRepository', side_effect=acquire), \
-             mock.patch.object(discovery, 'skill_documents', return_value=({'demo': ['skills/demo']}, [])):
+             mock.patch.object(discovery, 'skill_documents',
+                               return_value=({'demo': ['skills/demo']}, [], b'')):
             selection, summary = discovery.discover([listing], metadata(plugins), api, budget,
                 source_commit=COMMIT, plugins=plugins, workers=1)
 
