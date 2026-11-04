@@ -78,6 +78,13 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "v2 selector"):
             sign_snapshot_v2(second, "test-current", self.private)
 
+    def test_v2_project_grant_cannot_borrow_user_runtime_proof(self):
+        modified = copy.deepcopy(self.snapshot)
+        grant = modified["distributions"][0]["release_policies"][0]["targets"][0]
+        grant["scope"] = "project"
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(modified, "test-current", self.private)
+
     def test_cross_release_evidence_and_unqualified_scope_refused(self):
         modified = copy.deepcopy(self.snapshot)
         modified["distributions"][0]["release_policies"][0]["targets"][0]["minimum_installer_version"] = "0.1.0"
