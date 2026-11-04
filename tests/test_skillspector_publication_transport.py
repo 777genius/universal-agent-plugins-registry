@@ -650,6 +650,30 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
                 self.assertTrue(terminal_stream.closed)
                 sleeper.assert_not_called()
 
+    def test_http_429_requires_bounded_retry_after_instead_of_hammering(self):
+        retry_error = http_error(429, {"Retry-After": "2"})
+        stream = retry_error.fp
+        publisher, opener = self.client([retry_error, b"{}"])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.raw_file("a" * 40, "index.json", 64), b"{}")
+        self.assertTrue(stream.closed)
+        self.assertEqual(len(self.requests), 2)
+        sleeper.assert_called_once_with(2)
+
+        for headers in ({}, {"Retry-After": "999"}, {"Retry-After": "invalid"}):
+            with self.subTest(headers=headers):
+                terminal = http_error(429, headers)
+                stream = terminal.fp
+                publisher, opener = self.client([terminal])
+                with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+                     mock.patch.object(publisher.time, "sleep") as sleeper:
+                    with self.assertRaisesRegex(PublicationError, "HTTP 429"):
+                        publisher.raw_file("a" * 40, "index.json", 64)
+                self.assertTrue(stream.closed)
+                self.assertEqual(len(self.requests), 1)
+                sleeper.assert_not_called()
+
     def test_exhausted_timeouts_are_bounded_and_sanitized(self):
         publisher, opener = self.client([TimeoutError("private-token") for _ in range(3)])
         with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
