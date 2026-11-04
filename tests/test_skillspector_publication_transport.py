@@ -625,15 +625,20 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
         sleeper.assert_called_once_with(1)
 
     def test_transient_http_503_retries_and_optional_404_does_not(self):
-        publisher, opener = self.client([http_error(503), b"{}"])
+        retry_error = http_error(503)
+        retry_stream = retry_error.fp
+        publisher, opener = self.client([retry_error, b"{}"])
         with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
              mock.patch.object(publisher.time, "sleep") as sleeper:
             self.assertEqual(publisher.raw_file("a" * 40, "index.json", 64), b"{}")
         self.assertEqual(len(self.requests), 2)
+        self.assertTrue(retry_stream.closed)
         sleeper.assert_called_once_with(1)
         for optional in (True, False):
             with self.subTest(optional=optional):
-                publisher, opener = self.client([http_error(404)])
+                terminal_error = http_error(404)
+                terminal_stream = terminal_error.fp
+                publisher, opener = self.client([terminal_error])
                 with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
                      mock.patch.object(publisher.time, "sleep") as sleeper:
                     if optional:
@@ -642,6 +647,7 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
                         with self.assertRaisesRegex(PublicationError, r"HTTP 404"):
                             publisher.raw_file("a" * 40, "index.json", 64)
                 self.assertEqual(len(self.requests), 1)
+                self.assertTrue(terminal_stream.closed)
                 sleeper.assert_not_called()
 
     def test_exhausted_timeouts_are_bounded_and_sanitized(self):
