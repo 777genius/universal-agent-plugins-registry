@@ -610,7 +610,7 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
             event = responses.pop(0)
             if isinstance(event, Exception):
                 raise event
-            return Response(event)
+            return event if isinstance(event, Response) else Response(event)
         return publication, opener
 
     def test_read_timeout_retries_whole_exact_sha_url_without_credentials(self):
@@ -654,6 +654,22 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
         self.assertNotIn("private-token", str(raised.exception))
         self.assertEqual([timeout for _, timeout in self.requests], [30, 30, 30])
         self.assertEqual(sleeper.call_args_list, [mock.call(1), mock.call(2)])
+
+    def test_incomplete_read_discards_partial_response_before_retry(self):
+        import http.client
+        class Interrupted(Response):
+            def read(self, _limit=-1):
+                raise http.client.IncompleteRead(b"partial-private-content", 12)
+
+        broken = Interrupted(b"partial-private-content")
+        publisher, opener = self.client([broken, b'{"complete":true}'])
+        with mock.patch.object(publisher.urllib.request, "urlopen", side_effect=opener), \
+             mock.patch.object(publisher.time, "sleep") as sleeper:
+            body = publisher.raw_file("a" * 40, "index.json", 64)
+        self.assertEqual(body, b'{"complete":true}')
+        self.assertTrue(broken.closed)
+        self.assertEqual(len(self.requests), 2)
+        sleeper.assert_called_once_with(1)
 
     def test_nontransient_and_oversize_responses_never_retry(self):
         publisher, opener = self.client([OSError("private-token")])
