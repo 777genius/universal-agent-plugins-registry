@@ -2,8 +2,8 @@
 """Discover bounded immutable static-scan subjects; never execute skill content.
 
 The catalog is a discovery hint. An explicit path is verified against its pinned
-Git tree and declared name; otherwise only an unambiguous declared name resolves
-a listing to a root. Partial acquisitions retain prior roots
+Git tree and declared name; otherwise a unique name or verified byte-identical
+duplicate roots resolve a listing to a root. Partial acquisitions retain prior roots
 as historical subjects and are explicitly reported, never called fresh scans.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ MAX_DOCUMENT_TOTAL_BYTES = 16 << 20
 MAX_DIAGNOSTICS = 256
 MAX_CANDIDATES = 64
 MAX_SOURCE_STATES = MAX_LISTINGS + MAX_ROOTS
-RESOLVER_VERSION = 2
+RESOLVER_VERSION = 3  # Recheck cached duplicate-name candidates for exact Git-tree equivalence.
 PLUGIN_RESOLVER_VERSION = 1
 PATH_RE = re.compile(r"^(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
