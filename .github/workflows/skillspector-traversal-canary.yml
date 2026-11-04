@@ -1,0 +1,41 @@
+name: SkillSpector parent traversal fail-closed canary
+
+on:
+  pull_request:
+    paths:
+      - "scripts/patch_skillspector_traversal_guard_canary.py"
+      - "scripts/test_skillspector_traversal_guard_canary.py"
+      - ".github/workflows/skillspector-traversal-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-traversal-cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035
+          persist-credentials: false
+          path: scanner
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned scanner without executing any Skill
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4 PyYAML==6.0.3
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+      - name: Preserve existing vetted directory semantics
+        run: python3 source/scripts/patch_skillspector_directory_references.py scanner --verify
+      - name: Apply bounded traversal canary and resolver verification
+        run: python3 source/scripts/patch_skillspector_traversal_guard_canary.py scanner --verify
+      - name: Actual CLI regression without source execution
+        run: python3 source/scripts/test_skillspector_traversal_guard_canary.py scanner/.venv/bin/skillspector
