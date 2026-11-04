@@ -1,0 +1,64 @@
+name: SkillSpector pinned 2.13.3 upgrade canary
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_upgrade_compare.py"
+      - ".github/workflows/skillspector-upgrade-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-scanner-releases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035 # v2.13.1, current production
+          persist-credentials: false
+          path: scanner-old
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: 38a1dfe93325d2f8bfcd4f8d0241eed706334915 # v2.13.3, canary only
+          persist-credentials: false
+          path: scanner-new
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: rorkai/app-store-connect-cli-skills
+          ref: 7de1ef7cc831f62d205dfa589063f3831f66391b
+          sparse-checkout: skills/asc-workflow
+          persist-credentials: false
+          path: real-asc
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install two immutable upstream releases
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner-old --frozen --no-dev --python 3.12
+          uv sync --directory scanner-new --frozen --no-dev --python 3.12
+      - name: Compare bounded real CLI coverage and retain true missing executable
+        timeout-minutes: 12
+        run: |
+          python3 source/scripts/skillspector_upgrade_compare.py \
+            --old scanner-old/.venv/bin/skillspector \
+            --new scanner-new/.venv/bin/skillspector \
+            --real-skill real-asc/skills/asc-workflow \
+            --out "${RUNNER_TEMP}/skillspector-upgrade-canary/comparison.json"
+      - name: Preserve machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-release-comparison
+          path: ${{ runner.temp }}/skillspector-upgrade-canary/
+          if-no-files-found: warn
+          retention-days: 7
