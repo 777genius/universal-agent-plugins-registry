@@ -13,7 +13,7 @@
 
 A read-only, no-LLM hosted CI comparison at two immutable upstream SHAs, using identical inputs, fixed process/static analyzer budgets, and true fail-on-incomplete behavior. Test control (no references), a true missing executable (must remain Partial), a JSON VERSION literal, a typed data-field table, and the immutable real asc-workflow Skill at `rorkai/app-store-connect-cli-skills@7de1ef7cc831f62d205dfa589063f3831f66391b` (verified SKILL.md Git blob `121e813665d7fe7512e4a59ad0c341b92d8d124c`). Retain JSON evidence only, no raw untrusted source or secrets.
 
-**This PR MUST NOT change production scanner SHA, report profiles, selection, scheduling, retry policy, statuses or signed publications.** The comparison does not currently attempt to apply the production v2.13.1-only directory patch on the v2.13.3 checkout; results are therefore diagnostic, not a production-quality equivalence proof.
+**This PR MUST NOT change production scanner SHA, report profiles, selection, scheduling, retry policy, statuses or signed publications.** Both upstream checkouts receive the same conservative pinned directory-reference maintenance logic, with separate immutable commit/blob/anchor verification for v2.13.3. Upstream 2.13.3 references.py is byte-identical to 2.13.1; build_context.py differs only by .mjs/.cjs extension recognition. This is still a diagnostic, not a production rollout or full scanner-equivalence proof.
 
 ## Implementation/review risks
 
