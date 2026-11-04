@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -205,6 +206,109 @@ class DocumentTests(unittest.TestCase):
             self.assertEqual([d["code"] for d in diagnostics], ["ambiguous_name", "invalid_skill_documents"])
             self.assertEqual(diagnostics[0]["candidates"], ["duplicate", "skills/demo"])
             self.assertEqual(diagnostics[0]["count"], 2)
+
+    def test_identical_mirrored_git_trees_resolve_without_name_guessing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, _ = fixture_repository(root)
+            source = root / "source"
+            primary = source / "skills/demo"
+            copied = source / "plugins/agent/skills/demo"
+            (primary / "references").mkdir()
+            (primary / "references/nested.md").write_text("nested content\n")
+            shutil.copytree(primary, copied)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "byte-identical mirrored roots")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, names = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(sorted(names["demo"]), [
+                    "plugins/agent/skills/demo", "skills/demo"])
+                self.assertEqual(issues, [])
+                self.assertEqual([row["path"] for row in rows], ["skills/demo"])
+                self.assertEqual([row["revision"] for row in rows], [revision])
+                # An explicit installation/catalog path never needs inference.
+                explicit, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing() | {
+                        "path": "plugins/agent/skills/demo/SKILL.md"}], pinned, WorkBudget(20))
+                self.assertEqual([row["path"] for row in explicit], [
+                    "plugins/agent/skills/demo"])
+                self.assertEqual(issues, [])
+            finally:
+                pinned.close()
+
+            # Identical primary SKILL.md does not prove unchanged support content.
+            (copied / "references/nested.md").write_text("changed nested dependency\n")
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "change only nested dependency")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(rows, [])
+                self.assertEqual([issue["code"] for issue in issues], ["ambiguous_name"])
+                self.assertEqual(issues[0]["count"], 2)
+            finally:
+                pinned.close()
+
+            # Equal bytes but a different executable mode also fail equality.
+            (copied / "references/nested.md").write_text("nested content\n")
+            (copied / "evil.py").chmod(0o644)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "change only executable mode")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(rows, [])
+                self.assertEqual([issue["code"] for issue in issues], ["ambiguous_name"])
+            finally:
+                pinned.close()
+
+    def test_symlink_and_untrusted_tree_rows_never_prove_equivalence(self):
+        # Even two equal symlink blobs are not executable/analyzable input proof.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mirrors, _ = fixture_repository(root)
+            source = root / "source"
+            primary = source / "skills/demo"
+            copied = source / "plugins/agent/skills/demo"
+            (primary / "alias.md").symlink_to("SKILL.md")
+            shutil.copytree(primary, copied, symlinks=True)
+            git(source, "add", ".")
+            git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "-qm", "mirrored uninspectable symlink")
+            revision = git(source, "rev-parse", "HEAD")
+            git(mirrors / "owner/repo.git", "fetch", str(source), f"{revision}:{revision}")
+            pinned = discovery.PinnedRepository("owner/repo", revision, mirrors)
+            try:
+                rows, issues, _ = discovery.resolve_listings(
+                    "owner/repo", revision, [listing()], pinned, WorkBudget(20))
+                self.assertEqual(rows, [])
+                self.assertEqual([issue["code"] for issue in issues], ["ambiguous_name"])
+            finally:
+                pinned.close()
+
+        paths = ["left/demo", "right/demo"]
+        for corrupt in (
+            b"100644 blob " + b"a" * 40 + b"\tleft/demo/SKILL.md",  # Truncated
+            b"100644 blob " + b"a" * 40 + b"\t../escape/SKILL.md\0",
+            b"120000 blob " + b"a" * 40 + b"\tleft/demo/SKILL.md\0",
+        ):
+            with self.subTest(corrupt=corrupt), mock.patch.object(
+                discovery, "bounded_tree", return_value=corrupt
+            ):
+                self.assertIsNone(discovery.identical_skill_roots(mock.Mock(), WorkBudget(10), paths))
 
     def test_exact_path_resolves_duplicate_and_ignores_unrelated_oversized_document(self):
         with tempfile.TemporaryDirectory() as temporary:
