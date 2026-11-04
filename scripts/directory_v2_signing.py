@@ -94,6 +94,10 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
                         and evidence[evidence_id].get("scope") == "project"
                         and evidence[evidence_id].get("level") == "runtime"
                         and evidence[evidence_id].get("outcome") == "passed"
+                        and (not grant.get("canonical_closure")
+                             or not grant["canonical_closure"]["eligible"]
+                             or evidence[evidence_id].get("closure_digest")
+                             == grant["canonical_closure"]["closure_digest"])
                         for evidence_id in grant["current_evidence"]
                     )
                     require(qualified, "v2 project grant lacks qualified scoped runtime evidence")

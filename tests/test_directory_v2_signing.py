@@ -78,6 +78,31 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "v2 selector"):
             sign_snapshot_v2(second, "test-current", self.private)
 
+    def test_project_runtime_proof_must_match_exact_canonical_closure(self):
+        candidate = copy.deepcopy(self.snapshot)
+        policy = candidate["distributions"][0]["release_policies"][0]
+        grant = policy["targets"][0]
+        grant["scope"] = "project"
+        digest = "sha256:" + "a" * 64
+        grant["canonical_closure"] = {
+            "eligible": True,
+            "closure_digest": digest,
+            "minimum_installer_version": grant["minimum_installer_version"],
+        }
+        runtime = copy.deepcopy(candidate["evidence"][0])
+        runtime["id"] = "project-runtime-exact"
+        runtime["client"] = grant["client"]
+        runtime["scope"] = "project"
+        runtime["closure_digest"] = digest
+        runtime["outcome"] = "passed"
+        runtime["level"] = "runtime"
+        candidate["evidence"].append(runtime)
+        grant["current_evidence"] = [runtime["id"]]
+        sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime["closure_digest"] = "sha256:" + "b" * 64
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
     def test_v2_project_grant_cannot_borrow_user_runtime_proof(self):
         modified = copy.deepcopy(self.snapshot)
         grant = modified["distributions"][0]["release_policies"][0]["targets"][0]
