@@ -537,7 +537,7 @@ class DiscoveryTests(unittest.TestCase):
         with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
              mock.patch.object(discovery, "PinnedRepository") as pinned, \
              mock.patch.object(discovery, "resolve_listings", return_value=([row], [], {})) as resolved:
-            selection, summary = self.run_discovery([listing()], previous_summary=prior)
+            selection, summary = self.run_discovery([listing()], previous=[row], previous_summary=prior)
         pinned.assert_called_once()
         resolved.assert_called_once()
         self.assertEqual(selection["sources"], [row])
@@ -550,6 +550,22 @@ class DiscoveryTests(unittest.TestCase):
         pinned.assert_not_called()
         self.assertEqual(repeated["sources"], [row])
         self.assertEqual(checked["resolution_cache"]["owner/repo"]["hints_digest"], current_hints)
+
+    def test_v2_unselected_two_candidate_ambiguity_does_not_reload_repository(self):
+        row = item(id="owner/repo/demo")
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        issue = {"code": "ambiguous_name", "repository": "owner/repo",
+            "id": row["id"], "count": 2,
+            "candidates": ["skills/demo", "plugins/demo"]}
+        prior = {"resolution_cache": {"owner/repo": {"revision": row["revision"],
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [issue]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            selection, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_not_called()
+        self.assertEqual(selection["sources"], [])
+        self.assertEqual(summary["source_states"][0]["reason"], "ambiguous_name")
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
 
     def test_v2_three_candidate_ambiguity_not_needlessly_reacquired(self):
         old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)

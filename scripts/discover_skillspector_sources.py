@@ -837,13 +837,14 @@ def discover(listings, catalog, api, budget, *, source_commit, previous=(), revi
         prior = cache.get(repo, {})
         if not isinstance(prior, dict):
             prior = {}
-        # Preserve still-valid v2 cache entries for resolved/unrelated names.
-        # Revisit only v2 entries blocked by two-candidate ambiguity; on the
-        # next run their v3 digest is stable, even if the trees differ.
+        # Preserve still-valid v2 cache for resolved/unselected names.
+        # Revisit v2 two-candidate ambiguity only for historical selected
+        # identities; unselected ambiguities must not exhaust discovery budget.
         legacy_hints = listing_hints_digest(grouped[repo], resolver_version=2)
         diagnostics = prior.get("diagnostics")
         ambiguous_pair = isinstance(diagnostics, list) and any(
             isinstance(issue, dict) and issue.get("code") == "ambiguous_name" and
+            issue.get("id") in previous_by_id and
             (issue.get("count") == 2 or
              isinstance(issue.get("candidates"), list) and len(issue["candidates"]) == 2)
             for issue in diagnostics

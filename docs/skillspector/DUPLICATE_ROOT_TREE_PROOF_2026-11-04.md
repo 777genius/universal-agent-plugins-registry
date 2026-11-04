@@ -16,6 +16,21 @@ When exactly two candidate directories share a declared Skill name **and the cat
 
 Use the existing `bounded_tree` **recursive** subprocess/deadline/output limits unchanged, no dynamic code execution or new network client. Reject symlinks, submodules, malformed/truncated output, case collisions and unsafe paths before comparing complete inventories. No scanner profile/policy changes, no finding suppression, no forced Complete, no retry reset, no feature flags. Source selection includes the real path and revision.
 
+## Measured v2 cache upgrade scope
+
+The immutable 2026-11-04 v3 discovery report has **84 cached repositories with
+539 two-candidate ambiguities**, but only **26 ambiguous identities are still
+selected historical subjects** (18 Microsoft, 7 Google, 1 Caveman). The other
+513 are unselected catalog ambiguities. Unconditionally invalidating all 84
+cached repositories would spend the finite discovery budget outside issue #417.
+
+Upgrade a v2 resolver entry only if a two-candidate ambiguous `id` is present in
+the previous selection. This re-opens just the **three impacted repositories**
+for the measured cohort. All other unchanged v2 entries retain their previously
+recorded unresolved evidence; a changed source revision still invalidates
+their cache normally. The v3 entry is reused on later unchanged runs. No
+scanner/profile, published status, or evidence policy is changed.
+
 ## Required E2E
 
 - Hermetic real Git object fixtures with **two truly identical nested directory trees** -> one selected current source; differing nested file, different mode, symlink or malformed Git tree -> ambiguous.
