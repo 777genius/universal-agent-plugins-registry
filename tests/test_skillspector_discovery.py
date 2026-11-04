@@ -514,6 +514,59 @@ class DiscoveryTests(unittest.TestCase):
             self.run_discovery([listing()], previous=[row], previous_summary=prior)
             pinned.assert_called_once()
 
+    def test_v2_resolved_cache_survives_targeted_upgrade_without_git_reads(self):
+        row = item(id="owner/repo/demo")
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        prior = {"resolution_cache": {"owner/repo": {"revision": row["revision"],
+            "hints_digest": old_hints, "selected_ids": [row["id"]], "diagnostics": []}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            selection, summary = self.run_discovery([listing()], previous=[row], previous_summary=prior)
+        pinned.assert_not_called()
+        self.assertEqual(selection["sources"], [row])
+        self.assertTrue(summary["complete"])
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
+
+    def test_v2_two_candidate_ambiguity_upgrades_once_then_reuses_v3(self):
+        row = item(id="owner/repo/demo")
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        prior = {"resolution_cache": {"owner/repo": {"revision": row["revision"],
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [{
+                "code": "ambiguous_name", "repository": "owner/repo", "id": row["id"],
+                "count": 2, "candidates": ["skills/demo", "plugins/demo"]}]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned, \
+             mock.patch.object(discovery, "resolve_listings", return_value=([row], [], {})) as resolved:
+            selection, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_called_once()
+        resolved.assert_called_once()
+        self.assertEqual(selection["sources"], [row])
+        current_hints = discovery.listing_hints_digest([listing()])
+        self.assertNotEqual(current_hints, old_hints)
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], current_hints)
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            repeated, checked = self.run_discovery([listing()], previous=selection["sources"], previous_summary=summary)
+        pinned.assert_not_called()
+        self.assertEqual(repeated["sources"], [row])
+        self.assertEqual(checked["resolution_cache"]["owner/repo"]["hints_digest"], current_hints)
+
+    def test_v2_three_candidate_ambiguity_not_needlessly_reacquired(self):
+        old_hints = discovery.listing_hints_digest([listing()], resolver_version=2)
+        issue = {"code": "ambiguous_name", "repository": "owner/repo",
+            "id": "owner/repo/demo", "count": 3,
+            "candidates": ["one", "two", "three"]}
+        prior = {"resolution_cache": {"owner/repo": {"revision": "a" * 40,
+            "hints_digest": old_hints, "selected_ids": [], "diagnostics": [issue]}}}
+        with mock.patch.object(discovery, "repository_states", return_value=self.state()), \
+             mock.patch.object(discovery, "PinnedRepository") as pinned:
+            selection, summary = self.run_discovery([listing()], previous_summary=prior)
+        pinned.assert_not_called()
+        self.assertEqual(selection["sources"], [])
+        self.assertEqual(summary["source_states"][0]["reason"], "ambiguous_name")
+        self.assertEqual(summary["source_states"][0]["candidates"], issue["candidates"])
+        self.assertEqual(summary["resolution_cache"]["owner/repo"]["hints_digest"], old_hints)
+
     def test_resolver_upgrade_revisits_cached_ambiguity_to_retain_candidates(self):
         prior = {"resolution_cache": {"owner/repo": {"revision": "a" * 40,
             "hints_digest": discovery.sha256_digest(discovery.canonical_json([listing()])),
