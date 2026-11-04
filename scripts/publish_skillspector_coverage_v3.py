@@ -60,11 +60,13 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
     # Each attempt reads one whole immutable object. Discard partial reads on
     # transient failures; never retry an invalid/oversized artifact or a ref write.
     for attempt in range(3):
+        delay = 1 + attempt
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 body = response.read(maximum + 1)
         except urllib.error.HTTPError as error:
             code = error.code
+            retry_after = error.headers.get("Retry-After") if error.headers else None
             # HTTPError may own a live response stream, even on optional 404.
             try:
                 error.close()
@@ -72,7 +74,12 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
                 pass
             if code == 404 and optional:
                 return None
-            if code not in {429, 500, 502, 503, 504} or attempt == 2:
+            if code == 429:
+                # Never hammer a rate-limited host without a bounded retry hint.
+                if attempt == 2 or retry_after is None or not retry_after.isdecimal() or int(retry_after) > 60:
+                    raise PublicationError("Public coverage read failed (HTTP 429)") from None
+                delay = max(1, int(retry_after))
+            elif code not in {500, 502, 503, 504} or attempt == 2:
                 raise PublicationError(f"Public coverage read failed (HTTP {code})") from None
         except (OSError, urllib.error.URLError, http.client.IncompleteRead) as error:
             if attempt == 2 or not GitHub._transient(error):
@@ -80,7 +87,7 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
         else:
             require(len(body) <= maximum, "public coverage file exceeds limit")
             return body
-        time.sleep(1 + attempt)
+        time.sleep(delay)
     raise AssertionError("unreachable public read retry loop")
 
 
