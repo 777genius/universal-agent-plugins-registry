@@ -201,7 +201,7 @@ def main() -> None:
                     raise AssertionError(("Scanner mutated pinned real skill", name))
                 if hashlib.sha256((inputs / "outside-runner.sh").read_bytes()).hexdigest() != outside_fingerprint:
                     raise AssertionError(("Scanner mutated out-of-root target", name))
-    
+
         finally:
             # Retain all completed CLI measurements when a later scan fails or times out.
             evidence = {
