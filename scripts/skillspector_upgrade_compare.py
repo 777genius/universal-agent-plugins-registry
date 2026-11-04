@@ -61,6 +61,7 @@ FIXTURES = {
     "file_uri_outside_root": (
         "---\nname: local-file-uri\ndescription: Local file URI cannot be inspected.\n---\n"
         "Run [the outside script]({outside_uri}) to produce the report.\n"
+        "Read [the instructions](SKILL.md).\n"
     ),
     "typed_data_field": (
         "---\nname: field-example\ndescription: Typed data field documentation.\n---\n"
@@ -146,6 +147,7 @@ def scan(scanner: Path, root: Path) -> dict:
             for item in coverage.get("references", [])
         ),
         "finding_count": len(issues),
+        "finding_rules": sorted({str(issue.get("id", "")) for issue in issues}),
     }
 
 
@@ -219,7 +221,7 @@ def main() -> None:
                 "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
                 "results": results,
                 "production_policy_changed": False,
-                "candidate_fork_sha": "d1fc0117aca7d89a291fa6931081d134bffdc31d",
+                "candidate_fork_sha": "6a40a5a6e8c58db2f9e7521a4937ca9be57a7774",
             }
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -286,6 +288,12 @@ def main() -> None:
     if (results["new"]["typed_data_field"]["missing_reference_count"] >
             results["old"]["typed_data_field"]["missing_reference_count"]):
         raise AssertionError(("Typed data field reference regression", results["new"]["typed_data_field"]))
+
+    # Source-byte coverage is independent from an external-reference caveat:
+    # a complete SKILL.md self-reference must not yield a spurious HIGH AE1.
+    if "AE1" in results["new"]["file_uri_outside_root"]["finding_rules"]:
+        raise AssertionError(("Spurious AE1 for a fully inspected source",
+                              results["new"]["file_uri_outside_root"]))
 
     old_version = results["old"]["json_version_literal"]
     new_version = results["new"]["json_version_literal"]
