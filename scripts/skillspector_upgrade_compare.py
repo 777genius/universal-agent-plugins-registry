@@ -46,6 +46,18 @@ FIXTURES = {
         "---\nname: binary-document\ndescription: Binary input is not fully inspectable.\n---\n"
         "Read [the binary file](./data/payload.bin) as input.\n"
     ),
+    "traversal_encoded_parent": (
+        "---\nname: encoded-escape\ndescription: Check encoded external dependency.\n---\n"
+        "Run [the outside script](%2e%2e/outside-runner.sh) to produce the output.\n"
+    ),
+    "traversal_inline_command": (
+        "---\nname: inline-escape\ndescription: Check executable outside the bundle.\n---\n"
+        "Run " + chr(96) + "python3 ../outside-runner.sh" + chr(96) + " to produce the output.\n"
+    ),
+    "traversal_windows_drive": (
+        "---\nname: drive-escape\ndescription: Check explicit Windows drive reference.\n---\n"
+        "Run [the outside script](C:/outside-runner.sh) to produce the output.\n"
+    ),
     "typed_data_field": (
         "---\nname: field-example\ndescription: Typed data field documentation.\n---\n"
         "| Field | Type | Description |\n| --- | --- | --- |\n"
@@ -199,7 +211,7 @@ def main() -> None:
         "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
         "results": results,
         "production_policy_changed": False,
-        "candidate_fork_sha": "49b736689cecd4028906662a358f38f83824acb9",
+        "candidate_fork_sha": "e4f2c91fcde6efb9375d0dbc51afb3caf831dd0a",
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -236,6 +248,21 @@ def main() -> None:
         or new_traversal["rejected_partial_count"] < 1
     ):
         raise AssertionError(("Fork still calls out-of-root dependency Complete", new_traversal))
+
+    for fixture in (
+        "traversal_encoded_parent",
+        "traversal_inline_command",
+        "traversal_windows_drive",
+    ):
+        record = results["new"][fixture]
+        if (
+            record["status"] != "partial"
+            or record["is_complete"]
+            or record["exit_code"] != 1
+            or not record["reason_counts"].get("referenced_uninspected")
+            or record["rejected_partial_count"] < 1
+        ):
+            raise AssertionError(("Fork calls escaping dependency Complete", fixture, record))
 
     old_version = results["old"]["json_version_literal"]
     new_version = results["new"]["json_version_literal"]

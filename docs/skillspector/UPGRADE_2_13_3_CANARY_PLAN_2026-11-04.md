@@ -15,7 +15,7 @@
   missing-executable and symlink/directory incompleteness. The result remains a
   regression; never classify that old success as accepted security coverage.
 - Current **candidate** is an immutable user-owned fork SHA
-  `777genius/SkillSpector@49b736689cecd4028906662a358f38f83824acb9`,
+  `777genius/SkillSpector@e4f2c91fcde6efb9375d0dbc51afb3caf831dd0a`,
   stacked on upstream v2.13.3. The fork adds narrow JSON `VERSION`
   extraction correction and conservative `referenced_uninspected` ledger
   accounting for out-of-bundle Markdown parent traversal, preserving rejected
