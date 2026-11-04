@@ -54,6 +54,23 @@ FIXTURES = {
 }
 
 
+def input_fingerprint(root: Path) -> str:
+    """Fail closed if either scanner mutates a shared fixture or pinned real root."""
+    records: list[str] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            kind, payload = "link", os.readlink(path).encode()
+        elif path.is_file():
+            kind, payload = "file", path.read_bytes()
+        elif path.is_dir():
+            kind, payload = "dir", b""
+        else:
+            raise AssertionError(("Unexpected input kind", relative))
+        records.append(f"{relative}\t{kind}\t{hashlib.sha256(payload).hexdigest()}")
+    return hashlib.sha256("\n".join(records).encode()).hexdigest()
+
+
 def version(scanner: Path) -> str:
     done = subprocess.run([str(scanner), "--version"], capture_output=True, text=True,
                           timeout=20, check=True)
@@ -151,11 +168,21 @@ def main() -> None:
         (inputs / "symlink_outside_root" / "scripts" / "runner.sh").symlink_to(
             inputs / "outside-runner.sh"
         )
+        fingerprints = {name: input_fingerprint(inputs / name) for name in FIXTURES}
+        fingerprints["real_asc_workflow"] = input_fingerprint(source.parent)
+        outside_fingerprint = hashlib.sha256((inputs / "outside-runner.sh").read_bytes()).hexdigest()
         for name, scanner in scanners.items():
             reports = {}
             for fixture in FIXTURES:
-                reports[fixture] = scan(scanner, inputs / fixture)
+                root = inputs / fixture
+                reports[fixture] = scan(scanner, root)
+                if input_fingerprint(root) != fingerprints[fixture]:
+                    raise AssertionError(("Scanner mutated its fixture", name, fixture))
             reports["real_asc_workflow"] = scan(scanner, source.parent)
+            if input_fingerprint(source.parent) != fingerprints["real_asc_workflow"]:
+                raise AssertionError(("Scanner mutated pinned real skill", name))
+            if hashlib.sha256((inputs / "outside-runner.sh").read_bytes()).hexdigest() != outside_fingerprint:
+                raise AssertionError(("Scanner mutated out-of-root target", name))
             results[name] = reports
 
     for name, reports in results.items():
@@ -176,6 +203,7 @@ def main() -> None:
 
     evidence = {
         "format": "uap.skillspector.release-comparison.v1",
+        "input_sha256": fingerprints,
         "immutable_real_skill_blob": oid,
         "scanner_versions": versions,
         "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
