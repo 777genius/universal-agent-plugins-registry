@@ -46,6 +46,8 @@ jobs:
           python3 -m pip install --disable-pip-version-check uv==0.13.4
           uv sync --directory scanner-old --frozen --no-dev --python 3.12
           uv sync --directory scanner-new --frozen --no-dev --python 3.12
+      - name: Match the exact production v2.13.1 reference maintenance patch
+        run: python3 source/scripts/patch_skillspector_directory_references.py scanner-old --verify
       - name: Compare bounded real CLI coverage and retain true missing executable
         timeout-minutes: 12
         run: |
