@@ -396,6 +396,59 @@ def listing_path(listing):
     return path.removesuffix("/SKILL.md")
 
 
+def identical_skill_roots(pinned, budget, paths):
+    """Select a canonical root only after proving whole pinned trees identical.
+
+    The bounded Git listing includes every nested relative path, mode and blob
+    object ID. Matching SKILL.md alone must never resolve an ambiguous source.
+    """
+    if len(paths) != 2 or any(not path for path in paths):
+        return None
+    roots = sorted(paths)
+    if roots[0] == roots[1] or any(root.startswith(other + "/")
+                                     for root in roots for other in roots if root != other):
+        return None
+    try:
+        for root in roots:
+            portable_path(root, "candidate skill path")
+        raw = bounded_tree(pinned, budget, roots)
+        if not raw or not raw.endswith(b"\0"):
+            return None
+        entries = {root: {} for root in roots}
+        count = 0
+        for row in raw.split(b"\0"):
+            if not row:
+                continue
+            count += 1
+            if count > MAX_TREE_ENTRIES:
+                return None
+            metadata, encoded_path = row.split(b"\t", 1)
+            mode, kind, oid = metadata.decode("ascii").split()
+            path = encoded_path.decode("utf-8")
+            if kind != "blob" or mode not in {"100644", "100755"} or not SHA_RE.fullmatch(oid):
+                return None  # Symlinks, submodules and unsupported modes are never proven safe.
+            owners = [root for root in roots if path.startswith(root + "/")]
+            if len(owners) != 1:
+                return None
+            root = owners[0]
+            relative = path[len(root) + 1:]
+            portable_path(relative, "candidate skill entry")
+            folded = relative.casefold()
+            if folded in entries[root]:
+                return None
+            entries[root][folded] = (relative, mode, oid)
+        first, second = (entries[root] for root in roots)
+        if (not first or not second or "skill.md" not in first or
+                "skill.md" not in second or first != second):
+            return None
+    except (BridgeError, DiscoveryError, PublicationError, UnicodeError, ValueError,
+            OSError, subprocess.SubprocessError):
+        return None
+    # With identical acquired bytes and file modes, either path yields the same
+    # static-analysis input. Prefer shortest then lexical; record the real path.
+    return min(roots, key=lambda root: (len(root), root))
+
+
 def resolve_listings(repository, revision, listings, pinned, budget):
     sources, diagnostics, explicit = [], [], {}
     eligible = []
@@ -439,6 +492,10 @@ def resolve_listings(repository, revision, listings, pinned, budget):
             paths = [root]
         else:
             paths = names.get(listing["name"], [])
+            if len(paths) == 2:
+                proven = identical_skill_roots(pinned, budget, paths)
+                if proven is not None:
+                    paths = [proven]
         if len(paths) != 1:
             issue = {"code": "ambiguous_name" if paths else "skill_not_found", "repository": repository, "id": identity}
             if paths:
