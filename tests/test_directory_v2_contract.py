@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator, ValidationError
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from directory_v2_contract import legacy_user_v2_distribution, require_unique_scoped_grants
+from directory_publication import PublicationError, validate_with_schema
 
 
 class DirectoryV2GrantContractTests(unittest.TestCase):
@@ -38,6 +39,40 @@ class DirectoryV2GrantContractTests(unittest.TestCase):
             policy["targets"] = grants
         return result
 
+
+    def test_v2_snapshot_validates_legacy_evidence_and_isolated_signing_schema(self):
+        source = json.loads((ROOT / "tests/fixtures/directory-publication/snapshot.json").read_text())
+        upgraded = copy.deepcopy(source)
+        upgraded["snapshot_schema_version"] = 2
+        upgraded["sequence"] = 1  # New v2 high-water domain, not the v1 sequence.
+        upgraded["distributions"] = [legacy_user_v2_distribution(item, "0.1.96")
+                                    for item in upgraded["distributions"]]
+        target = upgraded["distributions"][0]["release_policies"][0]["targets"][0]
+        self.assertEqual(target["scope"], "user")
+        v2_path = ROOT / "schemas/directory-snapshot-v2.schema.json"
+        validate_with_schema(upgraded, v2_path)
+        with self.assertRaises(PublicationError):
+            validate_with_schema(upgraded, ROOT / "schemas/directory-snapshot.schema.json")
+
+        # Project evidence must be explicitly scoped; legacy unscoped evidence
+        # remains user-only for the Go resolver and must never acquire a scope.
+        project = copy.deepcopy(upgraded)
+        scoped = project["evidence"][0]
+        scoped["scope"] = "project"
+        scoped["closure_digest"] = "sha256:" + "f" * 64
+        validate_with_schema(project, v2_path)
+        scoped["scope"] = "workspace"
+        with self.assertRaises(PublicationError):
+            validate_with_schema(project, v2_path)
+
+        for name, key, expected in (
+            ("directory-envelope-v2.schema.json", "signature_domain",
+             "UAP-DIRECTORY-SNAPSHOT-ED25519-V2"),
+            ("directory-latest-v2.schema.json", "snapshot_schema_version", 2),
+        ):
+            schema = json.loads((ROOT / "schemas" / name).read_text())
+            Draft202012Validator.check_schema(schema)
+            self.assertEqual(schema["properties"][key]["const"], expected)
 
     def test_legacy_bootstrap_projection_is_user_only_without_mutating_source(self):
         source = json.loads((ROOT / "registry/directory.json").read_text())["distributions"]
