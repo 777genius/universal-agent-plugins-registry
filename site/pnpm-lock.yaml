@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@eslint/config-array>minimatch': 11.0.4
   '@humanfs/node': 0.16.8
   '@rollup/plugin-node-resolve@16.0.3>deepmerge': '-'
   '@typescript-eslint/typescript-estree>minimatch': 11.0.4
@@ -5150,7 +5151,7 @@ snapshots:
     dependencies:
       '@eslint/object-schema': 3.0.5
       debug: 4.4.3
-      minimatch: 10.2.6
+      minimatch: 11.0.4
     transitivePeerDependencies:
       - supports-color
 
