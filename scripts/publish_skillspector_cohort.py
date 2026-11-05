@@ -16,8 +16,8 @@ from typing import Callable
 from scripts import skillspector_cohort_release_protocol as protocol
 from scripts import skillspector_reports as scanner
 from scripts.directory_publication import (
-    PublicationError, canonical_json, parse_json_bytes, parse_timestamp,
-    require, sha256_digest,
+    ID_RE, PublicationError, b64decode_exact, canonical_json, ed25519_verify,
+    parse_json_bytes, parse_timestamp, require, sha256_digest,
 )
 from scripts.skillspector_publication_transport import create_filtered_tree
 
@@ -102,13 +102,15 @@ def checked_tree(github, head: str | None) -> tuple[dict[str, str], dict[str, st
     return entries, subtrees
 
 
-def read_pointer(github, head: str | None) -> dict | None:
+def read_pointer(github, head: str | None, entries: dict[str, str],
+                 trusted_keys: dict[str, bytes]) -> dict | None:
     """Read the current pointer by immutable SHA and validate its structure."""
     if head is None:
         return None
     body = github.request("GET", f"contents/{POINTER}?ref={head}", raw=True)
-    require(type(body) is bytes and len(body) <= MAX_POINTER_BYTES,
-            "current cohort pointer is unavailable")
+    require(type(body) is bytes and len(body) <= MAX_POINTER_BYTES
+            and entries.get(POINTER) == git_blob_sha(body),
+            "current cohort pointer differs from immutable Git blob")
     pointer = parse_json_bytes(body, "cohort pointer", max_bytes=MAX_POINTER_BYTES)
     require(isinstance(pointer, dict) and set(pointer) == POINTER_FIELDS
             and canonical_json(pointer) == body
@@ -131,8 +133,50 @@ def read_pointer(github, head: str | None) -> dict | None:
             and pointer["envelope_digest"] == "sha256:" +
                 pointer["envelope_path"][len(PREFIX + "envelopes/"):-len(".json")],
             "existing cohort immutable content addresses differ")
-    parse_timestamp(pointer["generated_at"], "cohort pointer generated_at")
-    parse_timestamp(pointer["expires_at"], "cohort pointer expires_at")
+    issued = parse_timestamp(pointer["generated_at"], "cohort pointer generated_at")
+    expires = parse_timestamp(pointer["expires_at"], "cohort pointer expires_at")
+    require(expires > issued, "previous cohort validity interval is invalid")
+    # The old release may have expired. Its historic signature, not its live
+    # status, is what authenticates the monotonic signed publication chain.
+    signed_body = github.request(
+        "GET", f"contents/{pointer['release_path']}?ref={head}", raw=True)
+    envelope_body = github.request(
+        "GET", f"contents/{pointer['envelope_path']}?ref={head}", raw=True)
+    require(type(signed_body) is bytes and len(signed_body) <= protocol.MAX_RELEASE_BYTES
+            and type(envelope_body) is bytes and len(envelope_body) <= protocol.MAX_ENVELOPE_BYTES
+            and entries.get(pointer["release_path"]) == git_blob_sha(signed_body)
+            and entries.get(pointer["envelope_path"]) == git_blob_sha(envelope_body)
+            and sha256_digest(signed_body) == pointer["release_digest"]
+            and sha256_digest(envelope_body) == pointer["envelope_digest"],
+            "previous signed cohort release has missing or altered Git bytes")
+    old = scanner.parse_scanner_json(signed_body, "previous cohort release")
+    envelope = parse_json_bytes(
+        envelope_body, "previous cohort envelope",
+        max_bytes=protocol.MAX_ENVELOPE_BYTES)
+    require(isinstance(old, dict) and set(old) == protocol.SNAPSHOT_FIELDS
+            and type(old["schema_version"]) is int and old["schema_version"] == 1
+            and old["kind"] == protocol.RELEASE_KIND
+            and old["source_commit"] == pointer["source_commit"]
+            and old["candidate"]["base_report_commit"] == pointer["report_commit"]
+            and old["generated_at"] == pointer["generated_at"]
+            and old["expires_at"] == pointer["expires_at"]
+            and scanner.report_json(old) == signed_body
+            and isinstance(envelope, dict) and set(envelope) == protocol.ENVELOPE_FIELDS
+            and canonical_json(envelope) == envelope_body
+            and type(envelope["schema_version"]) is int and envelope["schema_version"] == 1
+            and envelope["kind"] == protocol.ENVELOPE_KIND
+            and envelope["algorithm"] == "Ed25519"
+            and envelope["signature_domain"] == protocol.DOMAIN_NAME
+            and envelope["snapshot_digest"] == pointer["release_digest"],
+            "previous cohort signature contract or provenance differs")
+    key_id = envelope["key_id"]
+    require(isinstance(key_id, str) and ID_RE.fullmatch(key_id) is not None
+            and key_id in trusted_keys and type(trusted_keys[key_id]) is bytes
+            and len(trusted_keys[key_id]) == 32,
+            "previous cohort signer has no independent trusted key")
+    ed25519_verify(
+        trusted_keys[key_id], protocol.signing_message(signed_body),
+        b64decode_exact(envelope["signature"], 64, "previous cohort signature"))
     return pointer
 
 
@@ -165,7 +209,7 @@ def publish(
     if head != expected_cohort_head:
         raise StaleCohortPublication("isolated cohort branch advanced since preflight")
     entries, subtrees = checked_tree(github, head)
-    previous = read_pointer(github, head)
+    previous = read_pointer(github, head, entries, trusted_keys)
     release_digest, envelope_digest = sha256_digest(body), sha256_digest(envelope_bytes)
     release_path = PREFIX + "releases/" + release_digest[7:] + ".json"
     envelope_path = PREFIX + "envelopes/" + envelope_digest[7:] + ".json"

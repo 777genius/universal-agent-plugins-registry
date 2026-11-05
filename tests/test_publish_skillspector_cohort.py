@@ -36,11 +36,10 @@ class FakeGitHub:
                     if branch in self.refs else None)
         if method == "GET" and path.startswith("git/trees/"):
             head = path[len("git/trees/"):].split("?", 1)[0]
-            files = self.commits[head]["files"]
+            hashes = self.commits[head]["blob_shas"]
             return {"truncated": False, "tree": [
-                {"path": name, "type": "blob", "mode": "100644",
-                 "sha": publisher.git_blob_sha(body)}
-                for name, body in files.items()
+                {"path": name, "type": "blob", "mode": "100644", "sha": digest}
+                for name, digest in hashes.items()
             ]}
         if method == "GET" and path.startswith("contents/"):
             name, head = path[len("contents/"):].split("?ref=", 1)
@@ -56,7 +55,10 @@ class FakeGitHub:
             sha = hashlib.sha1(f"test-commit-{len(self.commits)}".encode()).hexdigest()
             files = {name: self.blobs[blob] for name, blob in self.pending_entries.items()}
             parent = data["parents"][0] if data["parents"] else None
-            self.commits[sha] = {"files": files, "parent": parent}
+            self.commits[sha] = {
+                "files": files, "blob_shas": dict(self.pending_entries),
+                "parent": parent,
+            }
             self.writes.append(("commit", sha))
             self.pending_entries = None
             return {"sha": sha}
@@ -168,8 +170,32 @@ class CohortPublisherTests(unittest.TestCase):
         body, envelope, previous, sources = self.fixture()
         first = self.do_publish(github, body, envelope, previous, sources)
         github.commits[first]["files"]["malware.sh"] = b"evil"
+        github.commits[first]["blob_shas"]["malware.sh"] = publisher.git_blob_sha(b"evil")
         with self.assertRaises(PublicationError):
             self.do_publish(github, body, envelope, previous, sources, first)
+
+    def test_previous_pointer_and_signed_history_reject_tampering(self):
+        for kind in ("pointer_bytes", "release_bytes", "envelope_bytes"):
+            github = FakeGitHub()
+            body, envelope, previous, sources = self.fixture()
+            first = self.do_publish(github, body, envelope, previous, sources)
+            files = github.commits[first]["files"]
+            pointer = json.loads(files[publisher.POINTER])
+            if kind == "pointer_bytes":
+                old = files[publisher.POINTER]
+                files[publisher.POINTER] = old + b" "
+            elif kind == "release_bytes":
+                path = pointer["release_path"]
+                data = files[path] + b" "
+                files[path] = data
+                github.commits[first]["blob_shas"][path] = publisher.git_blob_sha(data)
+            else:
+                path = pointer["envelope_path"]
+                data = files[path] + b" "
+                files[path] = data
+                github.commits[first]["blob_shas"][path] = publisher.git_blob_sha(data)
+            with self.subTest(kind=kind), self.assertRaises(PublicationError):
+                self.do_publish(github, body, envelope, previous, sources, first)
 
     def test_data_only_whitelist_and_pointer_type_limits(self):
         self.assertTrue(publisher.allowed_path(publisher.POINTER))
