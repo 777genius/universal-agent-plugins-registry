@@ -111,6 +111,19 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
             sign_snapshot_v2(candidate, "test-current", self.private)
 
+        # Passed runtime B never authorizes an ineligible signed closure A.
+        runtime["closure_digest"] = digest
+        grant["canonical_closure"]["eligible"] = False
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
+        # Without a canonical closure, only unbound legacy proof qualifies.
+        del grant["canonical_closure"]
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime.pop("closure_digest")
+        sign_snapshot_v2(candidate, "test-current", self.private)
+
     def test_v2_expiry_contract_matches_go_reader_thirty_days(self):
         modified = copy.deepcopy(self.snapshot)
         from datetime import datetime, timedelta, timezone

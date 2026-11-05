@@ -93,6 +93,7 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
                 ids.update(grant["current_evidence"])
                 if grant["scope"] == "project":
                     require(grant["client"] != "chatgpt", "ChatGPT project grant is not qualified")
+                    closure = grant.get("canonical_closure")
                     # A new signed project compatibility claim needs proof for
                     # this exact client and scope, not borrowed user evidence.
                     qualified = any(
@@ -100,10 +101,12 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
                         and evidence[evidence_id].get("scope") == "project"
                         and evidence[evidence_id].get("level") == "runtime"
                         and evidence[evidence_id].get("outcome") == "passed"
-                        and (not grant.get("canonical_closure")
-                             or not grant["canonical_closure"]["eligible"]
-                             or evidence[evidence_id].get("closure_digest")
-                             == grant["canonical_closure"]["closure_digest"])
+                        and (
+                            (closure is None and not evidence[evidence_id].get("closure_digest"))
+                            or (closure is not None and closure["eligible"]
+                                and evidence[evidence_id].get("closure_digest")
+                                == closure["closure_digest"])
+                        )
                         for evidence_id in grant["current_evidence"]
                     )
                     require(qualified, "v2 project grant lacks qualified scoped runtime evidence")
