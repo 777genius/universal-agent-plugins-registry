@@ -1,0 +1,173 @@
+name: SkillSpector XML prolog coverage canary
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_xml_prolog_compare.py"
+      - "scripts/skillspector_upgrade_compare.py"
+      - "scripts/skillspector_named_version_compare.py"
+      - "scripts/patch_skillspector_directory_references.py"
+      - "scripts/patch_skillspector_directory_refs_2133_canary.py"
+      - ".github/workflows/skillspector-xml-prolog-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-xml-prolog:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 018daa3afa2fa3ad084dda251fb562c5045cb423
+          persist-credentials: false
+          path: scanner-old
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 604a1cff1249ec4023012be4bdb77eac20621893
+          persist-credentials: false
+          path: scanner-new
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: indranilbanerjee/digital-marketing-pro
+          ref: cc45ca06eaf48abde3bb60fb79d31c41229c58db
+          sparse-checkout: skills/sitemap-manager
+          persist-credentials: false
+          path: digital
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: teachskillofskills-ai/digitalmarketingpro-techshu
+          ref: e97a5bdd91601024a9cfa870807a8d3c81dc3caf
+          sparse-checkout: skills/sitemap-manager
+          persist-credentials: false
+          path: techshu
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify rejected preflight retains machine-readable evidence
+        run: |
+          set -euo pipefail
+          proof="${RUNNER_TEMP}/xml-preflight/result.json"
+          if python3 source/scripts/skillspector_xml_prolog_compare.py \
+            --old /missing-scanner --new /missing-scanner \
+            --digital digital/skills/sitemap-manager \
+            --techshu techshu/skills/sitemap-manager --out "$proof"; then
+            echo "Unexpected preflight success" >&2
+            exit 1
+          fi
+          python3 - "$proof" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          x = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if (x.get("format") != "uap.skillspector.xml-prolog-comparison.v1"
+                  or x.get("results") != {"old": {}, "new": {}}
+                  or x.get("versions") != {}
+                  or x.get("production_changed") is not False):
+              raise SystemExit("Malformed failure evidence")
+          PY
+      - name: Reject ignored or changed material in a pinned source checkout
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "source/scripts")
+          from skillspector_xml_prolog_compare import git_revision
+
+          with tempfile.TemporaryDirectory(prefix="xml-source-provenance-") as tmp:
+              repo = Path(tmp)
+              subprocess.run(["git", "init", "-q", str(repo)], check=True)
+              (repo / ".gitignore").write_text("generated.log\n", encoding="utf-8")
+              (repo / "SKILL.md").write_text("Inert test source.\n", encoding="utf-8")
+              subprocess.run(["git", "-C", str(repo), "add", ".gitignore", "SKILL.md"], check=True)
+              subprocess.run(["git", "-C", str(repo), "-c", "user.name=CI",
+                              "-c", "user.email=ci@example.invalid", "commit", "-qm", "fixture"], check=True)
+              assert len(git_revision(repo)) == 40
+
+              (repo / "generated.log").write_text("Ignored but still on disk.\n", encoding="utf-8")
+              try:
+                  git_revision(repo)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Ignored source content was accepted under a pinned SHA")
+              (repo / "generated.log").unlink()
+
+              (repo / "SKILL.md").write_text("Changed tracked source.\n", encoding="utf-8")
+              try:
+                  git_revision(repo)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Modified tracked source was accepted under a pinned SHA")
+          PY
+      - name: Install pinned scanner dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner-old --frozen --no-dev --python 3.12
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      - name: Test XML parser, missing paths and Ruff
+        timeout-minutes: 10
+        run: |
+          scanner-new/.venv/bin/python -m pytest -q \
+            scanner-new/tests/test_xml_version_references.py \
+            scanner-new/tests/test_named_version_references.py \
+            scanner-new/tests/test_json_version_references.py \
+            scanner-new/tests/test_version_references.py \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py
+          scanner-new/.venv/bin/ruff check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/tests/test_xml_version_references.py \
+            scanner-new/tests/test_named_version_references.py
+          scanner-new/.venv/bin/ruff format --diff \
+            scanner-new/tests/test_xml_version_references.py \
+            scanner-new/tests/test_named_version_references.py
+          scanner-new/.venv/bin/ruff format --check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/tests/test_xml_version_references.py \
+            scanner-new/tests/test_named_version_references.py
+      - name: Remove only generated Python bytecode before scanner source attestation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for label in ("scanner-old", "scanner-new"):
+              for folder in sorted((Path(label) / "src").rglob("__pycache__"), reverse=True):
+                  if folder.is_symlink() or not folder.is_dir():
+                      raise SystemExit(f"Unsafe Python cache path: {folder}")
+                  for entry in folder.iterdir():
+                      if entry.is_symlink() or not entry.is_file() or entry.suffix != ".pyc":
+                          raise SystemExit(f"Unexpected scanner cache entry: {entry}")
+                      entry.unlink()
+                  folder.rmdir()
+          PY
+      - name: Compare pinned real sitemap Skills, actual no-LLM CLI
+        timeout-minutes: 12
+        run: |
+          python3 source/scripts/skillspector_xml_prolog_compare.py \
+            --old scanner-old/.venv/bin/skillspector \
+            --new scanner-new/.venv/bin/skillspector \
+            --digital digital/skills/sitemap-manager \
+            --techshu techshu/skills/sitemap-manager \
+            --out "${RUNNER_TEMP}/xml-prolog-proof/comparison.json"
+      - name: Archive JSON proof even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-xml-prolog-comparison
+          path: |
+            ${{ runner.temp }}/xml-preflight
+            ${{ runner.temp }}/xml-prolog-proof
+          if-no-files-found: error
+          retention-days: 7
