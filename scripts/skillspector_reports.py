@@ -422,10 +422,11 @@ def normalize_location(location: dict, root: Path) -> dict:
     return result
 
 
-def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, root: Path) -> dict[str, Any]:
+def normalize_report_v3(record: dict[str, Any], body: bytes, returncode: int, root: Path,
+                        *, scanner_identity: dict | None = None) -> dict[str, Any]:
     # Preserve the legacy trust boundary: exact scanner, no LLMs or suppressions,
     # explicit execution and analyzer coverage, and canonical source locations.
-    normalize_report(record, body, returncode, root)
+    normalize_report(record, body, returncode, root, scanner_identity=scanner_identity)
     report = parse_scanner_json(body, "SkillSpector report")
     completeness = report["analysis_completeness"]
     record["execution"]["state"] = "failed" if record["status"] == "error" else "completed"
@@ -724,12 +725,16 @@ def add_error(record: dict[str, Any], code: str, message: str) -> None:
         record["errors"].append({"code": clean(code, 120), "message": clean(message)})
 
 
-def normalize_report(record: dict[str, Any], body: bytes, returncode: int, root: Path) -> dict[str, Any]:
+def normalize_report(record: dict[str, Any], body: bytes, returncode: int, root: Path,
+                     *, scanner_identity: dict | None = None) -> dict[str, Any]:
     require(0 < len(body) <= MAX_REPORT_BYTES, "SkillSpector report is empty or oversized")
     report = parse_scanner_json(body, "SkillSpector report")
     require(isinstance(report, dict), "SkillSpector report must be an object")
     metadata = report.get("metadata")
-    require(isinstance(metadata, dict) and metadata.get("skillspector_version") == SCANNER["version"],
+    require(scanner_identity is None or record.get("scanner") == scanner_identity,
+            "scanner provenance differs from normalization identity")
+    expected_version = (SCANNER if scanner_identity is None else scanner_identity)["version"]
+    require(isinstance(metadata, dict) and metadata.get("skillspector_version") == expected_version,
             "SkillSpector report identity is unsupported")
     require(metadata.get("llm_requested") is False and metadata.get("inference_usage") == [],
             "SkillSpector report is not static-only")
