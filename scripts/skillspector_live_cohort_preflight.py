@@ -81,7 +81,10 @@ def verify_live_pins(
         if key not in target_roots:
             continue
         if key in directory_roots:
-            require(directory_roots[key]["source"] == source,
+            other = directory_roots[key]["source"]
+            require(other["repository"].casefold() == source["repository"].casefold()
+                    and other["revision"] == source["revision"]
+                    and other["path"] == source["path"],
                     "conflicting signed Directory revisions for one target root")
         directory_roots[key] = plugin
 
