@@ -134,7 +134,8 @@ def build_plan(previous: dict, current_selection: dict, report_commit: str) -> d
 
 def write_plan_exclusively(path: Path, plan: dict) -> None:
     """Never overwrite a prior proof or follow a symlink output location."""
-    require(not path.is_symlink(), "cohort output cannot be a symlink")
+    require(not any(part.is_symlink() for part in (path, *path.parents)),
+            "cohort output path cannot contain symlinks")
     path.parent.mkdir(parents=True, exist_ok=True)
     require(not path.parent.is_symlink(), "cohort output directory cannot be a symlink")
     with path.open("xb") as out:
