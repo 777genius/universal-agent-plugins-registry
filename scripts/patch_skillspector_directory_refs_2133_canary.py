@@ -50,7 +50,12 @@ EXPECTED_BLOBS = {
 }
 
 
-def apply(scanner: Path) -> None:
+def apply(scanner: Path, *, expected_release: str = EXPECTED_RELEASE,
+          expected_blobs: dict[str, str] | None = None) -> None:
+    """Apply the shared patch only to an attested immutable fork checkout."""
+    blobs = EXPECTED_BLOBS if expected_blobs is None else expected_blobs
+    if set(blobs) != set(PATCHES):
+        raise RuntimeError("Scanner blob allowlist must cover every patch target")
     safe_env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
 
     def git(*args: str) -> str:
@@ -58,7 +63,7 @@ def apply(scanner: Path) -> None:
             ["git", "-C", str(scanner), *args], env=safe_env, text=True, timeout=30,
         ).strip()
 
-    if git("rev-parse", "HEAD") != EXPECTED_RELEASE:
+    if git("rev-parse", "HEAD") != expected_release:
         raise RuntimeError("Canary scanner must be exact immutable vetted fork commit")
     replacements: dict[Path, str] = {}
     for path, (before, after) in PATCHES.items():
@@ -66,9 +71,9 @@ def apply(scanner: Path) -> None:
         if (target.is_symlink() or target.parent.is_symlink()
                 or not target.resolve().is_relative_to(scanner) or not target.is_file()):
             raise RuntimeError(f"Missing or symlinked scanner module: {path}")
-        if git("rev-parse", f"HEAD:{path}") != EXPECTED_BLOBS[path]:
+        if git("rev-parse", f"HEAD:{path}") != blobs[path]:
             raise RuntimeError(f"Unexpected immutable source blob: {path}")
-        if git("hash-object", path) != EXPECTED_BLOBS[path]:
+        if git("hash-object", path) != blobs[path]:
             raise RuntimeError(f"Unexpected working tree content: {path}")
         body = target.read_text(encoding="utf-8")
         if body.count(before) != 1:

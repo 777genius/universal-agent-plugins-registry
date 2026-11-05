@@ -1,0 +1,106 @@
+name: SkillSpector named YAML version canary
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_named_version_compare.py"
+      - "scripts/skillspector_upgrade_compare.py"
+      - "scripts/patch_skillspector_directory_references.py"
+      - "scripts/patch_skillspector_directory_refs_2133_canary.py"
+      - ".github/workflows/skillspector-named-version-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-named-yaml-version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 018daa3afa2fa3ad084dda251fb562c5045cb423
+          persist-credentials: false
+          path: scanner-old
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: d135a75fa66d52fe840ba0c14ab45ac3253f4256
+          persist-credentials: false
+          path: scanner-new
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: vyas-devgna/braids
+          ref: 79c913e9d27854d88c7ee58aa9906bd2b45001b4
+          sparse-checkout: skills
+          persist-credentials: false
+          path: real-braids
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify preflight failure retains machine-readable evidence
+        run: |
+          set -euo pipefail
+          proof="${RUNNER_TEMP}/named-version-preflight/proof.json"
+          if python3 source/scripts/skillspector_named_version_compare.py \
+            --old /missing-version-candidate --new /missing-version-candidate \
+            --real-root real-braids/skills --out "$proof"; then
+            echo "Unexpected scanner preflight success" >&2
+            exit 1
+          fi
+          python3 - "$proof" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          row = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          if (row.get('format') != 'uap.skillspector.named-version-comparison.v1'
+              or row.get('results') != {'old': {}, 'new': {}}
+              or row.get('scanner_versions') != {}
+              or row.get('production_changed') is not False
+              or row.get('candidate_sha') != 'd135a75fa66d52fe840ba0c14ab45ac3253f4256'):
+              raise SystemExit('Missing or misleading named-version preflight evidence')
+          print('Empty preflight evidence preserved without a success claim')
+          PY
+      - name: Install both immutable v2.13.3 scanners
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner-old --frozen --no-dev --python 3.12
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      - name: Test strict parser rules and Ruff on exact candidate
+        timeout-minutes: 10
+        run: |
+          scanner-new/.venv/bin/python -m pytest -q \
+            scanner-new/tests/test_named_version_references.py \
+            scanner-new/tests/test_version_references.py \
+            scanner-new/tests/test_json_version_references.py \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py
+          scanner-new/.venv/bin/ruff check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/tests/test_named_version_references.py
+          scanner-new/.venv/bin/ruff format --check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/tests/test_named_version_references.py
+      - name: Verify SHA/blob-attested identical directory rules and compare Braids
+        timeout-minutes: 12
+        run: |
+          python3 source/scripts/skillspector_named_version_compare.py \
+            --old scanner-old/.venv/bin/skillspector \
+            --new scanner-new/.venv/bin/skillspector \
+            --real-root real-braids/skills \
+            --out "${RUNNER_TEMP}/named-version-proof/comparison.json"
+      - name: Preserve machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-named-version-comparison
+          path: |
+            ${{ runner.temp }}/named-version-preflight/
+            ${{ runner.temp }}/named-version-proof/
+          if-no-files-found: error
+          retention-days: 7
