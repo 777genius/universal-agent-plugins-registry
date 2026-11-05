@@ -166,10 +166,24 @@ class BoundedCohortTests(unittest.TestCase):
                           (item["repository"], item["revision"], item["path"]) in COHORT and
                           COHORT[(item["repository"], item["revision"], item["path"])] == kind)
             evidence = previous["records"][target["id"]]["coverage"]["references"][0]
-            evidence["evidence"] = ('methodology-version: "3.1.0\\\'' if kind == "yaml"
-                                    else '<?xml version="1.0\\\' encoding="UTF-8"?>')
+            evidence["evidence"] = (
+                """methodology-version: "3.1.0'""" if kind == "yaml"
+                else """<?xml version="1.0' encoding="UTF-8"?>"""
+            )
             with self.assertRaises(CohortRejected):
                 build_plan(previous, selection, "b" * 40)
+
+    def test_valid_single_quote_pairs_stay_admitted(self):
+        previous, selection = self.fixture()
+        for item in selection["sources"]:
+            key = item["repository"], item["revision"], item["path"]
+            if key not in COHORT:
+                continue
+            evidence = ("""methodology-version: '3.1.0'""" if COHORT[key] == "yaml"
+                        else """<?xml version='1.0' encoding='UTF-8'?>""")
+            for row in previous["records"][item["id"]]["coverage"]["references"]:
+                row["evidence"] = evidence
+        self.assertEqual(len(build_plan(previous, selection, "b" * 40)["selection"]["sources"]), 9)
 
     def test_direct_script_help_resolves_repo_package(self):
         script = Path(__file__).resolve().parents[1] / "scripts/skillspector_bounded_cohort.py"
