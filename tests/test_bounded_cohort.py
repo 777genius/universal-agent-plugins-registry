@@ -123,6 +123,11 @@ class BoundedCohortTests(unittest.TestCase):
                 write_plan_exclusively(linked_dir / "plan2.json", plan)
             self.assertFalse((path.parent / "plan2.json").exists())
 
+            nested = linked_dir / "nested" / "plan3.json"
+            with self.assertRaises(CohortRejected):
+                write_plan_exclusively(nested, plan)
+            self.assertFalse((path.parent / "nested").exists())
+
 
 
 if __name__ == "__main__":
