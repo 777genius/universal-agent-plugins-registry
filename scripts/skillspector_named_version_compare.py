@@ -64,6 +64,24 @@ def require_status(
         raise AssertionError(("Unexpected completeness result", status, missing, row))
 
 
+
+def source_revision(checkout: Path) -> str:
+    """Verify that a pinned checkout has no modified, untracked OR ignored inputs."""
+    safe_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    revision = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+        env=safe_env, text=True, timeout=30,
+    ).strip()
+    dirty = subprocess.check_output(
+        ["git", "-C", str(checkout), "status", "--porcelain",
+         "--untracked-files=all", "--ignored=matching"],
+        env=safe_env, text=True, timeout=30,
+    ).strip()
+    if dirty:
+        raise AssertionError(("Pinned Braids checkout has untracked or modified inputs", dirty))
+    return revision
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--old", required=True, type=Path)
@@ -108,22 +126,10 @@ def main() -> None:
         subprocess.run([str(root / ".venv/bin/python"), str(adapter), str(root), "--check-only"],
                        timeout=60, check=True)
 
-    safe_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     source_checkout = args.real_root.resolve().parent
-    source_commit = subprocess.check_output(
-        ["git", "-C", str(source_checkout), "rev-parse", "HEAD"],
-        env=safe_env, text=True, timeout=30,
-    ).strip()
+    source_commit = source_revision(source_checkout)
     if source_commit != SOURCE:
         raise AssertionError(("Unexpected immutable Braids source SHA", source_commit))
-    # An immutable commit identity alone does not attest the checkout bytes.
-    # Refuse both modified tracked files and extra untracked files.
-    dirty = subprocess.check_output(
-        ["git", "-C", str(source_checkout), "status", "--porcelain", "--untracked-files=all"],
-        env=safe_env, text=True, timeout=30,
-    ).strip()
-    if dirty:
-        raise AssertionError(("Braids checkout differs from pinned source", dirty))
     with tempfile.TemporaryDirectory(prefix="uap-named-version-") as temp:
         inputs = Path(temp)
         roots = {}

@@ -67,6 +67,51 @@ jobs:
               raise SystemExit('Missing or misleading named-version preflight evidence')
           print('Empty preflight evidence preserved without a success claim')
           PY
+      - name: Reject ignored and modified material in a pinned source checkout
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "source/scripts")
+          from skillspector_named_version_compare import source_revision
+
+          with tempfile.TemporaryDirectory(prefix="yaml-source-provenance-") as tmp:
+              root = Path(tmp)
+              subprocess.run(["git", "init", "-q", str(root)], check=True)
+              (root / ".gitignore").write_text("generated.log\n", encoding="utf-8")
+              (root / "SKILL.md").write_text("Inert source.\n", encoding="utf-8")
+              subprocess.run(["git", "-C", str(root), "add", ".gitignore", "SKILL.md"], check=True)
+              subprocess.run(["git", "-C", str(root), "-c", "user.name=CI",
+                              "-c", "user.email=ci@example.invalid",
+                              "commit", "-qm", "fixture"], check=True)
+              assert len(source_revision(root)) == 40
+
+              (root / "generated.log").write_text("Ignored input.\n", encoding="utf-8")
+              assert subprocess.check_output(
+                  ["git", "-C", str(root), "check-ignore", "generated.log"],
+                  text=True,
+              ).strip() == "generated.log"
+              try:
+                  source_revision(root)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Ignored source content accepted under a pinned SHA")
+              (root / "generated.log").unlink()
+
+              (root / "SKILL.md").write_text("Modified tracked input.\n", encoding="utf-8")
+              try:
+                  source_revision(root)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Changed tracked source accepted under a pinned SHA")
+              (root / "SKILL.md").write_text("Inert source.\n", encoding="utf-8")
+              assert len(source_revision(root)) == 40
+          PY
       - name: Install both immutable v2.13.3 scanners
         run: |
           python3 -m pip install --disable-pip-version-check uv==0.13.4
