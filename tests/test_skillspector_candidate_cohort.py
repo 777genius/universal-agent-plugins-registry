@@ -22,6 +22,8 @@ class CandidateCohortTests(unittest.TestCase):
         # admission fields; stage-two tests require full v3 selection identity.
         old["kind"] = item["kind"]
         old["plugin_path"] = item["plugin_path"]
+        old["finding_count"] = 0
+        old["findings"] = []
         new = {
             "id": old["id"], "kind": item["kind"], "plugin_path": item["plugin_path"],
             "source": copy.deepcopy(old["source"]),
