@@ -1,0 +1,68 @@
+name: Temporary reviewed lint compatibility lockfile regeneration
+on:
+  push:
+    branches:
+      - fix/site-nuxt-audit-20261105
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Resolve review-locked import-x compatibility patch
+        working-directory: site
+        run: |
+          pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
+      - name: Check zero known vulnerabilities without disabling audit
+        working-directory: site
+        run: pnpm audit --audit-level=low
+      - name: Commit exact pnpm lockfile to this topic branch only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "777genius/universal-agent-plugins-registry"
+          test "${GITHUB_REF_NAME}" = "fix/site-nuxt-audit-20261105"
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${GITHUB_REF_NAME}" --jq '.object.sha')"
+          test "${current}" = "${GITHUB_SHA}"
+          if git diff --quiet -- site/pnpm-lock.yaml; then
+            echo "Lockfile unchanged"
+            exit 0
+          fi
+          export PREVIOUS_LOCK_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/contents/site/pnpm-lock.yaml?ref=${GITHUB_REF_NAME}" --jq '.sha')"
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+          body = {
+              "branch": os.environ["GITHUB_REF_NAME"],
+              "sha": os.environ["PREVIOUS_LOCK_SHA"],
+              "message": "fix(site): regenerate patched import-x lockfile with pinned pnpm\n\nSigned-off-by: 777genius <13103045+777genius@users.noreply.github.com>",
+              "content": base64.b64encode(Path("site/pnpm-lock.yaml").read_bytes()).decode(),
+              "author": {"name":"777genius","email":"13103045+777genius@users.noreply.github.com"},
+              "committer": {"name":"777genius","email":"13103045+777genius@users.noreply.github.com"},
+          }
+          (Path(os.environ["RUNNER_TEMP"]) / "lock-payload.json").write_text(json.dumps(body))
+          PY
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/site/pnpm-lock.yaml" --input "${RUNNER_TEMP}/lock-payload.json" --jq '.commit.sha'
+      - name: Upload exact lockfile for independent readback on failure as well
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site-import-x-compat-lock
+          path: site/pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 2
