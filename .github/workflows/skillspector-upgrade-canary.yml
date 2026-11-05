@@ -43,6 +43,29 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Verify failed preflight preserves machine-readable evidence
+        run: |
+          set -euo pipefail
+          result="${RUNNER_TEMP}/skillspector-preflight-control/result.json"
+          if python3 source/scripts/skillspector_upgrade_compare.py \
+            --old /definitely-nonexistent-scanner --new /definitely-nonexistent-scanner \
+            --real-skill real-asc/skills/asc-workflow --out "$result"; then
+            echo "Unexpected preflight success" >&2
+            exit 1
+          fi
+          python3 - "$result" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          data = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          if (data.get('format') != 'uap.skillspector.release-comparison.v1'
+              or data.get('results') != {}
+              or data.get('scanner_versions') != {}
+              or data.get('production_policy_changed') is not False
+              or data.get('candidate_fork_sha') != '018daa3afa2fa3ad084dda251fb562c5045cb423'):
+              raise SystemExit('Preflight evidence missing or misleading')
+          print('Verified failure preserves empty, non-success comparison evidence')
+          PY
       - name: Install two immutable upstream releases
         run: |
           python3 -m pip install --disable-pip-version-check uv==0.13.4
