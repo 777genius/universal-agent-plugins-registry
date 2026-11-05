@@ -64,6 +64,20 @@ def validate_snapshot_v2(snapshot: dict[str, Any]) -> None:
     validate_v2_product_ownership(snapshot)
     evidence = {item["id"]: item for item in snapshot["evidence"]}
     require(len(evidence) == len(snapshot["evidence"]), "duplicate v2 evidence")
+    # The schema validates the shape; the signed feed must also satisfy the
+    # same trust/artefact binding enforced by the Go reader.
+    for record in snapshot["evidence"]:
+        trust = record["trust"]
+        if record["level"] == "schema":
+            require(trust["kind"] == "github_actions",
+                    "v2 schema evidence requires workflow provenance")
+        if trust["kind"] == "github_actions":
+            artifact = record["artifact"]
+            require(
+                trust["workflow"].startswith(artifact["repository"] + "/.github/workflows/")
+                and trust["source_digest"] == artifact["revision"],
+                "v2 workflow provenance is not bound to its evidence artifact",
+            )
     selected: set[str] = set()
     releases: set[tuple[str, int]] = set()
     for distribution in snapshot["distributions"]:
