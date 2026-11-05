@@ -36,6 +36,9 @@ patchedDependencies:
   '@rollup/plugin-node-resolve@16.0.3':
     hash: b81e978e1d012f35856ef1a5cc126c4fc65548e41ba1dfaab1fea3a8fc425fe0
     path: patches/@rollup__plugin-node-resolve@16.0.3.patch
+  eslint-plugin-import-x@4.17.1:
+    hash: c757e4897664b21f993974f14a56406869214dd955e873cfc0d2e42f5dda81f9
+    path: patches/eslint-plugin-import-x@4.17.1.patch
   listhen@1.10.1:
     hash: 3292a6ace6239bff62f18f8ca3253c23fb5ddd3f8f5dab887b04d3c552e5bfda
     path: patches/listhen@1.10.1.patch
@@ -5489,7 +5492,7 @@ snapshots:
       eslint-flat-config-utils: 3.2.0
       eslint-merge-processors: 2.0.0(eslint@10.13.0(jiti@2.7.0))
       eslint-plugin-import-lite: 0.6.0(eslint@10.13.0(jiti@2.7.0))
-      eslint-plugin-import-x: 4.17.1(@typescript-eslint/utils@8.72.0(eslint@10.13.0(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.9)(eslint@10.13.0(jiti@2.7.0))
+      eslint-plugin-import-x: 4.17.1(patch_hash=c757e4897664b21f993974f14a56406869214dd955e873cfc0d2e42f5dda81f9)(@typescript-eslint/utils@8.72.0(eslint@10.13.0(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.9)(eslint@10.13.0(jiti@2.7.0))
       eslint-plugin-jsdoc: 63.3.3(eslint@10.13.0(jiti@2.7.0))
       eslint-plugin-regexp: 3.3.1(eslint@10.13.0(jiti@2.7.0))
       eslint-plugin-unicorn: 73.0.0(eslint@10.13.0(jiti@2.7.0))
@@ -7320,7 +7323,7 @@ snapshots:
     dependencies:
       eslint: 10.13.0(jiti@2.7.0)
 
-  eslint-plugin-import-x@4.17.1(@typescript-eslint/utils@8.72.0(eslint@10.13.0(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.9)(eslint@10.13.0(jiti@2.7.0)):
+  eslint-plugin-import-x@4.17.1(patch_hash=c757e4897664b21f993974f14a56406869214dd955e873cfc0d2e42f5dda81f9)(@typescript-eslint/utils@8.72.0(eslint@10.13.0(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.9)(eslint@10.13.0(jiti@2.7.0)):
     dependencies:
       '@typescript-eslint/types': 8.57.1
       comment-parser: 1.4.5
