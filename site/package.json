@@ -40,9 +40,7 @@
       "@humanfs/node": "0.16.8",
       "@rollup/plugin-node-resolve@16.0.3>deepmerge": "-",
       "@typescript-eslint/typescript-estree>minimatch": "11.0.4",
-      "@typescript-eslint/typescript-estree@8.72.0>minimatch": "11.0.1",
       "@vercel/nft>glob": "14.0.3",
-      "@vercel/nft@1.11.0>glob": "14.0.2",
       "brace-expansion@<1.1.21": "1.1.21",
       "brace-expansion@>=2.0.0 <3.0.0": "2.1.7",
       "brace-expansion@>=4.0.0 <6.0.0": "5.0.12",
@@ -51,7 +49,6 @@
       "esbuild": "0.28.2",
       "eslint-plugin-import-x>minimatch": "11.0.4",
       "eslint>minimatch": "11.0.4",
-      "eslint@10.13.0>minimatch": "11.0.1",
       "immutable@>=5.0.0-beta.1 <5.1.8": "5.1.9",
       "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
       "listhen": "1.10.1",
@@ -61,7 +58,8 @@
       "shell-quote@<1.11.0": "1.11.0",
       "source-map-js@<1.2.2": "1.2.2",
       "svgo@>=4.0.0 <4.1.0": "4.1.0",
-      "tar@<=7.5.20": "7.5.22"
+      "tar@<=7.5.20": "7.5.22",
+      "readdir-glob>minimatch": "11.0.4"
     },
     "packageExtensions": {
       "listhen@1.10.1": {
