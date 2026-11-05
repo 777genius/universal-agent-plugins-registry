@@ -17,7 +17,7 @@ SKILLS = (
     "braids-help", "braids-review", "braids-risk",
 )
 BASE = "018daa3afa2fa3ad084dda251fb562c5045cb423"
-CANDIDATE = "d135a75fa66d52fe840ba0c14ab45ac3253f4256"
+CANDIDATE = "b52508d34426e975b4b16ece449decb4cd600108"
 SOURCE = "79c913e9d27854d88c7ee58aa9906bd2b45001b4"
 CONTROLS = {
     "clean": FIXTURES["complete_control"],
