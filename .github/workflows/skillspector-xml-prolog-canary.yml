@@ -83,7 +83,7 @@ jobs:
           from pathlib import Path
 
           sys.path.insert(0, "source/scripts")
-          from skillspector_xml_prolog_compare import git_revision
+          from skillspector_xml_prolog_compare import checked_skill_root, git_revision
 
           with tempfile.TemporaryDirectory(prefix="xml-source-provenance-") as tmp:
               repo = Path(tmp)
@@ -94,6 +94,27 @@ jobs:
               subprocess.run(["git", "-C", str(repo), "-c", "user.name=CI",
                               "-c", "user.email=ci@example.invalid", "commit", "-qm", "fixture"], check=True)
               assert len(git_revision(repo)) == 40
+              assert checked_skill_root(repo) == repo.resolve()
+
+              linked = repo.parent / "linked-skill"
+              linked.symlink_to(repo, target_is_directory=True)
+              try:
+                  checked_skill_root(linked)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Symlinked Skill root passed provenance")
+              linked.unlink()
+
+              linked_parent = repo.parent / "linked-parent"
+              linked_parent.symlink_to(repo.parent, target_is_directory=True)
+              try:
+                  checked_skill_root(linked_parent / repo.name)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Symlinked Skill ancestor passed provenance")
+              linked_parent.unlink()
 
               (repo / "generated.log").write_text("Ignored but still on disk.\n", encoding="utf-8")
               try:

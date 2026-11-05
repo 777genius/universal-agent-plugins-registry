@@ -60,6 +60,17 @@ def git_revision(root: Path) -> str:
     return revision
 
 
+def checked_skill_root(path: Path) -> Path:
+    """Reject symlinks in the supplied Skill path before canonicalizing it."""
+    original = path.absolute()
+    if any(part.is_symlink() for part in (original, *original.parents)):
+        raise AssertionError(("Symlinked Skill path", str(path)))
+    root = original.resolve(strict=True)
+    if not root.is_dir() or not (root / "SKILL.md").is_file():
+        raise AssertionError(("Missing pinned Skill root", str(path)))
+    return root
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--old", type=Path, required=True)
@@ -113,12 +124,10 @@ def main() -> None:
         )
 
     roots = {
-        "digital-marketing-pro": args.digital.resolve(),
-        "digitalmarketingpro-techshu": args.techshu.resolve(),
+        "digital-marketing-pro": checked_skill_root(args.digital),
+        "digitalmarketingpro-techshu": checked_skill_root(args.techshu),
     }
     for name, root in roots.items():
-        if root.is_symlink() or not root.is_dir() or not (root / "SKILL.md").is_file():
-            raise AssertionError(("Expected immutable real Skill root", name))
         if git_revision(root.parents[1]) != SOURCES[name]:
             raise AssertionError(("Real source checkout changed", name))
 
@@ -133,7 +142,8 @@ def main() -> None:
                 (root / "docs" / "guide.md").write_text("Inert documentation.\n", encoding="utf-8")
             roots[name] = root
         outside = work / "outside-runner.sh"
-        outside.write_text("An inert external reference.\n", encoding="utf-8")
+        marker = work / "outside-runner.marker"
+        outside.write_text(f': > "{marker}"\n', encoding="utf-8")
         hashes = {name: input_fingerprint(root) for name, root in roots.items()}
         evidence["input_sha256"] = hashes
         outside_bytes = outside.read_bytes()
@@ -145,6 +155,11 @@ def main() -> None:
                         raise AssertionError(("Scanner mutated input", name, label))
                 if outside.read_bytes() != outside_bytes:
                     raise AssertionError(("Scanner mutated external target", name))
+                if marker.exists():
+                    raise AssertionError(("Scanner executed external target", name))
+                for label, root in roots.items():
+                    if input_fingerprint(root) != hashes[label]:
+                        raise AssertionError(("Scanner mutated another input", name, label))
         finally:
             args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
