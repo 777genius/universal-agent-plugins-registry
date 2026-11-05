@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - "scripts/skillspector_candidate_cohort.py"
+      - "scripts/skillspector_bounded_cohort.py"
+      - "scripts/patch_skillspector_directory_refs_2133_canary.py"
       - "scripts/skillspector_reports.py"
+      - "tests/test_bounded_cohort.py"
       - "tests/test_skillspector_candidate_cohort.py"
       - ".github/workflows/skillspector-candidate-cohort.yml"
 
