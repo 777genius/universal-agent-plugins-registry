@@ -10,7 +10,11 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
+import stat
+import sys
+from contextlib import ExitStack
 from pathlib import Path
 
 OLD_SCANNER = {"id": "skillspector", "version": "2.13.1",
@@ -30,9 +34,9 @@ COHORT = {
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 YAML_METADATA = re.compile(
-    r"""^\s*(?:metadata\.)?[a-z][a-z0-9_-]*-version\s*:\s*["']\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?["']\s*$"""
+    r"""^\s*(?:metadata\.)?[a-z][a-z0-9_-]*-version\s*:\s*(["'])\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\1\s*$"""
 )
-XML_PROLOG = re.compile(r"""^\s*<\?xml\s+version=["']1\.0["']\s+encoding=["']UTF-8["']\s*\?>\s*$""")
+XML_PROLOG = re.compile(r"""^\s*<\?xml\s+version=(["'])1\.0\1\s+encoding=(["'])UTF-8\2\s*\?>\s*$""")
 
 
 class CohortRejected(ValueError):
@@ -122,8 +126,14 @@ def build_plan(previous: dict, current_selection: dict, report_commit: str) -> d
     """
     require(SHA.fullmatch(report_commit) is not None, "invalid immutable report commit")
     manifest, selection, records = previous["manifest"], previous["selection"], previous["records"]
+    from scripts import skillspector_contract as contract
+    from scripts import skillspector_reports as scanner
+
     require(manifest["schema_version"] == 3 and manifest["scanner"] == OLD_SCANNER and
-            manifest["coverage"]["selected"] > 9, "not the old full-snapshot policy")
+            manifest["coverage"]["selected"] > 9 and
+            manifest.get("profile") == contract.PROFILE and
+            manifest.get("profiles") == list(scanner.PROFILES.values()),
+            "not the current full-v3 producer policy")
     require(manifest["selection_digest"] == digest(selection), "baseline selection digest differs")
     by_key, live_by_key = {}, {}
     for item in selection["sources"]:
@@ -157,13 +167,36 @@ def build_plan(previous: dict, current_selection: dict, report_commit: str) -> d
 
 
 def write_plan_exclusively(path: Path, plan: dict) -> None:
-    """Never overwrite a prior proof or follow a symlink output location."""
-    require(not any(part.is_symlink() for part in (path, *path.parents)),
-            "cohort output path cannot contain symlinks")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    require(not path.parent.is_symlink(), "cohort output directory cannot be a symlink")
-    with path.open("xb") as out:
-        out.write(canon(plan))
+    """Create one proof without following symlinks, even during a path swap."""
+    require(hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"),
+            "safe cohort output requires no-follow directory descriptors")
+    absolute = path.absolute()
+    require(absolute.name not in {"", ".", ".."}, "invalid cohort output filename")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    with ExitStack() as stack:
+        directory = os.open(absolute.anchor, directory_flags)
+        stack.callback(os.close, directory)
+        for part in absolute.parts[1:-1]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+            try:
+                child = os.open(part, directory_flags, dir_fd=directory)
+            except OSError as error:
+                raise CohortRejected("cohort output path contains an unsafe directory") from error
+            stack.callback(os.close, child)
+            directory = child
+        try:
+            existing = os.stat(absolute.name, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            require(not stat.S_ISLNK(existing.st_mode), "cohort output cannot be a symlink")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        output = os.open(absolute.name, flags, 0o600, dir_fd=directory)
+        with os.fdopen(output, "wb") as stream:
+            stream.write(canon(plan))
 
 
 def main() -> int:
@@ -177,6 +210,7 @@ def main() -> int:
 
     previous = coverage.read_bundle(args.previous_dir)
     require(previous is not None, "verified prior report bundle missing")
+    coverage.validate_manifest(previous["manifest"], current_policy=True)
     current = coverage.load_selection(args.current_selection)
     plan = build_plan(previous, current, args.report_commit)
     write_plan_exclusively(args.output, plan)
@@ -185,4 +219,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if not __package__:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     raise SystemExit(main())

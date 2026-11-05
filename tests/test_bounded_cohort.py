@@ -1,10 +1,14 @@
 """Fail-closed tests for the non-publishing nine-source scanner cohort."""
 import copy
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from scripts import skillspector_contract as contract
+from scripts import skillspector_reports as scanner
 from scripts.skillspector_bounded_cohort import (
     COHORT, CohortRejected, OLD_SCANNER, build_plan, digest, write_plan_exclusively,
 )
@@ -47,6 +51,8 @@ class BoundedCohortTests(unittest.TestCase):
                         "revision": "f" * 40, "path": "skills/unknown", "plugin_path": ""})
         selection = {"schema_version": 1, "sources": sources}
         manifest = {"schema_version": 3, "scanner": copy.deepcopy(OLD_SCANNER),
+                    "profile": copy.deepcopy(contract.PROFILE),
+                    "profiles": list(scanner.PROFILES.values()),
                     "selection_digest": digest(selection), "source_commit": "c" * 40,
                     "coverage": {"selected": 17947}}
         return {"manifest": manifest, "selection": selection, "records": records}, selection
@@ -109,6 +115,10 @@ class BoundedCohortTests(unittest.TestCase):
         previous["manifest"]["scanner"]["revision"] = "0" * 40
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
+        previous, selection = self.fixture()
+        previous["manifest"]["profiles"][0]["digest"] = "sha256:" + "0" * 64
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
 
 
     def test_unrelated_error_or_ledger_must_stay_partial(self):
@@ -149,11 +159,31 @@ class BoundedCohortTests(unittest.TestCase):
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
 
+    def test_mismatched_metadata_quotes_are_rejected(self):
+        for kind in ("yaml", "xml"):
+            previous, selection = self.fixture()
+            target = next(item for item in selection["sources"] if
+                          (item["repository"], item["revision"], item["path"]) in COHORT and
+                          COHORT[(item["repository"], item["revision"], item["path"])] == kind)
+            evidence = previous["records"][target["id"]]["coverage"]["references"][0]
+            evidence["evidence"] = ('methodology-version: "3.1.0\\\'' if kind == "yaml"
+                                    else '<?xml version="1.0\\\' encoding="UTF-8"?>')
+            with self.assertRaises(CohortRejected):
+                build_plan(previous, selection, "b" * 40)
+
+    def test_direct_script_help_resolves_repo_package(self):
+        script = Path(__file__).resolve().parents[1] / "scripts/skillspector_bounded_cohort.py"
+        result = subprocess.run([sys.executable, str(script), "--help"],
+                                cwd=script.parent.parent, text=True,
+                                capture_output=True, timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--previous-dir", result.stdout)
+
     def test_cohort_proof_is_exclusive_and_rejects_symlink_locations(self):
         previous, selection = self.fixture()
         plan = build_plan(previous, selection, "b" * 40)
         with tempfile.TemporaryDirectory(prefix="cohort-exclusivity-") as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             path = root / "out" / "plan.json"
             write_plan_exclusively(path, plan)
             self.assertEqual(json.loads(path.read_text()), plan)
