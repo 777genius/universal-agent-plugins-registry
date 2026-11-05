@@ -18,6 +18,10 @@ class CandidateCohortTests(unittest.TestCase):
         previous, selection = BoundedCohortTests.fixture()
         item = selection["sources"][0]
         old = previous["records"][item["id"]]
+        # The stage-one historical witness fixture intentionally uses only its
+        # admission fields; stage-two tests require full v3 selection identity.
+        old["kind"] = item["kind"]
+        old["plugin_path"] = item["plugin_path"]
         new = {
             "id": old["id"], "kind": item["kind"], "plugin_path": item["plugin_path"],
             "source": copy.deepcopy(old["source"]),
