@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from scripts import skillspector_candidate_cohort as candidate
 from scripts import skillspector_reports as scanner
@@ -89,6 +92,7 @@ class CandidateCohortTests(unittest.TestCase):
     def test_unresolved_link_and_ledger_fail(self):
         item, old, new = self.fixture()
         new["coverage"]["references"] = [{"status": "rejected", "disposition": "partial"}]
+        new["coverage"]["references_total"] = 1
         with self.assertRaises(candidate.admission.CohortRejected):
             candidate.verify_candidate(item, old, new)
         item, old, new = self.fixture()
@@ -103,6 +107,48 @@ class CandidateCohortTests(unittest.TestCase):
         proof = candidate.verify_candidate(item, old, new)
         self.assertTrue(proof["findings_changed"])
         self.assertEqual(new["findings"][0]["rule"], "MP3")
+
+    def test_changed_occurrence_positions_are_reported(self):
+        item, old, new = self.fixture()
+        group = {"rule": "E4", "severity": "HIGH", "path": "SKILL.md", "line": 7,
+                 "occurrences": [{"path": "SKILL.md", "line": 7},
+                                 {"path": "SKILL.md", "line": 19}]}
+        old.update(findings=[group], finding_count=2)
+        new.update(findings=[copy.deepcopy(group)], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        new["findings"][0]["occurrences"].reverse()
+        self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
+        new["findings"][0]["occurrences"][0]["line"] = 20
+        self.assertTrue(candidate.verify_candidate(item, old, new)["findings_changed"])
+
+    def test_failed_cohort_preserves_only_safe_verified_progress(self):
+        previous, selection = BoundedCohortTests.fixture()
+        for item in selection["sources"][:-1]:
+            old = previous["records"][item["id"]]
+            old.update(kind=item["kind"], plugin_path=item["plugin_path"],
+                       finding_count=0, findings=[])
+        plan = candidate.admission.build_plan(previous, selection, "b" * 40)
+        item, _, verified = self.fixture()
+        self.assertEqual(item["id"], plan["selection"]["sources"][0]["id"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            with (
+                mock.patch.object(candidate, "verify_pinned_scanner", return_value=path / "scanner"),
+                mock.patch.object(candidate.subprocess, "run",
+                                  return_value=SimpleNamespace(stdout="SkillSpector v2.13.3", stderr="")),
+                mock.patch.object(candidate, "PinnedRepository"),
+                mock.patch.object(candidate, "scan_one",
+                                  side_effect=[verified, candidate.admission.CohortRejected("secret-value")]),
+            ):
+                with self.assertRaises(candidate.admission.CohortRejected):
+                    candidate.run_candidate(plan, previous, path / "scanner", progress_dir=path)
+            accepted = json.loads((path / "accepted-01.json").read_text())
+            rejected = json.loads((path / "rejected-02.json").read_text())
+            self.assertEqual(accepted["record"]["id"], item["id"])
+            self.assertFalse(accepted["publication_authorized"])
+            self.assertEqual(rejected["completed_records"], 1)
+            self.assertFalse(rejected["publication_authorized"])
+            self.assertNotIn("secret-value", (path / "rejected-02.json").read_text())
 
     def test_pinned_new_version_requires_explicit_identity(self):
         raw = upstream_report()
