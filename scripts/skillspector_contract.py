@@ -128,7 +128,8 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
             if reference["status"] == "uninspected":
                 require(reference["disposition"] == "partial", "Uninspected directory cannot be analyzed")
             if reference["status"] in {"missing", "ambiguous", "uninspected"} or (
-                    reference["status"] == "resolved" and reference["disposition"] != "analyzed"):
+                    reference["status"] == "resolved" and reference["disposition"] != "analyzed") or (
+                    reference["status"] == "rejected" and reference["disposition"] == "partial"):
                 require(record["status"] != "complete" and coverage["status"] != "complete",
                         "uninspected reference cannot claim complete analysis")
         for diagnostic in coverage["ledger_exceptions"]:
