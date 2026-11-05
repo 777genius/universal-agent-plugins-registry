@@ -123,9 +123,8 @@ def verify_live_pins(
                     "a newer signed Directory source overrides the Community pin")
         claimed[package_name] = claimed.get(package_name, 0) + 1
         old = previous["records"][item["id"]]
-        require(old["source"]["content_digest"] == plan["selection"]["sources"][
-                    selected.index(item)]["revision"] or
-                isinstance(old["source"]["content_digest"], str),
+        require(isinstance(old["source"].get("content_digest"), str)
+                and DIGEST.fullmatch(old["source"]["content_digest"]) is not None,
                 "prior source digest is unavailable")
         result.append({
             "id": item["id"], "repository": item["repository"],
