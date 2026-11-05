@@ -83,6 +83,8 @@ jobs:
           scanner-new/.venv/bin/ruff check \
             scanner-new/src/skillspector/references.py \
             scanner-new/tests/test_named_version_references.py
+          scanner-new/.venv/bin/ruff format --diff \
+            scanner-new/tests/test_named_version_references.py
           scanner-new/.venv/bin/ruff format --check \
             scanner-new/src/skillspector/references.py \
             scanner-new/tests/test_named_version_references.py
