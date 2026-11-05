@@ -124,7 +124,8 @@ class CohortReleaseTests(unittest.TestCase):
         with mock.patch.object(skillspector_candidate_signature, "load_verified_previous",
                                return_value=previous):
             envelope = release.sign_release(
-                snapshot, KEYS, KEY_ID, SEED, Path("/synthetic-v3"), now=NOW)
+                snapshot, KEYS, KEY_ID, SEED, Path("/synthetic-v3"),
+                lambda: snapshot["signed_sources"], now=NOW)
         return snapshot, envelope, previous
 
     def verify(self, snapshot, envelope, previous, keys=None, now=NOW):
@@ -165,10 +166,12 @@ class CohortReleaseTests(unittest.TestCase):
         snapshot, envelope, previous = self.fixture()
         with self.assertRaises(PublicationError):
             release.sign_release(snapshot, {}, KEY_ID, SEED,
-                                 Path("/synthetic-v3"), now=NOW)
+                                 Path("/synthetic-v3"),
+                                 lambda: snapshot["signed_sources"], now=NOW)
         with self.assertRaises(PublicationError):
             release.sign_release(snapshot, KEYS, KEY_ID, bytes([1]) * 32,
-                                 Path("/synthetic-v3"), now=NOW)
+                                 Path("/synthetic-v3"),
+                                 lambda: snapshot["signed_sources"], now=NOW)
         with self.assertRaises(PublicationError):
             self.verify(snapshot, envelope, previous, keys={KEY_ID: bytes(32)})
         tampered = copy.deepcopy(snapshot)
@@ -192,7 +195,23 @@ class CohortReleaseTests(unittest.TestCase):
                                    "load_verified_previous", return_value=previous), \
                  self.assertRaises(PublicationError):
                 release.sign_release(
-                    value, KEYS, KEY_ID, SEED, Path("/synthetic-v3"), now=NOW)
+                    value, KEYS, KEY_ID, SEED, Path("/synthetic-v3"),
+                    lambda: value["signed_sources"], now=NOW)
+
+    def test_signer_requires_independent_fresh_signed_feed_readback(self):
+        snapshot, _, previous = self.fixture()
+        wrong = copy.deepcopy(snapshot["signed_sources"])
+        wrong["community"]["snapshot_digest"] = "sha256:" + "0" * 64
+        with mock.patch.object(skillspector_candidate_signature,
+                               "load_verified_previous", return_value=previous):
+            with self.assertRaises(PublicationError):
+                release.sign_release(
+                    snapshot, KEYS, KEY_ID, SEED,
+                    Path("/synthetic-v3"), now=NOW)
+            with self.assertRaises(PublicationError):
+                release.sign_release(
+                    snapshot, KEYS, KEY_ID, SEED,
+                    Path("/synthetic-v3"), lambda: wrong, now=NOW)
 
     def test_changed_candidate_source_or_signed_live_pin_rejected(self):
         proof, pins, previous = qualified_fixture()

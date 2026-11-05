@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from scripts import skillspector_candidate_signature as candidate_signature
 from scripts import skillspector_candidate_cohort as candidate
@@ -153,6 +153,7 @@ def signing_message(body: bytes) -> bytes:
 def sign_release(
     release: dict, trusted_keys: dict[str, bytes],
     key_id: str, private_seed: bytes, previous_dir: Path,
+    fresh_source_loader: Callable[[], dict] | None = None,
     *, now: datetime | None = None,
 ) -> dict[str, Any]:
     """Requalify all nine records *before* using the independent signer key."""
@@ -173,6 +174,17 @@ def sign_release(
         raise PublicationError("unverified cohort evidence cannot be signed") from error
     require(expected == release,
             "cohort signer refuses unverified or altered source evidence")
+    # The on-disk source witness can be copied or fabricated. A privileged
+    # signer must fetch and authenticate both signed feeds immediately before
+    # signing and compare their exact normalized current-pins proof.
+    require(callable(fresh_source_loader),
+            "production cohort signing needs a fresh signed-feed verifier")
+    fresh_sources = fresh_source_loader()
+    require(isinstance(fresh_sources, dict)
+            and len(scanner.report_json(fresh_sources)) <= MAX_RELEASE_BYTES
+            and scanner.report_json(fresh_sources) ==
+                scanner.report_json(release["signed_sources"]),
+            "fresh signed Community/Directory pin readback differs")
     body = scanner.report_json(release)
     require(len(body) <= MAX_RELEASE_BYTES, "release exceeds signing limit")
     return {
