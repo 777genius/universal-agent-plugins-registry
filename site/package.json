@@ -71,7 +71,8 @@
     },
     "patchedDependencies": {
       "listhen@1.10.1": "patches/listhen@1.10.1.patch",
-      "@rollup/plugin-node-resolve@16.0.3": "patches/@rollup__plugin-node-resolve@16.0.3.patch"
+      "@rollup/plugin-node-resolve@16.0.3": "patches/@rollup__plugin-node-resolve@16.0.3.patch",
+      "eslint-plugin-import-x@4.17.1": "patches/eslint-plugin-import-x@4.17.1.patch"
     }
   }
 }
