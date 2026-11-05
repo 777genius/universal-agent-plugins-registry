@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: 13963c56dfce8f708079018100ac24f32b85b9a7 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
+          ref: 80535e43cf2e59f3085558d0a2fc6e1eefca3ca2 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
           persist-credentials: false
           path: scanner-new
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,6 +63,8 @@ jobs:
             scanner-new/src/skillspector/nodes/finalize_inspection_ledger.py \
             scanner-new/tests/test_out_of_bundle_reference_coverage.py \
             scanner-new/tests/nodes/test_finalize_inspection_ledger.py
+          scanner-new/.venv/bin/ruff format --diff \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py
           scanner-new/.venv/bin/ruff format --check \
             scanner-new/src/skillspector/references.py \
             scanner-new/src/skillspector/nodes/build_context.py \
