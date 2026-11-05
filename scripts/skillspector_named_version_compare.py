@@ -65,6 +65,16 @@ def require_status(
 
 
 
+def uncommitted_inputs(checkout: Path, *paths: str) -> str:
+    """Detect all scanner or source drift, including ignored files."""
+    safe_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    args = ["git", "-C", str(checkout), "status", "--porcelain",
+            "--untracked-files=all", "--ignored=matching"]
+    if paths:
+        args.extend(["--", *paths])
+    return subprocess.check_output(args, env=safe_env, text=True, timeout=30).strip()
+
+
 def source_revision(checkout: Path) -> str:
     """Verify that a pinned checkout has no modified, untracked OR ignored inputs."""
     safe_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -72,11 +82,7 @@ def source_revision(checkout: Path) -> str:
         ["git", "-C", str(checkout), "rev-parse", "HEAD"],
         env=safe_env, text=True, timeout=30,
     ).strip()
-    dirty = subprocess.check_output(
-        ["git", "-C", str(checkout), "status", "--porcelain",
-         "--untracked-files=all", "--ignored=matching"],
-        env=safe_env, text=True, timeout=30,
-    ).strip()
+    dirty = uncommitted_inputs(checkout)
     if dirty:
         raise AssertionError(("Pinned Braids checkout has untracked or modified inputs", dirty))
     return revision
@@ -109,6 +115,13 @@ def main() -> None:
 
     scanners = {"old": args.old.resolve(), "new": args.new.resolve()}
     roots = {name: binary.parents[2] for name, binary in scanners.items()}
+    # Fail closed before version() imports editable scanner modules or the
+    # vetted adapter patches two tracked source files. Only the importable
+    # src/ tree matters; uv's .venv is intentionally outside that scope.
+    for label, checkout in roots.items():
+        dirty = uncommitted_inputs(checkout, "src")
+        if dirty:
+            raise AssertionError(("Pinned scanner src differs from Git HEAD", label, dirty))
     versions = {k: version(binary) for k, binary in scanners.items()}
     if not all(v.endswith("v2.13.3") for v in versions.values()):
         raise AssertionError(("Scanner release differs", versions))

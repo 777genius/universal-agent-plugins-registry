@@ -112,6 +112,45 @@ jobs:
               (root / "SKILL.md").write_text("Inert source.\n", encoding="utf-8")
               assert len(source_revision(root)) == 40
           PY
+      - name: Reject ignored, untracked and modified scanner src without rejecting .venv
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "source/scripts")
+          from skillspector_named_version_compare import uncommitted_inputs
+
+          with tempfile.TemporaryDirectory(prefix="scanner-source-provenance-") as tmp:
+              root = Path(tmp)
+              (root / "src" / "skillspector").mkdir(parents=True)
+              (root / ".gitignore").write_text(".venv/\n*.cache\n", encoding="utf-8")
+              module = root / "src" / "skillspector" / "__init__.py"
+              module.write_text("VALUE = 1\n", encoding="utf-8")
+              subprocess.run(["git", "init", "-q", str(root)], check=True)
+              subprocess.run(["git", "-C", str(root), "add", ".gitignore", "src"], check=True)
+              subprocess.run([
+                  "git", "-C", str(root), "-c", "user.name=CI",
+                  "-c", "user.email=ci@example.invalid", "commit", "-qm", "fixture",
+              ], check=True)
+              (root / ".venv").mkdir()
+              (root / ".venv" / "installed.cache").write_text("expected venv content\n")
+              assert not uncommitted_inputs(root, "src")
+              ignored = root / "src" / "generated.cache"
+              ignored.write_text("Untrusted ignored code\n")
+              assert "generated.cache" in uncommitted_inputs(root, "src")
+              ignored.unlink()
+              extra = root / "src" / "extra.py"
+              extra.write_text("untracked code\n")
+              assert "extra.py" in uncommitted_inputs(root, "src")
+              extra.unlink()
+              module.write_text("VALUE = 2\n", encoding="utf-8")
+              assert "__init__.py" in uncommitted_inputs(root, "src")
+              module.write_text("VALUE = 1\n", encoding="utf-8")
+              assert not uncommitted_inputs(root, "src")
+          PY
       - name: Install both immutable v2.13.3 scanners
         run: |
           python3 -m pip install --disable-pip-version-check uv==0.13.4
