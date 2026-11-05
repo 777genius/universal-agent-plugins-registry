@@ -1,0 +1,118 @@
+name: SkillSpector isolated 2.13.3 cohort candidate
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_candidate_cohort.py"
+      - "scripts/skillspector_bounded_cohort.py"
+      - "scripts/patch_skillspector_directory_refs_2133_canary.py"
+      - "scripts/skillspector_reports.py"
+      - "tests/test_bounded_cohort.py"
+      - "tests/test_skillspector_candidate_cohort.py"
+      - ".github/workflows/skillspector-candidate-cohort.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  nine-immutable-skill-cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 604a1cff1249ec4023012be4bdb77eac20621893
+          path: scanner-new
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned read-only registry and scanner dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3 uv==0.13.4
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      - name: Run source/provenance/negative normalizer tests
+        run: python3 -m unittest tests.test_bounded_cohort tests.test_skillspector_candidate_cohort -v
+      - name: Verify immutable scanner source and apply vetted directory inventory adapter
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from skillspector_named_version_compare import uncommitted_inputs
+          from patch_skillspector_directory_refs_2133_canary import apply
+          root = Path("scanner-new").resolve()
+          revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+          expected = "604a1cff1249ec4023012be4bdb77eac20621893"
+          if revision != expected or uncommitted_inputs(root, "src"):
+              raise SystemExit("New scanner source does not match immutable pinned SHA")
+          apply(root, expected_release=expected, expected_blobs={
+              "src/skillspector/references.py": "a80b1a5f77b1a74403d8c44a04af082fe5f19b8c",
+              "src/skillspector/nodes/build_context.py": "174887b736d1d5940cd1cf04b235210290702960",
+          })
+          subprocess.run([str(root / ".venv/bin/python"),
+              str(Path("scripts/patch_skillspector_directory_refs_2133_canary.py").resolve()),
+              str(root), "--check-only"], check=True, timeout=60)
+          PY
+      - name: Remove only vetted generated scanner bytecode before src attestation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for folder in sorted((Path("scanner-new")/"src").rglob("__pycache__"), reverse=True):
+              if folder.is_symlink() or not folder.is_dir():
+                  raise SystemExit("Unexpected scanner cache directory")
+              for entry in folder.iterdir():
+                  if entry.is_symlink() or not entry.is_file() or entry.suffix != ".pyc":
+                      raise SystemExit(f"Unexpected scanner cache file: {entry}")
+                  entry.unlink()
+              folder.rmdir()
+          PY
+      - name: Read back and verify entire immutable published v3 baseline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m scripts.publish_skillspector_coverage_v3 previous --output-dir "$RUNNER_TEMP/candidate-baseline"
+      - name: Require the same nine exact old Partial source identities
+        run: |
+          REPORT_COMMIT=$(python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"candidate-baseline/publication-base.json"; print(json.loads(p.read_text())["report_commit"])')
+          test -n "$REPORT_COMMIT"
+          python3 -m scripts.skillspector_bounded_cohort \
+            --previous-dir "$RUNNER_TEMP/candidate-baseline" \
+            --current-selection "$RUNNER_TEMP/candidate-baseline/selection.json" \
+            --report-commit "$REPORT_COMMIT" \
+            --output "$RUNNER_TEMP/candidate-proof/plan.json"
+      - name: Scan ONLY pinned nine immutable sources with actual no-LLM CLI
+        timeout-minutes: 25
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m scripts.skillspector_candidate_cohort \
+            --previous-dir "$RUNNER_TEMP/candidate-baseline" \
+            --plan "$RUNNER_TEMP/candidate-proof/plan.json" \
+            --scanner scanner-new/.venv/bin/skillspector \
+            --output "$RUNNER_TEMP/candidate-proof/candidate.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          proof = json.loads((Path(os.environ["RUNNER_TEMP"])/"candidate-proof/candidate.json").read_text())
+          assert len(proof["records"]) == len(proof["comparisons"]) == 9
+          assert all(r["status"] == r["coverage"]["status"] == "complete" for r in proof["records"])
+          assert proof["candidate_status"] == "measured_complete_unpublished"
+          assert proof["publication_authorized"] is False
+          assert proof["live_selection_verified"] is False
+          print("Pinned 2.13.3 normalized results 9/9, no production publication")
+          PY
+      - name: Preserve exact-source comparison/normalized evidence on failure too
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-2133-isolated-candidate
+          path: ${{ runner.temp }}/candidate-proof/
+          if-no-files-found: warn
+          retention-days: 7
