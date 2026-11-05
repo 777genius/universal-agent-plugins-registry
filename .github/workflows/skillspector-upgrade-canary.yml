@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: 80535e43cf2e59f3085558d0a2fc6e1eefca3ca2 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
+          ref: 018daa3afa2fa3ad084dda251fb562c5045cb423 # vetted fork backport: v2.13.3 + JSON VERSION + traversal
           persist-credentials: false
           path: scanner-new
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

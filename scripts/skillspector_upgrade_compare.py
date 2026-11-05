@@ -230,7 +230,7 @@ def main() -> None:
                 "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
                 "results": results,
                 "production_policy_changed": False,
-                "candidate_fork_sha": "80535e43cf2e59f3085558d0a2fc6e1eefca3ca2",
+                "candidate_fork_sha": "018daa3afa2fa3ad084dda251fb562c5045cb423",
             }
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
