@@ -98,6 +98,25 @@ class SignedLiveCohortTests(unittest.TestCase):
         value[4][0]["source"]["revision"] = value[2][0]["source"]["revision"]
         self.assertEqual(len(self.check(value)["sources"]), 9)
 
+    def test_duplicate_directory_target_root_conflicts_in_either_order(self):
+        for ordering in ("conflict_first", "matching_first"):
+            value = copy.deepcopy(signed_fixture())
+            matching = copy.deepcopy(value[2][0]["source"])
+            changed = dict(matching, revision="f" * 40)
+            duplicates = [{"name": "directory/a", "source": changed},
+                          {"name": "directory/b", "source": matching}]
+            value[4].extend(duplicates if ordering == "conflict_first" else duplicates[::-1])
+            with self.subTest(order=ordering), self.assertRaises(admission.CohortRejected):
+                self.check(value)
+
+    def test_same_root_repository_casing_is_not_a_revision_conflict(self):
+        value = copy.deepcopy(signed_fixture())
+        source = copy.deepcopy(value[2][0]["source"])
+        another = dict(source, repository=source["repository"].swapcase())
+        value[4].extend([{"name": "directory/a", "source": source},
+                         {"name": "directory/b", "source": another}])
+        self.assertEqual(len(self.check(value)["sources"]), 9)
+
     def test_incomplete_signed_inventory_or_digest_rejected(self):
         for change in ("count", "digest", "components"):
             value = copy.deepcopy(signed_fixture())

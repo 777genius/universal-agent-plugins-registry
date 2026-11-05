@@ -13,7 +13,10 @@ on:
     branches: [main]
     paths:
       - "scripts/skillspector_live_cohort_preflight.py"
+      - "scripts/discover_skillspector_sources.py"
+      - "scripts/skillspector_bounded_cohort.py"
       - "tests/test_skillspector_live_cohort_preflight.py"
+      - "tests/test_bounded_cohort.py"
       - ".github/workflows/skillspector-live-cohort-preflight.yml"
   workflow_dispatch:
 
