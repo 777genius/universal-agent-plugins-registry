@@ -71,13 +71,18 @@ def verify_live_pins(
         name = plugin["name"]
         require(name not in packages, "duplicate signed Community package ID")
         packages[name] = plugin
+    target_roots = {(item["repository"].casefold(), item["plugin_path"]) for item in selected}
     directory_roots = {}
     for plugin in directory:
         require(isinstance(plugin, dict) and isinstance(plugin.get("source"), dict),
                 "invalid signed Directory package")
         source = plugin["source"]
         key = (source["repository"].casefold(), source["path"])
-        require(key not in directory_roots, "duplicate Directory package root")
+        if key not in target_roots:
+            continue
+        if key in directory_roots:
+            require(directory_roots[key]["source"] == source,
+                    "conflicting signed Directory revisions for one target root")
         directory_roots[key] = plugin
 
     claimed = {}
