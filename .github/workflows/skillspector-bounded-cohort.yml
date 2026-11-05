@@ -1,0 +1,63 @@
+name: SkillSpector bounded cohort readback
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_bounded_cohort.py"
+      - "tests/test_bounded_cohort.py"
+      - ".github/workflows/skillspector-bounded-cohort.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-nine-source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned read-only verification dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Reject changed pins, genuine missing files and unsupported evidence
+        run: python3 -m unittest tests.test_bounded_cohort -v
+      - name: Fetch and validate the last immutable production v3 bundle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m scripts.publish_skillspector_coverage_v3 previous \
+            --output-dir "${RUNNER_TEMP}/cohort-baseline"
+      - name: Require nine current immutable historical-Partial witnesses
+        run: |
+          REPORT_COMMIT=$(python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"cohort-baseline/publication-base.json"; print(json.loads(p.read_text())["report_commit"])')
+          test -n "$REPORT_COMMIT"
+          python3 -m scripts.skillspector_bounded_cohort \
+            --previous-dir "${RUNNER_TEMP}/cohort-baseline" \
+            --current-selection "${RUNNER_TEMP}/cohort-baseline/selection.json" \
+            --report-commit "$REPORT_COMMIT" \
+            --output "${RUNNER_TEMP}/bounded-cohort/plan.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import os
+          p = Path(os.environ["RUNNER_TEMP"]) / "bounded-cohort/plan.json"
+          proof = json.loads(p.read_text(encoding="utf-8"))
+          assert len(proof["selection"]["sources"]) == 9
+          assert proof["candidate_status"] == "not_scanned"
+          assert proof["live_selection_verified"] is False
+          assert proof["publication_authorized"] is False
+          print("Published-baseline cohort witnessed; fresh discovery and production rollout remain unverified")
+          PY
+      - name: Retain bounded non-publishing admission proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-bounded-cohort-preflight
+          path: ${{ runner.temp }}/bounded-cohort/
+          if-no-files-found: warn
+          retention-days: 7
