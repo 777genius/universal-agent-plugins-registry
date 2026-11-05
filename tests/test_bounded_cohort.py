@@ -52,7 +52,7 @@ class BoundedCohortTests(unittest.TestCase):
         selection = {"schema_version": 1, "sources": sources}
         manifest = {"schema_version": 3, "scanner": copy.deepcopy(OLD_SCANNER),
                     "profile": copy.deepcopy(contract.PROFILE),
-                    "profiles": list(scanner.PROFILES.values()),
+                    "profiles": copy.deepcopy(list(scanner.PROFILES.values())),
                     "selection_digest": digest(selection), "source_commit": "c" * 40,
                     "coverage": {"selected": 17947}}
         return {"manifest": manifest, "selection": selection, "records": records}, selection
