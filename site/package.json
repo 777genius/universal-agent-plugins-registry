@@ -56,7 +56,10 @@
       "shell-quote@<1.11.0": "1.11.0",
       "source-map-js@<1.2.2": "1.2.2",
       "svgo@>=4.0.0 <4.1.0": "4.1.0",
-      "tar@<=7.5.20": "7.5.22"
+      "tar@<=7.5.20": "7.5.22",
+      "@vercel/nft@1.11.0>glob": "14.0.2",
+      "eslint@10.13.0>minimatch": "11.0.1",
+      "@typescript-eslint/typescript-estree@8.72.0>minimatch": "11.0.1"
     },
     "packageExtensions": {
       "listhen@1.10.1": {
