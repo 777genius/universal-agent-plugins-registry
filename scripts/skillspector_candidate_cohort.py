@@ -68,9 +68,16 @@ def verify_candidate(item: dict, old: dict, new: dict) -> dict:
             "candidate scanner/profile identity differs")
     require(new["status"] == "complete" and new["coverage"]["status"] == "complete"
             and new["execution"]["state"] == "completed"
+            and type(new["execution"]["exit_code"]) is int
             and new["execution"]["exit_code"] in (0, 1),
             "candidate did not complete bounded static analysis")
     cv = new["coverage"]
+    require(all(type(cv.get(key)) is int and cv[key] >= 0 for key in (
+                "fully_inspected_files", "partially_inspected_files",
+                "entirely_uninspected_files", "references_total", "ledger_exceptions_total"))
+            and isinstance(cv.get("references"), list)
+            and isinstance(cv.get("ledger_exceptions"), list),
+            "candidate coverage counters or arrays are invalid")
     require(cv["fully_inspected_files"] > 0 and cv["partially_inspected_files"] == 0
             and cv["entirely_uninspected_files"] == 0
             and cv.get("grouping_complete") is True
@@ -80,14 +87,20 @@ def verify_candidate(item: dict, old: dict, new: dict) -> dict:
             and not new["findings_truncated"] and not new["errors"],
             "candidate has uninspected, incomplete or truncated evidence")
     for ref in cv.get("references", []):
-        require(ref["status"] not in {"missing", "ambiguous", "uninspected"}
+        require(ref["status"] in {"resolved", "missing", "ambiguous", "rejected", "uninspected"}
+                and ref["disposition"] in {"analyzed", "partial", "failed", "out_of_scope"}
+                and ref["status"] not in {"missing", "ambiguous", "uninspected"}
                 and not (ref["status"] == "rejected" and ref["disposition"] == "partial")
                 and not (ref["status"] == "resolved" and ref["disposition"] != "analyzed"),
                 "candidate retains an uninspected reference")
     require(cv.get("ledger_exceptions_total", 0) == 0 and not cv.get("ledger_exceptions"),
             "candidate has unresolved ledger exceptions")
-    require(new["raw_finding_count"] >= new["finding_count"] >= new["finding_group_count"] >= len(new["findings"]),
-            "candidate finding accounting is invalid")
+    require(all(type(new.get(key)) is int and new[key] >= 0 for key in (
+                "raw_finding_count", "finding_count", "finding_group_count"))
+            and isinstance(new.get("findings"), list)
+            and new["raw_finding_count"] >= new["finding_count"] >= new["finding_group_count"]
+            and new["finding_group_count"] == len(new["findings"]),
+            "candidate finding groups are omitted or malformed")
     return {
         "id": item["id"],
         "source_digest": new["source"]["content_digest"],

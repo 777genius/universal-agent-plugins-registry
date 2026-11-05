@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "scripts/skillspector_candidate_cohort.py"
+      - "scripts/skillspector_candidate_signature.py"
       - "scripts/skillspector_bounded_cohort.py"
       - "scripts/patch_skillspector_directory_refs_2133_canary.py"
       - "scripts/skillspector_reports.py"
       - "tests/test_bounded_cohort.py"
       - "tests/test_skillspector_candidate_cohort.py"
+      - "tests/test_skillspector_candidate_signature.py"
       - ".github/workflows/skillspector-candidate-cohort.yml"
 
 permissions:
@@ -38,7 +40,7 @@ jobs:
           python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3 uv==0.13.4
           uv sync --directory scanner-new --frozen --extra dev --python 3.12
       - name: Run source/provenance/negative normalizer tests
-        run: python3 -m unittest tests.test_bounded_cohort tests.test_skillspector_candidate_cohort -v
+        run: python3 -m unittest tests.test_bounded_cohort tests.test_skillspector_candidate_cohort tests.test_skillspector_candidate_signature -v
       - name: Verify immutable scanner source and apply vetted directory inventory adapter
         run: |
           python3 - <<'PY'
@@ -107,6 +109,37 @@ jobs:
           assert proof["publication_authorized"] is False
           assert proof["live_selection_verified"] is False
           print("Pinned 2.13.3 normalized results 9/9, no production publication")
+          PY
+      - name: Sign and verify real nine-source candidate with test-only Ed25519 key
+        timeout-minutes: 5
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts import skillspector_candidate_signature as signing
+          from scripts import skillspector_bounded_cohort as admission
+          from scripts import skillspector_reports as scanner
+          from scripts.directory_publication import canonical_json, ed25519_public_bytes
+          work = Path(os.environ["RUNNER_TEMP"])
+          previous_dir = work / "candidate-baseline"
+          candidate_path = work / "candidate-proof/candidate.json"
+          report_commit = scanner.read_report_json(
+              previous_dir / "publication-base.json", max_bytes=4096)["report_commit"]
+          original_bytes = candidate_path.read_bytes()
+          proof = scanner.parse_scanner_json(original_bytes, "hosted 9-source candidate")
+          seed = bytes(range(32))  # Public CI TEST vector; never a production signing key.
+          key_id = "uap-skillspector-ci-test-only"
+          envelope = signing.sign_unpublished_candidate(
+              proof, previous_dir, report_commit, key_id, seed)
+          verified = signing.verify_signed_candidate(
+              original_bytes, canonical_json(envelope),
+              {key_id: ed25519_public_bytes(seed)}, previous_dir, report_commit)
+          assert verified == proof and len(verified["records"]) == 9
+          assert verified["publication_authorized"] is False
+          assert verified["live_selection_verified"] is False
+          assert verified["candidate_status"] == "measured_complete_unpublished"
+          admission.write_plan_exclusively(work / "candidate-proof/signature-test.json", envelope)
+          print("Verified all 9 hosted 2.13.3 candidate records and complete old-v3 bundle; TEST key only")
           PY
       - name: Preserve exact-source comparison/normalized evidence on failure too
         if: always()
