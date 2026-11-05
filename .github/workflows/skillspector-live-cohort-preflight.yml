@@ -1,0 +1,84 @@
+name: SkillSpector fresh signed Community cohort preflight
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_live_cohort_preflight.py"
+      - "scripts/discover_skillspector_sources.py"
+      - "scripts/skillspector_bounded_cohort.py"
+      - "tests/test_skillspector_live_cohort_preflight.py"
+      - "tests/test_bounded_cohort.py"
+      - ".github/workflows/skillspector-live-cohort-preflight.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/skillspector_live_cohort_preflight.py"
+      - "tests/test_skillspector_live_cohort_preflight.py"
+      - ".github/workflows/skillspector-live-cohort-preflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  current-signed-nine-source-pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned read-only validation dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Prove strict preflight and signed feed fixtures
+        run: |
+          python3 -m unittest tests.test_bounded_cohort tests.test_skillspector_live_cohort_preflight tests.test_skillspector_community.CommunityFeedTests -v
+      - name: Read and authenticate all immutable old-v3 report shards
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m scripts.publish_skillspector_coverage_v3 previous \
+            --output-dir "${RUNNER_TEMP}/signed-source-previous"
+      - name: Require nine old current Partial witnesses
+        run: |
+          REPORT_COMMIT="$(python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"signed-source-previous/publication-base.json"; print(json.loads(p.read_text())["report_commit"])')"
+          test -n "${REPORT_COMMIT}"
+          python3 -m scripts.skillspector_bounded_cohort \
+            --previous-dir "${RUNNER_TEMP}/signed-source-previous" \
+            --current-selection "${RUNNER_TEMP}/signed-source-previous/selection.json" \
+            --report-commit "${REPORT_COMMIT}" \
+            --output "${RUNNER_TEMP}/signed-source-proof/plan.json"
+      - name: Independently authenticate fresh signed Community and Directory pins
+        timeout-minutes: 10
+        run: |
+          python3 -m scripts.skillspector_live_cohort_preflight \
+            --previous-dir "${RUNNER_TEMP}/signed-source-previous" \
+            --plan "${RUNNER_TEMP}/signed-source-proof/plan.json" \
+            --output "${RUNNER_TEMP}/signed-source-proof/current-signed-pins.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "signed-source-proof"
+          result = json.loads((root / "current-signed-pins.json").read_bytes())
+          assert result["kind"] == "skillspector-signed-community-cohort-preflight"
+          assert len(result["sources"]) == 9
+          assert result["source_pins_verified_against_fresh_signed_feeds"] is True
+          assert result["provider_listing_verified"] is False
+          assert result["candidate_scan_verified"] is False
+          assert result["publication_authorized"] is False
+          print("Nine exact signed Community package pins verified; not production promotion")
+          PY
+      - name: Preserve read-only source preflight evidence, even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-nine-signed-community-sources
+          path: ${{ runner.temp }}/signed-source-proof/
+          if-no-files-found: warn
+          retention-days: 7
