@@ -1,8 +1,13 @@
 """Fail-closed tests for the non-publishing nine-source scanner cohort."""
 import copy
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from scripts.skillspector_bounded_cohort import COHORT, CohortRejected, OLD_SCANNER, build_plan, digest
+from scripts.skillspector_bounded_cohort import (
+    COHORT, CohortRejected, OLD_SCANNER, build_plan, digest, write_plan_exclusively,
+)
 
 
 class BoundedCohortTests(unittest.TestCase):
@@ -39,6 +44,7 @@ class BoundedCohortTests(unittest.TestCase):
         plan = build_plan(previous, selection, "b" * 40)
         self.assertEqual(len(plan["selection"]["sources"]), 9)
         self.assertFalse(plan["publication_authorized"])
+        self.assertFalse(plan["live_selection_verified"])
         self.assertEqual(plan["candidate_status"], "not_scanned")
         self.assertEqual(previous["records"]["skill-0"]["status"], "partial")
         self.assertNotEqual(plan["baseline_scanner"], plan["candidate_scanner"])
@@ -91,6 +97,32 @@ class BoundedCohortTests(unittest.TestCase):
         previous["manifest"]["scanner"]["revision"] = "0" * 40
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
+
+
+    def test_cohort_proof_is_exclusive_and_rejects_symlink_locations(self):
+        previous, selection = self.fixture()
+        plan = build_plan(previous, selection, "b" * 40)
+        with tempfile.TemporaryDirectory(prefix="cohort-exclusivity-") as tmp:
+            root = Path(tmp)
+            path = root / "out" / "plan.json"
+            write_plan_exclusively(path, plan)
+            self.assertEqual(json.loads(path.read_text()), plan)
+            with self.assertRaises(FileExistsError):
+                write_plan_exclusively(path, plan)
+            self.assertEqual(json.loads(path.read_text()), plan)
+
+            dangling = root / "dangling.json"
+            dangling.symlink_to(root / "missing-target.json")
+            with self.assertRaises(CohortRejected):
+                write_plan_exclusively(dangling, plan)
+            self.assertFalse((root / "missing-target.json").exists())
+
+            linked_dir = root / "linked-output"
+            linked_dir.symlink_to(path.parent, target_is_directory=True)
+            with self.assertRaises(CohortRejected):
+                write_plan_exclusively(linked_dir / "plan2.json", plan)
+            self.assertFalse((path.parent / "plan2.json").exists())
+
 
 
 if __name__ == "__main__":
