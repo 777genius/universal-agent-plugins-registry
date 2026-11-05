@@ -49,8 +49,11 @@ def require(condition: bool, message: str) -> None:
 
 
 def finding_signature(record: dict) -> list[tuple]:
-    return sorted((row["rule"], row["severity"], row["path"], row.get("line", 0))
-                  for row in record["findings"])
+    return sorted(
+        (row["rule"], row["severity"], row["path"], row.get("line", 0),
+         tuple(sorted(scanner.report_json(position) for position in row.get("occurrences", []))))
+        for row in record["findings"]
+    )
 
 
 def verify_candidate(item: dict, old: dict, new: dict) -> dict:
@@ -185,7 +188,8 @@ def verify_pinned_scanner(executable: Path) -> Path:
     return binary
 
 
-def run_candidate(plan: dict, previous: dict, executable: Path, *, github_token: str | None = None) -> dict:
+def run_candidate(plan: dict, previous: dict, executable: Path, *,
+                  github_token: str | None = None, progress_dir: Path | None = None) -> dict:
     require(plan.get("kind") == "skillspector-bounded-cohort-preflight"
             and plan.get("candidate_status") == "not_scanned"
             and plan.get("publication_authorized") is False
@@ -204,20 +208,45 @@ def run_candidate(plan: dict, previous: dict, executable: Path, *, github_token:
     require((version.stdout + version.stderr).strip().endswith("v2.13.3"),
             "candidate CLI version differs")
     records, comparisons = [], []
+    progress_bytes = 0
     with ExitStack() as stack:
         pins: dict[tuple[str, str], PinnedRepository] = {}
-        for item in plan["selection"]["sources"]:
-            key = (item["repository"], item["revision"])
-            if key not in pins:
-                pinned = PinnedRepository(*key, mirror_root=None, github_token=github_token)
-                pins[key] = pinned
-                stack.callback(pinned.close)
-            old = previous["records"][item["id"]]
-            admission.checked_old_partial(old, item, admission.COHORT[
-                item["repository"], item["revision"], item["path"],
-            ])
-            new = scan_one(binary, item, pins[key])
-            comparisons.append(verify_candidate(item, old, new))
+        for ordinal, item in enumerate(plan["selection"]["sources"], 1):
+            new = None
+            try:
+                key = (item["repository"], item["revision"])
+                if key not in pins:
+                    pinned = PinnedRepository(*key, mirror_root=None, github_token=github_token)
+                    pins[key] = pinned
+                    stack.callback(pinned.close)
+                old = previous["records"][item["id"]]
+                admission.checked_old_partial(old, item, admission.COHORT[
+                    item["repository"], item["revision"], item["path"],
+                ])
+                new = scan_one(binary, item, pins[key])
+                comparison = verify_candidate(item, old, new)
+                if progress_dir is not None:
+                    require(not scanner.has_public_credentials(new),
+                            "candidate contains credential-shaped public evidence")
+                    progress_bytes += len(scanner.report_json(new))
+                    require(progress_bytes <= MAX_PROOF_BYTES, "candidate evidence budget exceeded")
+                    admission.write_plan_exclusively(
+                        progress_dir / f"accepted-{ordinal:02d}.json",
+                        {"record": new, "comparison": comparison, "publication_authorized": False},
+                    )
+            except Exception as error:
+                if progress_dir is not None:
+                    # Rejected raw evidence is not safe to publish. Keep only a
+                    # bounded, source-pinned failure witness, never raw scanner text.
+                    observed = new.get("status") if isinstance(new, dict) else None
+                    admission.write_plan_exclusively(
+                        progress_dir / f"rejected-{ordinal:02d}.json",
+                        {"id": item["id"], "error_class": type(error).__name__,
+                         "observed_status": observed if observed in {"complete", "partial", "error"} else None,
+                         "completed_records": len(records), "publication_authorized": False},
+                    )
+                raise
+            comparisons.append(comparison)
             records.append(new)
     require(len(records) == 9 and len({r["id"] for r in records}) == 9,
             "incomplete isolated candidate scan")
@@ -253,7 +282,8 @@ def main() -> int:
     require(previous is not None, "authenticated old v3 bundle missing")
     coverage.validate_manifest(previous["manifest"], current_policy=True)
     plan = json.loads(args.plan.read_bytes())
-    proof = run_candidate(plan, previous, args.scanner, github_token=os.environ.get("GITHUB_TOKEN"))
+    proof = run_candidate(plan, previous, args.scanner, github_token=os.environ.get("GITHUB_TOKEN"),
+                          progress_dir=args.output.parent)
     admission.write_plan_exclusively(args.output, proof)
     print("Nine exact pinned sources rescanned by 2.13.3. Unpublished candidate only.")
     return 0
