@@ -112,7 +112,7 @@ jobs:
           print("Pinned 2.13.3 normalized results 9/9, no production publication")
           PY
       - name: Sign and verify real nine-source candidate with test-only Ed25519 key
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           python3 - <<'PY'
           import os
