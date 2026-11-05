@@ -116,6 +116,14 @@ def main() -> None:
     ).strip()
     if source_commit != SOURCE:
         raise AssertionError(("Unexpected immutable Braids source SHA", source_commit))
+    # An immutable commit identity alone does not attest the checkout bytes.
+    # Refuse both modified tracked files and extra untracked files.
+    dirty = subprocess.check_output(
+        ["git", "-C", str(source_checkout), "status", "--porcelain", "--untracked-files=all"],
+        env=safe_env, text=True, timeout=30,
+    ).strip()
+    if dirty:
+        raise AssertionError(("Braids checkout differs from pinned source", dirty))
     with tempfile.TemporaryDirectory(prefix="uap-named-version-") as temp:
         inputs = Path(temp)
         roots = {}
@@ -158,6 +166,7 @@ def main() -> None:
     for scanner in scanners:
         directory = results[scanner]["directory"]
         if (directory["status"] != "partial" or directory["is_complete"]
+                or directory["exit_code"] != 1
                 or directory["missing_reference_count"] != 0
                 or not directory["reason_counts"].get("referenced_uninspected")):
             raise AssertionError(("Directory incorrectly marked Complete", scanner, directory))
@@ -165,6 +174,7 @@ def main() -> None:
         if not (
             traversal["status"] == "partial"
             and not traversal["is_complete"]
+            and traversal["exit_code"] == 1
             and traversal["rejected_partial_count"] >= 1
             and traversal["reason_counts"].get("referenced_uninspected")
         ):
