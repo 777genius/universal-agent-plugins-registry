@@ -1,0 +1,73 @@
+name: Signed SkillSpector nine-source cohort production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: skillspector-signed-cohort-v1-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  qualify:
+    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/skillspector-candidate-cohort.yml
+    permissions:
+      contents: read
+      actions: read
+
+  sign-and-publish:
+    name: Sign and CAS-publish independently trusted cohort
+    needs: qualify
+    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned trusted publication dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: skillspector-2133-isolated-candidate
+          path: ${{ runner.temp }}/skillspector-candidate
+      - name: Require complete real scanner candidate before accessing signing secret
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts import skillspector_candidate_cohort as candidate
+          p = Path(os.environ["RUNNER_TEMP"]) / "skillspector-candidate/candidate.json"
+          proof = json.loads(p.read_bytes())
+          assert len(proof["records"]) == len(proof["comparisons"]) == 9
+          assert all(record["status"] == record["coverage"]["status"] == "complete"
+                     for record in proof["records"])
+          assert all(record["scanner"] == candidate.NEW_SCANNER
+                     and record["profile"] == candidate.PROFILE
+                     for record in proof["records"])
+          assert proof["candidate_status"] == "measured_complete_unpublished"
+          assert proof["live_selection_verified"] is False
+          assert proof["publication_authorized"] is False
+          PY
+      - name: Authenticate, Ed25519-sign and CAS-publish exact nine-source release
+        timeout-minutes: 35
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY: ${{ secrets.SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY }}
+          SKILLSPECTOR_COHORT_SIGNING_KEY_ID: ${{ vars.SKILLSPECTOR_COHORT_SIGNING_KEY_ID }}
+        run: |
+          python3 -m scripts.skillspector_cohort_publish_cli \
+            --candidate "${RUNNER_TEMP}/skillspector-candidate/candidate.json"
