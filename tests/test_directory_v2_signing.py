@@ -116,6 +116,10 @@ class V2SignedBundleTests(unittest.TestCase):
         grant["canonical_closure"]["eligible"] = False
         with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
             sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime.pop("closure_digest")
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime["closure_digest"] = digest
 
         # Without a canonical closure, only unbound legacy proof qualifies.
         del grant["canonical_closure"]
@@ -127,6 +131,8 @@ class V2SignedBundleTests(unittest.TestCase):
     def test_v2_evidence_provenance_matches_go_reader(self):
         candidate = copy.deepcopy(self.snapshot)
         record = candidate["evidence"][0]
+        original_level = record["level"]
+        original_client = record.get("client")
         record["level"] = "schema"
         record.pop("client")
         with self.assertRaisesRegex(PublicationError, "schema evidence requires workflow provenance"):
@@ -149,6 +155,15 @@ class V2SignedBundleTests(unittest.TestCase):
         record["trust"]["workflow"] = "other/evidence/.github/workflows/prove.yml"
         with self.assertRaisesRegex(PublicationError, "workflow provenance is not bound"):
             sign_snapshot_v2(candidate, "test-current", self.private)
+
+        # Provenance is bound for every GitHub Actions proof, not just schema.
+        record["level"] = original_level
+        if original_client is not None:
+            record["client"] = original_client
+        with self.assertRaisesRegex(PublicationError, "workflow provenance is not bound"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        record["trust"]["workflow"] = artifact["repository"] + "/.github/workflows/prove.yml"
+        sign_snapshot_v2(candidate, "test-current", self.private)
 
     def test_v2_expiry_contract_matches_go_reader_thirty_days(self):
         modified = copy.deepcopy(self.snapshot)
