@@ -17,17 +17,29 @@ class BoundedCohortTests(unittest.TestCase):
         for index, ((repo, revision, path), kind) in enumerate(sorted(COHORT.items())):
             item = {"id": f"skill-{index}", "kind": "skill", "repository": repo,
                     "revision": revision, "path": path, "plugin_path": ""}
-            evidence = ('metadata.methodology-version: "3.1.0"' if kind == "yaml"
+            evidence = ('methodology-version: "3.1.0"' if kind == "yaml"
                         else '<?xml version="1.0" encoding="UTF-8"?>')
+            lines = [5] if kind == "yaml" else [75, 86]
+            missing = [
+                {"status": "missing", "evidence": evidence, "reference_kind": "quoted_or_code",
+                 "source_path": "SKILL.md", "line": line, "target_path": None,
+                 "disposition": "partial"} for line in lines
+            ]
+            ledger = [
+                {"path": "SKILL.md", "start_line": line, "end_line": line,
+                 "reason_code": "reference_missing", "phase": "reference_resolution",
+                 "outcome": "partial", "fatal": False} for line in lines
+            ]
             sources.append(item)
             records[item["id"]] = {
                 "id": item["id"], "freshness": "current", "target_revision": revision,
                 "source": {"repository": repo, "revision": revision, "path": path,
                            "content_digest": "sha256:" + "a" * 64},
-                "scanner": copy.deepcopy(OLD_SCANNER), "status": "partial", "errors": [],
+                "scanner": copy.deepcopy(OLD_SCANNER), "status": "partial",
+                "errors": [{"code": "reference_missing"} for _ in lines],
                 "coverage": {"status": "partial", "reasons": [{"code": "reference_missing"}],
-                             "references_total": 1, "references": [{"status": "missing", "evidence": evidence}],
-                             "ledger_exceptions_total": 0, "ledger_exceptions": [],
+                             "references_total": len(missing), "references": missing,
+                             "ledger_exceptions_total": len(ledger), "ledger_exceptions": ledger,
                              "reference_evidence_truncated": False},
                 "execution": {"state": "completed", "exit_code": 1},
             }
@@ -69,11 +81,11 @@ class BoundedCohortTests(unittest.TestCase):
         coverage = previous["records"]["skill-0"]["coverage"]
         coverage["references"].append({"status": "rejected", "disposition": "partial",
                                        "evidence": "../outside.sh"})
-        coverage["references_total"] = 2
+        coverage["references_total"] = len(coverage["references"])
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
         coverage["references"].pop()
-        coverage["references_total"] = 1
+        coverage["references_total"] = len(coverage["references"])
         coverage["reference_evidence_truncated"] = True
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
@@ -98,6 +110,44 @@ class BoundedCohortTests(unittest.TestCase):
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
 
+
+    def test_unrelated_error_or_ledger_must_stay_partial(self):
+        previous, selection = self.fixture()
+        record = previous["records"]["skill-0"]
+        record["errors"].append({"code": "acquisition_failed"})
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
+
+        previous, selection = self.fixture()
+        coverage = previous["records"]["skill-0"]["coverage"]
+        coverage["ledger_exceptions"].append({
+            "path": "SKILL.md", "start_line": 9, "end_line": 9,
+            "reason_code": "referenced_uninspected", "phase": "reference_resolution",
+            "outcome": "partial", "fatal": False,
+        })
+        coverage["ledger_exceptions_total"] += 1
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
+
+    def test_mismatched_ledger_lines_or_reference_kind_must_fail(self):
+        previous, selection = self.fixture()
+        coverage = previous["records"]["skill-0"]["coverage"]
+        coverage["ledger_exceptions"][0]["start_line"] = 88
+        coverage["ledger_exceptions"][0]["end_line"] = 88
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
+
+        previous, selection = self.fixture()
+        coverage = previous["records"]["skill-0"]["coverage"]
+        coverage["references"][0]["reference_kind"] = "markdown_link"
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
+
+    def test_mismatched_error_count_fails_even_with_reference_missing_code(self):
+        previous, selection = self.fixture()
+        previous["records"]["skill-0"]["errors"].append({"code": "reference_missing"})
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
 
     def test_cohort_proof_is_exclusive_and_rejects_symlink_locations(self):
         previous, selection = self.fixture()
