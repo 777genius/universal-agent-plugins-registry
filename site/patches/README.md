@@ -30,38 +30,15 @@ Remove this patch only after a maintained upstream release removes the
 vulnerability and passes the same TLS/site gates. Do not merely remove the
 dependency override while retaining the adapter or ignore the audit advisory.
 
-## Site-local Nitro glob adapter
+## Native Nitro glob regression gates
 
-`nitropack@2.13.4.patch` routes Nitro's three glob imports through a small
-site-local adapter backed by pinned `tinyglobby@0.2.17`. The package extension
-declares that dependency; the version-scoped override removes Nitro's globby
-dependency and its fast-glob/micromatch/braces path. GHSA-vfj7-8cjw-p6xm has no
-patched braces release. The audit remains enabled without exceptions.
-
-The adapter preserves the nine Nitro callers' `cwd`, `absolute`, `dot` and
-`ignore` options, files-only discovery, directory/brace expansion and result
-deduplication. Ordered negative input patterns exclude only preceding positive
-groups, so later positive patterns can reinclude public assets. Negation-only
-input retains globby 16.2.0's catch-all fallback; empty input matches nothing.
-Negated `options.ignore` entries remain exclusions, as in fast-glob; they are
-distinct from ordered input patterns. This is not a general globby replacement:
-no gitignore, custom filesystem, stream or synchronous API is exposed.
-
-`nitro-glob.ts` is the handwritten source. The patch's `uap-glob.mjs` is
-generated with pinned TypeScript 5.9.3, ESNext modules and ES2022 target for Node
-22 compatibility. Tests compare its installed bytes with source compilation
-and exercise actual Nitro route discovery, public copy/compression and Rollup
-asset metadata using disposable fixtures. They need no full Nuxt build.
-
-To regenerate after changing the source, run `pnpm patch nitropack@2.13.4`,
-then compile with `pnpm exec tsc patches/nitro-glob.ts --module ESNext
---moduleResolution Bundler --target ES2022 --skipLibCheck --outDir <temp-dir>`.
-Move the generated `nitro-glob.js` to the edit directory's
-`dist/shared/uap-glob.mjs`, then run `pnpm patch-commit <edit-dir>
---patches-dir patches`. Run the focused test and frozen install/audit before
-the existing full Pages CI gates. Remove this patch only when a maintained
-upstream release removes the vulnerable path and passes the same behavior and
-site gates.
+Nuxt 4.6.4 upgrades to Nitro 2.13.6. The obsolete, version-scoped
+`nitropack@2.13.4.patch` was removed rather than retaining a disconnected
+adapter and unused pnpm patch binding. `site/tests/nitro-glob.test.ts`
+still exercises actual Nitro server route discovery, public asset copy,
+compression, and Cloudflare route metadata against the installed native
+implementation. If the newer Nitro regresses these behaviors, the Pages
+E2E fails; do not bypass those tests.
 
 ## Site-local Rollup defaults clone
 
