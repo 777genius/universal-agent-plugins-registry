@@ -31,7 +31,6 @@
     "eslint": "10.13.0",
     "listhen": "1.10.1",
     "selfsigned": "5.5.0",
-    "tinyglobby": "0.2.17",
     "typescript": "5.9.3",
     "vue-tsc": "3.3.9"
   },

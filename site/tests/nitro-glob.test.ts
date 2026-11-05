@@ -6,12 +6,9 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { gunzipSync } from 'node:zlib'
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript'
-import { globby } from '../patches/nitro-glob.ts'
 
 const nuxtRequire = createRequire(import.meta.resolve('nuxt'))
 const nitroDirectory = dirname(nuxtRequire.resolve('nitropack/package.json'))
-const runtimePath = join(nitroDirectory, 'dist/shared/uap-glob.mjs')
 
 async function fixture(files: Record<string, string>, run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'uap-nitro-glob-'))
@@ -24,31 +21,7 @@ async function fixture(files: Record<string, string>, run: (directory: string) =
   } finally { await rm(directory, { recursive: true, force: true }) }
 }
 
-test('installed Nitro adapter equals its pinned TypeScript source compilation', async () => {
-  const source = await readFile(new URL('../patches/nitro-glob.ts', import.meta.url), 'utf8')
-  const generated = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  assert.equal(await readFile(runtimePath, 'utf8'), generated)
-})
-
-// A direct tinyglobby alias loses keep.txt and negative-only discovery;
-// applying every negative globally loses later reinclusions and ignoring ! loses exclusions.
-test('ordered exclusions, deduplication, negative-only patterns and global ignores retain Nitro semantics', async () => {
-  await fixture({ 'drop.txt': '', 'keep.txt': '', 'nested/drop.txt': '', '.hidden': '', 'extensionless': '' }, async cwd => {
-    const runtime = await import(pathToFileURL(runtimePath).href) as { globby: typeof globby }
-    for (const implementation of [globby, runtime.globby]) {
-      const options = { cwd, dot: true }
-      assert.deepEqual((await implementation(['**', '!**/*.txt', 'keep.txt'], options)).sort(), ['.hidden', 'extensionless', 'keep.txt'])
-      assert.deepEqual(await implementation(['*.txt', '!drop.txt', 'keep.txt', '!keep.txt'], options), [])
-      assert.deepEqual((await implementation(['**', '**', 'keep.txt'], options)).sort(), ['.hidden', 'drop.txt', 'extensionless', 'keep.txt', 'nested/drop.txt'])
-      assert.deepEqual((await implementation(['**', '!**/*.txt', '**'], options)).sort(), ['.hidden', 'extensionless'])
-      assert.deepEqual((await implementation(['!**/*.txt'], options)).sort(), ['.hidden', 'extensionless'])
-      assert.deepEqual((await implementation(['!/*.txt'], options)).sort(), ['.hidden', 'extensionless', 'nested/drop.txt'])
-      assert.deepEqual(await implementation([], options), [])
-      assert.deepEqual((await implementation('**', { ...options, ignore: ['!**/*.txt'] })).sort(), ['.hidden', 'extensionless'])
-    }
-  })
-})
-
+// Native Nitro >=2.13.6 integration: preserve actual route/public asset behavior.
 // Removing dot/brace/absolute support or dropping negated ignore discovers the wrong handlers.
 test('actual Nitro route discovery keeps hidden brace extensions, methods and ignored handlers', async () => {
   await fixture({
