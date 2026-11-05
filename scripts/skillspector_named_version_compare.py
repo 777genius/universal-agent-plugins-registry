@@ -17,7 +17,7 @@ SKILLS = (
     "braids-help", "braids-review", "braids-risk",
 )
 BASE = "018daa3afa2fa3ad084dda251fb562c5045cb423"
-CANDIDATE = "06a6860b8720acc1efd3221668f5ebd384e0b322"
+CANDIDATE = "42366154e3c9520082ebc5f0bba9250641916aac"
 SOURCE = "79c913e9d27854d88c7ee58aa9906bd2b45001b4"
 CONTROLS = {
     "clean": FIXTURES["complete_control"],
@@ -100,7 +100,7 @@ def main() -> None:
     # candidates; verify full commit + pre-patch module blobs before writing.
     patch_directory(roots["old"])
     patch_directory(roots["new"], expected_release=CANDIDATE, expected_blobs={
-        "src/skillspector/references.py": "c8e824104cf470997f2e3f110d826c375e8ff6e4",
+        "src/skillspector/references.py": "425a29f4f969a90eaabf9e817f60826eb2084ccb",
         "src/skillspector/nodes/build_context.py": "174887b736d1d5940cd1cf04b235210290702960",
     })
     adapter = Path(__file__).with_name("patch_skillspector_directory_refs_2133_canary.py")
