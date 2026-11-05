@@ -167,6 +167,20 @@ def main() -> None:
     parser.add_argument("--real-skill", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    # A version/source/fixture preflight failure must still leave machine-readable
+    # evidence. The existing finally block atomically replaces these empty
+    # measurements after the scans begin, without treating preflight as success.
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps({
+        "format": "uap.skillspector.release-comparison.v1",
+        "input_sha256": {},
+        "immutable_real_skill_blob": None,
+        "scanner_versions": {},
+        "same_cli_args": ["--no-llm", "--format", "json", "--fail-on-incomplete"],
+        "results": {},
+        "production_policy_changed": False,
+        "candidate_fork_sha": "018daa3afa2fa3ad084dda251fb562c5045cb423",
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     scanners = {"old": args.old.resolve(), "new": args.new.resolve()}
     versions = {name: version(scanner) for name, scanner in scanners.items()}
     for name, expected in EXPECTED.items():
