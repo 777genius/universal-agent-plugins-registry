@@ -139,8 +139,13 @@ def scan(scanner: Path, root: Path) -> dict:
     if not isinstance(exceptions, list) or any(not isinstance(item, dict) for item in exceptions):
         raise AssertionError(("Malformed inspection ledger exceptions", root.name))
     reasons = Counter(item.get("reason_code", "unknown") for item in exceptions)
-    risk_score = result.get("risk_score")
-    if type(risk_score) not in (int, float):
+    # Public `scan --format json` nests its score under risk_assessment;
+    # the top-level risk_score is an internal graph field, not a JSON field.
+    risk_assessment = result.get("risk_assessment")
+    if not isinstance(risk_assessment, dict):
+        raise AssertionError(("Missing public risk assessment", root.name))
+    risk_score = risk_assessment.get("score")
+    if type(risk_score) not in (int, float) or not 0 <= risk_score <= 100:
         raise AssertionError(("Malformed public risk score", root.name, risk_score))
     missing = Counter(
         item.get("reference_kind", "unknown")
