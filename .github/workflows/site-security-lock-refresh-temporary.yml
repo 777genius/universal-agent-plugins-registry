@@ -1,0 +1,52 @@
+name: Temporary reviewed site security lockfile refresh
+on:
+  push:
+    branches: [fix/site-nuxt-audit-20261105]
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - name: Resolve Nuxt security patch using the repository's locked pnpm
+        working-directory: site
+        run: pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
+      - name: Record the remaining audit findings without suppressing them
+        working-directory: site
+        shell: bash
+        run: |
+          set +e
+          pnpm audit --audit-level=low > "${RUNNER_TEMP}/site-audit.txt" 2>&1
+          code=$?
+          set -e
+          echo "audit_exit_code=$code"
+          cat "${RUNNER_TEMP}/site-audit.txt"
+          echo "$code" > "${RUNNER_TEMP}/audit-exit-code.txt"
+      - name: Export the actual pnpm-regenerated lockfile for review
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site-nuxt-security-lockfile-candidate
+          path: |
+            site/package.json
+            site/pnpm-lock.yaml
+            ${{ runner.temp }}/site-audit.txt
+            ${{ runner.temp }}/audit-exit-code.txt
+          if-no-files-found: warn
+          retention-days: 2
