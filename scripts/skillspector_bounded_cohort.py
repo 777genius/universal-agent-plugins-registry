@@ -66,16 +66,15 @@ def checked_old_partial(record: dict, item: dict, kind: str) -> None:
     require(DIGEST.fullmatch(source.get("content_digest") or "") is not None,
             "missing source content digest")
     require(record.get("scanner") == OLD_SCANNER and record.get("status") == "partial" and
-            record.get("coverage", {}).get("status") == "partial" and not record.get("errors"),
+            record.get("coverage", {}).get("status") == "partial",
             "not a current old-scanner Partial")
     coverage = record["coverage"]
     reasons = coverage.get("reasons")
     require(isinstance(reasons, list) and bool(reasons) and
             all(isinstance(reason, dict) and reason.get("code") == "reference_missing" for reason in reasons),
             "other coverage limitation must stay Partial")
-    require(not coverage.get("reference_evidence_truncated") and not coverage.get("ledger_exceptions") and
-            coverage.get("ledger_exceptions_total", 0) == 0,
-            "uninspected/truncated ledger must stay Partial")
+    require(not coverage.get("reference_evidence_truncated"),
+            "truncated reference evidence must stay Partial")
     refs = coverage.get("references")
     require(isinstance(refs, list) and bool(refs) and coverage.get("references_total") == len(refs),
             "reference evidence is not wholly retained")
@@ -83,6 +82,31 @@ def checked_old_partial(record: dict, item: dict, kind: str) -> None:
     require(bool(missing) and all(ref.get("status") in {"missing", "resolved"} and
             (ref.get("status") != "resolved" or ref.get("disposition") == "analyzed") for ref in refs),
             "uninspected, rejected or unresolved dependency must stay Partial")
+    # Production 2.13.1 mirrors each missing reference in errors and the
+    # reference-resolution ledger. These are not independent limitations.
+    # Match *every* row by position; unrelated failures or extra partial
+    # ledger evidence still fail closed.
+    positions = [(ref.get("source_path"), ref.get("line")) for ref in missing]
+    require(len(set(positions)) == len(missing) and
+            all(ref.get("source_path") == "SKILL.md" and type(ref.get("line")) is int
+                and ref["line"] > 0 and ref.get("reference_kind") == "quoted_or_code"
+                and ref.get("disposition") == "partial" and ref.get("target_path") is None
+                for ref in missing),
+            "missing reference identity does not match strict metadata")
+    errors = record.get("errors")
+    require(isinstance(errors, list) and len(errors) == len(missing) and
+            all(isinstance(row, dict) and row.get("code") == "reference_missing"
+                for row in errors),
+            "unrelated scanner error must stay Partial")
+    ledger = coverage.get("ledger_exceptions")
+    require(isinstance(ledger, list) and coverage.get("ledger_exceptions_total") == len(missing)
+            and len(ledger) == len(missing) and
+            all(isinstance(row, dict) and row.get("reason_code") == "reference_missing"
+                and row.get("phase") == "reference_resolution"
+                and row.get("outcome") == "partial" and row.get("fatal") is False
+                and row.get("start_line") == row.get("end_line") for row in ledger)
+            and sorted((row["path"], row["start_line"]) for row in ledger) == sorted(positions),
+            "additional or mismatched ledger limitation must stay Partial")
     pattern = YAML_METADATA if kind == "yaml" else XML_PROLOG
     require(all(isinstance(ref.get("evidence"), str) and pattern.fullmatch(ref["evidence"]) for ref in missing),
             "missing reference is not exactly qualified metadata")
