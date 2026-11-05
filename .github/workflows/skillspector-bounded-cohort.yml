@@ -49,8 +49,9 @@ jobs:
           proof = json.loads(p.read_text(encoding="utf-8"))
           assert len(proof["selection"]["sources"]) == 9
           assert proof["candidate_status"] == "not_scanned"
+          assert proof["live_selection_verified"] is False
           assert proof["publication_authorized"] is False
-          print("Pinned cohort witnessed, with no production relabel or publication")
+          print("Published-baseline cohort witnessed; fresh discovery and production rollout remain unverified")
           PY
       - name: Retain bounded non-publishing admission proof
         if: always()
