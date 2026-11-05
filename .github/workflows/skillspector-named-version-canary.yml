@@ -1,0 +1,211 @@
+name: SkillSpector named YAML version canary
+
+on:
+  pull_request:
+    paths:
+      - "scripts/skillspector_named_version_compare.py"
+      - "scripts/skillspector_upgrade_compare.py"
+      - "scripts/patch_skillspector_directory_references.py"
+      - "scripts/patch_skillspector_directory_refs_2133_canary.py"
+      - ".github/workflows/skillspector-named-version-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-named-yaml-version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 018daa3afa2fa3ad084dda251fb562c5045cb423
+          persist-credentials: false
+          path: scanner-old
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 42366154e3c9520082ebc5f0bba9250641916aac
+          persist-credentials: false
+          path: scanner-new
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: vyas-devgna/braids
+          ref: 79c913e9d27854d88c7ee58aa9906bd2b45001b4
+          sparse-checkout: skills
+          persist-credentials: false
+          path: real-braids
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify preflight failure retains machine-readable evidence
+        run: |
+          set -euo pipefail
+          proof="${RUNNER_TEMP}/named-version-preflight/proof.json"
+          if python3 source/scripts/skillspector_named_version_compare.py \
+            --old /missing-version-candidate --new /missing-version-candidate \
+            --real-root real-braids/skills --out "$proof"; then
+            echo "Unexpected scanner preflight success" >&2
+            exit 1
+          fi
+          python3 - "$proof" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          row = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          if (row.get('format') != 'uap.skillspector.named-version-comparison.v1'
+              or row.get('results') != {'old': {}, 'new': {}}
+              or row.get('scanner_versions') != {}
+              or row.get('production_changed') is not False
+              or row.get('candidate_sha') != '42366154e3c9520082ebc5f0bba9250641916aac'):
+              raise SystemExit('Missing or misleading named-version preflight evidence')
+          print('Empty preflight evidence preserved without a success claim')
+          PY
+      - name: Reject ignored and modified material in a pinned source checkout
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "source/scripts")
+          from skillspector_named_version_compare import source_revision
+
+          with tempfile.TemporaryDirectory(prefix="yaml-source-provenance-") as tmp:
+              root = Path(tmp)
+              subprocess.run(["git", "init", "-q", str(root)], check=True)
+              (root / ".gitignore").write_text("generated.log\n", encoding="utf-8")
+              (root / "SKILL.md").write_text("Inert source.\n", encoding="utf-8")
+              subprocess.run(["git", "-C", str(root), "add", ".gitignore", "SKILL.md"], check=True)
+              subprocess.run(["git", "-C", str(root), "-c", "user.name=CI",
+                              "-c", "user.email=ci@example.invalid",
+                              "commit", "-qm", "fixture"], check=True)
+              assert len(source_revision(root)) == 40
+
+              (root / "generated.log").write_text("Ignored input.\n", encoding="utf-8")
+              assert subprocess.check_output(
+                  ["git", "-C", str(root), "check-ignore", "generated.log"],
+                  text=True,
+              ).strip() == "generated.log"
+              try:
+                  source_revision(root)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Ignored source content accepted under a pinned SHA")
+              (root / "generated.log").unlink()
+
+              (root / "SKILL.md").write_text("Modified tracked input.\n", encoding="utf-8")
+              try:
+                  source_revision(root)
+              except AssertionError:
+                  pass
+              else:
+                  raise SystemExit("Changed tracked source accepted under a pinned SHA")
+              (root / "SKILL.md").write_text("Inert source.\n", encoding="utf-8")
+              assert len(source_revision(root)) == 40
+          PY
+      - name: Reject ignored, untracked and modified scanner src without rejecting .venv
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "source/scripts")
+          from skillspector_named_version_compare import uncommitted_inputs
+
+          with tempfile.TemporaryDirectory(prefix="scanner-source-provenance-") as tmp:
+              root = Path(tmp)
+              (root / "src" / "skillspector").mkdir(parents=True)
+              (root / ".gitignore").write_text(".venv/\n*.cache\n", encoding="utf-8")
+              module = root / "src" / "skillspector" / "__init__.py"
+              module.write_text("VALUE = 1\n", encoding="utf-8")
+              subprocess.run(["git", "init", "-q", str(root)], check=True)
+              subprocess.run(["git", "-C", str(root), "add", ".gitignore", "src"], check=True)
+              subprocess.run([
+                  "git", "-C", str(root), "-c", "user.name=CI",
+                  "-c", "user.email=ci@example.invalid", "commit", "-qm", "fixture",
+              ], check=True)
+              (root / ".venv").mkdir()
+              (root / ".venv" / "installed.cache").write_text("expected venv content\n")
+              assert not uncommitted_inputs(root, "src")
+              ignored = root / "src" / "generated.cache"
+              ignored.write_text("Untrusted ignored code\n")
+              assert "generated.cache" in uncommitted_inputs(root, "src")
+              ignored.unlink()
+              extra = root / "src" / "extra.py"
+              extra.write_text("untracked code\n")
+              assert "extra.py" in uncommitted_inputs(root, "src")
+              extra.unlink()
+              module.write_text("VALUE = 2\n", encoding="utf-8")
+              assert "__init__.py" in uncommitted_inputs(root, "src")
+              module.write_text("VALUE = 1\n", encoding="utf-8")
+              assert not uncommitted_inputs(root, "src")
+          PY
+      - name: Install both immutable v2.13.3 scanners
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner-old --frozen --no-dev --python 3.12
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      - name: Test strict parser rules and Ruff on exact candidate
+        timeout-minutes: 10
+        run: |
+          scanner-new/.venv/bin/python -m pytest -q \
+            scanner-new/tests/test_named_version_references.py \
+            scanner-new/tests/test_version_references.py \
+            scanner-new/tests/test_json_version_references.py \
+            scanner-new/tests/test_out_of_bundle_reference_coverage.py
+          scanner-new/.venv/bin/ruff check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/tests/test_named_version_references.py
+          scanner-new/.venv/bin/ruff format --diff \
+            scanner-new/tests/test_named_version_references.py
+          scanner-new/.venv/bin/ruff format --check \
+            scanner-new/src/skillspector/references.py \
+            scanner-new/tests/test_named_version_references.py
+      - name: Drop only pytest-generated bytecode before attesting scanner src
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Strictly temporary CI caches from the focused pinned pytest run.
+          # Never exclude an executable .pyc from provenance attestation:
+          # remove only regular bytecode files in well-named cache dirs.
+          for label in ("scanner-old", "scanner-new"):
+              src = Path(label) / "src"
+              for folder in sorted(src.rglob("__pycache__"), reverse=True):
+                  if folder.is_symlink() or not folder.is_dir():
+                      raise SystemExit(f"Unsafe Python cache path: {folder}")
+                  for entry in folder.iterdir():
+                      if entry.is_symlink() or not entry.is_file() or entry.suffix != ".pyc":
+                          raise SystemExit(f"Unexpected scanner cache entry: {entry}")
+                      entry.unlink()
+                  folder.rmdir()
+          PY
+      - name: Verify SHA/blob-attested identical directory rules and compare Braids
+        timeout-minutes: 12
+        run: |
+          python3 source/scripts/skillspector_named_version_compare.py \
+            --old scanner-old/.venv/bin/skillspector \
+            --new scanner-new/.venv/bin/skillspector \
+            --real-root real-braids/skills \
+            --out "${RUNNER_TEMP}/named-version-proof/comparison.json"
+      - name: Preserve machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-named-version-comparison
+          path: |
+            ${{ runner.temp }}/named-version-preflight/
+            ${{ runner.temp }}/named-version-proof/
+          if-no-files-found: error
+          retention-days: 7
