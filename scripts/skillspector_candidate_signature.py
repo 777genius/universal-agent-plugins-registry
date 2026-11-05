@@ -8,10 +8,12 @@ remain separate mandatory gates. Never replace a v3 record on this basis.
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 from typing import Any
 
 from scripts import skillspector_bounded_cohort as admission
 from scripts import skillspector_candidate_cohort as candidate
+from scripts import skillspector_coverage_v3 as coverage
 from scripts import skillspector_reports as scanner
 from scripts.build_registry import RegistryError
 from scripts.directory_publication import (
@@ -29,8 +31,31 @@ ENVELOPE_FIELDS = {
 }
 
 
-def validate_candidate_proof(proof: dict, previous: dict, report_commit: str) -> None:
-    """Bind every newly measured record to an immutable old Partial witness."""
+def load_verified_previous(directory: Path, report_commit: str) -> dict:
+    """Load authenticated v3 shards and the immutable report-head lease.
+
+    Production callers must obtain the directory through the trusted
+    immutable GitHub report reader, not from an arbitrary caller-controlled ZIP.
+    """
+    require(isinstance(directory, Path) and directory.is_dir()
+            and not directory.is_symlink(), "prior report bundle must be regular")
+    require(isinstance(report_commit, str)
+            and admission.SHA.fullmatch(report_commit) is not None,
+            "invalid prior report commit")
+    lease = scanner.read_report_json(directory / "publication-base.json", max_bytes=4096)
+    require(isinstance(lease, dict) and set(lease) == {"schema_version", "report_commit"}
+            and type(lease["schema_version"]) is int and lease["schema_version"] == 1
+            and lease["report_commit"] == report_commit,
+            "prior report lease differs from immutable commit")
+    previous = coverage.read_bundle(directory)
+    require(previous is not None, "prior report bundle is incomplete")
+    coverage.validate_manifest(previous["manifest"], current_policy=True)
+    return previous
+
+
+def validate_candidate_proof(proof: dict, previous_dir: Path, report_commit: str) -> None:
+    """Read and verify old v3 evidence before authenticating nine new rows."""
+    previous = load_verified_previous(previous_dir, report_commit)
     require(isinstance(proof, dict) and set(proof) == {
         "schema_version", "kind", "base_report_commit", "base_manifest_digest",
         "scanner", "profile", "profile_policy_digest", "candidate_status",
@@ -39,9 +64,6 @@ def validate_candidate_proof(proof: dict, previous: dict, report_commit: str) ->
     require(type(proof["schema_version"]) is int and proof["schema_version"] == 1
             and proof["kind"] == "skillspector-2.13.3-nine-source-candidate",
             "candidate proof version differs")
-    require(proof["base_report_commit"] == report_commit
-            and proof["base_manifest_digest"] == admission.digest(previous["manifest"]),
-            "candidate base report identity differs")
     require(proof["scanner"] == candidate.NEW_SCANNER
             and proof["profile"] == candidate.PROFILE
             and proof["profile_policy_digest"] == candidate.PROFILE["digest"],
@@ -52,6 +74,9 @@ def validate_candidate_proof(proof: dict, previous: dict, report_commit: str) ->
             "candidate proof falsely claims deployment or live selection")
     require(not scanner.has_public_credentials(proof), "candidate proof contains credential-shaped data")
     try:
+        require(proof["base_report_commit"] == report_commit
+                and proof["base_manifest_digest"] == admission.digest(previous["manifest"]),
+                "candidate base report identity differs")
         plan = admission.build_plan(previous, previous["selection"], report_commit)
         selected = plan["selection"]["sources"]
         rows, comparisons = proof["records"], proof["comparisons"]
@@ -69,8 +94,8 @@ def validate_candidate_proof(proof: dict, previous: dict, report_commit: str) ->
         raise PublicationError("candidate evidence or prior witness differs") from error
 
 
-def candidate_bytes(proof: dict, previous: dict, report_commit: str) -> bytes:
-    validate_candidate_proof(proof, previous, report_commit)
+def candidate_bytes(proof: dict, previous_dir: Path, report_commit: str) -> bytes:
+    validate_candidate_proof(proof, previous_dir, report_commit)
     body = scanner.report_json(proof)
     require(len(body) <= MAX_PROOF_BYTES, "candidate evidence exceeds bound")
     return body
@@ -81,12 +106,12 @@ def signature_message(body: bytes) -> bytes:
     return DOMAIN + len(body).to_bytes(8, "big") + body
 
 
-def sign_unpublished_candidate(proof: dict, previous: dict, report_commit: str,
+def sign_unpublished_candidate(proof: dict, previous_dir: Path, report_commit: str,
                                key_id: str, private_seed: bytes) -> dict[str, Any]:
     """Use only in a separately authorized signer; never set a live flag."""
     require(isinstance(key_id, str) and ID_RE.fullmatch(key_id) is not None,
             "invalid candidate signing key ID")
-    body = candidate_bytes(proof, previous, report_commit)
+    body = candidate_bytes(proof, previous_dir, report_commit)
     return {
         "schema_version": 1,
         "kind": "skillspector-unpublished-candidate-envelope",
@@ -99,7 +124,7 @@ def sign_unpublished_candidate(proof: dict, previous: dict, report_commit: str,
 
 
 def verify_signed_candidate(body: bytes, envelope_bytes: bytes, trusted_keys: dict[str, bytes],
-                            previous: dict, report_commit: str) -> dict:
+                            previous_dir: Path, report_commit: str) -> dict:
     """Verify exact bytes, dedicated Ed25519 trust and every old/current witness.
 
     The result is still unpublished evidence, never an authorized status overlay.
@@ -134,5 +159,5 @@ def verify_signed_candidate(body: bytes, envelope_bytes: bytes, trusted_keys: di
             "untrusted candidate signing key")
     signature = b64decode_exact(envelope["signature"], 64, "candidate signature")
     ed25519_verify(trusted_keys[key_id], signature_message(body), signature)
-    validate_candidate_proof(proof, previous, report_commit)
+    validate_candidate_proof(proof, previous_dir, report_commit)
     return proof
