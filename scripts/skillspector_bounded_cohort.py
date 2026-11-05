@@ -128,7 +128,17 @@ def build_plan(previous: dict, current_selection: dict, report_commit: str) -> d
             "base_report_commit": report_commit, "base_manifest_digest": digest(manifest),
             "baseline_scanner": copy.deepcopy(OLD_SCANNER), "candidate_scanner": copy.deepcopy(NEW_SCANNER),
             "selection": {"schema_version": selection["schema_version"], "sources": chosen},
+            "live_selection_verified": False,
             "candidate_status": "not_scanned", "publication_authorized": False}
+
+
+def write_plan_exclusively(path: Path, plan: dict) -> None:
+    """Never overwrite a prior proof or follow a symlink output location."""
+    require(not path.is_symlink(), "cohort output cannot be a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    require(not path.parent.is_symlink(), "cohort output directory cannot be a symlink")
+    with path.open("xb") as out:
+        out.write(canon(plan))
 
 
 def main() -> int:
@@ -144,10 +154,8 @@ def main() -> int:
     require(previous is not None, "verified prior report bundle missing")
     current = coverage.load_selection(args.current_selection)
     plan = build_plan(previous, current, args.report_commit)
-    require(not args.output.exists(), "never overwrite an existing cohort proof")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_bytes(canon(plan))
-    print("Prepared nine source pins. No Complete claim or publication.")
+    write_plan_exclusively(args.output, plan)
+    print("Prepared nine baseline source pins; live discovery remains unverified. No Complete or publication.")
     return 0
 
 
