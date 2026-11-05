@@ -85,6 +85,30 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(record['findings_truncated'])
         self.assertTrue(record['coverage']['grouping_complete'])
 
+    def test_validation_independently_rejects_complete_with_partial_rejected_reference(self):
+        # Direct publication, bypassing the normalizer, must still fail closed.
+        from tests.test_skillspector_records_v3 import reference
+        source, complete = self.fresh_record()
+        complete['coverage'].update(
+            references=[reference(
+                status='rejected', disposition='partial', target_path=None,
+                reference_kind='markdown_link', evidence='[outside](../runner.sh)')],
+            references_total=1,
+        )
+        with self.assertRaises(PublicationError):
+            contract.validate_record(complete, source, datetime.now(timezone.utc))
+
+        # A link to remote documentation is not an uninspected local dependency.
+        complete['coverage']['references'][0]['disposition'] = 'out_of_scope'
+        contract.validate_record(complete, source, datetime.now(timezone.utc))
+
+        # Truthfully reported Partial remains valid with its existing reason.
+        complete['coverage']['references'][0]['disposition'] = 'partial'
+        complete['status'] = complete['coverage']['status'] = 'partial'
+        scanner.add_coverage_reason(
+            complete, 'referenced_uninspected', 'Out-of-root dependency was not inspected.')
+        contract.validate_record(complete, source, datetime.now(timezone.utc))
+
     def test_reference_and_ledger_locations_are_checked_after_publication(self):
         from tests.test_skillspector_records_v3 import reference, ledger_exception
         source, record = self.fresh_record()

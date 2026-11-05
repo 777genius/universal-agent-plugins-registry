@@ -165,6 +165,40 @@ class QueueTests(unittest.TestCase):
             self.assertEqual((ref['status'], ref['target_path'], ref['disposition']),
                              ('uninspected', 'docs', 'partial'))
 
+    def test_rejected_partial_dependency_survives_immutable_shard_and_publication(self):
+        source = item()
+        selection = {"schema_version": 1, "sources": [source]}
+        raw = upstream_report()
+        # Deliberately malformed upstream Complete: the reference itself
+        # proves incomplete acquisition even when ledger exceptions are absent.
+        raw['analysis_completeness']['references'] = [{
+            "source_path": "SKILL.md", "line": 5, "column": 8,
+            "evidence": "[outside](../outside-runner.sh)", "target_path": None,
+            "status": "rejected", "disposition": "partial",
+            "reference_kind": "markdown_link",
+        }]
+        raw['analysis_completeness']['ledger_exceptions'] = []
+        record = scanner.empty_record_v3(source)
+        record['source']['content_digest'] = 'sha256:' + 'a' * 64
+        record['scanned_at'] = scanner.now()
+        record = scanner.normalize_report_v3(
+            record, json.dumps(raw).encode(), 0, Path('/source'))
+        self.assertEqual((record['status'], record['coverage']['status']), ('partial', 'partial'))
+        self.assertIn('referenced_uninspected', {
+            reason['code'] for reason in record['coverage']['reasons']})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assembled = bundle(root, selection, [record])
+            publisher.validate_directory(root, COMMIT)
+            self.assertEqual((assembled['manifest']['coverage']['partial'],
+                              assembled['manifest']['coverage']['complete']), (1, 0))
+            shard_path = assembled['manifest']['shards'][0]['path']
+            published = json.loads((root / shard_path).read_text())['records'][0]
+            self.assertEqual((published['status'], published['coverage']['status']),
+                             ('partial', 'partial'))
+            self.assertEqual(published['coverage']['references'][0]['status'], 'rejected')
+            self.assertEqual(published['coverage']['references'][0]['disposition'], 'partial')
+
     def test_verified_rename_keeps_exact_original_source_as_historical_until_rescan(self):
         old = item(id="old/repo/demo", repository="old/repo")
         new = item(id="canonical/renamed/demo", repository="canonical/renamed", revision="d" * 40)
