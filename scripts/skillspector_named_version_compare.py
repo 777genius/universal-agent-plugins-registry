@@ -41,11 +41,24 @@ CONTROLS = {
 }
 
 
-def require_status(row: dict, status: str, *, missing: bool) -> None:
+# Exact pinned SkillSpector v2.13.3 constant: risk above this threshold
+# independently causes CLI exit 1 even when inspection coverage is Complete.
+RISK_THRESHOLD = 50
+
+
+def require_status(
+    row: dict, status: str, *, missing: bool, allow_risk_exit: bool = False
+) -> None:
+    expected_exit = 0 if status == "complete" else 1
+    exit_ok = row["exit_code"] == expected_exit
+    if allow_risk_exit and status == "complete" and row["exit_code"] == 1:
+        # Never discard or relabel content findings. Only allow an actual
+        # high-risk score to explain an otherwise fully inspected CLI result.
+        exit_ok = row["risk_score"] > RISK_THRESHOLD and row["finding_count"] > 0
     if not (
         row["status"] == status
         and row["is_complete"] == (status == "complete")
-        and row["exit_code"] == (0 if status == "complete" else 1)
+        and exit_ok
         and bool(row["missing_reference_count"]) == missing
     ):
         raise AssertionError(("Unexpected completeness result", status, missing, row))
@@ -159,7 +172,15 @@ def main() -> None:
     for label in ("named_version", *("real/" + name for name in SKILLS)):
         old, new = results["old"][label], results["new"][label]
         require_status(old, "partial", missing=True)
-        require_status(new, "complete", missing=False)
+        require_status(
+            new, "complete", missing=False, allow_risk_exit=label.startswith("real/")
+        )
+        if label.startswith("real/") and (
+            old["risk_score"] != new["risk_score"]
+            or old["finding_count"] != new["finding_count"]
+            or old["finding_rules"] != new["finding_rules"]
+        ):
+            raise AssertionError(("Risk findings changed while correcting coverage", label, old, new))
         if not old["reason_counts"].get("reference_missing"):
             raise AssertionError(("Baseline missing reference not reproduced", label, old))
 

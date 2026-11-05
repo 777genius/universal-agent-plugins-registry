@@ -139,6 +139,9 @@ def scan(scanner: Path, root: Path) -> dict:
     if not isinstance(exceptions, list) or any(not isinstance(item, dict) for item in exceptions):
         raise AssertionError(("Malformed inspection ledger exceptions", root.name))
     reasons = Counter(item.get("reason_code", "unknown") for item in exceptions)
+    risk_score = result.get("risk_score")
+    if type(risk_score) not in (int, float):
+        raise AssertionError(("Malformed public risk score", root.name, risk_score))
     missing = Counter(
         item.get("reference_kind", "unknown")
         for item in coverage.get("references", [])
@@ -146,6 +149,7 @@ def scan(scanner: Path, root: Path) -> dict:
     )
     return {
         "exit_code": done.returncode,
+        "risk_score": risk_score,
         "status": coverage["status"],
         "is_complete": coverage["is_complete"],
         "reason_counts": dict(sorted(reasons.items())),
