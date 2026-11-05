@@ -152,15 +152,27 @@ def signing_message(body: bytes) -> bytes:
 
 def sign_release(
     release: dict, trusted_keys: dict[str, bytes],
-    key_id: str, private_seed: bytes,
+    key_id: str, private_seed: bytes, previous_dir: Path,
+    *, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Sign only with a separately trusted production cohort public key."""
+    """Requalify all nine records *before* using the independent signer key."""
     require(isinstance(key_id, str) and ID_RE.fullmatch(key_id) is not None
             and key_id in trusted_keys
             and type(private_seed) is bytes and len(private_seed) == 32
             and type(trusted_keys[key_id]) is bytes and len(trusted_keys[key_id]) == 32
             and ed25519_public_bytes(private_seed) == trusted_keys[key_id],
             "cohort signer is not registered under the independent trust key")
+    require(isinstance(release, dict) and set(release) == SNAPSHOT_FIELDS,
+            "unsigned release is not an exact cohort snapshot")
+    try:
+        expected = build_release(
+            release["candidate"], release["signed_sources"], previous_dir,
+            release["source_commit"], release["generated_at"],
+            release["expires_at"], now=now)
+    except (KeyError, TypeError, ValueError, IndexError) as error:
+        raise PublicationError("unverified cohort evidence cannot be signed") from error
+    require(expected == release,
+            "cohort signer refuses unverified or altered source evidence")
     body = scanner.report_json(release)
     require(len(body) <= MAX_RELEASE_BYTES, "release exceeds signing limit")
     return {

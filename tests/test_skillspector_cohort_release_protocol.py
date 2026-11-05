@@ -121,7 +121,10 @@ class CohortReleaseTests(unittest.TestCase):
                                return_value=previous):
             snapshot = release.build_release(
                 proof, live, Path("/synthetic-v3"), MAIN_SHA, GENERATED, EXPIRES, now=NOW)
-        envelope = release.sign_release(snapshot, KEYS, KEY_ID, SEED)
+        with mock.patch.object(skillspector_candidate_signature, "load_verified_previous",
+                               return_value=previous):
+            envelope = release.sign_release(
+                snapshot, KEYS, KEY_ID, SEED, Path("/synthetic-v3"), now=NOW)
         return snapshot, envelope, previous
 
     def verify(self, snapshot, envelope, previous, keys=None, now=NOW):
@@ -161,9 +164,11 @@ class CohortReleaseTests(unittest.TestCase):
     def test_wrong_or_unregistered_signer_and_tampered_bytes_rejected(self):
         snapshot, envelope, previous = self.fixture()
         with self.assertRaises(PublicationError):
-            release.sign_release(snapshot, {}, KEY_ID, SEED)
+            release.sign_release(snapshot, {}, KEY_ID, SEED,
+                                 Path("/synthetic-v3"), now=NOW)
         with self.assertRaises(PublicationError):
-            release.sign_release(snapshot, KEYS, KEY_ID, bytes([1]) * 32)
+            release.sign_release(snapshot, KEYS, KEY_ID, bytes([1]) * 32,
+                                 Path("/synthetic-v3"), now=NOW)
         with self.assertRaises(PublicationError):
             self.verify(snapshot, envelope, previous, keys={KEY_ID: bytes(32)})
         tampered = copy.deepcopy(snapshot)
@@ -174,6 +179,20 @@ class CohortReleaseTests(unittest.TestCase):
         tampered_envelope["signature_domain"] = skillspector_candidate_signature.DOMAIN_NAME
         with self.assertRaises(PublicationError):
             self.verify(snapshot, tampered_envelope, previous)
+
+    def test_valid_registered_key_cannot_sign_unverified_candidate_or_expiry(self):
+        snapshot, _, previous = self.fixture()
+        changed = copy.deepcopy(snapshot)
+        changed["candidate"]["records"][0]["source"]["content_digest"] = "sha256:" + "0" * 64
+        expired = copy.deepcopy(snapshot)
+        expired["expires_at"] = "2026-11-05T12:10:00Z"
+        for value in (changed, expired):
+            with self.subTest(kind=value["expires_at"]), \
+                 mock.patch.object(skillspector_candidate_signature,
+                                   "load_verified_previous", return_value=previous), \
+                 self.assertRaises(PublicationError):
+                release.sign_release(
+                    value, KEYS, KEY_ID, SEED, Path("/synthetic-v3"), now=NOW)
 
     def test_changed_candidate_source_or_signed_live_pin_rejected(self):
         proof, pins, previous = qualified_fixture()
