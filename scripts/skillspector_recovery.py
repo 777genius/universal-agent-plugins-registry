@@ -435,6 +435,19 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     """Advance a persistent created-at anchored cursor despite newer arrivals."""
     now = now or datetime.now(timezone.utc)
     fetch_archive = fetch_archive or download_archive
+    validate_state(state)
+    directory.mkdir(parents=True, exist_ok=True)
+    remaining = getattr(github, "remaining_seconds", None)
+    if callable(remaining) and remaining() < 240:
+        # No new remote evidence is consumed. Preserve the existing cursor and
+        # confirmed receipts; leave the current-run acknowledgement pending.
+        cursor = state.get("cursor")
+        if current_run is None and cursor is None:
+            cursor = {"before": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "page": 1, "offset": 0}
+            state = {**state, "cursor": cursor}
+        return state, {"status": "deferred", "runs": 0, "bytes": 0,
+            "retention_days": RETENTION_DAYS, "maximum_runs_per_prepare": MAX_RECOVERY_RUNS,
+            "cursor": cursor, "rejected": []}
     workflow = github.request("GET", "actions/workflows/skillspector-reports.yml")
     require(isinstance(workflow, dict), "canonical recovery workflow unavailable")
     workflow_id = integer(workflow.get("id"), "workflow id")
@@ -628,6 +641,8 @@ def recover_plan(github, plan_dir, source_commit, *, token, current_id=None):
         new_state, own = collect(github, staged, new_state, token=token, current_run=current_id)
         summary["rejected"].extend(own["rejected"])
         summary["runs"] += own["runs"]
+        if own["status"] == "deferred":
+            summary["status"] = "deferred"
     batches = load_recovery_batches(staged)
     summary["recovered_sources"] = 0
     summary["reconciliation"] = {"equivalent_executions": 0, "conflicting_executions": 0,

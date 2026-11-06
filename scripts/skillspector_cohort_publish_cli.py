@@ -97,8 +97,8 @@ def main() -> int:
     args = parser.parse_args()
     require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY
             and os.environ.get("GITHUB_REF") == "refs/heads/main"
-            and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
-            "cohort production publication requires an explicit main workflow")
+            and os.environ.get("GITHUB_EVENT_NAME") in {"workflow_dispatch", "schedule"},
+            "cohort production publication requires a scheduled or manual main workflow")
     candidate_path = args.candidate
     require(candidate_path.is_file() and not candidate_path.is_symlink(),
             "candidate artifact must be a regular file")
