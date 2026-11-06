@@ -418,7 +418,7 @@ class CheckpointTransportTests(unittest.TestCase):
                  mock.patch.dict(recovery.os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
                 summary = recovery.recover_plan(api, plan, COMMIT, token='read-only', current_id=101)
             self.assertEqual(summary['status'], 'deferred')
-            self.assertEqual(summary['runs'], 1)
+            self.assertEqual(summary['runs'], 0)  # Current run is intentionally excluded from historical recovery.
             self.assertEqual(json.loads((plan / 'recovery-status.json').read_text())['status'], 'deferred')
 
     def test_signed_cohort_production_guard_accepts_only_main_manual_or_scheduled_event(self):
@@ -430,7 +430,7 @@ class CheckpointTransportTests(unittest.TestCase):
             for event in ('workflow_dispatch', 'schedule'):
                 with self.subTest(event=event), \
                      mock.patch.dict(cli.os.environ, {**correct, 'GITHUB_EVENT_NAME': event}), \
-                     mock.patch.object(cli.sys, 'argv', ['cohort', '--candidate', str(path)]), \
+                     mock.patch('sys.argv', ['cohort', '--candidate', str(path)]), \
                      mock.patch.object(cli, 'publish_one') as published:
                     self.assertEqual(cli.main(), 0)
                     published.assert_called_once()
@@ -438,7 +438,7 @@ class CheckpointTransportTests(unittest.TestCase):
                         {'GITHUB_REPOSITORY': cli.REPOSITORY, 'GITHUB_REF': 'refs/heads/other',
                          'GITHUB_EVENT_NAME': 'schedule'}):
                 with self.subTest(env=env), mock.patch.dict(cli.os.environ, env), \
-                     mock.patch.object(cli.sys, 'argv', ['cohort', '--candidate', str(path)]), \
+                     mock.patch('sys.argv', ['cohort', '--candidate', str(path)]), \
                      mock.patch.object(cli, 'publish_one') as published, \
                      self.assertRaises(PublicationError):
                     cli.main()
