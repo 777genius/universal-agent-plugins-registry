@@ -179,6 +179,10 @@ class GitHub:
         self._sleep = sleeper or time.sleep
         self._deadline = self._clock() + budget_seconds
 
+    def remaining_seconds(self):
+        """Allow long read-only recovery to yield before hard transport expiry."""
+        return max(0, self._deadline - self._clock())
+
     @staticmethod
     def _transient(error):
         reason = error.reason if isinstance(error, urllib.error.URLError) else error

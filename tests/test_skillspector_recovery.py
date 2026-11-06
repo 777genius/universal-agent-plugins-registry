@@ -343,6 +343,153 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(fetch.call_count, 1)
             self.assertFalse(any("artifacts?" in path for _, path in fresh.calls))
 
+    def test_soft_transport_budget_defers_without_losing_cursor_or_misclassifying_artifacts(self):
+        class BudgetedActions(FakeActions):
+            seconds = 120
+
+            def remaining_seconds(self):
+                return self.seconds
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            body, artifact = archive_package(package(root))
+            api = BudgetedActions(run_metadata(), artifact)
+            fetch = mock.Mock(return_value=body)
+            old = {'schema_version': 1, 'runs': []}
+            deferred, status = recovery.collect(api, root / 'deferred', old,
+                token='read-only', fetch_archive=fetch, now=NOW)
+            self.assertEqual(status['status'], 'deferred')
+            self.assertEqual(status['runs'], 0)
+            self.assertEqual(deferred['runs'], [])
+            self.assertEqual(deferred['cursor'], {'before': '2026-11-03T00:00:00Z', 'page': 1, 'offset': 0})
+            self.assertEqual(recovery.load_recovery_batches(root / 'deferred'), [])
+            fetch.assert_not_called()
+            self.assertEqual(status['rejected'], [])
+
+            api.seconds = 600
+            resumed, completed = recovery.collect(api, root / 'resumed', deferred,
+                token='read-only', fetch_archive=fetch, now=NOW)
+            self.assertEqual(completed['status'], 'ready')
+            self.assertEqual(resumed['runs'][0]['artifacts'],
+                [{'id': artifact['id'], 'digest': artifact['digest']}])
+            self.assertEqual(len(recovery.load_recovery_batches(root / 'resumed')), 1)
+            self.assertEqual(fetch.call_count, 1)
+
+    def test_artifact_inventory_defers_between_pages_and_resumes_without_false_receipt(self):
+        class PaginatedBudget(FakeActions):
+            seconds = 600
+            drop_after_first = True
+
+            def remaining_seconds(self):
+                return self.seconds
+
+            def request(self, method, path, data=None):
+                if path.startswith("actions/runs/101/artifacts?"):
+                    self.calls.append((method, path))
+                    if path.endswith("page=1"):
+                        if self.drop_after_first:
+                            self.seconds = 120
+                        return {"total_count": 101, "artifacts": [{"name": "unrelated"}] * 100}
+                    if path.endswith("page=2"):
+                        return {"total_count": 101, "artifacts": [self.artifact]}
+                    raise AssertionError(path)
+                return super().request(method, path, data)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            body, artifact = archive_package(package(root))
+            api = PaginatedBudget(run_metadata(), artifact)
+            fetch = mock.Mock(return_value=body)
+            deferred, summary = recovery.collect(api, root / "deferred",
+                {"schema_version": 1, "runs": []}, token="read-only",
+                fetch_archive=fetch, now=NOW)
+            self.assertEqual(summary["status"], "deferred")
+            self.assertEqual(summary["runs"], 0)
+            self.assertEqual(summary["rejected"], [])
+            self.assertEqual(deferred["runs"], [])
+            self.assertEqual(deferred["cursor"],
+                {"before": "2026-11-03T00:00:00Z", "page": 1, "offset": 0})
+            self.assertFalse(any("page=2" in path for _, path in api.calls))
+            fetch.assert_not_called()
+
+            api.seconds, api.drop_after_first = 600, False
+            resumed, completed = recovery.collect(api, root / "resumed", deferred,
+                token="read-only", fetch_archive=fetch, now=NOW)
+            self.assertEqual(completed["status"], "ready")
+            self.assertEqual(resumed["runs"][0]["artifacts"],
+                [{"id": artifact["id"], "digest": artifact["digest"]}])
+            self.assertTrue(any("page=2" in path for _, path in api.calls))
+            self.assertEqual(fetch.call_count, 1)
+
+    def test_low_budget_does_not_request_metadata_or_attempt_current_run_acknowledgement(self):
+        class BudgetedActions(FakeActions):
+            def remaining_seconds(self):
+                return 120
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            body, artifact = archive_package(package(root))
+            api = BudgetedActions(run_metadata(), artifact)
+            for current in (None, 101):
+                with self.subTest(current_run=current):
+                    state, summary = recovery.collect(api, root / f"low-{current}",
+                        {'schema_version': 1, 'runs': []}, token='read-only',
+                        current_run=current, now=NOW, fetch_archive=lambda *_: body)
+                    self.assertEqual(summary['status'], 'deferred')
+                    self.assertEqual(state['runs'], [])
+                    self.assertEqual(api.calls, [])
+                    self.assertEqual(summary['cursor'] is None, current is not None)
+
+    def test_rerun_own_collection_deferral_is_reported_without_claiming_checkpoint_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = package(root)
+            body, artifact = archive_package(original)
+            plan = root / 'plan'
+            plan.mkdir(exist_ok=True)
+            api = FakeActions(run_metadata(), artifact)
+            calls = 0
+            original_collect = recovery.collect
+
+            def limited(github, directory, state, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    return state, {'status': 'deferred', 'runs': 0, 'bytes': 0,
+                        'rejected': [], 'cursor': state.get('cursor')}
+                return original_collect(github, directory, state, **kwargs, now=NOW,
+                    fetch_archive=lambda *_: body)
+
+            with mock.patch.object(recovery, 'collect', side_effect=limited), \
+                 mock.patch.dict(recovery.os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+                summary = recovery.recover_plan(api, plan, COMMIT, token='read-only', current_id=101)
+            self.assertEqual(summary['status'], 'deferred')
+            self.assertEqual(summary['runs'], 0)  # Current run is intentionally excluded from historical recovery.
+            self.assertEqual(json.loads((plan / 'recovery-status.json').read_text())['status'], 'deferred')
+
+    def test_signed_cohort_production_guard_accepts_only_main_manual_or_scheduled_event(self):
+        from scripts import skillspector_cohort_publish_cli as cli
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'candidate.json'
+            path.write_text('{}')
+            correct = {'GITHUB_REPOSITORY': cli.REPOSITORY, 'GITHUB_REF': 'refs/heads/main'}
+            for event in ('workflow_dispatch', 'schedule'):
+                with self.subTest(event=event), \
+                     mock.patch.dict(cli.os.environ, {**correct, 'GITHUB_EVENT_NAME': event}), \
+                     mock.patch('sys.argv', ['cohort', '--candidate', str(path)]), \
+                     mock.patch.object(cli, 'publish_one') as published:
+                    self.assertEqual(cli.main(), 0)
+                    published.assert_called_once()
+            for env in ({**correct, 'GITHUB_EVENT_NAME': 'pull_request'},
+                        {'GITHUB_REPOSITORY': cli.REPOSITORY, 'GITHUB_REF': 'refs/heads/other',
+                         'GITHUB_EVENT_NAME': 'schedule'}):
+                with self.subTest(env=env), mock.patch.dict(cli.os.environ, env), \
+                     mock.patch('sys.argv', ['cohort', '--candidate', str(path)]), \
+                     mock.patch.object(cli, 'publish_one') as published, \
+                     self.assertRaises(PublicationError):
+                    cli.main()
+                published.assert_not_called()
+
     def test_controlled_main_artifact_is_acknowledged_but_never_staged_for_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
