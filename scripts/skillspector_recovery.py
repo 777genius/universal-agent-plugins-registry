@@ -455,6 +455,12 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
     accepted, consumed, bytes_read, rejected, deferred = [], 0, 0, [], False
     directory.mkdir(parents=True, exist_ok=True)
 
+    def budget_low():
+        # Reserve time for one worst-case retried GitHub read. A partial recovery
+        # is resumed from its authenticated cursor; it must not block fresh scans.
+        remaining = getattr(github, "remaining_seconds", None)
+        return callable(remaining) and remaining() < 240
+
     def process(run, *, force=False):
         nonlocal consumed, bytes_read, deferred
         key = run["id"], run["run_attempt"]
@@ -463,7 +469,7 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
             require(old["head_sha"] == run["head_sha"], "acknowledged run source changed")
             if old.get("complete", True) and not force:
                 return True
-        if consumed >= MAX_RECOVERY_RUNS:
+        if consumed >= MAX_RECOVERY_RUNS or budget_low():
             deferred = True
             return False
         artifacts = run_artifacts(github, run["id"])
@@ -479,6 +485,9 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
         # preparation must inspect it again, including late-visible artifacts.
         complete = consumed_checkpoints is None
         for artifact in sorted(artifacts, key=lambda a: a["name"]):
+            if budget_low():
+                deferred, complete = True, False
+                break
             identifier = integer(artifact.get("id"), "artifact id")
             if identifier in artifact_acks or identifier in quarantine:
                 continue
@@ -555,6 +564,9 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
         next_cursor = dict(cursor)
         finished = False
         for _ in range(MAX_LIST_PAGES):
+            if budget_low():
+                deferred = True
+                break
             query = urllib.parse.urlencode({"branch": "main", "status": "completed", "per_page": 100,
                                            "page": page, "created": "<=" + cursor["before"]})
             result = github.request("GET", f"actions/workflows/{workflow_id}/runs?{query}")
@@ -564,6 +576,9 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
             for index in range(offset, len(listed)):
                 run = listed[index]
                 next_cursor = {"before": cursor["before"], "page": page, "offset": index}
+                if budget_low():
+                    deferred = True
+                    break
                 try:
                     trusted_main_run(github, run, workflow_id, main_sha=main_sha, ancestry=ancestry)
                 except GitHubTransportError:

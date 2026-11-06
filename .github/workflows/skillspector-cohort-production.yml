@@ -1,6 +1,10 @@
 name: Signed SkillSpector nine-source cohort production
 
 on:
+  # Renew the at-most-24-hour signed result daily; all qualification and
+  # source-pin checks still run before each protected Ed25519 publication.
+  schedule:
+    - cron: "13 0 * * *"
   workflow_dispatch:
 
 permissions:
