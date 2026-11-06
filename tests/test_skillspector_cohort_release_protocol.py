@@ -4,10 +4,11 @@ from __future__ import annotations
 import copy
 import json
 import unittest
-import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
+
+import yaml
 
 from scripts import skillspector_bounded_cohort as admission
 from scripts import skillspector_candidate_cohort as candidate
@@ -283,8 +284,6 @@ class CohortReleaseTests(unittest.TestCase):
                 release.verify_release(b'{"schema_version":1,"schema_version":1}\n',
                                        canonical_json(envelope), KEYS,
                                        Path("/synthetic-v3"), now=NOW)
-
-
 
 
 class CohortProductionTriggerTests(unittest.TestCase):
