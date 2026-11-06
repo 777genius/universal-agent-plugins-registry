@@ -8,7 +8,8 @@ on:
       - "registry/directory.json"
       - "registry/publication/**"
       - "schemas/directory-*.schema.json"
-      # Even the removal of retired v2 schema files must not publish a v1 sequence.
+      # V2 has a separate signed protocol and bootstrap/ledger promotion.
+      # A V2-only schema edit must not sign or publish a new V1 sequence.
       - "!schemas/directory-*-v2.schema.json"
       - "scripts/directory_publication.py"
       - "scripts/directory_publication_cas.py"
