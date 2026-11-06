@@ -417,9 +417,12 @@ def load_recovery_batches(directory):
     return batches
 
 
-def run_artifacts(github, run_id):
+def run_artifacts(github, run_id, *, budget_low=None):
+    """Read a complete bounded inventory, or defer rather than trust a truncated page set."""
     result = []
     for page in range(1, 4):
+        if budget_low is not None and budget_low():
+            return None
         listing = github.request("GET", f"actions/runs/{run_id}/artifacts?per_page=100&page={page}")
         require(isinstance(listing, dict) and isinstance(listing.get("artifacts"), list), "recovery artifact listing unavailable")
         result.extend(row for row in listing["artifacts"] if ARTIFACT.fullmatch(row.get("name", "")))
@@ -485,7 +488,10 @@ def collect(github, directory, state, *, token, current_run=None, current_id=Non
         if consumed >= MAX_RECOVERY_RUNS or budget_low():
             deferred = True
             return False
-        artifacts = run_artifacts(github, run["id"])
+        artifacts = run_artifacts(github, run["id"], budget_low=budget_low)
+        if artifacts is None:
+            deferred = True
+            return False
         if not artifacts:
             if consumed_checkpoints is not None:
                 accepted.append({"run_id": run["id"], "run_attempt": run["run_attempt"], "head_sha": run["head_sha"],

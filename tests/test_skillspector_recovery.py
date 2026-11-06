@@ -375,6 +375,52 @@ class CheckpointTransportTests(unittest.TestCase):
             self.assertEqual(len(recovery.load_recovery_batches(root / 'resumed')), 1)
             self.assertEqual(fetch.call_count, 1)
 
+    def test_artifact_inventory_defers_between_pages_and_resumes_without_false_receipt(self):
+        class PaginatedBudget(FakeActions):
+            seconds = 600
+            drop_after_first = True
+
+            def remaining_seconds(self):
+                return self.seconds
+
+            def request(self, method, path, data=None):
+                if path.startswith("actions/runs/101/artifacts?"):
+                    self.calls.append((method, path))
+                    if path.endswith("page=1"):
+                        if self.drop_after_first:
+                            self.seconds = 120
+                        return {"total_count": 101, "artifacts": [{"name": "unrelated"}] * 100}
+                    if path.endswith("page=2"):
+                        return {"total_count": 101, "artifacts": [self.artifact]}
+                    raise AssertionError(path)
+                return super().request(method, path, data)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            body, artifact = archive_package(package(root))
+            api = PaginatedBudget(run_metadata(), artifact)
+            fetch = mock.Mock(return_value=body)
+            deferred, summary = recovery.collect(api, root / "deferred",
+                {"schema_version": 1, "runs": []}, token="read-only",
+                fetch_archive=fetch, now=NOW)
+            self.assertEqual(summary["status"], "deferred")
+            self.assertEqual(summary["runs"], 0)
+            self.assertEqual(summary["rejected"], [])
+            self.assertEqual(deferred["runs"], [])
+            self.assertEqual(deferred["cursor"],
+                {"before": "2026-11-03T00:00:00Z", "page": 1, "offset": 0})
+            self.assertFalse(any("page=2" in path for _, path in api.calls))
+            fetch.assert_not_called()
+
+            api.seconds, api.drop_after_first = 600, False
+            resumed, completed = recovery.collect(api, root / "resumed", deferred,
+                token="read-only", fetch_archive=fetch, now=NOW)
+            self.assertEqual(completed["status"], "ready")
+            self.assertEqual(resumed["runs"][0]["artifacts"],
+                [{"id": artifact["id"], "digest": artifact["digest"]}])
+            self.assertTrue(any("page=2" in path for _, path in api.calls))
+            self.assertEqual(fetch.call_count, 1)
+
     def test_low_budget_does_not_request_metadata_or_attempt_current_run_acknowledgement(self):
         class BudgetedActions(FakeActions):
             def remaining_seconds(self):
