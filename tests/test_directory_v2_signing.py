@@ -111,6 +111,60 @@ class V2SignedBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
             sign_snapshot_v2(candidate, "test-current", self.private)
 
+        # Passed runtime B never authorizes an ineligible signed closure A.
+        runtime["closure_digest"] = digest
+        grant["canonical_closure"]["eligible"] = False
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime.pop("closure_digest")
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime["closure_digest"] = digest
+
+        # Without a canonical closure, only unbound legacy proof qualifies.
+        del grant["canonical_closure"]
+        with self.assertRaisesRegex(PublicationError, "qualified scoped runtime evidence"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        runtime.pop("closure_digest")
+        sign_snapshot_v2(candidate, "test-current", self.private)
+
+    def test_v2_evidence_provenance_matches_go_reader(self):
+        candidate = copy.deepcopy(self.snapshot)
+        record = candidate["evidence"][0]
+        original_level = record["level"]
+        original_client = record.get("client")
+        record["level"] = "schema"
+        record.pop("client")
+        with self.assertRaisesRegex(PublicationError, "schema evidence requires workflow provenance"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
+        artifact = record["artifact"]
+        record["trust"] = {
+            "kind": "github_actions",
+            "workflow": artifact["repository"] + "/.github/workflows/prove.yml",
+            "source_ref": "refs/heads/main",
+            "source_digest": artifact["revision"],
+        }
+        sign_snapshot_v2(candidate, "test-current", self.private)
+
+        record["trust"]["source_digest"] = "a" * 40
+        with self.assertRaisesRegex(PublicationError, "workflow provenance is not bound"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
+        record["trust"]["source_digest"] = artifact["revision"]
+        record["trust"]["workflow"] = "other/evidence/.github/workflows/prove.yml"
+        with self.assertRaisesRegex(PublicationError, "workflow provenance is not bound"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+
+        # Provenance is bound for every GitHub Actions proof, not just schema.
+        record["level"] = original_level
+        if original_client is not None:
+            record["client"] = original_client
+        with self.assertRaisesRegex(PublicationError, "workflow provenance is not bound"):
+            sign_snapshot_v2(candidate, "test-current", self.private)
+        record["trust"]["workflow"] = artifact["repository"] + "/.github/workflows/prove.yml"
+        sign_snapshot_v2(candidate, "test-current", self.private)
+
     def test_v2_expiry_contract_matches_go_reader_thirty_days(self):
         modified = copy.deepcopy(self.snapshot)
         from datetime import datetime, timedelta, timezone
