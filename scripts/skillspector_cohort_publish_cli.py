@@ -8,6 +8,7 @@ results exist, then rechecks every old-v3 shard and current signed feed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -23,7 +24,7 @@ from scripts import skillspector_reports as scanner
 from scripts import skillspector_coverage_v3 as coverage
 from scripts.directory_publication import (
     ed25519_private_key, format_timestamp, load_public_keys,
-    canonical_json, require,
+    canonical_json, require, PublicationError,
 )
 from scripts.discovery_checkpoint import WorkBudget
 from scripts.publish_skillspector_reports import GitHub
@@ -90,15 +91,38 @@ def publish_one(candidate_path: Path, token: str, signing_seed: str,
         return published
 
 
+def require_trusted_main_entrypoint() -> None:
+    """Verify privileged workflow provenance before accessing signing material."""
+    event_name = os.environ.get("GITHUB_EVENT_NAME")
+    require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY
+            and os.environ.get("GITHUB_REF") == "refs/heads/main"
+            and event_name in {"workflow_dispatch", "schedule", "workflow_run"},
+            "cohort production publication requires a trusted main workflow")
+    if event_name != "workflow_run":
+        return
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    require(bool(event_path), "trusted workflow_run event path is missing")
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublicationError("trusted workflow_run event cannot be parsed") from exc
+    upstream = event.get("workflow_run") if isinstance(event, dict) else None
+    require(isinstance(upstream, dict)
+            and upstream.get("name") == "SkillSpector static reports"
+            and upstream.get("conclusion") == "success"
+            and upstream.get("head_branch") == "main"
+            and isinstance(upstream.get("head_repository"), dict)
+            and upstream["head_repository"].get("full_name") == REPOSITORY
+            and upstream.get("event") in {"push", "schedule", "workflow_dispatch"},
+            "cohort signing requires a successful trusted main static-report run")
+
+
 def main() -> int:
     """Require an exact main workflow before opening protected signing context."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True)
     args = parser.parse_args()
-    require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY
-            and os.environ.get("GITHUB_REF") == "refs/heads/main"
-            and os.environ.get("GITHUB_EVENT_NAME") in {"workflow_dispatch", "schedule"},
-            "cohort production publication requires a scheduled or manual main workflow")
+    require_trusted_main_entrypoint()
     candidate_path = args.candidate
     require(candidate_path.is_file() and not candidate_path.is_symlink(),
             "candidate artifact must be a regular file")
