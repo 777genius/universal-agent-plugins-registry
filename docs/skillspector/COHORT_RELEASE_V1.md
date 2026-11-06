@@ -28,18 +28,21 @@ install, or blanket conversion of the catalog's genuine Partial reports.
 
 ## Required production key provisioning
 
-This repository intentionally bootstraps
-`registry/skillspector-cohort/trusted-keys.json` with **zero keys**, so no
-production signature can be created yet.
+The independently reviewed production **public** Ed25519 key is registered
+in `registry/skillspector-cohort/trusted-keys.json` as
+`skillspector-cohort-prod-v1`. Its presence does **not** prove that a private
+seed has been installed or that any signed cohort is live.
 
-A repository administrator must generate a **new independent Ed25519 key**
-outside this repository; commit only its 32-byte public key (base64) and a
-reviewed unique `key_id` to the trust file. Install the matching private
-32-byte seed as the protected GitHub Actions secret
-`SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY`; configure the reviewed key ID in
-`SKILLSPECTOR_COHORT_SIGNING_KEY_ID`. Never put the seed in an issue, PR,
-artifact, source file, CI log, environment variable visible to untrusted
-Skill code, or chat message.
+Before the first main-only production workflow dispatch, a repository
+administrator must verify that the matching private 32-byte seed is stored
+as GitHub Actions secret `SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY`, and that
+repository variable `SKILLSPECTOR_COHORT_SIGNING_KEY_ID` equals
+`skillspector-cohort-prod-v1`. The signer derives the public key from this
+seed and fails closed if it differs from the registered key. For future key
+rotation, generate an independent Ed25519 key outside the repository and
+register only its reviewed public 32-byte key and new unique ID. Never put
+the private seed in an issue, PR, artifact, source file, CI log, environment
+variable visible to untrusted Skill code, or chat message.
 
 The signer must be a **main-only**, read/write-isolated GitHub Actions job:
 untrusted Skill content is acquired as inert Git blobs, all scanner jobs run
