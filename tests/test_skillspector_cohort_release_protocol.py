@@ -306,20 +306,22 @@ class CohortProductionTriggerTests(unittest.TestCase):
             "./.github/workflows/skillspector-candidate-cohort.yml",
         )
         self.assertEqual(workflow["jobs"]["sign-and-publish"]["needs"], "qualify")
-        required = (
-            "github.repository == '777genius/universal-agent-plugins-registry'",
-            "github.ref == 'refs/heads/main'",
-            "github.event_name != 'workflow_run'",
-            "github.event.workflow_run.conclusion == 'success'",
-            "github.event.workflow_run.head_repository.full_name == github.repository",
-            "github.event.workflow_run.head_branch == 'main'",
-            "github.event.workflow_run.event != 'pull_request'",
+        # Keep the logical operators and grouping fail-closed; checking only
+        # individual substrings would miss an unsafe || in a privileged gate.
+        expected_guard = (
+            "github.repository == '777genius/universal-agent-plugins-registry' && "
+            "github.ref == 'refs/heads/main' && "
+            "(github.event_name != 'workflow_run' || "
+            "(github.event.workflow_run.conclusion == 'success' && "
+            "github.event.workflow_run.head_repository.full_name == github.repository && "
+            "github.event.workflow_run.head_branch == 'main' && "
+            "github.event.workflow_run.event != 'pull_request'))"
         )
         for job in ("qualify", "sign-and-publish"):
             with self.subTest(job=job):
-                guard = workflow["jobs"][job]["if"]
-                for predicate in required:
-                    self.assertIn(predicate, guard)
+                self.assertEqual(
+                    " ".join(workflow["jobs"][job]["if"].split()), expected_guard
+                )
         self.assertNotIn(
             "SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY", str(workflow["jobs"]["qualify"])
         )
