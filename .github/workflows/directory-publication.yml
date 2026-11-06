@@ -8,9 +8,6 @@ on:
       - "registry/directory.json"
       - "registry/publication/**"
       - "schemas/directory-*.schema.json"
-      # V2 has a separate signed protocol and bootstrap/ledger promotion.
-      # A V2-only schema edit must not sign or publish a new V1 sequence.
-      - "!schemas/directory-*-v2.schema.json"
       - "scripts/directory_publication.py"
       - "scripts/directory_publication_cas.py"
       - "scripts/materialize_launch_evidence.py"
