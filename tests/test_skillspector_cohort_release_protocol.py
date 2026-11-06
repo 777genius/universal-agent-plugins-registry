@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 from scripts import skillspector_bounded_cohort as admission
 from scripts import skillspector_candidate_cohort as candidate
 from scripts import skillspector_candidate_signature
 from scripts import skillspector_cohort_release_protocol as release
+from scripts import skillspector_cohort_publish_cli as cli
 from scripts import skillspector_reports as scanner
 from scripts.directory_publication import (
     PublicationError, canonical_json, ed25519_public_bytes, sha256_digest,
@@ -282,6 +287,104 @@ class CohortReleaseTests(unittest.TestCase):
                 release.verify_release(b'{"schema_version":1,"schema_version":1}\n',
                                        canonical_json(envelope), KEYS,
                                        Path("/synthetic-v3"), now=NOW)
+
+
+class CohortProductionTriggerTests(unittest.TestCase):
+    def test_production_cohort_refresh_is_scoped_to_trusted_v3_run(self):
+        path = Path(__file__).resolve().parents[1] / (
+            ".github/workflows/skillspector-cohort-production.yml"
+        )
+        workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        self.assertEqual(
+            workflow["on"]["workflow_run"],
+            {
+                "workflows": ["SkillSpector static reports"],
+                "types": ["completed"],
+                "branches": ["main"],
+            },
+        )
+        self.assertEqual(workflow["on"]["schedule"], [{"cron": "13 0 * * *"}])
+        self.assertEqual(
+            workflow["jobs"]["qualify"]["uses"],
+            "./.github/workflows/skillspector-candidate-cohort.yml",
+        )
+        self.assertEqual(workflow["jobs"]["sign-and-publish"]["needs"], "qualify")
+        # Keep the logical operators and grouping fail-closed; checking only
+        # individual substrings would miss an unsafe || in a privileged gate.
+        expected_guard = (
+            "github.repository == '777genius/universal-agent-plugins-registry' && "
+            "github.ref == 'refs/heads/main' && "
+            "(github.event_name != 'workflow_run' || "
+            "(github.event.workflow_run.conclusion == 'success' && "
+            "github.event.workflow_run.head_repository.full_name == github.repository && "
+            "github.event.workflow_run.head_branch == 'main' && "
+            "github.event.workflow_run.event != 'pull_request'))"
+        )
+        for job in ("qualify", "sign-and-publish"):
+            with self.subTest(job=job):
+                self.assertEqual(
+                    " ".join(workflow["jobs"][job]["if"].split()), expected_guard
+                )
+        self.assertNotIn(
+            "SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY", str(workflow["jobs"]["qualify"])
+        )
+        self.assertIn(
+            "SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY",
+            str(workflow["jobs"]["sign-and-publish"]),
+        )
+        self.assertEqual(
+            workflow["jobs"]["sign-and-publish"]["permissions"],
+            {"contents": "write", "actions": "read"},
+        )
+
+
+    def test_signer_checks_workflow_run_event_before_private_key_access(self):
+        upstream = {
+            "name": "SkillSpector static reports",
+            "conclusion": "success",
+            "head_branch": "main",
+            "head_repository": {"full_name": cli.REPOSITORY},
+            "event": "schedule",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            event_path = Path(temp) / "workflow-event.json"
+            env = {
+                "GITHUB_REPOSITORY": cli.REPOSITORY,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_EVENT_NAME": "workflow_run",
+                "GITHUB_EVENT_PATH": str(event_path),
+            }
+            valid = {"workflow_run": upstream}
+            invalid_cases = [
+                {"workflow_run": {**upstream, "conclusion": "failure"}},
+                {"workflow_run": {**upstream, "head_branch": "feature"}},
+                {"workflow_run": {**upstream, "event": "pull_request"}},
+                {"workflow_run": {**upstream, "name": "another workflow"}},
+                {"workflow_run": {**upstream,
+                    "head_repository": {"full_name": "untrusted/fork"}}},
+                {"workflow_run": {**upstream, "event": "workflow_run"}},
+                {"workflow_run": None},
+            ]
+            with mock.patch.dict(os.environ, env, clear=True):
+                event_path.write_text(json.dumps(valid), encoding="utf-8")
+                cli.require_trusted_main_entrypoint()
+                for bad in invalid_cases:
+                    with self.subTest(bad=bad):
+                        event_path.write_text(json.dumps(bad), encoding="utf-8")
+                        with self.assertRaises(PublicationError):
+                            cli.require_trusted_main_entrypoint()
+                with self.subTest(reason="invalid event JSON"):
+                    event_path.write_text("{", encoding="utf-8")
+                    with self.assertRaises(PublicationError):
+                        cli.require_trusted_main_entrypoint()
+                event_path.write_text(json.dumps(valid), encoding="utf-8")
+                with mock.patch.dict(os.environ, {"GITHUB_REF": "refs/heads/feature"}):
+                    with self.assertRaises(PublicationError):
+                        cli.require_trusted_main_entrypoint()
+                for event in ("schedule", "workflow_dispatch"):
+                    with self.subTest(event=event):
+                        with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}):
+                            cli.require_trusted_main_entrypoint()
 
 
 if __name__ == "__main__":

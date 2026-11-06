@@ -5,6 +5,12 @@ on:
   # source-pin checks still run before each protected Ed25519 publication.
   schedule:
     - cron: "13 0 * * *"
+  # Keep the signed nine-source evidence bound to the current v3 manifest.
+  # Never consume artifacts or checkout code from the triggering run.
+  workflow_run:
+    workflows: ["SkillSpector static reports"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +24,14 @@ concurrency:
 
 jobs:
   qualify:
-    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == '777genius/universal-agent-plugins-registry' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_repository.full_name == github.repository &&
+         github.event.workflow_run.head_branch == 'main' &&
+         github.event.workflow_run.event != 'pull_request'))
     uses: ./.github/workflows/skillspector-candidate-cohort.yml
     permissions:
       contents: read
@@ -27,7 +40,14 @@ jobs:
   sign-and-publish:
     name: Sign and CAS-publish independently trusted cohort
     needs: qualify
-    if: github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == '777genius/universal-agent-plugins-registry' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_repository.full_name == github.repository &&
+         github.event.workflow_run.head_branch == 'main' &&
+         github.event.workflow_run.event != 'pull_request'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
