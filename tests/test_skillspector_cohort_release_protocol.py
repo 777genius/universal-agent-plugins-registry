@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import unittest
+import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -282,6 +283,55 @@ class CohortReleaseTests(unittest.TestCase):
                 release.verify_release(b'{"schema_version":1,"schema_version":1}\n',
                                        canonical_json(envelope), KEYS,
                                        Path("/synthetic-v3"), now=NOW)
+
+
+
+
+class CohortProductionTriggerTests(unittest.TestCase):
+    def test_production_cohort_refresh_is_scoped_to_trusted_v3_run(self):
+        path = Path(__file__).resolve().parents[1] / (
+            ".github/workflows/skillspector-cohort-production.yml"
+        )
+        workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        self.assertEqual(
+            workflow["on"]["workflow_run"],
+            {
+                "workflows": ["SkillSpector static reports"],
+                "types": ["completed"],
+                "branches": ["main"],
+            },
+        )
+        self.assertEqual(workflow["on"]["schedule"], [{"cron": "13 0 * * *"}])
+        self.assertEqual(
+            workflow["jobs"]["qualify"]["uses"],
+            "./.github/workflows/skillspector-candidate-cohort.yml",
+        )
+        self.assertEqual(workflow["jobs"]["sign-and-publish"]["needs"], "qualify")
+        required = (
+            "github.repository == '777genius/universal-agent-plugins-registry'",
+            "github.ref == 'refs/heads/main'",
+            "github.event_name != 'workflow_run'",
+            "github.event.workflow_run.conclusion == 'success'",
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            "github.event.workflow_run.head_branch == 'main'",
+            "github.event.workflow_run.event != 'pull_request'",
+        )
+        for job in ("qualify", "sign-and-publish"):
+            with self.subTest(job=job):
+                guard = workflow["jobs"][job]["if"]
+                for predicate in required:
+                    self.assertIn(predicate, guard)
+        self.assertNotIn(
+            "SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY", str(workflow["jobs"]["qualify"])
+        )
+        self.assertIn(
+            "SKILLSPECTOR_COHORT_ED25519_PRIVATE_KEY",
+            str(workflow["jobs"]["sign-and-publish"]),
+        )
+        self.assertEqual(
+            workflow["jobs"]["sign-and-publish"]["permissions"],
+            {"contents": "write", "actions": "read"},
+        )
 
 
 if __name__ == "__main__":
