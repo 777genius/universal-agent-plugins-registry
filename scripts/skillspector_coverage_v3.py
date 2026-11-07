@@ -731,8 +731,9 @@ def degraded_rescan(old, new):
         return True
     # Finding group IDs can vary across scanner runs. Compare stable source
     # locations, rules and severities instead; never silently lose a warning.
-    identity = lambda finding: (finding.get("rule"), finding.get("path"),
-        finding.get("line"), finding.get("pattern"), finding.get("severity"))
+    def identity(finding):
+        return (finding.get("rule"), finding.get("path"), finding.get("line"),
+                finding.get("pattern"), finding.get("severity"))
     return not {identity(finding) for finding in old["findings"]}.issubset(
         {identity(finding) for finding in new["findings"]})
 
