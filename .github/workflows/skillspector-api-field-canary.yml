@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: 7355a54b17d6da964f38341311e16ae41ac9b214 # SkillSpector PR #6 candidate
+          ref: a943ac63a07535dc2ea72c6ffe5acfc19c47b647 # SkillSpector PR #6 candidate
           persist-credentials: false
           path: scanner-new
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
       - name: Verify immutable scanner candidate and install locked dependencies
         run: |
-          test "$(git -C scanner-new rev-parse HEAD)" = "7355a54b17d6da964f38341311e16ae41ac9b214"
+          test "$(git -C scanner-new rev-parse HEAD)" = "a943ac63a07535dc2ea72c6ffe5acfc19c47b647"
           python3 -m pip install --disable-pip-version-check uv==0.13.4
           test "$(git -C scanner-old rev-parse HEAD)" = "9fc0980a00d71fae4b5af1efa3a248c19f63a73a"
           test "$(git -C real-reddit rev-parse HEAD)" = "c79e3a3a0dc7d0d6d413fbdb50e706debfa062ec"
@@ -103,7 +103,7 @@ jobs:
           out.mkdir(exist_ok=True)
           (out/"comparison.json").write_text(json.dumps({
               "kind":"skillspector-api-field-readonly-v1",
-              "candidate":"7355a54b17d6da964f38341311e16ae41ac9b214", "source":"c79e3a3a0dc7d0d6d413fbdb50e706debfa062ec",
+              "candidate":"a943ac63a07535dc2ea72c6ffe5acfc19c47b647", "source":"c79e3a3a0dc7d0d6d413fbdb50e706debfa062ec",
               "production_changed":False,"results":results},sort_keys=True,indent=2)+"\n")
           print(json.dumps(results,sort_keys=True))
           PY
