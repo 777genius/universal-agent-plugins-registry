@@ -725,9 +725,9 @@ def degraded_rescan(old, new):
     before, after = old["coverage"], new["coverage"]
     if after["fully_inspected_files"] < before["fully_inspected_files"]:
         return True
-    completed = {entry["analyzer_id"]: entry["completed"] for entry in after["analyzers"]}
+    completed = {entry["analyzer_id"]: entry.get("completed", 0) for entry in after["analyzers"]}
     return any(completed.get(entry["analyzer_id"], 0) < entry["completed"]
-               for entry in before["analyzers"] if entry["completed"])
+               for entry in before["analyzers"] if entry.get("completed", 0))
 
 
 def apply_outcome(records, attempts, item, outcome, *, replay=False):
