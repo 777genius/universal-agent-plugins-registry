@@ -1,0 +1,146 @@
+name: SkillSpector API coverage field pinned canary
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-api-field-canary.yml"
+
+# Candidate code is checked out read-only at an immutable commit.
+# No signing secrets, GitHub write credentials, or production publishing.
+permissions:
+  contents: read
+
+jobs:
+  qualify-api-field:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 369bd532191e0b36a7b155382be940c04b18a254 # SkillSpector PR #6 candidate
+          persist-credentials: false
+          path: scanner-new
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 9fc0980a00d71fae4b5af1efa3a248c19f63a73a
+          persist-credentials: false
+          path: scanner-old
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lignertys/reddit-research-skills
+          ref: c79e3a3a0dc7d0d6d413fbdb50e706debfa062ec
+          persist-credentials: false
+          path: real-reddit
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify immutable scanner candidate and install locked dependencies
+        run: |
+          test "$(git -C scanner-new rev-parse HEAD)" = "369bd532191e0b36a7b155382be940c04b18a254"
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          test "$(git -C scanner-old rev-parse HEAD)" = "9fc0980a00d71fae4b5af1efa3a248c19f63a73a"
+          test "$(git -C real-reddit rev-parse HEAD)" = "c79e3a3a0dc7d0d6d413fbdb50e706debfa062ec"
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+          uv sync --directory scanner-old --frozen --no-dev --python 3.12
+      # Catch formatting drift before starting the ~16-minute full suite.
+      - name: Show exact Ruff formatting diff before full regression
+        run: |
+          cd scanner-new
+          .venv/bin/ruff format --diff tests/test_reference_destinations.py
+          .venv/bin/ruff format --check tests/test_reference_destinations.py
+      - name: Run complete non-provider Python regression suite and Ruff
+        timeout-minutes: 35
+        run: |
+          cd scanner-new
+          .venv/bin/python -m pytest -q -m 'not integration and not provider'
+          .venv/bin/ruff check src/skillspector/references.py tests/test_reference_destinations.py
+          .venv/bin/ruff format --check src/skillspector/references.py tests/test_reference_destinations.py
+      - name: Compare immutable Reddit Skills before and after with unchanged risk findings
+        timeout-minutes: 8
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, tempfile
+          from pathlib import Path
+          old_cli = str(Path("scanner-old/.venv/bin/skillspector").resolve())
+          new_cli = str(Path("scanner-new/.venv/bin/skillspector").resolve())
+          def scan(cli, path):
+              with tempfile.TemporaryDirectory(prefix="api-coverage-") as home:
+                  p = subprocess.run([cli, "scan", str(path.resolve()), "--no-llm",
+                      "--format", "json", "--fail-on-incomplete"], timeout=120,
+                      capture_output=True, text=True, check=False,
+                      env={**os.environ, "HOME": home, "SKILLSPECTOR_OSV_TIMEOUT": "3"})
+                  assert p.stdout, (path, p.returncode, p.stderr[-500:])
+                  d = json.loads(p.stdout)
+                  assert d["execution_successful"] is True, (path, p.returncode, p.stderr[-500:])
+                  return d
+          def missing(d):
+              return {(r["source_path"], r["line"], r["column"], r["reference_kind"], r["evidence"])
+                  for r in d["analysis_completeness"]["references"] if r["status"] == "missing"}
+          def findings(d):
+              return sorted((str(i.get("id")), str(i.get("severity")),
+                  json.dumps(i.get("location"), sort_keys=True))
+                  for i in d.get("issues", []) if "coverage" not in (i.get("tags") or []))
+          results = []
+          for name in ("reddapi", "reddit-research", "reddit-search-api"):
+              root = Path("real-reddit/skills") / name
+              sha = hashlib.sha256((root/"SKILL.md").read_bytes()).hexdigest()
+              old, new = scan(old_cli,root), scan(new_cli,root)
+              assert hashlib.sha256((root/"SKILL.md").read_bytes()).hexdigest() == sha
+              before, after = missing(old), missing(new)
+              removed = before - after
+              assert removed and all(chr(96)+"data.coverage"+chr(96) in row[-1] for row in removed), (name,removed)
+              assert not (after - before), (name, after-before)
+              assert findings(old) == findings(new), (name, "security finding regression")
+              if name == "reddit-research":
+                  assert new["analysis_completeness"]["status"] == "partial", "independent parse limitation hidden"
+              results.append({"source":name,"sha256":sha,"old_missing":len(before),
+                  "new_missing":len(after),"removed":len(removed),
+                  "new_status":new["analysis_completeness"]["status"],
+                  "unchanged_risk_findings":len(findings(new))})
+          out = Path(os.environ["RUNNER_TEMP"])/"skillspector-api-field-proof"
+          out.mkdir(exist_ok=True)
+          (out/"comparison.json").write_text(json.dumps({
+              "kind":"skillspector-api-field-readonly-v1",
+              "candidate":"369bd532191e0b36a7b155382be940c04b18a254", "source":"c79e3a3a0dc7d0d6d413fbdb50e706debfa062ec",
+              "production_changed":False,"results":results},sort_keys=True,indent=2)+"\n")
+          print(json.dumps(results,sort_keys=True))
+          PY
+      - name: Prove strict no-LLM CLI distinguishes HTTP field from missing dependency
+        timeout-minutes: 8
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          cli = str(Path("scanner-new/.venv/bin/skillspector").resolve())
+          header = "---\nname: url-host-proof\ndescription: Strict URL-host reference qualification.\n---\n"
+          examples = (
+              ("api-response", "POST /api/v1/trends returns HTTP 404 (not JSON). End yesterday and read `data.coverage`.\n", True),
+              ("missing-script", "Run [setup](scripts/required.sh) before continuing.\n", False),
+              ("artifact-suffix", "The URL host `bundle.zip` is listed.\n", False),
+          )
+          for label, body, should_complete in examples:
+              with tempfile.TemporaryDirectory(prefix="skillspector-url-host-") as tmp:
+                  Path(tmp, "SKILL.md").write_text(header + body, encoding="utf-8")
+                  run = subprocess.run(
+                      [cli, "scan", tmp, "--no-llm", "--format", "json", "--fail-on-incomplete"],
+                      capture_output=True, text=True, timeout=120, check=False,
+                  )
+                  try:
+                      report = json.loads(run.stdout)
+                  except json.JSONDecodeError as exc:
+                      raise AssertionError(f"{label}: CLI did not emit JSON: {run.stdout[:500]}") from exc
+                  completeness = report["analysis_completeness"]
+                  assert report["execution_successful"] is True, label
+                  assert completeness["is_complete"] is should_complete, (label, completeness)
+                  assert (run.returncode == 0) is should_complete, (label, run.returncode)
+                  if should_complete:
+                      assert completeness["references"] == [], label
+                  else:
+                      assert completeness["references"], label
+                  print(f"{label}: verified strict no-LLM CLI, complete={should_complete}")
+          PY
