@@ -170,7 +170,9 @@ def main() -> int:
     args = parser.parse_args()
     previous = coverage.read_bundle(args.previous_dir)
     require(previous is not None, "prior v3 report bundle is incomplete")
-    coverage.validate_manifest(previous["manifest"], current_policy=True)
+    # Verify the exact published baseline; admission.build_plan checks
+    # all nine old scanner Partial witnesses independently.
+    coverage.validate_manifest(previous["manifest"])
     lease = scanner.read_report_json(args.previous_dir / "publication-base.json", max_bytes=4096)
     require(lease.get("report_commit") is not None
             and SHA.fullmatch(lease["report_commit"]) is not None,

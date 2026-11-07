@@ -66,6 +66,33 @@ class QueueTests(unittest.TestCase):
         coverage.validate_discovery_summary(summary, selection, COMMIT)
         return summary
 
+    def test_legacy_current_report_is_retained_after_policy_upgrade(self):
+        source = item()
+        selection = {"schema_version": 1, "sources": [source]}
+        original = record(source)
+        original["profile"] = copy.deepcopy(scanner.LEGACY_PROFILES["static-standard-v3"])
+        original["freshness"] = "current"
+        old = {"manifest": {"schema_version": 3, "scanner": scanner.SCANNER,
+                            "profile": contract.LEGACY_POLICY,
+                            "profiles": list(scanner.LEGACY_PROFILES.values()),
+                            "repository_aliases": []},
+               "selection": selection, "records": {source["id"]: original}, "attempts": {}}
+        self.assertEqual(coverage.previous_records(old, selection)[source["id"]]["freshness"], "current")
+        self.assertEqual(coverage.compatible_attempts(old, selection), {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            merged = coverage.merge_reports(selection, old, [worker(selection)],
+                source_commit=COMMIT, output_dir=root)
+            self.assertEqual(merged["profiles"], scanner.ALL_PROFILES)
+            verified = coverage.read_bundle(root)
+            retained = verified["records"][source["id"]]
+            self.assertEqual(retained["status"], original["status"])
+            self.assertEqual(retained["freshness"], "current")
+            self.assertEqual(retained["profile"], original["profile"])
+            self.assertEqual(retained["findings"], original["findings"])
+            self.assertEqual(retained["retry"]["attempt_count"], 0)
+            self.assertNotIn(source["id"], verified["attempts"])
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}

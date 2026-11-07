@@ -70,6 +70,23 @@ EXTENDED_PROFILE_DOCUMENT = STANDARD_PROFILE_DOCUMENT | {
 PROFILE_DOCUMENTS = {p["id"]: p for p in (STANDARD_PROFILE_DOCUMENT, EXTENDED_PROFILE_DOCUMENT)}
 PROFILES = {key: {"id": key, "digest": sha256_digest(canonical_json(value))}
             for key, value in PROFILE_DOCUMENTS.items()}
+# Preserve the byte-exact previously published profile generation.
+# Old records keep their original evidence and source freshness until rescanned.
+LEGACY_PROFILE_DOCUMENTS = {
+    name: document | {"reference_inventory_patch": "uap-directory-inventory-v1"}
+    for name, document in PROFILE_DOCUMENTS.items()
+}
+LEGACY_PROFILES = {
+    name: {"id": name, "digest": sha256_digest(canonical_json(document))}
+    for name, document in LEGACY_PROFILE_DOCUMENTS.items()
+}
+if list(LEGACY_PROFILES.values()) != [
+    {"id": "static-standard-v3", "digest": "sha256:33e3822d74ce72625cc5b479f4473b515f693890a3818366206a4dbc2b8f509c"},
+    {"id": "static-extended-v3", "digest": "sha256:255c72648dd6a6e6b93ea75f5ad51553826692c60dd8222c7fb55613cf5766ba"},
+]:
+    raise ValueError("Original published scanner profiles changed")
+# Profile names may repeat; their digest and scanner identity are always bound.
+ALL_PROFILES = list(LEGACY_PROFILES.values()) + list(PROFILES.values())
 STANDARD_PROFILE = PROFILES[STANDARD_PROFILE_DOCUMENT["id"]]
 EXTENDED_PROFILE = PROFILES[EXTENDED_PROFILE_DOCUMENT["id"]]
 
