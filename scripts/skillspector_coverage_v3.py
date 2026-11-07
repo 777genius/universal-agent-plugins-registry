@@ -92,11 +92,17 @@ def validate_manifest(manifest, *, current_policy=False):
     if manifest.get("schema_version") == 2:
         return v2.validate_manifest(manifest)
     v2.schema(manifest, contract.MANIFEST_SCHEMA)
-    require(len(manifest["profiles"]) == 2 and
-            {profile["id"] for profile in manifest["profiles"]} == set(scanner.PROFILES), "invalid declared profile set")
+    # Immutable published manifests have either the original two profiles or
+    # the strictly pinned old/new pair. Unknown scanner policies fail closed.
+    legacy = (manifest["scanner"] == SCANNER and
+              manifest["profile"] == contract.LEGACY_POLICY and
+              manifest["profiles"] == list(scanner.LEGACY_PROFILES.values()))
+    current = (manifest["scanner"] == SCANNER and
+               manifest["profile"] == PROFILE and
+               manifest["profiles"] == scanner.ALL_PROFILES)
+    require(legacy or current, "unsupported report policy generation")
     if current_policy:
-        require(manifest["scanner"] == SCANNER and manifest["profile"] == PROFILE and
-                manifest["profiles"] == list(scanner.PROFILES.values()), "unsupported current report policy")
+        require(current, "unsupported current report policy")
     v2.timestamp(manifest["generated_at"], "generated_at")
     coverage = manifest["coverage"]
     def check_counts(counts):
@@ -820,7 +826,7 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
             descriptors.append({"repository": repository, "path": relative, "digest": digest, "bytes": len(body), "record_count": len(part)})
     generated, selection_hash = scanner.now(), sha256_digest(canonical_json(selection))
     manifest = {"schema_version": 3, "source_commit": source_commit, "generated_at": generated,
-        "scope": "selected_sources", "scanner": SCANNER, "profile": PROFILE, "profiles": list(scanner.PROFILES.values()),
+        "scope": "selected_sources", "scanner": SCANNER, "profile": PROFILE, "profiles": scanner.ALL_PROFILES,
         "selection_digest": selection_hash, "coverage": contract.analysis_counts(selection, records),
         "plugin_coverage": contract.plugin_counts(selection, records), "shards": descriptors,
         "execution_summary": {"partition_count": expected_count, "received_partitions": sorted(partitions),
@@ -1015,7 +1021,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             continue  # Independent authenticated forks use reconciliation below.
         if not known:
             require(origin is not None and len(epoch) == attempt["attempt_count"] and
-                    all(entry["profile"] in scanner.PROFILES.values() for entry in epoch),
+                    all(entry["profile"] in scanner.ALL_PROFILES for entry in epoch),
                     "recovered attempt count is not consecutive: missing predecessor")
             unanchored.add(sha256_digest(report_json(outcome)))
             uncertain_ids.add(item["id"])
@@ -1094,7 +1100,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             if item["id"] in uncertain_ids:
                 mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
     aligned = {"manifest": {"schema_version": 3, "scanner": SCANNER, "profile": PROFILE,
-            "profiles": list(scanner.PROFILES.values()), "repository_aliases": aliases},
+            "profiles": scanner.ALL_PROFILES, "repository_aliases": aliases},
         "selection": selection, "records": records, "attempts": attempts,
         "queue_cursor": ((previous or {}).get("queue_cursor", 0) + applied) % 3}
     empty = {"schema_version": 3, "source_commit": source_commit, "generated_at": scanner.now(),

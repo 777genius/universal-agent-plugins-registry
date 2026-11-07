@@ -131,8 +131,10 @@ def build_plan(previous: dict, current_selection: dict, report_commit: str) -> d
 
     require(manifest["schema_version"] == 3 and manifest["scanner"] == OLD_SCANNER and
             manifest["coverage"]["selected"] > 9 and
-            manifest.get("profile") == contract.PROFILE and
-            manifest.get("profiles") == list(scanner.PROFILES.values()),
+            (manifest.get("profile"), manifest.get("profiles")) in (
+                (contract.LEGACY_POLICY, list(scanner.LEGACY_PROFILES.values())),
+                (contract.PROFILE, scanner.ALL_PROFILES),
+            ),
             "not the current full-v3 producer policy")
     require(manifest["selection_digest"] == digest(selection), "baseline selection digest differs")
     by_key, live_by_key = {}, {}
@@ -210,7 +212,9 @@ def main() -> int:
 
     previous = coverage.read_bundle(args.previous_dir)
     require(previous is not None, "verified prior report bundle missing")
-    coverage.validate_manifest(previous["manifest"], current_policy=True)
+    # Both exact generations are valid authenticated baselines. The nine
+    # individual old Partial witnesses must still satisfy build_plan().
+    coverage.validate_manifest(previous["manifest"])
     current = coverage.load_selection(args.current_selection)
     plan = build_plan(previous, current, args.report_commit)
     write_plan_exclusively(args.output, plan)

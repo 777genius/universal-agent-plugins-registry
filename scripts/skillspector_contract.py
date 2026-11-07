@@ -15,14 +15,19 @@ SHARD_SCHEMA = ROOT / "schemas/skillspector-shard-v3.schema.json"
 RETRY_POLICY = {"network_delays_seconds": [900, 3600, 14400], "extended_delay_seconds": 0,
                 "maximum_attempts_per_identity": 4, "history_limit": 8,
                 "queue_lanes": ["new", "retry", "changed"], "normalization_version": 3}
-POLICY_DOCUMENT = {"id": "static-policy-v3", "profiles": list(scanner.PROFILES.values()),
+LEGACY_POLICY_DOCUMENT = {"id": "static-policy-v3", "profiles": list(scanner.LEGACY_PROFILES.values()),
+                          "retry": RETRY_POLICY, "preparation_seconds": 120}
+LEGACY_POLICY = {"id": "static-policy-v3", "digest": sha256_digest(canonical_json(LEGACY_POLICY_DOCUMENT))}
+if LEGACY_POLICY["digest"] != "sha256:b9600f5cb6461c28b367a4ff460da4d07224e497fdddc25732cf18e231a343e9":
+    raise ValueError("Original published v3 policy changed")
+POLICY_DOCUMENT = {"id": "static-policy-v3", "profiles": scanner.ALL_PROFILES,
                    "retry": RETRY_POLICY, "preparation_seconds": 120}
 PROFILE = {"id": POLICY_DOCUMENT["id"], "digest": sha256_digest(canonical_json(POLICY_DOCUMENT))}
 
 
 def known_profile(record):
     return (record["scanner"] == scanner.SCANNER and
-            record["profile"] == scanner.PROFILES.get(record["profile"]["id"]))
+            record["profile"] in scanner.ALL_PROFILES)
 
 
 def import_legacy(record, *, profile=None, scanner_identity=None):

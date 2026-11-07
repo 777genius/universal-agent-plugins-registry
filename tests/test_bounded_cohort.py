@@ -51,8 +51,8 @@ class BoundedCohortTests(unittest.TestCase):
                         "revision": "f" * 40, "path": "skills/unknown", "plugin_path": ""})
         selection = {"schema_version": 1, "sources": sources}
         manifest = {"schema_version": 3, "scanner": copy.deepcopy(OLD_SCANNER),
-                    "profile": copy.deepcopy(contract.PROFILE),
-                    "profiles": copy.deepcopy(list(scanner.PROFILES.values())),
+                    "profile": copy.deepcopy(contract.LEGACY_POLICY),
+                    "profiles": copy.deepcopy(list(scanner.LEGACY_PROFILES.values())),
                     "selection_digest": digest(selection), "source_commit": "c" * 40,
                     "coverage": {"selected": 17947}}
         return {"manifest": manifest, "selection": selection, "records": records}, selection
@@ -66,6 +66,15 @@ class BoundedCohortTests(unittest.TestCase):
         self.assertEqual(plan["candidate_status"], "not_scanned")
         self.assertEqual(previous["records"]["skill-0"]["status"], "partial")
         self.assertNotEqual(plan["baseline_scanner"], plan["candidate_scanner"])
+
+    def test_cohort_old_evidence_survives_mixed_policy_without_relabeling(self):
+        previous, selection = self.fixture()
+        previous["manifest"]["profile"] = copy.deepcopy(contract.PROFILE)
+        previous["manifest"]["profiles"] = copy.deepcopy(scanner.ALL_PROFILES)
+        self.assertEqual(len(build_plan(previous, selection, "b" * 40)["selection"]["sources"]), 9)
+        previous["manifest"]["profiles"].append({"id": "other", "digest": "sha256:" + "f" * 64})
+        with self.assertRaises(CohortRejected):
+            build_plan(previous, selection, "b" * 40)
 
     def test_unrelated_catalog_update_does_not_stale_17k_other_reports(self):
         previous, selection = self.fixture()

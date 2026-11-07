@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from scripts import skillspector_contract as contract
 from scripts import skillspector_coverage_v3 as coverage
 from scripts import publish_skillspector_coverage_v3 as publisher
 from scripts import skillspector_reports as scanner
@@ -65,6 +66,33 @@ class QueueTests(unittest.TestCase):
         summary["repository_aliases"] = list(aliases)
         coverage.validate_discovery_summary(summary, selection, COMMIT)
         return summary
+
+    def test_legacy_current_report_is_retained_after_policy_upgrade(self):
+        source = item()
+        selection = {"schema_version": 1, "sources": [source]}
+        original = record(source)
+        original["profile"] = copy.deepcopy(scanner.LEGACY_PROFILES["static-standard-v3"])
+        original["freshness"] = "current"
+        old = {"manifest": {"schema_version": 3, "scanner": scanner.SCANNER,
+                            "profile": contract.LEGACY_POLICY,
+                            "profiles": list(scanner.LEGACY_PROFILES.values()),
+                            "repository_aliases": []},
+               "selection": selection, "records": {source["id"]: original}, "attempts": {}}
+        self.assertEqual(coverage.previous_records(old, selection)[source["id"]]["freshness"], "current")
+        self.assertEqual(coverage.compatible_attempts(old, selection), {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            merged = coverage.merge_reports(selection, old, [worker(selection)],
+                source_commit=COMMIT, output_dir=root)
+            self.assertEqual(merged["profiles"], scanner.ALL_PROFILES)
+            verified = coverage.read_bundle(root)
+            retained = verified["records"][source["id"]]
+            self.assertEqual(retained["status"], original["status"])
+            self.assertEqual(retained["freshness"], "current")
+            self.assertEqual(retained["profile"], original["profile"])
+            self.assertEqual(retained["findings"], original["findings"])
+            self.assertEqual(retained["retry"]["attempt_count"], 0)
+            self.assertNotIn(source["id"], verified["attempts"])
 
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
@@ -552,22 +580,19 @@ class QueueTests(unittest.TestCase):
             with self.assertRaises(PublicationError):
                 coverage.read_bundle(root)
 
-    def test_old_policy_is_readable_but_new_policy_requires_refresh(self):
+    def test_unrecognized_profile_policy_cannot_impersonate_a_known_generation(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            prior = bundle(root / "before", selection, [record(source)])
-            old_digest = prior["manifest"]["profile"]["digest"]
+            bundle(root / "before", selection, [record(source)])
             with mock.patch.dict(coverage.PROFILE, {"digest": "sha256:" + "d" * 64}), \
                  mock.patch.dict(scanner.PROFILES["static-standard-v3"], {"digest": "sha256:" + "e" * 64}):
-                # Persisted artifacts are internally validated under their own policy.
-                loaded = coverage.read_bundle(root / "before")
-                self.assertEqual(loaded["manifest"]["profile"]["digest"], old_digest)
-                self.assertEqual(coverage.plan_attempts(selection, loaded, 0, 1, 1), [source])
-                fresh = bundle(root / "after", selection, previous=loaded)
-                self.assertEqual(fresh["manifest"]["coverage"]["complete"], 0)
-                self.assertEqual(fresh["manifest"]["coverage"]["stale"], 1)
+                # An arbitrary digest is not a vetted historical scanner policy.
+                # The exact old published identity is covered by the migration
+                # test above and remains readable and current.
+                with self.assertRaisesRegex(PublicationError, "unsupported report policy generation"):
+                    coverage.read_bundle(root / "before")
 
     def test_scanner_upgrade_requeues_complete_and_blocked_sources_without_old_retry_state(self):
         complete = item(id="fixture/complete", path="skills/complete")

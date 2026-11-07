@@ -49,7 +49,9 @@ def load_verified_previous(directory: Path, report_commit: str) -> dict:
             "prior report lease differs from immutable commit")
     previous = coverage.read_bundle(directory)
     require(previous is not None, "prior report bundle is incomplete")
-    coverage.validate_manifest(previous["manifest"], current_policy=True)
+    # Verify the exact published baseline; admission.build_plan checks
+    # all nine old scanner Partial witnesses independently.
+    coverage.validate_manifest(previous["manifest"])
     return previous
 
 
