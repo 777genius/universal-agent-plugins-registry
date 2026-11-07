@@ -157,6 +157,7 @@ class QueueTests(unittest.TestCase):
         old["coverage"]["fully_inspected_files"] = improved["coverage"]["fully_inspected_files"]
         old["coverage"]["analyzers"] = copy.deepcopy(improved["coverage"]["analyzers"])
         old["findings"] = copy.deepcopy(improved["findings"])
+        records[subject["id"]] = copy.deepcopy(old)
         self.assertFalse(coverage.degraded_rescan(old, improved))
         success = {"record": improved, "attempt": coverage.make_attempt(subject, improved)}
         self.assertTrue(coverage.apply_outcome(records, attempts, subject, success))
