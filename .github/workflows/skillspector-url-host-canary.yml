@@ -1,0 +1,75 @@
+name: SkillSpector pinned URL-host reference canary
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-url-host-canary.yml"
+
+# Candidate code is checked out read-only at an immutable commit.
+# No signing secrets, GitHub write credentials, or production publishing.
+permissions:
+  contents: read
+
+jobs:
+  qualify-url-host-references:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: e57428f7471ceb81b79c8f53c61364b5b195dccb # SkillSpector PR #4 candidate
+          persist-credentials: false
+          path: scanner-new
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify immutable scanner candidate and install locked dependencies
+        run: |
+          test "$(git -C scanner-new rev-parse HEAD)" = "e57428f7471ceb81b79c8f53c61364b5b195dccb"
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      - name: Run complete non-provider Python regression suite and Ruff
+        timeout-minutes: 35
+        run: |
+          cd scanner-new
+          .venv/bin/python -m pytest -q -m 'not integration and not provider'
+          .venv/bin/ruff check src/skillspector/references.py tests/test_reference_destinations.py
+          .venv/bin/ruff format --check src/skillspector/references.py tests/test_reference_destinations.py
+      - name: Prove strict no-LLM CLI distinguishes URL host from missing dependency
+        timeout-minutes: 8
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          cli = str(Path("scanner-new/.venv/bin/skillspector").resolve())
+          header = "---\nname: url-host-proof\ndescription: Strict URL-host reference qualification.\n---\n"
+          examples = (
+              ("hostname", "Attribute the source only from the URL host (`agoda.com`, `trip.com`, `traveloka.com`).\n", True),
+              ("missing-script", "Run [setup](scripts/required.sh) before continuing.\n", False),
+              ("artifact-suffix", "The URL host `bundle.zip` is listed.\n", False),
+          )
+          for label, body, should_complete in examples:
+              with tempfile.TemporaryDirectory(prefix="skillspector-url-host-") as tmp:
+                  Path(tmp, "SKILL.md").write_text(header + body, encoding="utf-8")
+                  run = subprocess.run(
+                      [cli, "scan", tmp, "--no-llm", "--format", "json", "--fail-on-incomplete"],
+                      capture_output=True, text=True, timeout=120, check=False,
+                  )
+                  try:
+                      report = json.loads(run.stdout)
+                  except json.JSONDecodeError as exc:
+                      raise AssertionError(f"{label}: CLI did not emit JSON: {run.stdout[:500]}") from exc
+                  completeness = report["analysis_completeness"]
+                  assert report["execution_successful"] is True, label
+                  assert completeness["is_complete"] is should_complete, (label, completeness)
+                  assert (run.returncode == 0) is should_complete, (label, run.returncode)
+                  if should_complete:
+                      assert completeness["references"] == [], label
+                  else:
+                      assert completeness["references"], label
+                  print(f"{label}: verified strict no-LLM CLI, complete={should_complete}")
+          PY
