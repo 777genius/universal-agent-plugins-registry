@@ -421,14 +421,21 @@ def reason_codes(record):
     return {value["code"] for value in record["coverage"]["reasons"]} | {value["code"] for value in record["errors"]}
 
 
+def attempt_fingerprint(item, record):
+    # The immutable attempt ledger is bound to this exact input identity, not
+    # to a generated finding-group position or a mutable retry disposition.
+    return sha256_digest(report_json({"source_digest": source_digest(item), "scanner": record["scanner"],
+        "profile": record["profile"], "status": record["status"],
+        "reasons": sorted(reason_codes(record)),
+        "groups": [finding["id"] for finding in record["findings"]]}))
+
+
 def make_attempt(item, record, previous_attempt=None, previous_record=None, *, at=None):
     at = at or scanner.now()
     count = (previous_attempt["attempt_count"] if previous_attempt else 0) + 1
     require(count <= contract.RETRY_POLICY["maximum_attempts_per_identity"], "attempt limit exhausted")
     reasons = reason_codes(record)
-    fingerprint = sha256_digest(report_json({"source_digest": source_digest(item), "scanner": record["scanner"],
-        "profile": record["profile"], "status": record["status"], "reasons": sorted(reasons),
-        "groups": [finding["id"] for finding in record["findings"]]}))
+    fingerprint = attempt_fingerprint(item, record)
     disposition, reason, delay, next_profile = "blocked", "persistent_limitation", None, None
     if record["status"] == "complete":
         disposition, reason = "none", "complete"
@@ -720,7 +727,12 @@ def finding_identities(record):
     """Preserve multiplicity of stable finding identities, not generated IDs."""
     return Counter((finding.get("rule"), finding.get("path"), finding.get("line"),
                     finding.get("pattern"), finding.get("severity"),
-                    finding.get("match_fingerprint")) for finding in record["findings"])
+                    finding.get("match_fingerprint"),
+                    # Without a stable fingerprint, normalization distinguishes
+                    # same-line groups by their original column positions.
+                    finding.get("start_column") if not finding.get("match_fingerprint") else None,
+                    finding.get("end_column") if not finding.get("match_fingerprint") else None)
+                   for finding in record["findings"])
 
 
 def degraded_rescan(old, new):
@@ -741,6 +753,30 @@ def degraded_rescan(old, new):
     return bool(finding_identities(old) - finding_identities(new))
 
 
+def retained_degraded_replay(item, old_record, old_attempt, outcome):
+    """Recognize an already-persisted attempt whose older evidence was retained.
+
+    The persisted attempt and its history, source and analysis fingerprint must
+    agree with the recovered worker; never accept a new finding, changed source,
+    altered skill identity, or a previously quarantined conflict as a replay.
+    """
+    if old_attempt is None or old_record is None:
+        return False
+    attempt, new = outcome["attempt"], outcome["record"]
+    if (attempt != old_attempt or old_record["status"] != "partial" or
+            new["status"] != "partial" or
+            old_record["source"] != new["source"] or
+            old_record["source"]["revision"] != item["revision"] or
+            old_record["skill_name"] != new["skill_name"] or
+            old_record.get("attempt_history") != attempt["history"] or
+            old_record.get("retry", {}).get("attempt_count") != attempt["attempt_count"] or
+            any(reason["code"].startswith("recovery_") for reason in old_record["coverage"]["reasons"]) or
+            not degraded_rescan(old_record, new)):
+        return False
+    return (attempt["fingerprint"] == attempt_fingerprint(item, new) and
+            not finding_identities(new) - finding_identities(old_record))
+
+
 def apply_outcome(records, attempts, item, outcome, *, replay=False):
     """Commit one record/retry transaction while retaining useful failed-scan fallback."""
     attempt, new = outcome["attempt"], outcome["record"]
@@ -749,7 +785,8 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
     if replay and old_attempt is not None and attempt["attempt_count"] <= old_attempt["attempt_count"]:
         if attempt["attempt_count"] == old_attempt["attempt_count"]:
             require(attempt == old_attempt, "recovered attempt conflicts with persisted progress")
-            if old_record is not None and old_record["status"] == new["status"]:
+            if old_record is not None and old_record["status"] == new["status"] and not (
+                    retained_degraded_replay(item, old_record, old_attempt, outcome)):
                 controls = {"freshness", "target_revision", "retry", "attempt_history"}
                 require({key: value for key, value in old_record.items() if key not in controls} ==
                         {key: value for key, value in new.items() if key not in controls},
@@ -1113,6 +1150,8 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     {key: value for key, value in old_attempt.items() if key not in scheduling} == \
                     {key: value for key, value in attempt.items() if key not in scheduling}:
                 continue  # Exact original execution replay; retain its existing uncertainty/schedule.
+            if retained_degraded_replay(item, old_record, old_attempt, outcome):
+                continue  # Already published attempt retained more complete original evidence.
             if attempt == old_attempt and outcome["record"]["status"] == "error" and old_record["status"] != "error":
                 continue  # Exact replay of a failure already retaining useful prior evidence.
             if attempt["attempt_count"] < old_attempt["attempt_count"] and \
