@@ -1,0 +1,162 @@
+name: SkillSpector pinned non-file literal E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-nonfile-literals-canary.yml"
+
+# Read-only, immutable candidate and independently pinned real Skills.
+# Never give candidate code deployment, signing, or write credentials.
+permissions:
+  contents: read
+
+jobs:
+  compare-pinned-real-sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: c9efce7dcf423f83a305b15631890658d01c2c2f
+          path: scanner-old
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: f9b970c0f82963573b82a7ae4b6cb307f5d96927
+          path: scanner-new
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: alpic-ai/skybridge
+          ref: 9afa5fa52522923022de30f27a4b785df68104c3
+          sparse-checkout: skills/chatgpt-app-builder
+          persist-credentials: false
+          path: real-skybridge
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nexlayer/nexlayer-plugin
+          ref: f13b3c1747136047e0623bbd1fa8d60052ba9c18
+          sparse-checkout: skills/ship-it-nexlayer
+          persist-credentials: false
+          path: real-nexlayer
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify immutable source identities and frozen dependencies
+        run: |
+          set -euo pipefail
+          test "$(git -C scanner-old rev-parse HEAD)" = c9efce7dcf423f83a305b15631890658d01c2c2f
+          test "$(git -C scanner-new rev-parse HEAD)" = f9b970c0f82963573b82a7ae4b6cb307f5d96927
+          test "$(git -C real-skybridge rev-parse HEAD)" = 9afa5fa52522923022de30f27a4b785df68104c3
+          test "$(git -C real-nexlayer rev-parse HEAD)" = f13b3c1747136047e0623bbd1fa8d60052ba9c18
+          test -s real-skybridge/skills/chatgpt-app-builder/SKILL.md
+          test -s real-nexlayer/skills/ship-it-nexlayer/SKILL.md
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner-old --frozen --no-dev --python 3.12
+          uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      - name: Run focused regressions and Ruff before expensive suite
+        run: |
+          scanner-new/.venv/bin/python -m pytest -q scanner-new/tests/test_reference_destinations.py scanner-new/tests/test_out_of_bundle_reference_coverage.py
+          scanner-new/.venv/bin/ruff check scanner-new/src/skillspector/references.py scanner-new/tests/test_reference_destinations.py
+          scanner-new/.venv/bin/ruff format --check scanner-new/src/skillspector/references.py scanner-new/tests/test_reference_destinations.py
+      - name: Full no-provider/no-LLM Python regression suite
+        timeout-minutes: 35
+        run: |
+          cd scanner-new
+          .venv/bin/python -m pytest -q -m 'not integration and not provider'
+      - name: Compare actual Skybridge and Nexlayer CLI with untouched security findings
+        timeout-minutes: 8
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          old_cli = str(Path("scanner-old/.venv/bin/skillspector").resolve())
+          new_cli = str(Path("scanner-new/.venv/bin/skillspector").resolve())
+          cases = [
+              ("skybridge", Path("real-skybridge/skills/chatgpt-app-builder"), ("1.x", "2.x", "0.36.x")),
+              ("nexlayer", Path("real-nexlayer/skills/ship-it-nexlayer"), ("0.0.0.0", "127.0.0.1")),
+          ]
+          def scan(cli, root):
+              with tempfile.TemporaryDirectory(prefix="skillspector-provenance-") as home:
+                  run = subprocess.run(
+                      [cli, "scan", str(root.resolve()), "--no-llm", "--format", "json", "--fail-on-incomplete"],
+                      capture_output=True, text=True, timeout=120, check=False,
+                      env={**os.environ, "HOME": home},
+                  )
+                  data = json.loads(run.stdout)
+                  assert data["execution_successful"] is True, (root, run.returncode, run.stderr[-400:])
+                  return data
+          def missing(report):
+              return {
+                  (r["source_path"], r["line"], r["column"], r["reference_kind"], r["evidence"])
+                  for r in report["analysis_completeness"]["references"]
+                  if r["status"] == "missing"
+              }
+          def issues(report):
+              return sorted(
+                  (str(i.get("id")), str(i.get("severity")), str(i.get("location")))
+                  for i in report.get("issues", [])
+                  if "coverage" not in (i.get("tags") or [])
+              )
+          proof = []
+          for name, root, tokens in cases:
+              skill = root / "SKILL.md"
+              original = hashlib.sha256(skill.read_bytes()).hexdigest()
+              old, new = scan(old_cli, root), scan(new_cli, root)
+              assert hashlib.sha256(skill.read_bytes()).hexdigest() == original, name
+              before, after = missing(old), missing(new)
+              removed = before - after
+              assert before - after, (name, "no documented false references removed")
+              assert not (after - before), (name, "candidate introduced missing references")
+              assert all(any("`" + token + "`" in row[-1] for token in tokens) for row in removed), (
+                  name, "candidate removed a non-target missing file"
+              )
+              assert issues(old) == issues(new), (name, "non-coverage security findings changed")
+              result = {
+                  "source": name,
+                  "skill_md_sha256": original,
+                  "old_status": old["analysis_completeness"]["status"],
+                  "new_status": new["analysis_completeness"]["status"],
+                  "old_missing": len(before),
+                  "new_missing": len(after),
+                  "removed_proven_nonfile_rows": len(removed),
+                  "unchanged_noncoverage_findings": len(issues(new)),
+              }
+              proof.append(result)
+              print(json.dumps(result, sort_keys=True))
+          with tempfile.TemporaryDirectory(prefix="skillspector-literal-negative-") as tmp:
+              skill = Path(tmp) / "SKILL.md"
+              skill.write_text(
+                  "---\nname: proof-negative\ndescription: Missing external executable stays incomplete.\n---\n"
+                  "Bind to IPv4 address `0.0.0.0`. Migrating from version `1.x`.\n"
+                  "Run [missing script](scripts/required.sh) before continuing.\n", encoding="utf-8"
+              )
+              result = scan(new_cli, Path(tmp))
+              assert result["analysis_completeness"]["is_complete"] is False
+              assert any(r["status"] == "missing" and "scripts/required.sh" in r["evidence"]
+                         for r in result["analysis_completeness"]["references"])
+              print("Negative real CLI: required script remains incomplete")
+          out = Path(os.environ["RUNNER_TEMP"]) / "skillspector-nonfile-literal-proof"
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "comparison.json").write_text(json.dumps({
+              "kind": "skillspector-isolated-literal-comparison-v1",
+              "candidate_sha": "f9b970c0f82963573b82a7ae4b6cb307f5d96927",
+              "production_changed": False,
+              "results": proof,
+          }, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          PY
+      - name: Preserve machine-readable source and negative control evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-nonfile-literal-comparison
+          path: ${{ runner.temp }}/skillspector-nonfile-literal-proof/
+          if-no-files-found: warn
+          retention-days: 7
