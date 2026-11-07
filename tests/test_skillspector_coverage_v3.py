@@ -207,6 +207,32 @@ class QueueTests(unittest.TestCase):
         changed["source"]["content_digest"] = "sha256:" + "b" * 64
         self.assertFalse(coverage.degraded_rescan(old, changed))
 
+    def test_degraded_partial_preserves_duplicate_finding_identity_counts(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        warning = {"id": "first", "rule": "LP1", "path": "scripts/check.py",
+                   "line": 1, "pattern": "Scan Limit", "severity": "HIGH"}
+        twin = {**warning, "id": "second"}
+        old["findings"] = [warning, twin]
+        # Production contains multiple distinct warning groups sharing this
+        # public identity; a set would incorrectly treat 2 -> 1 as no loss.
+        reduced = copy.deepcopy(old)
+        reduced["findings"] = [copy.deepcopy(warning)]
+        self.assertTrue(coverage.degraded_rescan(old, reduced))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        coverage.apply_outcome(records, attempts, subject,
+            {"record": reduced, "attempt": coverage.make_attempt(subject, reduced)})
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+
+        # A different new HIGH warning cannot replace the lost second match.
+        mixed = copy.deepcopy(reduced)
+        mixed["findings"].append({"id": "new", "rule": "E2", "path": "SKILL.md",
+                                  "line": 4, "pattern": "New risk", "severity": "HIGH"})
+        self.assertTrue(coverage.degraded_rescan(old, mixed))
+        with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+            coverage.apply_outcome({subject["id"]: old}, {}, subject,
+                {"record": mixed, "attempt": coverage.make_attempt(subject, mixed)})
+
     def test_degraded_partial_with_new_findings_fails_closed(self):
         subject = item()
         old = record(subject, status="partial", profile_id="static-extended-v3")

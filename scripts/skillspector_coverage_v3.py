@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -717,10 +717,10 @@ def coalesce_workers(workers, selection, source_commit, *, expected_partition_co
 
 
 def finding_identities(record):
-    """Compare stable finding evidence, not scanner-generated group identifiers."""
-    return {(finding.get("rule"), finding.get("path"), finding.get("line"),
-             finding.get("pattern"), finding.get("severity"),
-             finding.get("match_fingerprint")) for finding in record["findings"]}
+    """Preserve multiplicity of stable finding identities, not generated IDs."""
+    return Counter((finding.get("rule"), finding.get("path"), finding.get("line"),
+                    finding.get("pattern"), finding.get("severity"),
+                    finding.get("match_fingerprint")) for finding in record["findings"])
 
 
 def degraded_rescan(old, new):
@@ -738,7 +738,7 @@ def degraded_rescan(old, new):
         return True
     # Finding group IDs can vary across scanner runs. Retain verified
     # source positions, rules and fingerprint identities across rescans.
-    return not finding_identities(old).issubset(finding_identities(new))
+    return bool(finding_identities(old) - finding_identities(new))
 
 
 def apply_outcome(records, attempts, item, outcome, *, replay=False):
@@ -773,7 +773,7 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
     # Retaining the old Partial is safe only if it contains every newly
     # observed finding. Otherwise a fallback could hide a new security issue.
     require(not (degraded and new["status"] == "partial" and
-                 not finding_identities(new).issubset(finding_identities(old_record))),
+                 bool(finding_identities(new) - finding_identities(old_record))),
             "degraded partial rescan introduces new findings")
     if (new["status"] == "error" and old_record is not None and old_record["status"] != "error") or degraded:
         record = old_record
