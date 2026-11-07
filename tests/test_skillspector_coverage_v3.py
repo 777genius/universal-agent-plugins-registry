@@ -138,6 +138,67 @@ class QueueTests(unittest.TestCase):
         new["coverage"]["analyzers"][0]["completed"] = 9
         self.assertFalse(coverage.degraded_rescan(old, new))
 
+    def test_same_source_false_complete_fails_closed_without_losing_partial(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["coverage"]["fully_inspected_files"] = 20
+        new = record(subject)
+        new["coverage"]["fully_inspected_files"] = 10
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        outcome = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+            coverage.apply_outcome(records, attempts, subject, outcome)
+        self.assertEqual(records[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
+        # A genuinely thorough Complete may replace a prior bounded Partial.
+        improved = record(subject)
+        old["coverage"]["fully_inspected_files"] = improved["coverage"]["fully_inspected_files"]
+        old["coverage"]["analyzers"] = copy.deepcopy(improved["coverage"]["analyzers"])
+        old["findings"] = copy.deepcopy(improved["findings"])
+        self.assertFalse(coverage.degraded_rescan(old, improved))
+        success = {"record": improved, "attempt": coverage.make_attempt(subject, improved)}
+        self.assertTrue(coverage.apply_outcome(records, attempts, subject, success))
+        self.assertEqual(records[subject["id"]]["status"], "complete")
+
+    def test_same_source_finding_fingerprints_cannot_silently_disappear(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["findings"] = [
+            {"id": "old-high", "rule": "E2", "path": "SKILL.md", "line": 10,
+             "pattern": "Environment Access", "severity": "HIGH"},
+            {"id": "old-critical", "rule": "C1", "path": "scripts/run.sh", "line": 2,
+             "pattern": "Unsafe Execution", "severity": "CRITICAL"},
+        ]
+        new = copy.deepcopy(old)
+        new["findings"] = [copy.deepcopy(old["findings"][0])]
+        # All other coverage counts and analyzer completions are identical.
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        outcome = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        self.assertTrue(coverage.apply_outcome(records, attempts, subject, outcome))
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        self.assertEqual(attempts[subject["id"]]["fingerprint"], outcome["attempt"]["fingerprint"])
+
+        # Removing a warning must not become safe by claiming Complete.
+        claimed_complete = copy.deepcopy(new)
+        claimed_complete["status"] = "complete"
+        self.assertTrue(coverage.degraded_rescan(old, claimed_complete))
+        with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+            coverage.apply_outcome({subject["id"]: old}, {}, subject,
+                {"record": claimed_complete, "attempt": coverage.make_attempt(subject, claimed_complete)})
+
+        # New findings are never suppressed when all earlier evidence survives.
+        added = copy.deepcopy(old)
+        added["findings"].append({"id": "new-low", "rule": "L1", "path": "SKILL.md",
+            "line": 20, "pattern": "New Evidence", "severity": "LOW"})
+        self.assertFalse(coverage.degraded_rescan(old, added))
+        # An unrelated source digest is not eligible for same-source fallback.
+        changed = copy.deepcopy(new)
+        changed["source"]["content_digest"] = "sha256:" + "b" * 64
+        self.assertFalse(coverage.degraded_rescan(old, changed))
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
