@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: e3607320ee47c91529e775affd1fa06cb7411400 # SkillSpector PR #4 candidate
+          ref: 9a144196d814ff19cb4ba9af217d5b567f7578ad # SkillSpector PR #4 candidate
           persist-credentials: false
           path: scanner-new
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -26,7 +26,7 @@ jobs:
           python-version: "3.12"
       - name: Verify immutable scanner candidate and install locked dependencies
         run: |
-          test "$(git -C scanner-new rev-parse HEAD)" = "e3607320ee47c91529e775affd1fa06cb7411400"
+          test "$(git -C scanner-new rev-parse HEAD)" = "9a144196d814ff19cb4ba9af217d5b567f7578ad"
           python3 -m pip install --disable-pip-version-check uv==0.13.4
           uv sync --directory scanner-new --frozen --extra dev --python 3.12
       # Catch formatting drift before starting the ~16-minute full suite.
