@@ -207,6 +207,30 @@ class QueueTests(unittest.TestCase):
         changed["source"]["content_digest"] = "sha256:" + "b" * 64
         self.assertFalse(coverage.degraded_rescan(old, changed))
 
+    def test_same_line_without_fingerprint_keeps_column_identity(self):
+        subject = item()
+        old = record(subject, status="partial")
+        old["findings"] = [
+            {"id": "source-a", "rule": "E2", "path": "SKILL.md", "line": 12,
+             "start_column": 4, "end_column": 11, "pattern": "Exposed Secret",
+             "severity": "HIGH", "match_fingerprint": None},
+        ]
+        changed = copy.deepcopy(old)
+        changed["findings"][0]["start_column"] = 20
+        changed["findings"][0]["end_column"] = 27
+        # A different same-line match cannot replace the original warning
+        # when the scanner did not emit a stable match fingerprint.
+        self.assertTrue(coverage.degraded_rescan(old, changed))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        coverage.apply_outcome(records, attempts, subject,
+            {"record": changed, "attempt": coverage.make_attempt(subject, changed)})
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        # When a full-match fingerprint exists it, not the column alone,
+        # anchors the stable security identity.
+        old["findings"][0]["match_fingerprint"] = "stable-source-match"
+        changed["findings"][0]["match_fingerprint"] = "stable-source-match"
+        self.assertFalse(coverage.degraded_rescan(old, changed))
+
     def test_degraded_partial_preserves_duplicate_finding_identity_counts(self):
         subject = item()
         old = record(subject, status="partial", profile_id="static-extended-v3")
