@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: f9b970c0f82963573b82a7ae4b6cb307f5d96927
+          ref: 7b852c256d88c99f2762918f23fef8b01b6c42f4
           path: scanner-new
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C scanner-old rev-parse HEAD)" = c9efce7dcf423f83a305b15631890658d01c2c2f
-          test "$(git -C scanner-new rev-parse HEAD)" = f9b970c0f82963573b82a7ae4b6cb307f5d96927
+          test "$(git -C scanner-new rev-parse HEAD)" = 7b852c256d88c99f2762918f23fef8b01b6c42f4
           test "$(git -C real-skybridge rev-parse HEAD)" = 9afa5fa52522923022de30f27a4b785df68104c3
           test "$(git -C real-nexlayer rev-parse HEAD)" = f13b3c1747136047e0623bbd1fa8d60052ba9c18
           test -s real-skybridge/skills/chatgpt-app-builder/SKILL.md
@@ -148,7 +148,7 @@ jobs:
           out.mkdir(parents=True, exist_ok=True)
           (out / "comparison.json").write_text(json.dumps({
               "kind": "skillspector-isolated-literal-comparison-v1",
-              "candidate_sha": "f9b970c0f82963573b82a7ae4b6cb307f5d96927",
+              "candidate_sha": "7b852c256d88c99f2762918f23fef8b01b6c42f4",
               "production_changed": False,
               "results": proof,
           }, sort_keys=True, indent=2) + "\n", encoding="utf-8")
