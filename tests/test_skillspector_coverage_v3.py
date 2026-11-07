@@ -94,6 +94,206 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(retained["retry"]["attempt_count"], 0)
             self.assertNotIn(source["id"], verified["attempts"])
 
+    def test_profile_migration_does_not_downgrade_extended_scans(self):
+        subject = item()
+        prior = record(subject, status="partial", profile_id="static-extended-v3")
+        prior["profile"] = copy.deepcopy(scanner.LEGACY_PROFILES["static-extended-v3"])
+        self.assertEqual(coverage.initial_scan_profile(None, prior), "static-extended-v3")
+        self.assertEqual(coverage.initial_scan_profile(None, record(subject)), "static-standard-v3")
+        # Real scheduled retries remain authoritative, even after a policy change.
+        self.assertEqual(coverage.initial_scan_profile({"next_profile": "static-standard-v3"}, prior),
+                         "static-standard-v3")
+
+    def test_degraded_same_source_scan_keeps_verified_prior_findings(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["profile"] = copy.deepcopy(scanner.LEGACY_PROFILES["static-extended-v3"])
+        old["coverage"]["fully_inspected_files"] = 270
+        old["findings"] = [{"id": "previous-security-finding"}]
+        new = record(subject, status="partial")
+        new["coverage"]["fully_inspected_files"] = 0
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        records, attempts = {subject["id"]: old}, {}
+        outcome = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        self.assertTrue(coverage.apply_outcome(records, attempts, subject, outcome))
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        self.assertEqual(records[subject["id"]]["profile"], old["profile"])
+        self.assertEqual(attempts[subject["id"]]["profile"], new["profile"])
+        # Source drift may invalidate old findings; do not preserve them blindly.
+        changed = copy.deepcopy(new)
+        changed["source"]["content_digest"] = "sha256:" + "b" * 64
+        self.assertFalse(coverage.degraded_rescan(old, changed))
+        # A newly incomplete result must not be hidden behind an old Complete.
+        previously_complete = record(subject)
+        previously_complete["coverage"]["fully_inspected_files"] = 270
+        self.assertFalse(coverage.degraded_rescan(previously_complete, new))
+
+    def test_degraded_analyzer_completion_is_not_silently_replaced(self):
+        subject = item()
+        old = record(subject, status="partial")
+        new = copy.deepcopy(old)
+        old["coverage"]["analyzers"][0]["completed"] = 9
+        new["coverage"]["analyzers"][0]["completed"] = 1
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        new["coverage"]["analyzers"][0]["completed"] = 9
+        self.assertFalse(coverage.degraded_rescan(old, new))
+
+    def test_same_source_false_complete_fails_closed_without_losing_partial(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["coverage"]["fully_inspected_files"] = 20
+        new = record(subject)
+        new["coverage"]["fully_inspected_files"] = 10
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        outcome = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+            coverage.apply_outcome(records, attempts, subject, outcome)
+        self.assertEqual(records[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
+        # A genuinely thorough Complete may replace a prior bounded Partial.
+        improved = record(subject)
+        old["coverage"]["fully_inspected_files"] = improved["coverage"]["fully_inspected_files"]
+        old["coverage"]["analyzers"] = copy.deepcopy(improved["coverage"]["analyzers"])
+        old["findings"] = copy.deepcopy(improved["findings"])
+        records[subject["id"]] = copy.deepcopy(old)
+        self.assertFalse(coverage.degraded_rescan(old, improved))
+        success = {"record": improved, "attempt": coverage.make_attempt(subject, improved)}
+        self.assertTrue(coverage.apply_outcome(records, attempts, subject, success))
+        self.assertEqual(records[subject["id"]]["status"], "complete")
+
+    def test_same_source_finding_fingerprints_cannot_silently_disappear(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["findings"] = [
+            {"id": "old-high", "rule": "E2", "path": "SKILL.md", "line": 10,
+             "pattern": "Environment Access", "severity": "HIGH"},
+            {"id": "old-critical", "rule": "C1", "path": "scripts/run.sh", "line": 2,
+             "pattern": "Unsafe Execution", "severity": "CRITICAL"},
+        ]
+        new = copy.deepcopy(old)
+        new["findings"] = [copy.deepcopy(old["findings"][0])]
+        # All other coverage counts and analyzer completions are identical.
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        outcome = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        self.assertTrue(coverage.apply_outcome(records, attempts, subject, outcome))
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        self.assertEqual(attempts[subject["id"]]["fingerprint"], outcome["attempt"]["fingerprint"])
+
+        # Removing a warning must not become safe by claiming Complete.
+        claimed_complete = copy.deepcopy(new)
+        claimed_complete["status"] = "complete"
+        self.assertTrue(coverage.degraded_rescan(old, claimed_complete))
+        with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+            coverage.apply_outcome({subject["id"]: old}, {}, subject,
+                {"record": claimed_complete, "attempt": coverage.make_attempt(subject, claimed_complete)})
+
+        # New findings are never suppressed when all earlier evidence survives.
+        added = copy.deepcopy(old)
+        added["findings"].append({"id": "new-low", "rule": "L1", "path": "SKILL.md",
+            "line": 20, "pattern": "New Evidence", "severity": "LOW"})
+        self.assertFalse(coverage.degraded_rescan(old, added))
+        # Two independent matches on the same line cannot substitute for one
+        # another merely because rule, path and severity agree.
+        same_line_old = copy.deepcopy(old)
+        same_line_old["findings"][0]["match_fingerprint"] = "old-match"
+        same_line_new = copy.deepcopy(same_line_old)
+        same_line_new["findings"][0]["match_fingerprint"] = "new-match"
+        self.assertTrue(coverage.degraded_rescan(same_line_old, same_line_new))
+        # An unrelated source digest is not eligible for same-source fallback.
+        changed = copy.deepcopy(new)
+        changed["source"]["content_digest"] = "sha256:" + "b" * 64
+        self.assertFalse(coverage.degraded_rescan(old, changed))
+
+    def test_same_line_without_fingerprint_keeps_column_identity(self):
+        subject = item()
+        old = record(subject, status="partial")
+        old["findings"] = [
+            {"id": "source-a", "rule": "E2", "path": "SKILL.md", "line": 12,
+             "start_column": 4, "end_column": 11, "pattern": "Exposed Secret",
+             "severity": "HIGH", "match_fingerprint": None},
+        ]
+        changed = copy.deepcopy(old)
+        changed["findings"][0]["start_column"] = 20
+        changed["findings"][0]["end_column"] = 27
+        # A different same-line match cannot replace the original warning
+        # when the scanner did not emit a stable match fingerprint.
+        self.assertTrue(coverage.degraded_rescan(old, changed))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        # The replacement also introduces a new column-specific HIGH
+        # finding, so retaining the old report would silently hide new evidence.
+        with self.assertRaisesRegex(PublicationError, "degraded partial rescan introduces new findings"):
+            coverage.apply_outcome(records, attempts, subject,
+                {"record": changed, "attempt": coverage.make_attempt(subject, changed)})
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        self.assertEqual(attempts, {})
+        # When a full-match fingerprint exists it, not the column alone,
+        # anchors the stable security identity.
+        old["findings"][0]["match_fingerprint"] = "stable-source-match"
+        changed["findings"][0]["match_fingerprint"] = "stable-source-match"
+        self.assertFalse(coverage.degraded_rescan(old, changed))
+
+    def test_degraded_partial_preserves_duplicate_finding_identity_counts(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        warning = {"id": "first", "rule": "LP1", "path": "scripts/check.py",
+                   "line": 1, "pattern": "Scan Limit", "severity": "HIGH"}
+        twin = {**warning, "id": "second"}
+        old["findings"] = [warning, twin]
+        # Production contains multiple distinct warning groups sharing this
+        # public identity; a set would incorrectly treat 2 -> 1 as no loss.
+        reduced = copy.deepcopy(old)
+        reduced["findings"] = [copy.deepcopy(warning)]
+        self.assertTrue(coverage.degraded_rescan(old, reduced))
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        coverage.apply_outcome(records, attempts, subject,
+            {"record": reduced, "attempt": coverage.make_attempt(subject, reduced)})
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+
+        # A different new HIGH warning cannot replace the lost second match.
+        mixed = copy.deepcopy(reduced)
+        mixed["findings"].append({"id": "new", "rule": "E2", "path": "SKILL.md",
+                                  "line": 4, "pattern": "New risk", "severity": "HIGH"})
+        self.assertTrue(coverage.degraded_rescan(old, mixed))
+        with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+            coverage.apply_outcome({subject["id"]: old}, {}, subject,
+                {"record": mixed, "attempt": coverage.make_attempt(subject, mixed)})
+
+    def test_degraded_partial_with_new_findings_fails_closed(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["findings"] = [{"id": "old-high", "rule": "E2", "path": "SKILL.md",
+                            "line": 10, "severity": "HIGH", "pattern": "Existing risk"}]
+        new_finding = {"id": "new-critical", "rule": "C1", "path": "scripts/check.py",
+                       "line": 9, "severity": "CRITICAL", "pattern": "New risk"}
+        replacement = copy.deepcopy(old)
+        replacement["findings"] = [copy.deepcopy(new_finding)]
+        # Same-source regression with a replaced finding cannot keep old and
+        # silently discard the newly observed critical issue.
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        self.assertTrue(coverage.degraded_rescan(old, replacement))
+        with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+            coverage.apply_outcome(records, attempts, subject,
+                {"record": replacement, "attempt": coverage.make_attempt(subject, replacement)})
+        self.assertEqual(records[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
+        # Reduced analyzer coverage plus an additional finding must also fail
+        # closed, even when every prior fingerprint remains present.
+        less_coverage = copy.deepcopy(old)
+        old["coverage"]["fully_inspected_files"] = 5
+        records[subject["id"]] = copy.deepcopy(old)
+        less_coverage["coverage"]["fully_inspected_files"] = 4
+        less_coverage["findings"].append(copy.deepcopy(new_finding))
+        self.assertTrue(coverage.degraded_rescan(old, less_coverage))
+        with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+            coverage.apply_outcome(records, attempts, subject,
+                {"record": less_coverage, "attempt": coverage.make_attempt(subject, less_coverage)})
+        self.assertEqual(records[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}

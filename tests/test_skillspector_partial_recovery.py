@@ -115,6 +115,46 @@ class RecoveryTests(unittest.TestCase):
             discovery_summary=self.summary(selection, commit), output_dir=root)
         return coverage.read_bundle(root)
 
+    def test_retained_partial_attempt_replays_without_conflict_or_hidden_changes(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        old = record(subject, "partial", "static_parse_limit", "static-extended-v3")
+        old["coverage"]["fully_inspected_files"] = 8
+        new = record(subject, "partial", "static_parse_limit", "static-standard-v3")
+        new["coverage"]["fully_inspected_files"] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            incoming = self.batch(selection, [new], previous)
+            incoming["execution_origin"] = {"run_id": 3401, "run_attempt": 1}
+            retained = self.recover(root / "retained", selection, [incoming], previous)
+            prior_record = retained["records"][subject["id"]]
+            prior_attempt = retained["attempts"][subject["id"]]
+            self.assertEqual(prior_record["coverage"]["fully_inspected_files"], 8)
+            self.assertEqual(prior_attempt["attempt_count"], 2)
+            self.assertTrue(coverage.retained_degraded_replay(
+                subject, prior_record, prior_attempt, incoming["workers"][0]["attempts"][0]))
+            for label, batch in (
+                ("authenticated", incoming),
+                ("no-origin", {key: copy.deepcopy(value) for key, value in incoming.items()
+                               if key != "execution_origin"}),
+            ):
+                replay = self.recover(root / label, selection, [batch], retained)
+                self.assertEqual(replay["records"], retained["records"])
+                self.assertEqual(replay["attempts"], retained["attempts"])
+                self.assertEqual(replay["queue_cursor"], retained["queue_cursor"])
+                self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+
+            # An independent worker with the same attempt fingerprint but
+            # changed report identity must still enter conflict handling.
+            forged = copy.deepcopy(incoming)
+            forged["execution_origin"]["run_id"] = 3402
+            forged["workers"][0]["attempts"][0]["record"]["skill_name"] = "different skill metadata"
+            self.assertFalse(coverage.retained_degraded_replay(
+                subject, prior_record, prior_attempt, forged["workers"][0]["attempts"][0]))
+            divergent = self.recover(root / "divergent", selection, [forged], retained)
+            self.assertIn("recovery_conflict", coverage.reason_codes(divergent["records"][subject["id"]]))
+
     def test_old_main_exact_identity_recovers_and_duplicate_is_idempotent(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
