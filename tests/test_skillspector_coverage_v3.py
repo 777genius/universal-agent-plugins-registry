@@ -123,6 +123,10 @@ class QueueTests(unittest.TestCase):
         changed = copy.deepcopy(new)
         changed["source"]["content_digest"] = "sha256:" + "b" * 64
         self.assertFalse(coverage.degraded_rescan(old, changed))
+        # A newly incomplete result must not be hidden behind an old Complete.
+        previously_complete = record(subject)
+        previously_complete["coverage"]["fully_inspected_files"] = 270
+        self.assertFalse(coverage.degraded_rescan(previously_complete, new))
 
     def test_degraded_analyzer_completion_is_not_silently_replaced(self):
         subject = item()
