@@ -717,8 +717,8 @@ def coalesce_workers(workers, selection, source_commit, *, expected_partition_co
 
 
 def degraded_rescan(old, new):
-    """Do not replace stronger same-source findings with a time-limited scan."""
-    if old is None or old["status"] != "partial" or new["status"] != "partial" or \
+    """Require non-regressing coverage and findings for the exact same source."""
+    if old is None or old["status"] != "partial" or new["status"] not in {"partial", "complete"} or \
             old["source"] != new["source"] or \
             old.get("target_revision", old["source"]["revision"]) != new["source"]["revision"]:
         return False
@@ -726,8 +726,15 @@ def degraded_rescan(old, new):
     if after["fully_inspected_files"] < before["fully_inspected_files"]:
         return True
     completed = {entry["analyzer_id"]: entry.get("completed", 0) for entry in after["analyzers"]}
-    return any(completed.get(entry["analyzer_id"], 0) < entry["completed"]
-               for entry in before["analyzers"] if entry.get("completed", 0))
+    if any(completed.get(entry["analyzer_id"], 0) < entry["completed"]
+           for entry in before["analyzers"] if entry.get("completed", 0)):
+        return True
+    # Finding group IDs can vary across scanner runs. Compare stable source
+    # locations, rules and severities instead; never silently lose a warning.
+    identity = lambda finding: (finding.get("rule"), finding.get("path"),
+        finding.get("line"), finding.get("pattern"), finding.get("severity"))
+    return not {identity(finding) for finding in old["findings"]}.issubset(
+        {identity(finding) for finding in new["findings"]})
 
 
 def apply_outcome(records, attempts, item, outcome, *, replay=False):
@@ -753,8 +760,13 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
             "attempt count is not consecutive")
     require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
             "worker attempt lineage differs")
-    if (new["status"] == "error" and old_record is not None and old_record["status"] != "error") or \
-            degraded_rescan(old_record, new):
+    degraded = degraded_rescan(old_record, new)
+    # A superficially Complete run with less verified coverage is not a
+    # publishable replacement. Reject the bundle rather than record a Complete
+    # retry while continuing to display the old Partial indefinitely.
+    require(not (degraded and new["status"] == "complete"),
+            "complete rescan regresses verified same-source analysis")
+    if (new["status"] == "error" and old_record is not None and old_record["status"] != "error") or degraded:
         record = old_record
     else:
         record = copy.deepcopy(new)
