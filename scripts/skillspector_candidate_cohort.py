@@ -30,7 +30,10 @@ from scripts.directory_publication import canonical_json, sha256_digest
 
 NEW_SCANNER = admission.NEW_SCANNER
 # Do not reuse either current-v3 profile identity or the v2.13.1 exception set.
-PROFILE_DOCUMENT = scanner.STANDARD_PROFILE_DOCUMENT | {
+# This independent 2.13.3 signed cohort uses the ORIGINAL bounded v3 profile;
+# changing the global 2.13.1 producer's parser policy must not rotate this
+# already-published cohort digest or break the UAP Ed25519 source join.
+PROFILE_DOCUMENT = scanner.LEGACY_PROFILE_DOCUMENTS["static-standard-v3"] | {
     "id": "static-cohort-2.13.3-v1",
     "scanner": NEW_SCANNER,
     "exception_set_digest": None,

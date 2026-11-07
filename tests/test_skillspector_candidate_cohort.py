@@ -50,6 +50,8 @@ class CandidateCohortTests(unittest.TestCase):
         self.assertNotIn(candidate.PROFILE["id"], scanner.PROFILES)
         self.assertNotEqual(candidate.PROFILE, scanner.STANDARD_PROFILE)
         self.assertIsNone(candidate.PROFILE_DOCUMENT["exception_set_digest"])
+        self.assertEqual(candidate.PROFILE_DOCUMENT["reference_inventory_patch"], "uap-directory-inventory-v1")
+        self.assertEqual(candidate.PROFILE["digest"], "sha256:ad4477fa9f9d61952c5fa929fc6810b0792433a1494102308a1e8e183ba6fe74")
 
     def test_measured_complete_preserves_content_findings(self):
         item, old, new = self.fixture()
