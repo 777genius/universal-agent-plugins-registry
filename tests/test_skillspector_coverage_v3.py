@@ -195,6 +195,13 @@ class QueueTests(unittest.TestCase):
         added["findings"].append({"id": "new-low", "rule": "L1", "path": "SKILL.md",
             "line": 20, "pattern": "New Evidence", "severity": "LOW"})
         self.assertFalse(coverage.degraded_rescan(old, added))
+        # Two independent matches on the same line cannot substitute for one
+        # another merely because rule, path and severity agree.
+        same_line_old = copy.deepcopy(old)
+        same_line_old["findings"][0]["match_fingerprint"] = "old-match"
+        same_line_new = copy.deepcopy(same_line_old)
+        same_line_new["findings"][0]["match_fingerprint"] = "new-match"
+        self.assertTrue(coverage.degraded_rescan(same_line_old, same_line_new))
         # An unrelated source digest is not eligible for same-source fallback.
         changed = copy.deepcopy(new)
         changed["source"]["content_digest"] = "sha256:" + "b" * 64
