@@ -58,7 +58,7 @@ PROFILE = {"id": PROFILE_DOCUMENT["id"], "digest": sha256_digest(canonical_json(
 # deadlines must expire first so an incomplete report can still be returned.
 STANDARD_PROFILE_DOCUMENT = PROFILE_DOCUMENT | {
     "id": "static-standard-v3", "normalization_version": 3,
-    "reference_inventory_patch": "uap-directory-inventory-v1",
+    "reference_inventory_patch": "uap-directory-inventory-url-host-v2",
     "static_artifact_seconds": 30, "cache_max_age_seconds": None,
     "exception_set_digest": EXCEPTION_SET_DIGEST,
 }
