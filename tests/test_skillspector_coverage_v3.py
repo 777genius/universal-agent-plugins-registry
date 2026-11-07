@@ -207,6 +207,39 @@ class QueueTests(unittest.TestCase):
         changed["source"]["content_digest"] = "sha256:" + "b" * 64
         self.assertFalse(coverage.degraded_rescan(old, changed))
 
+    def test_degraded_partial_with_new_findings_fails_closed(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["findings"] = [{"id": "old-high", "rule": "E2", "path": "SKILL.md",
+                            "line": 10, "severity": "HIGH", "pattern": "Existing risk"}]
+        new_finding = {"id": "new-critical", "rule": "C1", "path": "scripts/check.py",
+                       "line": 9, "severity": "CRITICAL", "pattern": "New risk"}
+        replacement = copy.deepcopy(old)
+        replacement["findings"] = [copy.deepcopy(new_finding)]
+        # Same-source regression with a replaced finding cannot keep old and
+        # silently discard the newly observed critical issue.
+        records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        self.assertTrue(coverage.degraded_rescan(old, replacement))
+        with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+            coverage.apply_outcome(records, attempts, subject,
+                {"record": replacement, "attempt": coverage.make_attempt(subject, replacement)})
+        self.assertEqual(records[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
+        # Reduced analyzer coverage plus an additional finding must also fail
+        # closed, even when every prior fingerprint remains present.
+        less_coverage = copy.deepcopy(old)
+        old["coverage"]["fully_inspected_files"] = 5
+        records[subject["id"]] = copy.deepcopy(old)
+        less_coverage["coverage"]["fully_inspected_files"] = 4
+        less_coverage["findings"].append(copy.deepcopy(new_finding))
+        self.assertTrue(coverage.degraded_rescan(old, less_coverage))
+        with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+            coverage.apply_outcome(records, attempts, subject,
+                {"record": less_coverage, "attempt": coverage.make_attempt(subject, less_coverage)})
+        self.assertEqual(records[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}

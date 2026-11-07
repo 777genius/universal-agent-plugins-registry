@@ -716,6 +716,13 @@ def coalesce_workers(workers, selection, source_commit, *, expected_partition_co
     return [by_partition[index] for index in sorted(by_partition)], count
 
 
+def finding_identities(record):
+    """Compare stable finding evidence, not scanner-generated group identifiers."""
+    return {(finding.get("rule"), finding.get("path"), finding.get("line"),
+             finding.get("pattern"), finding.get("severity"),
+             finding.get("match_fingerprint")) for finding in record["findings"]}
+
+
 def degraded_rescan(old, new):
     """Require non-regressing coverage and findings for the exact same source."""
     if old is None or old["status"] != "partial" or new["status"] not in {"partial", "complete"} or \
@@ -729,14 +736,9 @@ def degraded_rescan(old, new):
     if any(completed.get(entry["analyzer_id"], 0) < entry["completed"]
            for entry in before["analyzers"] if entry.get("completed", 0)):
         return True
-    # Finding group IDs can vary across scanner runs. Compare stable source
-    # locations, rules and severities instead; never silently lose a warning.
-    def identity(finding):
-        return (finding.get("rule"), finding.get("path"), finding.get("line"),
-                finding.get("pattern"), finding.get("severity"),
-                finding.get("match_fingerprint"))
-    return not {identity(finding) for finding in old["findings"]}.issubset(
-        {identity(finding) for finding in new["findings"]})
+    # Finding group IDs can vary across scanner runs. Retain verified
+    # source positions, rules and fingerprint identities across rescans.
+    return not finding_identities(old).issubset(finding_identities(new))
 
 
 def apply_outcome(records, attempts, item, outcome, *, replay=False):
@@ -768,6 +770,11 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
     # retry while continuing to display the old Partial indefinitely.
     require(not (degraded and new["status"] == "complete"),
             "complete rescan regresses verified same-source analysis")
+    # Retaining the old Partial is safe only if it contains every newly
+    # observed finding. Otherwise a fallback could hide a new security issue.
+    require(not (degraded and new["status"] == "partial" and
+                 not finding_identities(new).issubset(finding_identities(old_record))),
+            "degraded partial rescan introduces new findings")
     if (new["status"] == "error" and old_record is not None and old_record["status"] != "error") or degraded:
         record = old_record
     else:
