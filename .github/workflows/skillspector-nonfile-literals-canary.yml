@@ -60,6 +60,7 @@ jobs:
         run: |
           scanner-new/.venv/bin/python -m pytest -q scanner-new/tests/test_reference_destinations.py scanner-new/tests/test_out_of_bundle_reference_coverage.py
           scanner-new/.venv/bin/ruff check scanner-new/src/skillspector/references.py scanner-new/tests/test_reference_destinations.py
+          scanner-new/.venv/bin/ruff format --diff scanner-new/src/skillspector/references.py scanner-new/tests/test_reference_destinations.py
           scanner-new/.venv/bin/ruff format --check scanner-new/src/skillspector/references.py scanner-new/tests/test_reference_destinations.py
       - name: Full no-provider/no-LLM Python regression suite
         timeout-minutes: 35
