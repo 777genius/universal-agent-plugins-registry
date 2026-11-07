@@ -29,6 +29,12 @@ jobs:
           test "$(git -C scanner-new rev-parse HEAD)" = "e3607320ee47c91529e775affd1fa06cb7411400"
           python3 -m pip install --disable-pip-version-check uv==0.13.4
           uv sync --directory scanner-new --frozen --extra dev --python 3.12
+      # Catch formatting drift before starting the ~16-minute full suite.
+      - name: Show exact Ruff formatting diff before full regression
+        run: |
+          cd scanner-new
+          .venv/bin/ruff format --diff tests/test_reference_destinations.py
+          .venv/bin/ruff format --check tests/test_reference_destinations.py
       - name: Run complete non-provider Python regression suite and Ruff
         timeout-minutes: 35
         run: |
