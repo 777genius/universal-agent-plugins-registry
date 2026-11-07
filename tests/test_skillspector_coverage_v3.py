@@ -94,6 +94,46 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(retained["retry"]["attempt_count"], 0)
             self.assertNotIn(source["id"], verified["attempts"])
 
+    def test_profile_migration_does_not_downgrade_extended_scans(self):
+        subject = item()
+        prior = record(subject, status="partial", profile_id="static-extended-v3")
+        prior["profile"] = copy.deepcopy(scanner.LEGACY_PROFILES["static-extended-v3"])
+        self.assertEqual(coverage.initial_scan_profile(None, prior), "static-extended-v3")
+        self.assertEqual(coverage.initial_scan_profile(None, record(subject)), "static-standard-v3")
+        # Real scheduled retries remain authoritative, even after a policy change.
+        self.assertEqual(coverage.initial_scan_profile({"next_profile": "static-standard-v3"}, prior),
+                         "static-standard-v3")
+
+    def test_degraded_same_source_scan_keeps_verified_prior_findings(self):
+        subject = item()
+        old = record(subject, status="partial", profile_id="static-extended-v3")
+        old["profile"] = copy.deepcopy(scanner.LEGACY_PROFILES["static-extended-v3"])
+        old["coverage"]["fully_inspected_files"] = 270
+        old["findings"] = [{"id": "previous-security-finding"}]
+        new = record(subject, status="partial")
+        new["coverage"]["fully_inspected_files"] = 0
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        records, attempts = {subject["id"]: old}, {}
+        outcome = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        self.assertTrue(coverage.apply_outcome(records, attempts, subject, outcome))
+        self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        self.assertEqual(records[subject["id"]]["profile"], old["profile"])
+        self.assertEqual(attempts[subject["id"]]["profile"], new["profile"])
+        # Source drift may invalidate old findings; do not preserve them blindly.
+        changed = copy.deepcopy(new)
+        changed["source"]["content_digest"] = "sha256:" + "b" * 64
+        self.assertFalse(coverage.degraded_rescan(old, changed))
+
+    def test_degraded_analyzer_completion_is_not_silently_replaced(self):
+        subject = item()
+        old = record(subject, status="partial")
+        new = copy.deepcopy(old)
+        old["coverage"]["analyzers"][0]["completed"] = 9
+        new["coverage"]["analyzers"][0]["completed"] = 1
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        new["coverage"]["analyzers"][0]["completed"] = 9
+        self.assertFalse(coverage.degraded_rescan(old, new))
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
