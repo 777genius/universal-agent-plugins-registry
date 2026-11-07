@@ -558,6 +558,16 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
     return record
 
 
+def initial_scan_profile(attempt, previous_record):
+    if attempt is not None:
+        return attempt["next_profile"]
+    # A policy-only digest migration must not downgrade a previously qualified
+    # extended scan to the standard time/file limits.
+    if previous_record is not None and previous_record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"]:
+        return scanner.EXTENDED_PROFILE["id"]
+    return scanner.STANDARD_PROFILE["id"]
+
+
 def scan_partition(selection, executable, previous, *, source_commit, partition_index=0,
                     partition_count=MAX_PARTITIONS, maximum_attempts=DEFAULT_ATTEMPTS,
                     budget_seconds=2100, mirror_root=None, discovery_summary=None,
@@ -621,7 +631,7 @@ def scan_partition(selection, executable, previous, *, source_commit, partition_
             if len(report_json(document(outcomes))) + MAX_OUTCOME_BYTES > MAX_WORKER_BYTES:
                 break  # Defer before acquisition: an executed result must always fit.
             old = old_attempts.get(item["id"])
-            profile_id = old["next_profile"] if old else scanner.STANDARD_PROFILE["id"]
+            profile_id = initial_scan_profile(old, old_records.get(item["id"]))
             profile = scanner.PROFILE_DOCUMENTS[profile_id]
             key = (item["repository"], item["revision"])
             acquisition_started = time.monotonic()
@@ -706,6 +716,19 @@ def coalesce_workers(workers, selection, source_commit, *, expected_partition_co
     return [by_partition[index] for index in sorted(by_partition)], count
 
 
+def degraded_rescan(old, new):
+    """Do not replace stronger same-source findings with a time-limited scan."""
+    if old is None or old["status"] == "error" or new["status"] != "partial" or \
+            old["source"] != new["source"] or old["target_revision"] != new["target_revision"]:
+        return False
+    before, after = old["coverage"], new["coverage"]
+    if after["fully_inspected_files"] < before["fully_inspected_files"]:
+        return True
+    completed = {entry["analyzer_id"]: entry["completed"] for entry in after["analyzers"]}
+    return any(completed.get(entry["analyzer_id"], 0) < entry["completed"]
+               for entry in before["analyzers"] if entry["completed"])
+
+
 def apply_outcome(records, attempts, item, outcome, *, replay=False):
     """Commit one record/retry transaction while retaining useful failed-scan fallback."""
     attempt, new = outcome["attempt"], outcome["record"]
@@ -729,7 +752,8 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
             "attempt count is not consecutive")
     require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
             "worker attempt lineage differs")
-    if new["status"] == "error" and old_record is not None and old_record["status"] != "error":
+    if (new["status"] == "error" and old_record is not None and old_record["status"] != "error") or \
+            degraded_rescan(old_record, new):
         record = old_record
     else:
         record = copy.deepcopy(new)
