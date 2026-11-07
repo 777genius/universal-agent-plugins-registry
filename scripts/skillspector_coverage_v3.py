@@ -719,7 +719,8 @@ def coalesce_workers(workers, selection, source_commit, *, expected_partition_co
 def degraded_rescan(old, new):
     """Do not replace stronger same-source findings with a time-limited scan."""
     if old is None or old["status"] == "error" or new["status"] != "partial" or \
-            old["source"] != new["source"] or old["target_revision"] != new["target_revision"]:
+            old["source"] != new["source"] or \
+            old.get("target_revision", old["source"]["revision"]) != new["source"]["revision"]:
         return False
     before, after = old["coverage"], new["coverage"]
     if after["fully_inspected_files"] < before["fully_inspected_files"]:
