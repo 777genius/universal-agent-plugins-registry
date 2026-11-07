@@ -32,6 +32,63 @@ jobs:
         run: |
           python3 -m scripts.publish_skillspector_coverage_v3 previous \
             --output-dir "${RUNNER_TEMP}/cohort-baseline"
+      - name: Prove full legacy-to-mixed report migration without stale or evidence loss
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+          from scripts import skillspector_contract as contract
+          from scripts import skillspector_coverage_v3 as coverage
+          from scripts import skillspector_reports as scanner
+          from scripts.directory_publication import canonical_json, sha256_digest
+
+          original = coverage.read_bundle(Path(os.environ["RUNNER_TEMP"]) / "cohort-baseline")
+          assert original is not None
+          assert original["manifest"]["profile"] in (contract.LEGACY_POLICY, contract.PROFILE)
+          selection = original["selection"]
+          source_commit = original["manifest"]["source_commit"]
+          empty_worker = {
+              "schema_version": 3, "source_commit": source_commit,
+              "generated_at": scanner.now(),
+              "selection_digest": sha256_digest(canonical_json(selection)),
+              "scanner": scanner.SCANNER, "profile": contract.PROFILE,
+              "partition": {"index": 0, "count": 1}, "attempts": [],
+          }
+          # A publication-format round trip of every actual old record, not a
+          # handful of synthetic fixtures. No source scan, signer or remote write.
+          with tempfile.TemporaryDirectory(prefix="skillspector-migration-proof-") as tmp:
+              coverage.merge_reports(
+                  selection, original, [empty_worker], source_commit=source_commit,
+                  output_dir=Path(tmp), discovery_summary=original["discovery"],
+                  expected_partition_count=1,
+              )
+              migrated = coverage.read_bundle(Path(tmp))
+          assert migrated is not None
+          assert migrated["manifest"]["profile"] == contract.PROFILE
+          assert migrated["manifest"]["profiles"] == scanner.ALL_PROFILES
+          assert migrated["manifest"]["coverage"] == original["manifest"]["coverage"], (
+              "migration changed published Complete/Partial/Error/Pending/stale counts"
+          )
+          assert migrated["records"].keys() == original["records"].keys()
+          for identifier, prior in original["records"].items():
+              current = migrated["records"][identifier]
+              for field in (
+                  "status", "freshness", "source", "scanner", "profile", "coverage",
+                  "findings", "finding_count", "raw_finding_count",
+                  "finding_group_count", "errors", "attempt_history",
+              ):
+                  assert current[field] == prior[field], "migration changed original scan evidence"
+          summary = migrated["manifest"]["coverage"]
+          print(json.dumps({
+              "migration": "verified_without_publication",
+              "records": len(migrated["records"]), "profiles": len(scanner.ALL_PROFILES),
+              "selected": summary["selected"], "complete": summary["complete"],
+              "partial": summary["partial"], "error": summary["error"],
+              "pending": summary["pending"], "stale": summary["stale"],
+          }, sort_keys=True))
+          PY
       - name: Require nine current immutable historical-Partial witnesses
         run: |
           REPORT_COMMIT=$(python3 -c 'import json,os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"cohort-baseline/publication-base.json"; print(json.loads(p.read_text())["report_commit"])')
