@@ -206,6 +206,15 @@ def verify_resolver(scanner: Path) -> None:
             assert record["target_path"] == target, (source, record)
             if status == "uninspected":
                 assert str(record["disposition"]) == "partial", record
+    print("Directory reference inventory, missing, symlink and traversal checks passed")
+
+
+def verify_url_host_resolver(scanner: Path) -> None:
+    # This extra proof is required only for the scanner patched by *this*
+    # producer, not older independent 2.13.1/2.13.3 version-comparison jobs.
+    sys.path.insert(0, str(scanner / "src"))
+    from skillspector.references import resolve_bundle_references_with_metadata
+
     # Tests execute the patched installed scanner; local artifacts and genuine
     # missing dependencies keep their original evidence and partial disposition.
     with tempfile.TemporaryDirectory(prefix="skillspector-host-reference-") as tmp:
@@ -231,7 +240,6 @@ def verify_resolver(scanner: Path) -> None:
                 assert outcome.records[0]["target_path"] is None, source
                 assert str(outcome.records[0]["disposition"]) == "partial", source
     print("Exact merged URL-host classifier and fail-closed references passed")
-    print("Directory reference inventory, missing, symlink and traversal checks passed")
 
 
 def main() -> None:
@@ -239,9 +247,12 @@ def main() -> None:
     parser.add_argument("scanner", type=Path)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--check-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--verify-url-hosts", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.check_only:
         verify_resolver(args.scanner)
+        if args.verify_url_hosts:
+            verify_url_host_resolver(args.scanner)
         return
     apply_patch(args.scanner)
     if args.verify:
@@ -250,7 +261,7 @@ def main() -> None:
         # metadata and runtime dependencies resolve exactly as in production.
         interpreter = args.scanner / ".venv" / "bin" / "python"
         subprocess.run(
-            [str(interpreter), str(Path(__file__).resolve()), str(args.scanner), "--check-only"],
+            [str(interpreter), str(Path(__file__).resolve()), str(args.scanner), "--check-only", "--verify-url-hosts"],
             check=True,
         )
 
