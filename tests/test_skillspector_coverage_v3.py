@@ -222,9 +222,13 @@ class QueueTests(unittest.TestCase):
         # when the scanner did not emit a stable match fingerprint.
         self.assertTrue(coverage.degraded_rescan(old, changed))
         records, attempts = {subject["id"]: copy.deepcopy(old)}, {}
-        coverage.apply_outcome(records, attempts, subject,
-            {"record": changed, "attempt": coverage.make_attempt(subject, changed)})
+        # The replacement also introduces a new column-specific HIGH
+        # finding, so retaining the old report would silently hide new evidence.
+        with self.assertRaisesRegex(PublicationError, "degraded partial rescan introduces new findings"):
+            coverage.apply_outcome(records, attempts, subject,
+                {"record": changed, "attempt": coverage.make_attempt(subject, changed)})
         self.assertEqual(records[subject["id"]]["findings"], old["findings"])
+        self.assertEqual(attempts, {})
         # When a full-match fingerprint exists it, not the column alone,
         # anchors the stable security identity.
         old["findings"][0]["match_fingerprint"] = "stable-source-match"
