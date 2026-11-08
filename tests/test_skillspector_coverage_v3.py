@@ -346,6 +346,35 @@ class QueueTests(unittest.TestCase):
             coverage.apply_outcome({subject["id"]: copy.deepcopy(old)}, {}, subject, fake_complete,
                                    authenticated_current_worker=True)
 
+    def test_current_worker_authentication_requires_real_main_package(self):
+        """No caller-supplied flag or GitHub-style environment may bypass the artifact verifier."""
+        subject = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection = root / "selection.json"
+            coverage.write_bounded(selection, {"schema_version": 1, "sources": [subject]},
+                                   coverage.MAX_SELECTION_BYTES)
+            argv = ["skillspector_coverage_v3", "merge", "--selection", str(selection),
+                    "--source-commit", COMMIT, "--workers", str(root / "forged" / "worker.json"),
+                    "--authenticated-checkpoints", str(root / "forged-consumed.json"),
+                    "--output-dir", str(root / "never-published")]
+            valid = {"GITHUB_REPOSITORY": "777genius/universal-agent-plugins-registry",
+                     "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": COMMIT,
+                     "GITHUB_EVENT_NAME": "schedule", "SCAN_CORPUS": "catalog",
+                     "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1"}
+            cases = [
+                {**valid, "GITHUB_REF": "refs/pull/446/merge"},
+                {**valid, "GITHUB_SHA": "d" * 40},
+                {**valid, "SCAN_CORPUS": "controlled"},
+                valid,  # Even a matching environment cannot invent missing provenance or manifests.
+            ]
+            for environment in cases:
+                with self.subTest(context=environment), \\
+                     mock.patch.dict("os.environ", environment, clear=True), \\
+                     mock.patch("sys.argv", argv), mock.patch("sys.stderr", new=mock.MagicMock()):
+                    self.assertEqual(coverage.main(), 1)
+                self.assertFalse((root / "never-published" / "index.json").exists())
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
