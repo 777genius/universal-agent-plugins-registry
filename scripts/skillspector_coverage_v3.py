@@ -777,7 +777,7 @@ def retained_degraded_replay(item, old_record, old_attempt, outcome):
             not finding_identities(new) - finding_identities(old_record))
 
 
-def apply_outcome(records, attempts, item, outcome, *, replay=False):
+def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticated_current_worker=False):
     """Commit one record/retry transaction while retaining useful failed-scan fallback."""
     attempt, new = outcome["attempt"], outcome["record"]
     identifier = item["id"]
@@ -807,11 +807,17 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False):
     # retry while continuing to display the old Partial indefinitely.
     require(not (degraded and new["status"] == "complete"),
             "complete rescan regresses verified same-source analysis")
-    # Retaining the old Partial is safe only if it contains every newly
-    # observed finding. Otherwise a fallback could hide a new security issue.
-    require(not (degraded and new["status"] == "partial" and
-                 bool(finding_identities(new) - finding_identities(old_record))),
-            "degraded partial rescan introduces new findings")
+    # Only a proven current-main worker may enter the same explicit quarantine
+    # used by authenticated historical recovery. Untrusted ordinary merges
+    # still fail before any report/attempt mutation if a degraded Partial loses
+    # old risks and introduces different ones.
+    if degraded and new["status"] == "partial" and finding_identities(new) - finding_identities(old_record):
+        require(authenticated_current_worker, "degraded partial rescan introduces new findings")
+        attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
+        quarantine_recovery(records, attempts, item, outcome)
+        if predecessor_uncertain(old_record):
+            mark_missing_predecessor(records[identifier], attempts[identifier])
+        return True
     if (new["status"] == "error" and old_record is not None and old_record["status"] != "error") or degraded:
         record = old_record
     else:
@@ -832,8 +838,10 @@ def shard_document(repository, records):
 
 
 def merge_reports(selection, previous, workers, *, source_commit, output_dir, discovery_summary=None,
-                  expected_partition_count=None, allow_partial_workers=False, recovered_sources=0):
+                  expected_partition_count=None, allow_partial_workers=False, recovered_sources=0,
+                  authenticated_current_workers=False):
     validate_selection(selection)
+    require(type(authenticated_current_workers) is bool, "invalid authenticated-worker option")
     require(SHA.fullmatch(source_commit) is not None and workers, "source commit and worker artifacts required")
     require(type(recovered_sources) is int and 0 <= recovered_sources <= len(selection["sources"]),
             "invalid recovered source count")
@@ -863,7 +871,8 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
             identifier = attempt["id"]
             require(identifier not in seen, "repeated attempt across partitions")
             seen.add(identifier)
-            apply_outcome(records, attempts, expected[identifier], outcome)
+            apply_outcome(records, attempts, expected[identifier], outcome,
+                          authenticated_current_worker=authenticated_current_workers)
     require(allow_partial_workers or partitions == set(range(expected_count)), "missing worker partition")
     current_ids = {identifier for state in (summary or {}).get("source_states", []) if state["current"] for identifier in state["selected_ids"]}
     historical_ids = {identifier for state in (summary or {}).get("source_states", []) if not state["current"]
@@ -1234,6 +1243,7 @@ def main():
     merge.add_argument("--expected-partition-count", type=int)
     merge.add_argument("--allow-partial-workers", action="store_true")
     merge.add_argument("--recovered-sources", type=int, default=0)
+    merge.add_argument("--authenticated-checkpoints", type=Path)
     for command in (scan, merge):
         command.add_argument("--selection", type=Path, required=True)
         command.add_argument("--previous-dir", type=Path)
@@ -1255,11 +1265,37 @@ def main():
             validate_worker(worker, selection, args.source_commit)
             write_bounded(args.output, worker, MAX_WORKER_BYTES)
         else:
+            authenticated_current = False
+            if args.authenticated_checkpoints is not None:
+                # list-workers already verified every current-main artifact.
+                # Recheck the exact local packages and its consumed manifest
+                # before allowing *any* otherwise-forbidden quarantine.
+                from scripts import skillspector_recovery as recovery
+                env = os.environ
+                require(env.get("GITHUB_REPOSITORY") == "777genius/universal-agent-plugins-registry" and
+                        env.get("GITHUB_REF") == "refs/heads/main" and env.get("GITHUB_SHA") == args.source_commit and
+                        env.get("GITHUB_EVENT_NAME") in {"push", "schedule", "workflow_dispatch"},
+                        "authenticated current-worker quarantine requires canonical main")
+                run_id, run_attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
+                paths = recovery.assembly_worker_paths(args.workers[0].parent.parent, selection, args.source_commit,
+                    run_id=run_id, run_attempt=run_attempt)
+                require(set(paths) == set(args.workers) and len(paths) == len(args.workers),
+                        "authenticated worker list differs")
+                bound = recovery.read_consumed_checkpoints(args.authenticated_checkpoints,
+                    source_commit=args.source_commit, run_id=run_id, run_attempt=run_attempt,
+                    selection_digest=sha256_digest(canonical_json(selection)))
+                require(set(bound) == {path.parent.name for path in paths},
+                        "authenticated checkpoint inventory differs")
+                for path in paths:
+                    proof = read_json(path.parent / "provenance.json", max_bytes=recovery.MAX_PROVENANCE_BYTES)
+                    require(bound[path.parent.name] == proof, "authenticated worker provenance differs")
+                authenticated_current = True
             workers = [read_json(path, max_bytes=MAX_WORKER_BYTES) for path in args.workers]
             manifest = merge_reports(selection, previous, workers, source_commit=args.source_commit,
                 output_dir=args.output_dir, discovery_summary=summary,
                 expected_partition_count=args.expected_partition_count, allow_partial_workers=args.allow_partial_workers,
-                recovered_sources=args.recovered_sources)
+                recovered_sources=args.recovered_sources,
+                authenticated_current_workers=authenticated_current)
             print(json.dumps(manifest["coverage"], sort_keys=True))
         return 0
     except (PublicationError, CheckpointYield, OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError) as error:
