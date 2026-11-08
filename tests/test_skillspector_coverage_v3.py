@@ -346,8 +346,8 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(scheduled_records[subject["id"]]["findings"], old["findings"])
         self.assertTrue(scheduled_records[subject["id"]]["findings_truncated"])
 
-        # No source/attempt lineage forgery and no superficially Complete
-        # downgrade is made acceptable by the current-worker provenance flag.
+        # Forged attempt lineage still fails, and an unauthenticated Complete
+        # downgrade cannot alter preserved evidence.
         bad = copy.deepcopy(outcome)
         bad["attempt"]["fingerprint"] = "sha256:" + "f" * 64
         with self.assertRaisesRegex(PublicationError, "worker attempt lineage differs"):
@@ -358,8 +358,55 @@ class QueueTests(unittest.TestCase):
         fake_complete["record"]["coverage"]["status"] = "complete"
         fake_complete["attempt"] = coverage.make_attempt(subject, fake_complete["record"])
         with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
-            coverage.apply_outcome({subject["id"]: copy.deepcopy(old)}, {}, subject, fake_complete,
+            coverage.apply_outcome({subject["id"]: copy.deepcopy(old)}, {}, subject, fake_complete)
+
+    def test_authenticated_current_degraded_complete_retains_prior_security_finding(self):
+        """A genuine current-main Complete that drops a warning must stay Partial."""
+        subject = item()
+        old = record(subject, status="partial", reason="static_parse_limit")
+        old["findings"] = [{"id": "old-high", "rule": "SC4", "path": "SKILL.md",
+                            "line": 8, "pattern": "old-advisory", "severity": "HIGH"}]
+        old["finding_count"] = 1
+        current = record(subject, profile_id="static-extended-v3")
+        current["findings"] = []
+        current["finding_count"] = 0
+        current["finding_group_count"] = 0
+        current["raw_finding_count"] = 0
+        current["coverage"]["fully_inspected_files"] = old["coverage"]["fully_inspected_files"] + 1
+        self.assertEqual(current["status"], "complete")
+        self.assertEqual(old["source"], current["source"])
+        self.assertTrue(coverage.degraded_rescan(old, current))
+        outcome = {"record": current, "attempt": coverage.make_attempt(subject, current)}
+        retained, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+
+        # This cannot be triggered by a direct or untrusted worker.
+        with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+            coverage.apply_outcome(retained, attempts, subject, outcome)
+        self.assertEqual(retained[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
+        corrupt = copy.deepcopy(outcome)
+        corrupt["attempt"]["fingerprint"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(PublicationError, "worker attempt lineage differs"):
+            coverage.apply_outcome(retained, attempts, subject, corrupt,
                                    authenticated_current_worker=True)
+        self.assertEqual(attempts, {})
+
+        self.assertTrue(coverage.apply_outcome(retained, attempts, subject, outcome,
+                                               authenticated_current_worker=True))
+        saved, attempt = retained[subject["id"]], attempts[subject["id"]]
+        self.assertEqual(saved["status"], "partial")
+        self.assertEqual(saved["coverage"]["status"], "partial")
+        self.assertEqual(saved["findings"], old["findings"])
+        self.assertEqual(saved["source"], old["source"])
+        self.assertTrue(saved["findings_truncated"])
+        self.assertFalse(saved["coverage"]["grouping_complete"])
+        self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(saved))
+        self.assertEqual(attempt["status"], "complete")  # Actual scanner outcome is not falsified.
+        self.assertEqual(attempt["attempt_count"], 1)
+        self.assertEqual(attempt["reason"], "recovery_conflict")
+        self.assertEqual(attempt["disposition"], "scheduled")
+        self.assertEqual(attempt["next_profile"], "static-extended-v3")
 
     def test_current_worker_authentication_requires_real_main_package(self):
         """No caller-supplied flag or GitHub-style environment may bypass the artifact verifier."""
