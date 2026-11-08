@@ -326,7 +326,7 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(result["findings_truncated"])
         self.assertFalse(result["coverage"]["grouping_complete"])
         self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(result))
-        self.assertIn(result["findings"], [old["findings"], current["findings"]])
+        self.assertEqual(result["findings"], old["findings"])  # CRITICAL retained over changed HIGH
         self.assertEqual(attempts[subject["id"]]["attempt_count"], 1)
         self.assertEqual(attempts[subject["id"]]["reason"], "recovery_conflict")
         self.assertEqual(attempts[subject["id"]]["disposition"], "scheduled")
