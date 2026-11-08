@@ -335,6 +335,17 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(attempts[subject["id"]]["disposition"], "scheduled")
         self.assertEqual(attempts[subject["id"]]["next_profile"], "static-extended-v3")
 
+        # A previously scheduled *standard* retry must also be upgraded to
+        # extended when one authenticated conflicting witness is extended.
+        scheduled = copy.deepcopy(outcome["attempt"])
+        scheduled["next_profile"] = "static-standard-v3"
+        scheduled_attempts = {subject["id"]: scheduled}
+        scheduled_records = {subject["id"]: copy.deepcopy(old)}
+        coverage.quarantine_recovery(scheduled_records, scheduled_attempts, subject, outcome)
+        self.assertEqual(scheduled_attempts[subject["id"]]["next_profile"], "static-extended-v3")
+        self.assertEqual(scheduled_records[subject["id"]]["findings"], old["findings"])
+        self.assertTrue(scheduled_records[subject["id"]]["findings_truncated"])
+
         # No source/attempt lineage forgery and no superficially Complete
         # downgrade is made acceptable by the current-worker provenance flag.
         bad = copy.deepcopy(outcome)
