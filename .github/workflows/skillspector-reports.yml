@@ -367,6 +367,7 @@ jobs:
       - name: Assemble validated available partitions and preserve missing work
         env:
           SOURCE_COMMIT: ${{ github.sha }}
+          SCAN_CORPUS: ${{ needs.prepare.outputs.corpus }}
         run: |
           previous="${RUNNER_TEMP}/skillspector-plan/previous"
           recovered_sources=0
@@ -385,7 +386,7 @@ jobs:
           # Only GitHub's canonical current-main run may quarantine authenticated
           # conflicting Partial evidence. PR/untrusted merges retain strict rejection.
           authenticated=()
-          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${SCAN_CORPUS}" = "catalog" ]; then
             authenticated=(--authenticated-checkpoints "${RUNNER_TEMP}/skillspector-plan/consumed-checkpoints.json")
           fi
           python3 -m scripts.skillspector_coverage_v3 merge \
