@@ -282,6 +282,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                 with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
                     zipped.extractall(destination)
                 env = {**os.environ, 'RUNNER_TEMP': str(root), 'SOURCE_COMMIT': 'c' * 40,
+                       'GITHUB_REF': 'refs/pull/446/merge', 'SCAN_CORPUS': 'controlled',
                        'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '1',
                        'PATH': str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH']}
                 result = subprocess.run(['bash', '-eu', '-c', command], cwd=ROOT, env=env,
@@ -289,6 +290,83 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 manifest = json.loads((root / 'skillspector-report' / 'index.json').read_text())
                 self.assertEqual(manifest['coverage']['complete'], 1)
+
+
+    def test_authenticated_catalog_shell_requires_real_checkpoint_and_rejects_untrusted_context(self):
+        """Exercise production shell with a validated, conflicting main checkpoint."""
+        import shutil
+        from tests.test_skillspector_coverage_v3 import item, worker, bundle, COMMIT, QueueTests
+        from tests.test_skillspector_reports import upstream_report
+
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def adverse(profile_id, severity):
+            value = scanner.empty_record_v3(subject, profile_id)
+            raw = upstream_report()
+            raw["issues"] = [{"id": "PI1", "severity": severity,
+                              "explanation": "Original risk." if severity == "CRITICAL" else "Changed advisory.",
+                              "location": {"file": "SKILL.md", "start_line": 1}}]
+            raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Bounded fixture limitation."}]
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old = adverse("static-standard-v3", "CRITICAL")
+        current = adverse("static-extended-v3", "HIGH")
+        self.assertTrue(coverage.degraded_rescan(old, current))
+        self.assertTrue(coverage.finding_identities(current) - coverage.finding_identities(old))
+        merge = next(step['run'] for step in self.workflow['jobs']['assemble']['steps']
+                     if 'skillspector_coverage_v3 merge' in step.get('run', ''))
+        command = merge.replace('$' + '{{ needs.prepare.outputs.partition_count }}', '1')
+
+        for flat in (False, True):
+            with self.subTest(flat=flat), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                plan = root / "skillspector-plan"
+                plan.mkdir()
+                coverage.write_bounded(plan / "selection.json", selection, coverage.MAX_SELECTION_BYTES)
+                summary = QueueTests().discovery_summary(selection)
+                coverage.write_bounded(plan / "coverage.json", summary, coverage.MAX_DISCOVERY_BYTES)
+                previous = bundle(plan / "previous", selection, [old])
+                worker_path = root / "worker.json"
+                coverage.write_bounded(worker_path, worker(selection, [current], previous), coverage.MAX_WORKER_BYTES)
+                checkpoint = root / "skillspector-workers"
+                if not flat:
+                    checkpoint /= "skillspector-checkpoint-a1-p0-s1"
+                provenance_env = {"GITHUB_REPOSITORY": recovery.REPOSITORY, "GITHUB_RUN_ID": "101",
+                                  "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": COMMIT,
+                                  "GITHUB_REF_NAME": "main", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                                  "SCAN_CORPUS": "catalog"}
+                recovery.pack(plan, worker_path, checkpoint, slice_index=1, environment=provenance_env)
+                env = {**os.environ, **provenance_env, "GITHUB_REF": "refs/heads/main",
+                       "RUNNER_TEMP": str(root), "SOURCE_COMMIT": COMMIT,
+                       "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]}
+
+                def run(context):
+                    shutil.rmtree(root / "skillspector-report", ignore_errors=True)
+                    return subprocess.run(['bash', '-eu', '-c', command], cwd=ROOT, env=context,
+                                          text=True, capture_output=True)
+
+                accepted = run(env)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                published = coverage.read_bundle(root / "skillspector-report")
+                retained = published["records"][subject["id"]]
+                self.assertEqual(retained["status"], "partial")
+                self.assertIn("recovery_conflict", coverage.reason_codes(retained))
+                self.assertTrue(retained["findings_truncated"])
+                self.assertEqual(retained["findings"], old["findings"])
+                self.assertEqual(published["attempts"][subject["id"]]["next_profile"], "static-extended-v3")
+                for change in ({"GITHUB_REF": "refs/pull/446/merge"},
+                               {"SCAN_CORPUS": "controlled"},
+                               {"GITHUB_SHA": "d" * 40},
+                               {"GITHUB_EVENT_NAME": "pull_request"}):
+                    with self.subTest(change=change):
+                        rejected = run({**env, **change})
+                        self.assertNotEqual(rejected.returncode, 0)
+                        self.assertFalse((root / "skillspector-report" / "index.json").exists())
 
 
 class ControlledCorpusPreparationTests(unittest.TestCase):

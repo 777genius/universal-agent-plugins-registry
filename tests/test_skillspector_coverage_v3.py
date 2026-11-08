@@ -294,6 +294,102 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(records[subject["id"]], old)
         self.assertEqual(attempts, {})
 
+    def test_authenticated_current_partial_conflict_is_explicitly_quarantined(self):
+        """A current-main worker can retain both authentic alternatives without fake Complete."""
+        subject = item()
+        old = record(subject, status="partial", reason="static_parse_limit")
+        old["findings"] = [{"id": "old-critical", "rule": "SC4", "path": "requirements.txt",
+                            "line": 3, "pattern": "old-advisory", "severity": "CRITICAL"}]
+        old["finding_count"] = 1
+        current = copy.deepcopy(old)
+        # A higher-severity old standard report must not downgrade the next
+        # retry when the newer, conflicting report used extended limits.
+        current["profile"] = copy.deepcopy(scanner.PROFILE_DOCUMENTS["static-extended-v3"])
+        current["findings"] = [{"id": "new-high", "rule": "SC4", "path": "requirements.txt",
+                                "line": 3, "pattern": "new-advisory", "severity": "HIGH"}]
+        current["finding_count"] = 1
+        outcome = {"record": current, "attempt": coverage.make_attempt(subject, current)}
+        self.assertTrue(coverage.degraded_rescan(old, current))
+
+        # Default direct/unsigned merge must never silently hide a new warning.
+        baseline, attempts = {subject["id"]: copy.deepcopy(old)}, {}
+        with self.assertRaisesRegex(PublicationError, "degraded partial rescan introduces new findings"):
+            coverage.apply_outcome(baseline, attempts, subject, outcome)
+        self.assertEqual(baseline[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
+        # Only a separately authenticated current worker can expose explicitly
+        # truncated evidence while retaining a real scanner report + retry.
+        accepted = coverage.apply_outcome(baseline, attempts, subject, outcome,
+                                         authenticated_current_worker=True)
+        self.assertTrue(accepted)
+        result = baseline[subject["id"]]
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["coverage"]["status"], "partial")
+        self.assertTrue(result["findings_truncated"])
+        self.assertFalse(result["coverage"]["grouping_complete"])
+        self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(result))
+        self.assertEqual(result["findings"], old["findings"])  # CRITICAL retained over changed HIGH
+        self.assertEqual(attempts[subject["id"]]["attempt_count"], 1)
+        self.assertEqual(attempts[subject["id"]]["reason"], "recovery_conflict")
+        self.assertEqual(attempts[subject["id"]]["disposition"], "scheduled")
+        self.assertEqual(attempts[subject["id"]]["next_profile"], "static-extended-v3")
+
+        # A previously scheduled *standard* retry must also be upgraded to
+        # extended when one authenticated conflicting witness is extended.
+        scheduled = copy.deepcopy(outcome["attempt"])
+        scheduled["next_profile"] = "static-standard-v3"
+        scheduled_attempts = {subject["id"]: scheduled}
+        scheduled_records = {subject["id"]: copy.deepcopy(old)}
+        coverage.quarantine_recovery(scheduled_records, scheduled_attempts, subject, outcome)
+        self.assertEqual(scheduled_attempts[subject["id"]]["next_profile"], "static-extended-v3")
+        self.assertEqual(scheduled_records[subject["id"]]["findings"], old["findings"])
+        self.assertTrue(scheduled_records[subject["id"]]["findings_truncated"])
+
+        # No source/attempt lineage forgery and no superficially Complete
+        # downgrade is made acceptable by the current-worker provenance flag.
+        bad = copy.deepcopy(outcome)
+        bad["attempt"]["fingerprint"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(PublicationError, "worker attempt lineage differs"):
+            coverage.apply_outcome({subject["id"]: copy.deepcopy(old)}, {}, subject, bad,
+                                   authenticated_current_worker=True)
+        fake_complete = copy.deepcopy(outcome)
+        fake_complete["record"]["status"] = "complete"
+        fake_complete["record"]["coverage"]["status"] = "complete"
+        fake_complete["attempt"] = coverage.make_attempt(subject, fake_complete["record"])
+        with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+            coverage.apply_outcome({subject["id"]: copy.deepcopy(old)}, {}, subject, fake_complete,
+                                   authenticated_current_worker=True)
+
+    def test_current_worker_authentication_requires_real_main_package(self):
+        """No caller-supplied flag or GitHub-style environment may bypass the artifact verifier."""
+        subject = item()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection = root / "selection.json"
+            coverage.write_bounded(selection, {"schema_version": 1, "sources": [subject]},
+                                   coverage.MAX_SELECTION_BYTES)
+            argv = ["skillspector_coverage_v3", "merge", "--selection", str(selection),
+                    "--source-commit", COMMIT, "--workers", str(root / "forged" / "worker.json"),
+                    "--authenticated-checkpoints", str(root / "forged-consumed.json"),
+                    "--output-dir", str(root / "never-published")]
+            valid = {"GITHUB_REPOSITORY": "777genius/universal-agent-plugins-registry",
+                     "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": COMMIT,
+                     "GITHUB_EVENT_NAME": "schedule", "SCAN_CORPUS": "catalog",
+                     "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1"}
+            cases = [
+                {**valid, "GITHUB_REF": "refs/pull/446/merge"},
+                {**valid, "GITHUB_SHA": "d" * 40},
+                {**valid, "SCAN_CORPUS": "controlled"},
+                valid,  # Even a matching environment cannot invent missing provenance or manifests.
+            ]
+            for environment in cases:
+                with self.subTest(context=environment), \
+                     mock.patch.dict("os.environ", environment, clear=True), \
+                     mock.patch("sys.argv", argv), mock.patch("sys.stderr", new=mock.MagicMock()):
+                    self.assertEqual(coverage.main(), 1)
+                self.assertFalse((root / "never-published" / "index.json").exists())
+
     def test_large_rolling_report_keeps_evidence_budget_bounded_and_publication_strict(self):
         source = item()
         selection = {"schema_version": 1, "sources": [source]}
