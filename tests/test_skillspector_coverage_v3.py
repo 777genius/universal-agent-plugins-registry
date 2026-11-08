@@ -392,6 +392,19 @@ class QueueTests(unittest.TestCase):
                                    authenticated_current_worker=True)
         self.assertEqual(attempts, {})
 
+        # A real authenticated Complete with *new* distinct risk identities
+        # cannot publish a representative that omits either original witness.
+        novel = copy.deepcopy(current)
+        novel["findings"] = [{"id": "new-critical", "rule": "C1", "path": "scripts/run.sh",
+                              "line": 2, "pattern": "new-risk", "severity": "CRITICAL"}]
+        novel["finding_count"] = 1
+        risky = {"record": novel, "attempt": coverage.make_attempt(subject, novel)}
+        with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings"):
+            coverage.apply_outcome(retained, attempts, subject, risky,
+                                   authenticated_current_worker=True)
+        self.assertEqual(retained[subject["id"]], old)
+        self.assertEqual(attempts, {})
+
         self.assertTrue(coverage.apply_outcome(retained, attempts, subject, outcome,
                                                authenticated_current_worker=True))
         saved, attempt = retained[subject["id"]], attempts[subject["id"]]
@@ -399,6 +412,9 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(saved["coverage"]["status"], "partial")
         self.assertEqual(saved["findings"], old["findings"])
         self.assertEqual(saved["source"], old["source"])
+        self.assertEqual(saved["profile"], old["profile"])
+        self.assertEqual(saved["coverage"]["fully_inspected_files"],
+                         old["coverage"]["fully_inspected_files"])
         self.assertTrue(saved["findings_truncated"])
         self.assertFalse(saved["coverage"]["grouping_complete"])
         self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(saved))
