@@ -1005,7 +1005,13 @@ def quarantine_recovery(records, attempts, item, outcome):
         # the representative on a replay or when batch order changes.
         original = {key: record.get(key) for key in ("source", "scanner", "profile", "skill_name",
             "scanned_at", "report_digest", "findings", "errors", "raw_finding_count", "finding_group_count")}
-        return (bool(record["finding_count"] or record["findings"]), record["finding_count"],
+        # When alternate immutable reports disagree, retain the higher-risk
+        # original as the visible representative (especially CRITICAL -> HIGH
+        # advisory drift). The other report remains in its checkpoint artifact;
+        # coverage is marked truncated and is never promoted to Complete.
+        severity = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+        highest = max((severity.get(f["severity"], 0) for f in record["findings"]), default=0)
+        return (highest, bool(record["finding_count"] or record["findings"]), record["finding_count"],
                 len(record["findings"]), record["execution"]["state"] != "failed", report_json(original))
 
     retained = copy.deepcopy(max((old, new), key=rank))
