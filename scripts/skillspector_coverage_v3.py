@@ -1023,7 +1023,13 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # For a degrading Complete without novel findings, keep every previously
     # verified finding and coverage count; the newer attempt remains in its
     # authenticated immutable checkpoint and is disclosed as incomplete.
-    retained = copy.deepcopy(old if prefer_existing else max((old, new), key=rank))
+    # A recovered Complete may come from a checkpoint rejected in assembly.
+    # Historical recovery must enforce the same no-loss rule as current merges.
+    degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
+    if degraded_complete:
+        require(not (finding_identities(new) - finding_identities(old)),
+                "degraded complete introduces unrepresented new findings")
+    retained = copy.deepcopy(old if prefer_existing or degraded_complete else max((old, new), key=rank))
     # A higher-severity standard report may win display over a newer extended
     # report. Do not downgrade the bounded conflict retry to standard limits.
     if any(record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
@@ -1148,7 +1154,10 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             # Its current epoch has no retry predecessor; preserve the verified
             # original prefix instead of recomputing it from an unrelated snapshot.
             attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
-            if old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
+            if old_record is not None and outcome["record"]["status"] == "complete" and \
+                    degraded_rescan(old_record, outcome["record"]):
+                quarantine_recovery(records, attempts, item, outcome)
+            elif old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
                 records[item["id"]] = copy.deepcopy(outcome["record"])
                 records[item["id"]]["freshness"] = "current"
             if item["id"] in uncertain_ids:
