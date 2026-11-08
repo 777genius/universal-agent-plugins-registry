@@ -369,8 +369,8 @@ class QueueTests(unittest.TestCase):
                 valid,  # Even a matching environment cannot invent missing provenance or manifests.
             ]
             for environment in cases:
-                with self.subTest(context=environment), \\
-                     mock.patch.dict("os.environ", environment, clear=True), \\
+                with self.subTest(context=environment), \
+                     mock.patch.dict("os.environ", environment, clear=True), \
                      mock.patch("sys.argv", argv), mock.patch("sys.stderr", new=mock.MagicMock()):
                     self.assertEqual(coverage.main(), 1)
                 self.assertFalse((root / "never-published" / "index.json").exists())
