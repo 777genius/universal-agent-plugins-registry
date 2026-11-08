@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: indranilbanerjee/digital-marketing-pro
-          ref: cc45ca06eaf48abde3bb60fb79d31c41229c58db
+          ref: be4142b25bba6d424962a7788432dd813e6b768c
           sparse-checkout: skills/sitemap-manager
           persist-credentials: false
           path: digital
