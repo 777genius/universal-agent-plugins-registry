@@ -1015,6 +1015,11 @@ def quarantine_recovery(records, attempts, item, outcome):
                 len(record["findings"]), record["execution"]["state"] != "failed", report_json(original))
 
     retained = copy.deepcopy(max((old, new), key=rank))
+    # A higher-severity standard report may win display over a newer extended
+    # report. Do not downgrade the bounded conflict retry to standard limits.
+    if attempts[identifier]["next_profile"] is None and any(
+            record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
+        attempts[identifier]["next_profile"] = scanner.EXTENDED_PROFILE["id"]
     mark_recovery_uncertainty(retained, attempts[identifier], "recovery_conflict",
         "Independent authenticated executions disagree. This original report is retained; "
         "other authenticated outcomes are not fully represented. Their immutable checkpoint artifacts remain available.")
