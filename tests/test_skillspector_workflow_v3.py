@@ -333,9 +333,9 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                 previous = bundle(plan / "previous", selection, [old])
                 worker_path = root / "worker.json"
                 coverage.write_bounded(worker_path, worker(selection, [current], previous), coverage.MAX_WORKER_BYTES)
-                    checkpoint = root / "skillspector-workers"
-                    if not flat:
-                        checkpoint /= "skillspector-checkpoint-a1-p0-s1"
+                checkpoint = root / "skillspector-workers"
+                if not flat:
+                    checkpoint /= "skillspector-checkpoint-a1-p0-s1"
                 provenance_env = {"GITHUB_REPOSITORY": recovery.REPOSITORY, "GITHUB_RUN_ID": "101",
                                   "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": COMMIT,
                                   "GITHUB_REF_NAME": "main", "GITHUB_EVENT_NAME": "workflow_dispatch",
