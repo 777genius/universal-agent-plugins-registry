@@ -282,6 +282,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                 with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
                     zipped.extractall(destination)
                 env = {**os.environ, 'RUNNER_TEMP': str(root), 'SOURCE_COMMIT': 'c' * 40,
+                       'GITHUB_REF': 'refs/pull/446/merge', 'SCAN_CORPUS': 'controlled',
                        'GITHUB_RUN_ID': '101', 'GITHUB_RUN_ATTEMPT': '1',
                        'PATH': str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH']}
                 result = subprocess.run(['bash', '-eu', '-c', command], cwd=ROOT, env=env,
