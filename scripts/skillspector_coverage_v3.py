@@ -1185,14 +1185,16 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 continue
             follows = attempt["attempt_count"] == old_attempt["attempt_count"] + 1 and \
                 old_attempt["history"][-len(attempt["history"][:-1]):] == attempt["history"][:-1]
-            # An authenticated sequential retry may lose prior findings while
-            # revealing new ones. Preserve the true attempt lineage, keep one
-            # original adverse report with explicit truncated evidence, and
-            # require a fresh scan instead of silently replacing either result.
-            if follows and old_record is not None and \
-                    outcome["record"]["status"] == "partial" and \
-                    degraded_rescan(old_record, outcome["record"]) and \
-                    finding_identities(outcome["record"]) - finding_identities(old_record):
+            # A source-proven sequential retry cannot silently replace verified
+            # Partial evidence with a degraded Complete. Preserve the real
+            # execution history, keep an original adverse report explicitly
+            # Partial/incomplete, and require a bounded fresh scan. Ordinary
+            # unsigned/current worker Complete merges remain strictly rejected.
+            degraded = old_record is not None and degraded_rescan(old_record, outcome["record"])
+            conflicting_partial = (outcome["record"]["status"] == "partial" and
+                finding_identities(outcome["record"]) - finding_identities(old_record)) if degraded else False
+            degraded_complete = degraded and outcome["record"]["status"] == "complete"
+            if follows and (conflicting_partial or degraded_complete):
                 require(attempt == make_attempt(item, outcome["record"], old_attempt, old_record,
                     at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                 attempts[item["id"]] = copy.deepcopy(attempt)
