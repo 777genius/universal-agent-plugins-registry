@@ -802,17 +802,17 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
     require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
             "worker attempt lineage differs")
     degraded = degraded_rescan(old_record, new)
-    # A superficially Complete run with less verified coverage is not a
-    # publishable replacement. Reject the bundle rather than record a Complete
-    # retry while continuing to display the old Partial indefinitely.
-    require(not (degraded and new["status"] == "complete"),
-            "complete rescan regresses verified same-source analysis")
-    # Only a proven current-main worker may enter the same explicit quarantine
-    # used by authenticated historical recovery. Untrusted ordinary merges
-    # still fail before any report/attempt mutation if a degraded Partial loses
-    # old risks and introduces different ones.
-    if degraded and new["status"] == "partial" and finding_identities(new) - finding_identities(old_record):
-        require(authenticated_current_worker, "degraded partial rescan introduces new findings")
+    # Only source-proven current-main worker artifacts may quarantine a degraded
+    # Complete or a Partial introducing conflicting evidence. Preserve the actual
+    # scanner attempt but expose an incomplete Partial with the prior risk instead
+    # of claiming Complete or silently dropping findings. Untrusted merges still fail.
+    degraded_complete = degraded and new["status"] == "complete"
+    conflicting_partial = (degraded and new["status"] == "partial" and
+        bool(finding_identities(new) - finding_identities(old_record)))
+    if degraded_complete or conflicting_partial:
+        require(authenticated_current_worker,
+                "complete rescan regresses verified same-source analysis" if degraded_complete else
+                "degraded partial rescan introduces new findings")
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
         quarantine_recovery(records, attempts, item, outcome)
         if predecessor_uncertain(old_record):
