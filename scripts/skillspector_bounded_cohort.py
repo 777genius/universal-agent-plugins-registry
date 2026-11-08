@@ -26,7 +26,7 @@ BRAIDS = ("braids", "braids-audit", "braids-claims", "braids-depth",
           "braids-help", "braids-review", "braids-risk")
 COHORT = {
     **{("vyas-devgna/braids", BRAIDS_SHA, f"skills/{name}"): "yaml" for name in BRAIDS},
-    ("indranilbanerjee/digital-marketing-pro", "cc45ca06eaf48abde3bb60fb79d31c41229c58db",
+    ("indranilbanerjee/digital-marketing-pro", "be4142b25bba6d424962a7788432dd813e6b768c",
      "skills/sitemap-manager"): "xml",
     ("teachskillofskills-ai/digitalmarketingpro-techshu", "e97a5bdd91601024a9cfa870807a8d3c81dc3caf",
      "skills/sitemap-manager"): "xml",

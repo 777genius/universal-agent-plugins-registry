@@ -115,6 +115,29 @@ class BoundedCohortTests(unittest.TestCase):
         with self.assertRaises(CohortRejected):
             build_plan(previous, selection, "b" * 40)
 
+    def test_rotated_sitemap_pin_rejects_old_revision_even_if_report_matches(self):
+        repository = "indranilbanerjee/digital-marketing-pro"
+        path = "skills/sitemap-manager"
+        current_sha = "be4142b25bba6d424962a7788432dd813e6b768c"
+        old_sha = "cc45ca06eaf48abde3bb60fb79d31c41229c58db"
+        self.assertEqual(COHORT[(repository, current_sha, path)], "xml")
+        self.assertNotIn((repository, old_sha, path), COHORT)
+
+        previous, selection = self.fixture()
+        self.assertEqual(len(build_plan(previous, selection, "b" * 40)["selection"]["sources"]), 9)
+        # A matching but historical old source must not be relabelled as current.
+        historical = copy.deepcopy(previous)
+        old_selection = historical["selection"]
+        item = next(row for row in old_selection["sources"]
+                    if row["repository"] == repository)
+        item["revision"] = old_sha
+        record = historical["records"][item["id"]]
+        record["source"]["revision"] = old_sha
+        record["target_revision"] = old_sha
+        historical["manifest"]["selection_digest"] = digest(old_selection)
+        with self.assertRaises(CohortRejected):
+            build_plan(historical, old_selection, "b" * 40)
+
     def test_other_coverage_limit_and_changed_baseline_scanner_fail(self):
         previous, selection = self.fixture()
         previous["records"]["skill-0"]["coverage"]["reasons"].append({"code": "static_parse_limit"})
