@@ -1017,8 +1017,9 @@ def quarantine_recovery(records, attempts, item, outcome):
     retained = copy.deepcopy(max((old, new), key=rank))
     # A higher-severity standard report may win display over a newer extended
     # report. Do not downgrade the bounded conflict retry to standard limits.
-    if attempts[identifier]["next_profile"] is None and any(
-            record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
+    if any(record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
+        # An already scheduled standard retry is still too small for verified
+        # extended evidence; always preserve the higher bounded budget.
         attempts[identifier]["next_profile"] = scanner.EXTENDED_PROFILE["id"]
     mark_recovery_uncertainty(retained, attempts[identifier], "recovery_conflict",
         "Independent authenticated executions disagree. This original report is retained; "
@@ -1289,18 +1290,26 @@ def main():
                         env.get("SCAN_CORPUS") == "catalog",
                         "authenticated current-worker quarantine requires canonical main")
                 run_id, run_attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
-                paths = recovery.assembly_worker_paths(args.workers[0].parent.parent, selection, args.source_commit,
+                # A single artifact may be extracted directly into skillspector-workers;
+                # multiple artifacts arrive in provenance-named child directories.
+                worker_dir = args.workers[0].parent
+                if worker_dir.name != "skillspector-workers":
+                    worker_dir = worker_dir.parent
+                require(worker_dir.name == "skillspector-workers", "invalid worker package directory")
+                paths = recovery.assembly_worker_paths(worker_dir, selection, args.source_commit,
                     run_id=run_id, run_attempt=run_attempt)
                 require(set(paths) == set(args.workers) and len(paths) == len(args.workers),
                         "authenticated worker list differs")
                 bound = recovery.read_consumed_checkpoints(args.authenticated_checkpoints,
                     source_commit=args.source_commit, run_id=run_id, run_attempt=run_attempt,
                     selection_digest=sha256_digest(canonical_json(selection)))
-                require(set(bound) == {path.parent.name for path in paths},
-                        "authenticated checkpoint inventory differs")
+                actual = {}
                 for path in paths:
                     proof = read_json(path.parent / "provenance.json", max_bytes=recovery.MAX_PROVENANCE_BYTES)
-                    require(bound[path.parent.name] == proof, "authenticated worker provenance differs")
+                    key = f"skillspector-checkpoint-a{run_attempt}-p{proof['partition']}-s{proof['slice']}"
+                    require(key not in actual, "duplicate authenticated checkpoint identity")
+                    actual[key] = proof
+                require(bound == actual, "authenticated checkpoint inventory or provenance differs")
                 authenticated_current = True
             workers = [read_json(path, max_bytes=MAX_WORKER_BYTES) for path in args.workers]
             manifest = merge_reports(selection, previous, workers, source_commit=args.source_commit,
