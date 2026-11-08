@@ -302,6 +302,9 @@ class QueueTests(unittest.TestCase):
                             "line": 3, "pattern": "old-advisory", "severity": "CRITICAL"}]
         old["finding_count"] = 1
         current = copy.deepcopy(old)
+        # A higher-severity old standard report must not downgrade the next
+        # retry when the newer, conflicting report used extended limits.
+        current["profile"] = copy.deepcopy(scanner.PROFILE_DOCUMENTS["static-extended-v3"])
         current["findings"] = [{"id": "new-high", "rule": "SC4", "path": "requirements.txt",
                                 "line": 3, "pattern": "new-advisory", "severity": "HIGH"}]
         current["finding_count"] = 1
@@ -330,6 +333,7 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(attempts[subject["id"]]["attempt_count"], 1)
         self.assertEqual(attempts[subject["id"]]["reason"], "recovery_conflict")
         self.assertEqual(attempts[subject["id"]]["disposition"], "scheduled")
+        self.assertEqual(attempts[subject["id"]]["next_profile"], "static-extended-v3")
 
         # No source/attempt lineage forgery and no superficially Complete
         # downgrade is made acceptable by the current-worker provenance flag.
