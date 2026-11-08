@@ -322,48 +322,51 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                      if 'skillspector_coverage_v3 merge' in step.get('run', ''))
         command = merge.replace('$' + '{{ needs.prepare.outputs.partition_count }}', '1')
 
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            plan = root / "skillspector-plan"
-            plan.mkdir()
-            coverage.write_bounded(plan / "selection.json", selection, coverage.MAX_SELECTION_BYTES)
-            summary = QueueTests().discovery_summary(selection)
-            coverage.write_bounded(plan / "coverage.json", summary, coverage.MAX_DISCOVERY_BYTES)
-            previous = bundle(plan / "previous", selection, [old])
-            worker_path = root / "worker.json"
-            coverage.write_bounded(worker_path, worker(selection, [current], previous), coverage.MAX_WORKER_BYTES)
-            checkpoint = root / "skillspector-workers" / "skillspector-checkpoint-a1-p0-s1"
-            provenance_env = {"GITHUB_REPOSITORY": recovery.REPOSITORY, "GITHUB_RUN_ID": "101",
-                              "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": COMMIT,
-                              "GITHUB_REF_NAME": "main", "GITHUB_EVENT_NAME": "workflow_dispatch",
-                              "SCAN_CORPUS": "catalog"}
-            recovery.pack(plan, worker_path, checkpoint, slice_index=1, environment=provenance_env)
-            env = {**os.environ, **provenance_env, "GITHUB_REF": "refs/heads/main",
-                   "RUNNER_TEMP": str(root), "SOURCE_COMMIT": COMMIT,
-                   "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]}
+        for flat in (False, True):
+            with self.subTest(flat=flat), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                plan = root / "skillspector-plan"
+                plan.mkdir()
+                coverage.write_bounded(plan / "selection.json", selection, coverage.MAX_SELECTION_BYTES)
+                summary = QueueTests().discovery_summary(selection)
+                coverage.write_bounded(plan / "coverage.json", summary, coverage.MAX_DISCOVERY_BYTES)
+                previous = bundle(plan / "previous", selection, [old])
+                worker_path = root / "worker.json"
+                coverage.write_bounded(worker_path, worker(selection, [current], previous), coverage.MAX_WORKER_BYTES)
+                    checkpoint = root / "skillspector-workers"
+                    if not flat:
+                        checkpoint /= "skillspector-checkpoint-a1-p0-s1"
+                provenance_env = {"GITHUB_REPOSITORY": recovery.REPOSITORY, "GITHUB_RUN_ID": "101",
+                                  "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": COMMIT,
+                                  "GITHUB_REF_NAME": "main", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                                  "SCAN_CORPUS": "catalog"}
+                recovery.pack(plan, worker_path, checkpoint, slice_index=1, environment=provenance_env)
+                env = {**os.environ, **provenance_env, "GITHUB_REF": "refs/heads/main",
+                       "RUNNER_TEMP": str(root), "SOURCE_COMMIT": COMMIT,
+                       "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]}
 
-            def run(context):
-                shutil.rmtree(root / "skillspector-report", ignore_errors=True)
-                return subprocess.run(['bash', '-eu', '-c', command], cwd=ROOT, env=context,
-                                      text=True, capture_output=True)
+                def run(context):
+                    shutil.rmtree(root / "skillspector-report", ignore_errors=True)
+                    return subprocess.run(['bash', '-eu', '-c', command], cwd=ROOT, env=context,
+                                          text=True, capture_output=True)
 
-            accepted = run(env)
-            self.assertEqual(accepted.returncode, 0, accepted.stderr)
-            published = coverage.read_bundle(root / "skillspector-report")
-            retained = published["records"][subject["id"]]
-            self.assertEqual(retained["status"], "partial")
-            self.assertIn("recovery_conflict", coverage.reason_codes(retained))
-            self.assertTrue(retained["findings_truncated"])
-            self.assertEqual(retained["findings"], old["findings"])
-            self.assertEqual(published["attempts"][subject["id"]]["next_profile"], "static-extended-v3")
-            for change in ({"GITHUB_REF": "refs/pull/446/merge"},
-                           {"SCAN_CORPUS": "controlled"},
-                           {"GITHUB_SHA": "d" * 40},
-                           {"GITHUB_EVENT_NAME": "pull_request"}):
-                with self.subTest(change=change):
-                    rejected = run({**env, **change})
-                    self.assertNotEqual(rejected.returncode, 0)
-                    self.assertFalse((root / "skillspector-report" / "index.json").exists())
+                accepted = run(env)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                published = coverage.read_bundle(root / "skillspector-report")
+                retained = published["records"][subject["id"]]
+                self.assertEqual(retained["status"], "partial")
+                self.assertIn("recovery_conflict", coverage.reason_codes(retained))
+                self.assertTrue(retained["findings_truncated"])
+                self.assertEqual(retained["findings"], old["findings"])
+                self.assertEqual(published["attempts"][subject["id"]]["next_profile"], "static-extended-v3")
+                for change in ({"GITHUB_REF": "refs/pull/446/merge"},
+                               {"SCAN_CORPUS": "controlled"},
+                               {"GITHUB_SHA": "d" * 40},
+                               {"GITHUB_EVENT_NAME": "pull_request"}):
+                    with self.subTest(change=change):
+                        rejected = run({**env, **change})
+                        self.assertNotEqual(rejected.returncode, 0)
+                        self.assertFalse((root / "skillspector-report" / "index.json").exists())
 
 
 class ControlledCorpusPreparationTests(unittest.TestCase):
