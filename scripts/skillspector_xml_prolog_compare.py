@@ -16,7 +16,7 @@ from skillspector_upgrade_compare import FIXTURES, input_fingerprint, scan, vers
 BASE = "018daa3afa2fa3ad084dda251fb562c5045cb423"
 CANDIDATE = "604a1cff1249ec4023012be4bdb77eac20621893"
 SOURCES = {
-    "digital-marketing-pro": "cc45ca06eaf48abde3bb60fb79d31c41229c58db",
+    "digital-marketing-pro": "be4142b25bba6d424962a7788432dd813e6b768c",
     "digitalmarketingpro-techshu": "e97a5bdd91601024a9cfa870807a8d3c81dc3caf",
 }
 CONTROLS = {
