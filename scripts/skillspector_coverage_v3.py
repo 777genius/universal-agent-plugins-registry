@@ -813,8 +813,14 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
         require(authenticated_current_worker,
                 "complete rescan regresses verified same-source analysis" if degraded_complete else
                 "degraded partial rescan introduces new findings")
+        # Two disjoint finding sets cannot be merged into one attested report.
+        # Keep the strict refusal until a reviewed rescan resolves that conflict.
+        if degraded_complete:
+            require(not (finding_identities(new) - finding_identities(old_record)),
+                    "degraded complete introduces unrepresented new findings")
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
-        quarantine_recovery(records, attempts, item, outcome)
+        quarantine_recovery(records, attempts, item, outcome,
+                            prefer_existing=degraded_complete)
         if predecessor_uncertain(old_record):
             mark_missing_predecessor(records[identifier], attempts[identifier])
         return True
@@ -989,7 +995,7 @@ def mark_missing_predecessor(record, attempt):
         "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
 
 
-def quarantine_recovery(records, attempts, item, outcome):
+def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
     Attempt numbers belong to the originating queue lineage. A conflicting fork
@@ -1014,7 +1020,10 @@ def quarantine_recovery(records, attempts, item, outcome):
         return (highest, bool(record["finding_count"] or record["findings"]), record["finding_count"],
                 len(record["findings"]), record["execution"]["state"] != "failed", report_json(original))
 
-    retained = copy.deepcopy(max((old, new), key=rank))
+    # For a degrading Complete without novel findings, keep every previously
+    # verified finding and coverage count; the newer attempt remains in its
+    # authenticated immutable checkpoint and is disclosed as incomplete.
+    retained = copy.deepcopy(old if prefer_existing else max((old, new), key=rank))
     # A higher-severity standard report may win display over a newer extended
     # report. Do not downgrade the bounded conflict retry to standard limits.
     if any(record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
