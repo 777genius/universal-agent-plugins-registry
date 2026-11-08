@@ -160,14 +160,14 @@ class RecoveryTests(unittest.TestCase):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
         first = self.authentic_batch(
-            selection, 5501, 0, warning="Original security risk.",
+            selection, 5501, 0, warning="Original security risk.", pattern="original-static-risk",
             status="partial", reason="static_parse_limit", profile_id="static-extended-v3",
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             baseline = self.recover(root / "baseline", selection, [first])
             second = self.authentic_batch(
-                selection, 5502, 1, warning="Distinct new security risk.",
+                selection, 5502, 1, warning="Distinct new security risk.", pattern="new-static-risk",
                 status="partial", reason="static_parse_limit", profile_id="static-standard-v3",
                 previous=baseline,
             )
@@ -210,14 +210,14 @@ class RecoveryTests(unittest.TestCase):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
         first = self.authentic_batch(
-            selection, 5503, 0, warning="Preserved warning.", status="partial",
+            selection, 5503, 0, warning="Preserved warning.", pattern="old-risk", status="partial",
             reason="static_parse_limit", profile_id="static-extended-v3",
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             baseline = self.recover(root / "baseline", selection, [first])
             changed = self.authentic_batch(
-                selection, 5504, 1, warning="New warning.", status="partial",
+                selection, 5504, 1, warning="New warning.", pattern="new-risk", status="partial",
                 reason="static_parse_limit", profile_id="static-standard-v3",
                 previous=baseline,
             )
@@ -294,14 +294,15 @@ class RecoveryTests(unittest.TestCase):
                 with self.assertRaises(PublicationError):
                     self.recover(Path(directory), selection, batches)
 
-    def authentic_batch(self, selection, run_id, second, *, warning=None, previous=None, exit_code=None,
+    def authentic_batch(self, selection, run_id, second, *, warning=None, pattern=None, previous=None, exit_code=None,
                         status="complete", reason=None, profile_id="static-standard-v3"):
         with mock.patch.object(coverage.scanner, "now", return_value=f"2020-01-01T00:00:{second:02d}Z"):
             value = record(selection["sources"][0], status, reason, profile_id)
             if warning is not None:
                 raw = upstream_report()
                 raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": warning,
-                                  "location": {"file": "SKILL.md", "start_line": 1}}]
+                                  "location": {"file": "SKILL.md", "start_line": 1},
+                                  **({"pattern": pattern} if pattern is not None else {})}]
                 if status == "partial":
                     raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
                     raw["analysis_completeness"]["ledger_exceptions"] = [{"reason_code": reason or "static_parse_limit", "message": "Bounded fixture limitation."}]
