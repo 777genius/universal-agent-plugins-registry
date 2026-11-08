@@ -206,6 +206,64 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
+    def test_authenticated_degraded_complete_is_explicit_partial_with_risk_retained(self):
+        """A new 'Complete' cannot erase verified same-source risks or analysis."""
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(
+            selection, 5611, 0, warning="Original HIGH evidence must remain visible.",
+            pattern="old-risk", status="partial", reason="static_parse_limit",
+            profile_id="static-extended-v3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "baseline", selection, [first])
+            complete = self.authentic_batch(
+                selection, 5612, 1, status="complete", previous=baseline,
+                profile_id="static-standard-v3",
+            )
+            old = baseline["records"][subject["id"]]
+            fresh = complete["workers"][0]["attempts"][0]["record"]
+            self.assertEqual(fresh["status"], "complete")
+            self.assertTrue(coverage.degraded_rescan(old, fresh))
+            self.assertTrue(coverage.finding_identities(old) - coverage.finding_identities(fresh))
+
+            # Merely claiming the same execution is not authenticated.
+            without_origin = copy.deepcopy(complete)
+            without_origin.pop("execution_origin")
+            with self.assertRaisesRegex(PublicationError, "complete rescan regresses verified"):
+                self.recover(root / "unauthenticated", selection, [without_origin], baseline)
+
+            corrupted = copy.deepcopy(complete)
+            corrupted["workers"][0]["attempts"][0]["attempt"]["history"][-1]["fingerprint"] = (
+                "sha256:" + "f" * 64
+            )
+            with self.assertRaises(PublicationError):
+                self.recover(root / "corrupted", selection, [corrupted], baseline)
+
+            recovered = self.recover(root / "quarantined", selection, [complete], baseline)
+            value, attempt = recovered["records"][subject["id"]], recovered["attempts"][subject["id"]]
+            self.assertEqual(value["status"], "partial")
+            self.assertEqual(value["coverage"]["status"], "partial")
+            self.assertEqual(value["findings"], old["findings"])
+            self.assertEqual(value["source"], old["source"])
+            self.assertTrue(value["findings_truncated"])
+            self.assertFalse(value["coverage"]["grouping_complete"])
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(value))
+            self.assertEqual(attempt["attempt_count"], 2)
+            self.assertEqual(attempt["status"], "complete")  # Preserve the actual scanner execution.
+            self.assertEqual(attempt["history"], complete["workers"][0]["attempts"][0]["attempt"]["history"])
+            self.assertEqual(attempt["reason"], "recovery_conflict")
+            self.assertEqual(attempt["disposition"], "scheduled")
+            self.assertEqual(attempt["next_profile"], "static-extended-v3")
+            self.assertEqual(coverage.plan_attempts(selection, recovered, 0, 1, 128), [subject])
+            self.assertEqual(recovered["manifest"]["execution_summary"]["recovered_sources"], 1)
+
+            replay = self.recover(root / "replay", selection, [complete], recovered)
+            self.assertEqual(replay["records"], recovered["records"])
+            self.assertEqual(replay["attempts"], recovered["attempts"])
+            self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+
     def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
