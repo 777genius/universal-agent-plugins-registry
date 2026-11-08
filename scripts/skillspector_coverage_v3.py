@@ -1029,7 +1029,13 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     if degraded_complete:
         require(not (finding_identities(new) - finding_identities(old)),
                 "degraded complete introduces unrepresented new findings")
-    retained = copy.deepcopy(old if prefer_existing or degraded_complete else max((old, new), key=rank))
+    chosen = old if prefer_existing or degraded_complete else max((old, new), key=rank)
+    retained = copy.deepcopy(chosen)
+    if chosen is new:
+        # Worker evidence is not a scheduled report and has no queue controls.
+        # It is already authenticated and validated against this exact selected
+        # source; preserve that provenance when it becomes the public witness.
+        retained["freshness"] = "current"
     # A higher-severity standard report may win display over a newer extended
     # report. Do not downgrade the bounded conflict retry to standard limits.
     if any(record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
