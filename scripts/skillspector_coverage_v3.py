@@ -1274,7 +1274,8 @@ def main():
                 env = os.environ
                 require(env.get("GITHUB_REPOSITORY") == "777genius/universal-agent-plugins-registry" and
                         env.get("GITHUB_REF") == "refs/heads/main" and env.get("GITHUB_SHA") == args.source_commit and
-                        env.get("GITHUB_EVENT_NAME") in {"push", "schedule", "workflow_dispatch"},
+                        env.get("GITHUB_EVENT_NAME") in {"push", "schedule", "workflow_dispatch"} and
+                        env.get("SCAN_CORPUS") == "catalog",
                         "authenticated current-worker quarantine requires canonical main")
                 run_id, run_attempt = int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
                 paths = recovery.assembly_worker_paths(args.workers[0].parent.parent, selection, args.source_commit,
