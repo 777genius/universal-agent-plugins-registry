@@ -360,6 +360,52 @@ class QueueTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
             coverage.apply_outcome({subject["id"]: copy.deepcopy(old)}, {}, subject, fake_complete)
 
+    def test_authenticated_higher_risk_witness_preserves_queue_state_on_assembly(self):
+        """Production regression: a selected raw worker must acquire queue provenance."""
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def adverse(severity):
+            raw = upstream_report()
+            raw["issues"] = [{"id": "PI1", "severity": severity,
+                              "explanation": "Independently observed " + severity + " advisory.",
+                              "location": {"file": "SKILL.md", "start_line": 1}}]
+            raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Bounded fixture limitation."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old, current = adverse("HIGH"), adverse("CRITICAL")
+        self.assertTrue(coverage.degraded_rescan(old, current))
+        self.assertTrue(coverage.finding_identities(current) - coverage.finding_identities(old))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            updated_worker = worker(selection, [current], previous)
+            # The same conflicting evidence must stay rejected without current-main proof.
+            with self.assertRaisesRegex(PublicationError, "degraded partial rescan introduces new findings"):
+                coverage.merge_reports(selection, previous, [updated_worker], source_commit=COMMIT,
+                    output_dir=root / "untrusted")
+            self.assertFalse((root / "untrusted" / "index.json").exists())
+
+            coverage.merge_reports(selection, previous, [updated_worker], source_commit=COMMIT,
+                output_dir=root / "authenticated", authenticated_current_workers=True)
+            verified = coverage.read_bundle(root / "authenticated")
+            retained, attempt = verified["records"][subject["id"]], verified["attempts"][subject["id"]]
+            self.assertEqual(retained["freshness"], "current")
+            self.assertEqual(retained["status"], "partial")
+            self.assertEqual(retained["findings"], current["findings"])
+            self.assertTrue(retained["findings_truncated"])
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(retained))
+            self.assertEqual(retained["retry"], coverage.retry_summary(attempt))
+            self.assertEqual(retained["attempt_history"], attempt["history"])
+            self.assertEqual(attempt["attempt_count"], 2)
+            self.assertEqual(publisher.validate_directory(root / "authenticated", COMMIT)["manifest"],
+                             verified["manifest"])
+
     def test_authenticated_current_degraded_complete_retains_prior_security_finding(self):
         """A genuine current-main Complete that drops a warning must stay Partial."""
         subject = item()
