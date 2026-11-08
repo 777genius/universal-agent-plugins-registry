@@ -802,19 +802,25 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
     require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
             "worker attempt lineage differs")
     degraded = degraded_rescan(old_record, new)
-    # A superficially Complete run with less verified coverage is not a
-    # publishable replacement. Reject the bundle rather than record a Complete
-    # retry while continuing to display the old Partial indefinitely.
-    require(not (degraded and new["status"] == "complete"),
-            "complete rescan regresses verified same-source analysis")
-    # Only a proven current-main worker may enter the same explicit quarantine
-    # used by authenticated historical recovery. Untrusted ordinary merges
-    # still fail before any report/attempt mutation if a degraded Partial loses
-    # old risks and introduces different ones.
-    if degraded and new["status"] == "partial" and finding_identities(new) - finding_identities(old_record):
-        require(authenticated_current_worker, "degraded partial rescan introduces new findings")
+    # Only source-proven current-main worker artifacts may quarantine a degraded
+    # Complete or a Partial introducing conflicting evidence. Preserve the actual
+    # scanner attempt but expose an incomplete Partial with the prior risk instead
+    # of claiming Complete or silently dropping findings. Untrusted merges still fail.
+    degraded_complete = degraded and new["status"] == "complete"
+    conflicting_partial = (degraded and new["status"] == "partial" and
+        bool(finding_identities(new) - finding_identities(old_record)))
+    if degraded_complete or conflicting_partial:
+        require(authenticated_current_worker,
+                "complete rescan regresses verified same-source analysis" if degraded_complete else
+                "degraded partial rescan introduces new findings")
+        # Two disjoint finding sets cannot be merged into one attested report.
+        # Keep the strict refusal until a reviewed rescan resolves that conflict.
+        if degraded_complete:
+            require(not (finding_identities(new) - finding_identities(old_record)),
+                    "degraded complete introduces unrepresented new findings")
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
-        quarantine_recovery(records, attempts, item, outcome)
+        quarantine_recovery(records, attempts, item, outcome,
+                            prefer_existing=degraded_complete)
         if predecessor_uncertain(old_record):
             mark_missing_predecessor(records[identifier], attempts[identifier])
         return True
@@ -989,7 +995,7 @@ def mark_missing_predecessor(record, attempt):
         "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
 
 
-def quarantine_recovery(records, attempts, item, outcome):
+def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
     Attempt numbers belong to the originating queue lineage. A conflicting fork
@@ -1014,7 +1020,16 @@ def quarantine_recovery(records, attempts, item, outcome):
         return (highest, bool(record["finding_count"] or record["findings"]), record["finding_count"],
                 len(record["findings"]), record["execution"]["state"] != "failed", report_json(original))
 
-    retained = copy.deepcopy(max((old, new), key=rank))
+    # For a degrading Complete without novel findings, keep every previously
+    # verified finding and coverage count; the newer attempt remains in its
+    # authenticated immutable checkpoint and is disclosed as incomplete.
+    # A recovered Complete may come from a checkpoint rejected in assembly.
+    # Historical recovery must enforce the same no-loss rule as current merges.
+    degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
+    if degraded_complete:
+        require(not (finding_identities(new) - finding_identities(old)),
+                "degraded complete introduces unrepresented new findings")
+    retained = copy.deepcopy(old if prefer_existing or degraded_complete else max((old, new), key=rank))
     # A higher-severity standard report may win display over a newer extended
     # report. Do not downgrade the bounded conflict retry to standard limits.
     if any(record["profile"]["id"] == scanner.EXTENDED_PROFILE["id"] for record in (old, new)):
@@ -1139,7 +1154,10 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             # Its current epoch has no retry predecessor; preserve the verified
             # original prefix instead of recomputing it from an unrelated snapshot.
             attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
-            if old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
+            if old_record is not None and outcome["record"]["status"] == "complete" and \
+                    degraded_rescan(old_record, outcome["record"]):
+                quarantine_recovery(records, attempts, item, outcome)
+            elif old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
                 records[item["id"]] = copy.deepcopy(outcome["record"])
                 records[item["id"]]["freshness"] = "current"
             if item["id"] in uncertain_ids:

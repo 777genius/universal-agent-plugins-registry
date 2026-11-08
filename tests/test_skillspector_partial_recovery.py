@@ -264,6 +264,55 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
+    def test_rejected_complete_checkpoint_cannot_erase_prior_risk_on_recovery(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(
+            selection, 5701, 0, warning="Previously verified HIGH risk.", pattern="old-risk",
+            status="partial", reason="static_parse_limit", profile_id="static-extended-v3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "baseline", selection, [first])
+            old = baseline["records"][subject["id"]]
+            clean = self.authentic_batch(selection, 5702, 1, status="complete", previous=baseline)
+            self.assertTrue(coverage.degraded_rescan(old, clean["workers"][0]["attempts"][0]["record"]))
+
+            # A later authenticated recovery may preserve the actual execution
+            # but may not promote the rejected Complete or discard old evidence.
+            recovered = self.recover(root / "recovered", selection, [clean], baseline)
+            kept = recovered["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertEqual(kept["coverage"]["fully_inspected_files"], old["coverage"]["fully_inspected_files"])
+            self.assertIn("recovery_conflict", coverage.reason_codes(kept))
+            self.assertEqual(recovered["attempts"][subject["id"]]["status"], "complete")
+
+            # Even a legacy snapshot with no compatible retry metadata cannot
+            # let a first-epoch Complete overwrite its verified Partial record.
+            without_attempt = copy.deepcopy(baseline)
+            without_attempt["attempts"] = {}
+            first_epoch = self.authentic_batch(selection, 5703, 2, status="complete")
+            legacy = self.recover(root / "legacy", selection, [first_epoch], without_attempt)
+            self.assertEqual(legacy["records"][subject["id"]]["status"], "partial")
+            self.assertEqual(legacy["records"][subject["id"]]["findings"], old["findings"])
+
+            # The exact checkpoint that current assembly rejects must also
+            # fail closed in later recovery if it has a distinct new warning.
+            novel = self.authentic_batch(
+                selection, 5704, 3, warning="New HIGH risk.", pattern="new-risk",
+                status="complete", previous=baseline,
+            )
+            outcome = novel["workers"][0]["attempts"][0]
+            records, attempts = {subject["id"]: copy.deepcopy(old)}, copy.deepcopy(baseline["attempts"])
+            with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings"):
+                coverage.apply_outcome(records, attempts, subject, outcome, authenticated_current_worker=True)
+            self.assertEqual(records[subject["id"]], old)
+            self.assertEqual(attempts, baseline["attempts"])
+            with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings"):
+                self.recover(root / "rejected-later", selection, [novel], baseline)
+            self.assertFalse((root / "rejected-later" / "manifest.json").exists())
+
     def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
