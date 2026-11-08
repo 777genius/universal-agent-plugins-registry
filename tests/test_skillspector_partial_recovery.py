@@ -155,6 +155,78 @@ class RecoveryTests(unittest.TestCase):
             divergent = self.recover(root / "divergent", selection, [forged], retained)
             self.assertIn("recovery_conflict", coverage.reason_codes(divergent["records"][subject["id"]]))
 
+    def test_sequential_authenticated_degradation_with_new_risks_is_quarantined(self):
+        """Never lose either security warning silently in a verified retry."""
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(
+            selection, 5501, 0, warning="Original security risk.", pattern="original-static-risk",
+            status="partial", reason="static_parse_limit", profile_id="static-extended-v3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "baseline", selection, [first])
+            second = self.authentic_batch(
+                selection, 5502, 1, warning="Distinct new security risk.", pattern="new-static-risk",
+                status="partial", reason="static_parse_limit", profile_id="static-standard-v3",
+                previous=baseline,
+            )
+            old = baseline["records"][subject["id"]]
+            new = second["workers"][0]["attempts"][0]["record"]
+            self.assertTrue(coverage.degraded_rescan(old, new))
+            self.assertTrue(coverage.finding_identities(new) - coverage.finding_identities(old))
+
+            # Only an authenticated historical producer can reconcile the
+            # mismatch. Ordinary merges remain fail-closed and cannot weaken
+            # the finding-identity gate.
+            untrusted = copy.deepcopy(second)
+            untrusted.pop("execution_origin")
+            with self.assertRaisesRegex(PublicationError, "degraded partial rescan introduces new findings"):
+                self.recover(root / "untrusted", selection, [untrusted], baseline)
+
+            recovered = self.recover(root / "quarantined", selection, [second], baseline)
+            value, attempt = recovered["records"][subject["id"]], recovered["attempts"][subject["id"]]
+            self.assertEqual(value["status"], "partial")
+            self.assertEqual(value["coverage"]["status"], "partial")
+            self.assertTrue(value["findings_truncated"])
+            self.assertFalse(value["coverage"]["grouping_complete"])
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                            coverage.reason_codes(value))
+            self.assertEqual(attempt["attempt_count"], 2)
+            self.assertEqual(attempt["history"], second["workers"][0]["attempts"][0]["attempt"]["history"])
+            self.assertEqual(attempt["reason"], "recovery_conflict")
+            self.assertEqual(attempt["disposition"], "scheduled")
+            self.assertEqual(recovered["manifest"]["execution_summary"]["recovered_sources"], 1)
+            self.assertEqual(coverage.plan_attempts(selection, recovered, 0, 1, 128), [subject])
+            self.assertIn(value["findings"], [old["findings"], new["findings"]])
+
+            # Replaying the exact authenticated artifact is idempotent.
+            replay = self.recover(root / "replay", selection, [second], recovered)
+            self.assertEqual(replay["records"], recovered["records"])
+            self.assertEqual(replay["attempts"], recovered["attempts"])
+            self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+
+    def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(
+            selection, 5503, 0, warning="Preserved warning.", pattern="old-risk", status="partial",
+            reason="static_parse_limit", profile_id="static-extended-v3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "baseline", selection, [first])
+            changed = self.authentic_batch(
+                selection, 5504, 1, warning="New warning.", pattern="new-risk", status="partial",
+                reason="static_parse_limit", profile_id="static-standard-v3",
+                previous=baseline,
+            )
+            changed["workers"][0]["attempts"][0]["attempt"]["history"][-1]["fingerprint"] = (
+                "sha256:" + "f" * 64
+            )
+            with self.assertRaises(PublicationError):
+                self.recover(root / "rejected", selection, [changed], baseline)
+
     def test_old_main_exact_identity_recovers_and_duplicate_is_idempotent(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
@@ -222,14 +294,15 @@ class RecoveryTests(unittest.TestCase):
                 with self.assertRaises(PublicationError):
                     self.recover(Path(directory), selection, batches)
 
-    def authentic_batch(self, selection, run_id, second, *, warning=None, previous=None, exit_code=None,
+    def authentic_batch(self, selection, run_id, second, *, warning=None, pattern=None, previous=None, exit_code=None,
                         status="complete", reason=None, profile_id="static-standard-v3"):
         with mock.patch.object(coverage.scanner, "now", return_value=f"2020-01-01T00:00:{second:02d}Z"):
             value = record(selection["sources"][0], status, reason, profile_id)
             if warning is not None:
                 raw = upstream_report()
                 raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": warning,
-                                  "location": {"file": "SKILL.md", "start_line": 1}}]
+                                  "location": {"file": "SKILL.md", "start_line": 1},
+                                  **({"pattern": pattern} if pattern is not None else {})}]
                 if status == "partial":
                     raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
                     raw["analysis_completeness"]["ledger_exceptions"] = [{"reason_code": reason or "static_parse_limit", "message": "Bounded fixture limitation."}]

@@ -1164,6 +1164,27 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 continue
             follows = attempt["attempt_count"] == old_attempt["attempt_count"] + 1 and \
                 old_attempt["history"][-len(attempt["history"][:-1]):] == attempt["history"][:-1]
+            # An authenticated sequential retry may lose prior findings while
+            # revealing new ones. Preserve the true attempt lineage, keep one
+            # original adverse report with explicit truncated evidence, and
+            # require a fresh scan instead of silently replacing either result.
+            if follows and old_record is not None and \
+                    outcome["record"]["status"] == "partial" and \
+                    degraded_rescan(old_record, outcome["record"]) and \
+                    finding_identities(outcome["record"]) - finding_identities(old_record):
+                require(attempt == make_attempt(item, outcome["record"], old_attempt, old_record,
+                    at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
+                attempts[item["id"]] = copy.deepcopy(attempt)
+                quarantine_recovery(records, attempts, item, outcome)
+                if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
+                    mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
+                applied += 1
+                recovered_ids.add(item["id"])
+                diagnostics["conflicting_executions"] += 1
+                if len(diagnostics["examples"]) < 32:
+                    diagnostics["examples"].append({"id": item["id"], "reason": "recovery_conflict",
+                        "execution_origin": copy.deepcopy(origin)})
+                continue
             if not follows:
                 if recovery_analysis(old_record) == recovery_analysis(outcome["record"]):
                     diagnostics["equivalent_executions"] += 1
