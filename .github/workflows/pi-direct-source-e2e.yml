@@ -30,6 +30,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # On PR events, the default ref is a synthetic merge commit, not the declared source HEAD.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.21.1'
@@ -37,6 +39,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
+      - name: Require exact PR branch HEAD (never synthetic merge checkout)
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git show -s --format='Verified source tree: %H' HEAD
       - name: Verify published CLI and native Pi executable
         shell: bash
         run: |
