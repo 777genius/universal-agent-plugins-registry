@@ -28,12 +28,20 @@ def require(condition: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
-def native_files(profile: Path) -> list[tuple[str, str]]:
-    return sorted(
-        (file.relative_to(profile).as_posix(), hashlib.sha256(file.read_bytes()).hexdigest())
-        for file in profile.rglob("*")
-        if file.is_file() and not file.is_symlink()
-    )
+def native_files(profile: Path) -> list[tuple[str, str, str]]:
+    """Snapshot file bytes, directories and symlink targets without dereferencing links."""
+    entries = []
+    for path in profile.rglob("*"):
+        relative = path.relative_to(profile).as_posix()
+        if path.is_symlink():
+            entries.append((relative, "symlink", os.readlink(path)))
+        elif path.is_file():
+            entries.append((relative, "file", hashlib.sha256(path.read_bytes()).hexdigest()))
+        elif path.is_dir():
+            entries.append((relative, "directory", ""))
+        else:
+            entries.append((relative, "other", ""))
+    return sorted(entries)
 
 
 def active_sources(head: str) -> list[dict]:
