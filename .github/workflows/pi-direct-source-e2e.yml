@@ -56,6 +56,18 @@ jobs:
           set -euo pipefail
           python scripts/pi_direct_source_e2e.py --source-head "$SOURCE_HEAD" \
             --report "$RUNNER_TEMP/pi-direct-source-${{ matrix.os }}.json"
+      # docker-hub's real stdio preflight requires the Docker executable.
+      # The macOS runner does not ship it; install only the native CLI.
+      # This is a dry-run prerequisite, not a Docker daemon or MCP runtime proof.
+      - name: Provide macOS Docker CLI prerequisite for source planning
+        if: matrix.os == 'macos-15'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v docker >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install docker
+          fi
+          docker --version
       - name: Check every active source in user/project as an exact pinned Pi dry-run
         shell: bash
         env:
