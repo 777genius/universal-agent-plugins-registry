@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
+
+from pi_catalog_inventory_e2e import native_files
 
 PINNED_UPSTREAM = "769c6cd22c3d95462d1f55d789e9532cabefa5a9"
 CASES = (
@@ -147,16 +148,9 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         # with explicit switch guidance *before changing native Pi files*.
         call("info", first["installation_id"])
         native_root = pi_profile if scope == "user" else project / ".pi"
-        def native_files() -> list[tuple[str, str]]:
-            if not native_root.exists():
-                return []
-            return sorted(
-                (entry.relative_to(native_root).as_posix(),
-                 hashlib.sha256(entry.read_bytes()).hexdigest())
-                for entry in native_root.rglob("*")
-                if not entry.is_symlink() and entry.is_file()
-            )
-        before_update = native_files()
+        # A denied immutable-source update must not create directories or
+        # symlinks either: comparing file bytes alone misses these mutations.
+        before_update = native_files(native_root)
         refused = command([cli, "update", first["installation_id"], *args],
                           project, env, timeout=240)
         report["operations"].append({k: v for k, v in refused.items()
@@ -165,7 +159,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                 "direct full-SHA installations require explicit switch"
                 in refused.get("error_tail", ""),
                 "pinned Git update must refuse with explicit switch guidance")
-        require(native_files() == before_update,
+        require(native_files(native_root) == before_update,
                 "refused immutable source update changed Pi native files")
         call("repair", first["installation_id"], timeout=240)
         maintained = plugin_record(call("list"), name, revision)
