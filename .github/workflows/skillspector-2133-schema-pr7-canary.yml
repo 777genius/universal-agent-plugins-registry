@@ -101,6 +101,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: skillspector-2133-schema-pr7-acceptance
-          path: /tmp/schema-canary/
+          path: ${{ runner.temp }}/schema-canary/
           if-no-files-found: warn
           retention-days: 7
