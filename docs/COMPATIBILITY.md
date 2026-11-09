@@ -13,6 +13,28 @@ labels the reviewed **Default source**, and links alternatives and immutable
 provenance. Existing installs stay on their recorded distribution during
 update; changing source is an explicit `switch`.
 
+## Pi target and Directory status
+
+The published installer 0.1.102 supports Pi Skills, stdio and Streamable HTTP MCP
+(and native extensions) for user and project profiles. It does **not** imply
+that a signed Directory release is already authorized for Pi. The current
+reviewed Directory has **37 active release policies and none names Pi**.
+These policies predate Pi's component support. A package with eligible Skills/MCP
+is a *candidate* for Pi qualification, not a proven signed installation.
+
+For source-bound validation without silently broadening signed authority, first
+run an exact Git revision with `--dry-run` on a disposable Pi profile:
+
+```sh
+npx -y universal-agent-plugins@0.1.102 add github:upstash/context7@769c6cd22c3d95462d1f55d789e9532cabefa5a9//plugins/agent-plugins/context7 --target pi --scope user --dry-run
+```
+
+The same package's signed `context7` alias **does not yet authorize Pi**; a
+direct Git selector is a separate, explicit trust path and must be checked by
+the CLI. Do not conflate staged configuration, approved project trust, endpoint
+login, MCP tool execution, or a live provider account. See the
+[Pi Directory rollout qualification plan](../docs/plans/2026-11-09-pi-directory-global-qualification.md).
+
 ## Package matrix
 
 | Plugin | Component | Authentication and scope |

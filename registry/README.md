@@ -78,6 +78,18 @@ Commit `registry/directory.json` and any changed `registry/review-preview.json`
 or `registry/review-search.json`. The legacy catalogs and flat index are frozen
 and must not change.
 
+## Pi compatibility rollout
+
+Pi's native UAP adapter now handles Skills, stdio/HTTP MCP and Pi extensions
+in both user and project scope, but the **current signed Directory policies
+do not yet include Pi**. Support for a client in the CLI is different from
+release-specific installation permission in the Directory. The
+[Pi rollout plan](../docs/plans/2026-11-09-pi-directory-global-qualification.md)
+covers 37 active policies, direct-source lifecycle evidence, and safe migration
+from older pinned CLIs which would reject an unknown `pi` target. Do not
+enable Pi in the signed catalog or label packages Pi-installable before
+publication readiness and actual signed promotion.
+
 ## What validation means
 
 Static schema and package checks at the pinned revision are not endorsement,
