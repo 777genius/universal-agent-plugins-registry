@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: 777genius/SkillSpector
-          ref: 44872767c498e2df0439473cf02bbb54dd7b8be6
+          ref: 279afd114b2c2b2747a35027ca6418509f39a0c5
           path: fork-head
           persist-credentials: false
       - name: Checkout exact old scanner fork HEAD
@@ -46,7 +46,7 @@ jobs:
       - name: Install frozen scanner runtime and test framework
         run: |
           uv sync --directory fork-head --frozen --no-dev --python 3.12
-          uv pip install --python fork-head/.venv/bin/python "pytest==9.0.2"
+          uv pip install --python fork-head/.venv/bin/python "pytest==9.0.2" "pytest-asyncio==1.3.0"
       - name: Run strict targeted unit and negative regression tests
         working-directory: fork-head
         run: |
