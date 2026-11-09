@@ -28,7 +28,7 @@ jobs:
             runtime_package: firebase-tools
             version: 15.35.0
             omit_optional: true
-            probe_override: none
+            probe_override: glob14-minimatch11-rimraf614
           - id: hubspot-developer
             runtime_package: '@hubspot/cli'
             version: 8.18.0
@@ -61,7 +61,13 @@ jobs:
           const doc = JSON.parse(fs.readFileSync(path, 'utf8'));
           if (typeof doc.dependencies?.[rootPackage] !== 'string') throw new Error('unreviewed package name');
           doc.dependencies[rootPackage] = version;
-          if (probeOverride === 'glob14-minimatch11') {
+          if (probeOverride === 'glob14-minimatch11-rimraf614') {
+            // Research-only. Force patched transitive graph and check the
+            // exact npm advisory closure; native MCP compatibility is not
+            // inferred from a successful audit or package-lock resolution.
+            doc.overrides = { ...doc.overrides,
+              glob: '14.0.4', minimatch: '11.0.5', rimraf: '6.1.4' };
+          } else if (probeOverride === 'glob14-minimatch11') {
             doc.overrides = { ...doc.overrides, glob: '14.0.4', minimatch: '11.0.5' };
           } else if (probeOverride !== 'none') throw new Error('Unreviewed probe override');
           fs.writeFileSync(path, JSON.stringify(doc, null, 2) + '\n');
