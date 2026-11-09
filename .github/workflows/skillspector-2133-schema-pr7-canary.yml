@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: 777genius/SkillSpector
-          ref: 75b45324ab49c7f94c513319af0ae1e838ef0184
+          ref: 523c6d8f03af57fc71eba69d7074c14cb42975a0
           path: fork-head
           persist-credentials: false
       - name: Checkout exact old scanner fork HEAD
