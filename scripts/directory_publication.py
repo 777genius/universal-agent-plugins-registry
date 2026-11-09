@@ -303,7 +303,7 @@ PACKAGE_PATH_RE = re.compile(r"(?!/)(?!.*(?:^|/)\.\.?/)[A-Za-z0-9._-]+(?:/[A-Za-
 TIMESTAMP_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 CLIENTS = {"codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
-           "grok", "kimi", "qoder"}
+           "grok", "kimi", "qoder", "pi"}
 EVIDENCE_WORKFLOW_RE = re.compile(r"[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml")
 EVIDENCE_SOURCE_REF_RE = re.compile(r"refs/heads/[A-Za-z0-9._/-]+")
 
