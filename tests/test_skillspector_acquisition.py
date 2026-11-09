@@ -229,7 +229,7 @@ class ColdAcquisitionTests(unittest.TestCase):
 class OnlineBlobFetchRetryTests(unittest.TestCase):
     """Transport-only retries; immutable object and resource checks remain separate."""
 
-    def run_fetch(self, failures, *, origin=None, remaining=20, mutate_pack=False):
+    def run_fetch(self, failures, *, origin=None, remaining=20, mutate_pack=False, mutate_loose=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             packs = root / "objects" / "pack"
@@ -249,6 +249,10 @@ class OnlineBlobFetchRetryTests(unittest.TestCase):
                 if number <= len(failures):
                     if mutate_pack and number == 1:
                         (packs / "unexpected.pack").write_bytes(b"changed")
+                    if mutate_loose and number == 1:
+                        loose = packs.parent / "aa"
+                        loose.mkdir()
+                        (loose / "b" * 38).write_bytes(b"changed")
                     raise failures[number - 1]
                 return b""
 
@@ -306,7 +310,8 @@ class OnlineBlobFetchRetryTests(unittest.TestCase):
     def test_budget_or_pack_changes_prevent_unbounded_transport_retry(self):
         # The retry cutoff is inclusive: at delay + one reserved second,
         # the original transport failure must remain the only outcome.
-        for scenario in ({"remaining": 1.1}, {"remaining": 1.25}, {"mutate_pack": True}):
+        for scenario in ({"remaining": 1.1}, {"remaining": 1.25},
+                         {"mutate_pack": True}, {"mutate_loose": True}):
             with self.subTest(scenario=scenario):
                 error, calls, sleeps = self.run_fetch(
                     [acquisition.BridgeError("The requested URL returned error: 502")],
