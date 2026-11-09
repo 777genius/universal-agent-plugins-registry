@@ -5,6 +5,7 @@ on:
     paths:
       - 'registry/directory.json'
       - 'scripts/pi_direct_source_e2e.py'
+      - 'scripts/pi_catalog_inventory_e2e.py'
       - '.github/workflows/pi-direct-source-e2e.yml'
   workflow_dispatch:
 
