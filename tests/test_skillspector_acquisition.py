@@ -252,7 +252,7 @@ class OnlineBlobFetchRetryTests(unittest.TestCase):
                     if mutate_loose and number == 1:
                         loose = packs.parent / "aa"
                         loose.mkdir()
-                        (loose / "b" * 38).write_bytes(b"changed")
+                        (loose / ("b" * 38)).write_bytes(b"changed")
                     raise failures[number - 1]
                 return b""
 
