@@ -304,7 +304,9 @@ class OnlineBlobFetchRetryTests(unittest.TestCase):
             self.assertEqual(sleeps, [])
 
     def test_budget_or_pack_changes_prevent_unbounded_transport_retry(self):
-        for scenario in ({"remaining": 1.1}, {"mutate_pack": True}):
+        # The retry cutoff is inclusive: at delay + one reserved second,
+        # the original transport failure must remain the only outcome.
+        for scenario in ({"remaining": 1.1}, {"remaining": 1.25}, {"mutate_pack": True}):
             with self.subTest(scenario=scenario):
                 error, calls, sleeps = self.run_fetch(
                     [acquisition.BridgeError("The requested URL returned error: 502")],
@@ -313,6 +315,37 @@ class OnlineBlobFetchRetryTests(unittest.TestCase):
                 self.assertIsInstance(error, acquisition.BridgeError)
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(sleeps, [])
+        error, calls, sleeps = self.run_fetch(
+            [acquisition.BridgeError("The requested URL returned error: 502")],
+            remaining=1.251,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.25])
+
+    def test_real_budget_expiring_during_retry_never_launches_another_fetch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "objects" / "pack").mkdir(parents=True)
+            source = mock.Mock(root=root, repository="owner/repo")
+            clock = [0.0]
+            budget = WorkBudget(2, monotonic=lambda: clock[0])
+            fetches = []
+
+            def fake_git(_source, arguments, _budget, **_options):
+                if arguments == ["remote", "get-url", "origin"]:
+                    return b"https://github.com/owner/repo.git\n"
+                fetches.append(arguments)
+                raise acquisition.BridgeError("The requested URL returned error: 503")
+
+            def expire(_seconds):
+                clock[0] = 2.0
+
+            with mock.patch.object(acquisition, "_run_git", side_effect=fake_git), \
+                    mock.patch.object(acquisition.time, "sleep", side_effect=expire), \
+                    self.assertRaises(CheckpointYield):
+                acquisition._fetch_objects(source, ["a" * 40], budget, 4 << 20)
+            self.assertEqual(len(fetches), 1)
 
     def test_size_and_transfer_limits_are_never_treated_as_transport_retry(self):
         for exception in (
