@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -142,15 +143,34 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         repeated = plugin_record(call("list"), name, revision)
         require(first["installation_id"] == repeated["installation_id"],
                 "duplicate or switched installation identity")
-        # Exercise the complete recorded lifecycle on the same pinned source.
-        # These are no-change maintenance operations, not an upstream upgrade.
+        # An exact full-SHA source is immutable. The CLI must refuse update
+        # with explicit switch guidance *before changing native Pi files*.
         call("info", first["installation_id"])
-        call("update", first["installation_id"], timeout=240)
+        native_root = pi_profile if scope == "user" else project / ".pi"
+        def native_files() -> list[tuple[str, str]]:
+            if not native_root.exists():
+                return []
+            return sorted(
+                (entry.relative_to(native_root).as_posix(),
+                 hashlib.sha256(entry.read_bytes()).hexdigest())
+                for entry in native_root.rglob("*")
+                if not entry.is_symlink() and entry.is_file()
+            )
+        before_update = native_files()
+        refused = command([cli, "update", first["installation_id"], *args],
+                          project, env, timeout=240)
+        report["operations"].append({k: v for k, v in refused.items()
+                                     if k != "data"})
+        require(refused["exit"] != 0 and
+                "direct full-SHA installations require explicit switch"
+                in refused.get("error_tail", ""),
+                "pinned Git update must refuse with explicit switch guidance")
+        require(native_files() == before_update,
+                "refused immutable source update changed Pi native files")
         call("repair", first["installation_id"], timeout=240)
         maintained = plugin_record(call("list"), name, revision)
         require(maintained["installation_id"] == first["installation_id"],
                 "maintenance switched or duplicated the pinned Pi installation")
-        native_root = pi_profile if scope == "user" else project / ".pi"
         if kind == "skill":
             require(any(native_root.joinpath("skills").rglob("SKILL.md")),
                     "Pi native skills not installed")
