@@ -142,6 +142,14 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         repeated = plugin_record(call("list"), name, revision)
         require(first["installation_id"] == repeated["installation_id"],
                 "duplicate or switched installation identity")
+        # Exercise the complete recorded lifecycle on the same pinned source.
+        # These are no-change maintenance operations, not an upstream upgrade.
+        call("info", first["installation_id"])
+        call("update", first["installation_id"], timeout=240)
+        call("repair", first["installation_id"], timeout=240)
+        maintained = plugin_record(call("list"), name, revision)
+        require(maintained["installation_id"] == first["installation_id"],
+                "maintenance switched or duplicated the pinned Pi installation")
         native_root = pi_profile if scope == "user" else project / ".pi"
         if kind == "skill":
             require(any(native_root.joinpath("skills").rglob("SKILL.md")),
