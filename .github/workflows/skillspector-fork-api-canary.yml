@@ -50,6 +50,7 @@ jobs:
       - name: Focused real-reference tests and lint
         working-directory: candidate
         run: |
+          set -euo pipefail
           # Show exact candidate-only lint/format diffs before strict enforcement.
           uv run ruff check --select I001 --diff tests/test_schema_table_references.py || true
           uv run ruff format --diff src/skillspector/references.py tests/test_schema_table_references.py || true
