@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: e00ca21434d65aabac4a9d7c68a430caa3dac4ae
+          ref: 75b45324ab49c7f94c513319af0ae1e838ef0184
           path: candidate
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +41,7 @@ jobs:
           enable-cache: false
       - name: Confirm exact immutable source leases
         run: |
-          test "$(git -C candidate rev-parse HEAD)" = e00ca21434d65aabac4a9d7c68a430caa3dac4ae
+          test "$(git -C candidate rev-parse HEAD)" = 75b45324ab49c7f94c513319af0ae1e838ef0184
           test "$(git -C baseline rev-parse HEAD)" = 89000abff0d5662728849f35f9017a85a64db96a
           test "$(git -C telnyx rev-parse HEAD)" = 51066f5c677d00fbfce47fe479f1324837f4acca
       - name: Install locked scanner (no provider keys)
@@ -82,7 +82,15 @@ jobs:
           old = json.loads((root / "baseline.json").read_text())
           new = json.loads((root / "candidate.json").read_text())
           assert old["execution_successful"] and new["execution_successful"]
-          assert old.get("findings") == new.get("findings"), "security findings changed"
+          # Scanner JSON stores security findings under `issues`, not `findings`.
+          # Per-run finding_id values are volatile; every substantive issue,
+          # risk assessment and component must remain byte-semantically equal.
+          assert old["risk_assessment"] == new["risk_assessment"], "risk assessment changed"
+          assert old["components"] == new["components"], "scanned components changed"
+          assert len(old["issues"]) == len(new["issues"]) > 0, "security issue count changed"
+          def risk(issue):
+              return {k: v for k, v in issue.items() if k != "finding_id"}
+          assert [risk(issue) for issue in old["issues"]] == [risk(issue) for issue in new["issues"]], "security issues changed"
           def missing_data_id(value):
               return sum(row["status"] == "missing" and "data.id" in row["evidence"]
                          for row in value["analysis_completeness"]["references"])
