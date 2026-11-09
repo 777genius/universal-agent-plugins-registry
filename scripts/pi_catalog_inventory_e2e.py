@@ -40,8 +40,8 @@ def active_sources(head: str) -> list[dict]:
     directory = json.loads((ROOT / "registry/directory.json").read_text(encoding="utf-8"))
     sources = []
     for distribution in directory["distributions"]:
-        if distribution["status"] != "active":
-            continue
+        # A release policy can remain active while its distribution is suspended.
+        # Inventory it for completeness, but never qualify it for installation.
         releases = {release["sequence"]: release for release in distribution["releases"]}
         for policy in distribution["release_policies"]:
             if policy["status"] != "active":
@@ -61,6 +61,7 @@ def active_sources(head: str) -> list[dict]:
                     "unqualified portable component in active release")
             sources.append({
                 "distribution": distribution["id"],
+                "distribution_status": distribution["status"],
                 "release_sequence": release["sequence"],
                 "components": release["components"],
                 "source": f"github:{repo}@{revision}//{source['path']}",
@@ -94,7 +95,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path) -> dict:
         "APPDATA": str(root / "config"), "LOCALAPPDATA": str(root / "data"),
         "GIT_TERMINAL_PROMPT": "0", "CI": "true",
     })
-    result = {key: item[key] for key in ("distribution", "release_sequence", "components", "source")}
+    result = {key: item[key] for key in ("distribution", "distribution_status", "release_sequence", "components", "source")}
     result["status"] = "unverified"
     try:
         argv = [cli, "add", item["source"], "--target", "pi", "--scope", "user",
@@ -149,14 +150,21 @@ def main() -> int:
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"],
                                      prefix="pi-catalog-planning-") as temp:
         for number, source in enumerate(sources):
-            result = run_case(str(Path(binary).resolve()), source, number, Path(temp))
+            if source["distribution_status"] != "active":
+                result = {**source, "status": "not_eligible",
+                          "diagnostic": "suspended distribution; active policy is not install authority"}
+            else:
+                result = run_case(str(Path(binary).resolve()), source, number, Path(temp))
             evidence["results"].append(result)
             args.report.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
             print(f"{number + 1}/{len(sources)} {source['distribution']}: {result['status']}",
                   flush=True)
+    eligible = sum(x["distribution_status"] == "active" for x in sources)
     planned = sum(x["status"] == "planned" for x in evidence["results"])
-    print(f"Pi exact-source planning: {planned}/{len(sources)} planned")
-    return 0 if planned == len(sources) else 1
+    excluded = sum(x["status"] == "not_eligible" for x in evidence["results"])
+    print(f"Pi exact-source planning: {planned}/{eligible} eligible planned, "
+          f"{excluded} suspended excluded from {len(sources)} active policies")
+    return 0 if planned == eligible and excluded == len(sources) - eligible else 1
 
 
 if __name__ == "__main__":
