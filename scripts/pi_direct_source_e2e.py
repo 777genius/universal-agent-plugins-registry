@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,13 @@ def main() -> int:
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--cli", default="agentplugins")
     args = parser.parse_args()
+    # npm installs a .cmd launcher on Windows. subprocess does not reliably
+    # apply PATHEXT when given the bare command name; resolve the trusted
+    # published CLI executable before entering disposable child profiles.
+    cli_path = shutil.which(args.cli)
+    require(cli_path is not None and Path(cli_path).is_file(),
+            "published agentplugins executable not found in PATH")
+    args.cli = str(Path(cli_path).resolve(strict=True))
     require(re.fullmatch(r"[a-f0-9]{40}", args.source_head) is not None,
             "source SHA must be immutable")
     require(os.environ.get("GITHUB_ACTIONS") == "true" and
