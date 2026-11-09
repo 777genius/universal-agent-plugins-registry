@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: 75b45324ab49c7f94c513319af0ae1e838ef0184
+          ref: 523c6d8f03af57fc71eba69d7074c14cb42975a0
           path: candidate
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +41,7 @@ jobs:
           enable-cache: false
       - name: Confirm exact immutable source leases
         run: |
-          test "$(git -C candidate rev-parse HEAD)" = 75b45324ab49c7f94c513319af0ae1e838ef0184
+          test "$(git -C candidate rev-parse HEAD)" = 523c6d8f03af57fc71eba69d7074c14cb42975a0
           test "$(git -C baseline rev-parse HEAD)" = 89000abff0d5662728849f35f9017a85a64db96a
           test "$(git -C telnyx rev-parse HEAD)" = 51066f5c677d00fbfce47fe479f1324837f4acca
       - name: Install locked scanner (no provider keys)
@@ -51,9 +51,6 @@ jobs:
         working-directory: candidate
         run: |
           set -euo pipefail
-          # Show exact candidate-only lint/format diffs before strict enforcement.
-          uv run ruff check --select I001 --diff tests/test_schema_table_references.py || true
-          uv run ruff format --diff src/skillspector/references.py tests/test_schema_table_references.py || true
           uv run ruff check src/skillspector/references.py tests/test_schema_table_references.py
           uv run ruff format --check src/skillspector/references.py tests/test_schema_table_references.py
           uv run pytest -q tests/test_schema_table_references.py tests/test_reference_destinations.py tests/test_json_version_references.py tests/test_out_of_bundle_reference_coverage.py
