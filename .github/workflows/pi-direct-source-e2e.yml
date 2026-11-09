@@ -55,6 +55,23 @@ jobs:
           set -euo pipefail
           python scripts/pi_direct_source_e2e.py --source-head "$SOURCE_HEAD" \
             --report "$RUNNER_TEMP/pi-direct-source-${{ matrix.os }}.json"
+      - name: Check every active signed source as an exact pinned Pi dry-run
+        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/pi_catalog_inventory_e2e.py --source-head "$SOURCE_HEAD" \
+            --report "$RUNNER_TEMP/pi-catalog-inventory.json"
+      - name: Preserve full Pi catalog inventory
+        if: always() && matrix.os == 'ubuntu-24.04'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-catalog-source-plans
+          path: ${{ runner.temp }}/pi-catalog-inventory.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Preserve exact case evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
