@@ -1,0 +1,102 @@
+name: Runtime npm patched candidates (review only)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/runtime-candidate-refresh.yml'
+      - 'docs/plans/2026-11-09-runtime-dependency-advisory-remediation.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-candidate-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: reviewed root candidate / ${{ matrix.id }}
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: firebase
+            runtime_package: firebase-tools
+            version: 15.35.0
+            omit_optional: true
+          - id: hubspot-developer
+            runtime_package: '@hubspot/cli'
+            version: 8.18.0
+            omit_optional: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+          package-manager-cache: false
+      - name: Prepare review candidate in a disposable root (no scripts)
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.id }}
+          ROOT_PACKAGE: ${{ matrix.runtime_package }}
+          ROOT_VERSION: ${{ matrix.version }}
+          OMIT_OPTIONAL: ${{ matrix.omit_optional }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/runtime-candidate/$CANDIDATE"
+          mkdir -p "$work"
+          cp "plugins/$CANDIDATE/io.github.777genius.agentplugins/runtime/package.json" "$work/package.json"
+          node - "$work/package.json" "$ROOT_PACKAGE" "$ROOT_VERSION" <<'NODE'
+          const fs = require('node:fs');
+          const [path, rootPackage, version] = process.argv.slice(2);
+          const doc = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (typeof doc.dependencies?.[rootPackage] !== 'string') throw new Error('unreviewed package name');
+          doc.dependencies[rootPackage] = version;
+          fs.writeFileSync(path, JSON.stringify(doc, null, 2) + '\n');
+          NODE
+          npm install --global --ignore-scripts --no-audit --no-fund npm@12.0.2
+          test "$(npm --version)" = 12.0.2
+          cd "$work"
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          test -s package-lock.json
+          if [[ "$OMIT_OPTIONAL" == true ]]; then
+            npm ci --ignore-scripts --omit=optional --no-audit --no-fund
+            set +e
+            npm audit --omit=optional --json > audit.json
+          else
+            npm ci --ignore-scripts --no-audit --no-fund
+            set +e
+            npm audit --json > audit.json
+          fi
+          audit_exit=$?
+          set -e
+          node - "$ROOT_PACKAGE" "$ROOT_VERSION" "$audit_exit" <<'NODE'
+          const fs=require('node:fs'); const crypto=require('node:crypto');
+          const [name,version,exit]=process.argv.slice(2);
+          const lock=JSON.parse(fs.readFileSync('package-lock.json'));
+          const root=lock.packages[`node_modules/${name}`];
+          if (root?.version!==version || typeof root.integrity!=='string') throw new Error('root pin/integrity mismatch');
+          const audit=JSON.parse(fs.readFileSync('audit.json'));
+          const totals=audit.metadata?.vulnerabilities;
+          if (!totals || !Number.isInteger(totals.total)) throw new Error('audit metadata missing');
+          const digest='sha256:'+crypto.createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex');
+          const result={root_name:name,root_version:version,integrity:root.integrity,lock_digest:digest,lock_packages:Object.keys(lock.packages).length,npm:process.env.npm_config_user_agent,audit_exit:Number(exit),audit_totals:totals,passed:Number(exit)===0 && totals.total===0};
+          fs.writeFileSync('candidate-result.json',JSON.stringify(result,null,2)+'\n');
+          console.log(JSON.stringify(result));
+          NODE
+          # A non-zero audit remains a failed acceptance check, not a waiver.
+          test "$audit_exit" = 0
+      - name: Retain exact lock, manifest and audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-candidate-${{ matrix.id }}
+          path: ${{ runner.temp }}/runtime-candidate/${{ matrix.id }}/
+          if-no-files-found: warn
+          retention-days: 14
