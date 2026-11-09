@@ -1,0 +1,106 @@
+name: SkillSpector 2.13.3 schema PR7 read-only acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-2133-schema-pr7-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  schema-e2e:
+    name: pinned-fork-schema-live-cli
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact new scanner fork HEAD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 44872767c498e2df0439473cf02bbb54dd7b8be6
+          path: fork-head
+          persist-credentials: false
+      - name: Checkout exact old scanner fork HEAD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 89000abff0d5662728849f35f9017a85a64db96a
+          path: fork-base
+          persist-credentials: false
+      - name: Checkout source-qualified genuine Telnyx Skill
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: team-telnyx/ai
+          ref: 51066f5c677d00fbfce47fe479f1324837f4acca
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          version: "0.10.x"
+          enable-cache: false
+      - name: Install frozen scanner runtime and test framework
+        run: |
+          uv sync --directory fork-head --frozen --no-dev --python 3.12
+          uv pip install --python fork-head/.venv/bin/python "pytest==9.0.2"
+      - name: Run strict targeted unit and negative regression tests
+        working-directory: fork-head
+        run: |
+          .venv/bin/python -m pytest -q \
+            tests/test_schema_table_references.py \
+            tests/test_reference_destinations.py \
+            tests/test_json_version_references.py \
+            tests/test_out_of_bundle_reference_coverage.py
+      - name: Compare old and new real no-LLM CLI on immutable Telnyx source
+        run: |
+          set -euo pipefail
+          SOURCE_ROOT="$GITHUB_WORKSPACE/source/skills/telnyx-fax-curl"
+          mkdir -p "$RUNNER_TEMP/schema-canary"
+          for version in base head; do
+            set +e
+            PYTHONPATH="$GITHUB_WORKSPACE/fork-$version/src" \
+              timeout 180s "$GITHUB_WORKSPACE/fork-head/.venv/bin/skillspector" \
+              scan "$SOURCE_ROOT" --no-llm --format json --fail-on-incomplete \
+              > "$RUNNER_TEMP/schema-canary/$version.json" \
+              2> "$RUNNER_TEMP/schema-canary/$version.stderr"
+            code=$?
+            set -e
+            if [[ "$code" != "0" && "$code" != "1" ]]; then
+              echo "Scanner $version execution failed (exit $code)" >&2
+              exit 1
+            fi
+          done
+          python3 - "$RUNNER_TEMP/schema-canary" <<'PY'
+          import json, pathlib, sys
+          target = pathlib.Path(sys.argv[1])
+          old = json.loads((target / "base.json").read_text())
+          new = json.loads((target / "head.json").read_text())
+          def missing(report, needle):
+              return [r for r in report["analysis_completeness"]["references"]
+                      if r.get("status") == "missing" and needle in r.get("evidence", "")]
+          assert missing(old, "data.id"), "pinned baseline has no reproduced false missing field"
+          assert not missing(new, "data.id"), "new scanner still misclassifies data.id"
+          def findings(report):
+              return sorted(json.dumps(f, sort_keys=True, ensure_ascii=True)
+                            for f in report.get("findings", []))
+          assert findings(new) == findings(old), "content security findings changed"
+          assert new.get("execution_successful") is True, "new static scanner did not finish"
+          out = {"base_missing_data_id": len(missing(old, "data.id")),
+                 "head_missing_data_id": len(missing(new, "data.id")),
+                 "security_finding_count": len(findings(old)),
+                 "new_execution_successful": True}
+          (target / "acceptance.json").write_text(json.dumps(out, sort_keys=True))
+          print(json.dumps(out, sort_keys=True))
+          PY
+      - name: Retain independent immutable CLI evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: skillspector-2133-schema-pr7-acceptance
+          path: /tmp/schema-canary/
+          if-no-files-found: warn
+          retention-days: 7
