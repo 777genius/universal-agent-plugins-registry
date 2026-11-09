@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Keep only one exact-source qualification of this temporary PR in flight.
+concurrency:
+  group: skillspector-schema-pr7-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   schema-e2e:
     name: pinned-fork-schema-live-cli
@@ -43,6 +48,11 @@ jobs:
         with:
           version: "0.10.x"
           enable-cache: false
+      - name: Verify exact immutable scanner and source commits
+        run: |
+          test "$(git -C fork-head rev-parse HEAD)" = 523c6d8f03af57fc71eba69d7074c14cb42975a0
+          test "$(git -C fork-base rev-parse HEAD)" = 89000abff0d5662728849f35f9017a85a64db96a
+          test "$(git -C source rev-parse HEAD)" = 51066f5c677d00fbfce47fe479f1324837f4acca
       - name: Install frozen scanner runtime and test framework
         run: |
           uv sync --directory fork-head --frozen --all-extras --python 3.12
