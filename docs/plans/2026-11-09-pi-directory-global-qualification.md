@@ -18,9 +18,16 @@ Date: 2026-11-09. Status: Draft / qualification required. Owner goal: Pi Skills/
 5. Update the canonical client identifiers, Schema 1 allowlists, preview/builders, docs and publication acceptance matrix **together**; no stale positive `pi` badges in the website before the actual signed sequence has been published. Do not add Directory v2, alternate signature schemes, a second installer engine or feature flags.
 6. Run all existing builder unit/schema/static tests plus exact signed candidate readiness on published source and physical client tests. Keep PR Draft and protected signing/promotion approvals intact. After published sequence, verify CDN and product site mirror/selector against exact signed snapshot, with no invented activation.
 
+## Verified checkpoint (2026-11-09)
+
+- Published UAP 0.1.102 with native Pi 1.5.0 passed 18/18 representative user/project lifecycle cases on Linux/macOS/Windows: [GitHub Actions evidence](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42657104676).
+- Source inventory on Linux: **35 of 36 eligible active policies planned**, **one suspended distribution excluded**; `marketing-kit` **refused** because its `hubspot-crm@0.1.0` signed dependency is not admitted for Pi. Treat this as a failed catalog gate, not an install PASS. See [per-policy JSON artifact](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42661240785/artifacts/13694512188).
+- The inventory now covers both user and project scopes on all three runner OSes; pending CI results are evidence to inspect, not proof of completion.
+- Runtime remediation npm audits for Firebase/HubSpot are genuine independent security failures, not Pi successes; no waiver or new signed target is authorized by this checkpoint.
+
 ## Acceptance gates
 
-- Direct-source Pi representative/37-source E2E and explicit negative cases PASS on real 0.1.102; source pins and receipts checked.
+- Direct-source Pi representative lifecycle across three OS plus all source-policy user/project planning on each OS. Record each refusal (not a PASS), exact source pins and receipts, and deliberate suspended-distribution exclusion.
 - Registry generator and 1.0.89/1.0.102 readers handle candidate per documented migration decision; all 37 active policy changes have real validated coverage.
 - Exact head CI, independent review, protected candidate/signing/promotion workflow, signed sequence + Pages feed, UI and post-merge E2E successful. Merely passing schema tests is insufficient.
 

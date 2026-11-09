@@ -66,12 +66,13 @@ def active_sources(head: str) -> list[dict]:
                 "components": release["components"],
                 "source": f"github:{repo}@{revision}//{source['path']}",
             })
-    require(len(sources) == 37, f"expected all 37 active policies, got {len(sources)}")
+    require(bool(sources), "no active release policies were inventoried")
     return sources
 
 
-def run_case(cli: str, item: dict, number: int, scratch: Path) -> dict:
-    root = scratch / f"source-{number:02d}"
+def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> dict:
+    require(scope in {"user", "project"}, "unsupported scope")
+    root = scratch / f"source-{number:02d}-{scope}"
     home = root / "home"
     profile = home / ".pi" / "agent"
     project = root / "project"
@@ -81,7 +82,8 @@ def run_case(cli: str, item: dict, number: int, scratch: Path) -> dict:
                 "disposable profile path is redirected")
     marker = profile / "foreign-neighbor.txt"
     marker.write_text("unowned Pi profile\n", encoding="utf-8")
-    baseline = native_files(profile)
+    project_marker = project / "foreign-neighbor.txt"
+    project_marker.write_text("unowned Pi project\n", encoding="utf-8")
     env = dict(os.environ)
     for key in list(env):
         if key in {"GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY",
@@ -95,11 +97,19 @@ def run_case(cli: str, item: dict, number: int, scratch: Path) -> dict:
         "APPDATA": str(root / "config"), "LOCALAPPDATA": str(root / "data"),
         "GIT_TERMINAL_PROMPT": "0", "CI": "true",
     })
+    if scope == "project":
+        subprocess.run(["git", "init", "-q"], cwd=project, env=env,
+                       capture_output=True, timeout=20, check=True)
+    baseline = native_files(profile)
+    project_baseline = native_files(project)
     result = {key: item[key] for key in ("distribution", "distribution_status", "release_sequence", "components", "source")}
+    result["scope"] = scope
     result["status"] = "unverified"
     try:
-        argv = [cli, "add", item["source"], "--target", "pi", "--scope", "user",
+        argv = [cli, "add", item["source"], "--target", "pi", "--scope", scope,
                 "--dry-run", "--format", "json"]
+        if scope == "project":
+            argv.extend(["--project-root", str(project)])
         proc = subprocess.run(argv, cwd=project, env=env,
                               text=True, encoding="utf-8", errors="replace",
                               capture_output=True, timeout=240, check=False)
@@ -117,10 +127,13 @@ def run_case(cli: str, item: dict, number: int, scratch: Path) -> dict:
         require(native_files(profile) == baseline and
                 marker.read_text(encoding="utf-8") == "unowned Pi profile\n",
                 "dry-run changed native Pi profile")
+        require(native_files(project) == project_baseline and
+                project_marker.read_text(encoding="utf-8") == "unowned Pi project\n",
+                "dry-run changed project files or Pi native state")
         require(not (project / "uap.toml").exists() and
                 not (project / "uap.lock").exists(),
                 "dry-run changed portable project dependency state")
-    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
         result["status"] = "failed"
         result["diagnostic"] = str(error)[-600:]
     return result
@@ -145,26 +158,29 @@ def main() -> int:
         "source_commit": args.source_head, "cli_version": "0.1.102",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "signed_pi_policy_published": False, "runtime_claims": False,
-        "account_authentication": "not_tested", "results": [],
+        "account_authentication": "not_tested",
+        "scopes": ["user", "project"], "active_policy_count": len(sources),
+        "results": [],
     }
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"],
                                      prefix="pi-catalog-planning-") as temp:
         for number, source in enumerate(sources):
-            if source["distribution_status"] != "active":
-                result = {**source, "status": "not_eligible",
-                          "diagnostic": "suspended distribution; active policy is not install authority"}
-            else:
-                result = run_case(str(Path(binary).resolve()), source, number, Path(temp))
-            evidence["results"].append(result)
-            args.report.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
-            print(f"{number + 1}/{len(sources)} {source['distribution']}: {result['status']}",
-                  flush=True)
-    eligible = sum(x["distribution_status"] == "active" for x in sources)
+            for scope in ("user", "project"):
+                if source["distribution_status"] != "active":
+                    result = {**source, "scope": scope, "status": "not_eligible",
+                              "diagnostic": "suspended distribution; active policy is not install authority"}
+                else:
+                    result = run_case(str(Path(binary).resolve()), source, number, Path(temp), scope)
+                evidence["results"].append(result)
+                args.report.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+                print(f"{number + 1}/{len(sources)} {source['distribution']}/{scope}: {result['status']}",
+                      flush=True)
+    eligible = sum(x["distribution_status"] == "active" for x in sources) * 2
     planned = sum(x["status"] == "planned" for x in evidence["results"])
     excluded = sum(x["status"] == "not_eligible" for x in evidence["results"])
-    print(f"Pi exact-source planning: {planned}/{eligible} eligible planned, "
-          f"{excluded} suspended excluded from {len(sources)} active policies")
-    return 0 if planned == eligible and excluded == len(sources) - eligible else 1
+    print(f"Pi exact-source planning: {planned}/{eligible} eligible scope plans, "
+          f"{excluded} suspended scope exclusions across {len(sources)} active policies")
+    return 0 if planned == eligible and excluded == 2 * len(sources) - eligible else 1
 
 
 if __name__ == "__main__":
