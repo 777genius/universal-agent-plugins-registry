@@ -188,13 +188,16 @@ def _added_pack_bytes(repository, initial):
     return sum(size for name, size in current.items() if name not in initial)
 
 
-def _pack_inventory(repository):
-    """Prevent a retry after a failed fetch has altered local Git pack state."""
+def _object_inventory(repository):
+    """Do not re-fetch after a failed call leaves pack or loose Git objects."""
+    root = repository.root / "objects"
     result = {}
-    for path in (repository.root / "objects/pack").iterdir():
+    for path in root.rglob("*"):
         metadata = path.lstat()
-        _require(stat.S_ISREG(metadata.st_mode), "unexpected Git pack entry")
-        result[path.name] = metadata.st_size
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        _require(stat.S_ISREG(metadata.st_mode), "unexpected Git object entry")
+        result[path.relative_to(root).as_posix()] = (metadata.st_size, metadata.st_mtime_ns)
     return result
 
 
@@ -210,7 +213,7 @@ def _fetch_objects(repository, object_ids, budget, remaining):
         "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
         "--no-auto-maintenance", "origin", "--stdin"]
     input_bytes = ("\n".join(object_ids) + "\n").encode("ascii")
-    initial_packs = _pack_inventory(repository) if online else None
+    initial_packs = _object_inventory(repository) if online else None
     for attempt in range(3 if online else 1):
         try:
             _run_git(repository, arguments, budget, input_bytes=input_bytes, file_limit=remaining)
@@ -220,7 +223,7 @@ def _fetch_objects(repository, object_ids, budget, remaining):
             # remotes, offline fixtures, transfer caps or modified pack state.
             if (not online or attempt == 2
                     or not any(marker in str(error).casefold() for marker in _TRANSIENT_GITHUB_FETCH_ERRORS)
-                    or _pack_inventory(repository) != initial_packs):
+                    or _object_inventory(repository) != initial_packs):
                 raise
             delay = (attempt + 1) * 0.25
             budget.check()
