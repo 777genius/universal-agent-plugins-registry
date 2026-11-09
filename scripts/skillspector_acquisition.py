@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER, portable_path
@@ -28,6 +29,17 @@ STDERR_BYTES = 64 << 10
 PACK_BASE_OVERHEAD = 1 << 20
 PACK_PER_FILE_OVERHEAD = 256
 OID = re.compile(r"[0-9a-f]{40}\Z")
+# Retry only failures that happened before the remote supplied useful objects.
+# Arbitrary stderr, unauthorized sources and content/integrity failures are not retryable.
+_TRANSIENT_GITHUB_FETCH_ERRORS = (
+    "requested url returned error: 429",
+    "requested url returned error: 500",
+    "requested url returned error: 502",
+    "requested url returned error: 503",
+    "requested url returned error: 504",
+    "could not resolve host: github.com",
+    "failed to connect to github.com",
+)
 
 # Set limits in a separate interpreter, not preexec_fn in a threaded process.
 # RLIMIT_FSIZE is a per-file limit; cumulative pack bytes are checked separately.
@@ -176,18 +188,49 @@ def _added_pack_bytes(repository, initial):
     return sum(size for name, size in current.items() if name not in initial)
 
 
+def _object_inventory(repository):
+    """Do not re-fetch after a failed call leaves pack or loose Git objects."""
+    root = repository.root / "objects"
+    result = {}
+    for path in root.rglob("*"):
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        _require(stat.S_ISREG(metadata.st_mode), "unexpected Git object entry")
+        result[path.relative_to(root).as_posix()] = (metadata.st_size, metadata.st_mtime_ns)
+    return result
+
+
 def _fetch_objects(repository, object_ids, budget, remaining):
     # Origin belongs to PinnedRepository; only its explicit offline mirror may
     # use the file transport. Source content never controls a remote or ref.
     origin = _run_git(repository, ["remote", "get-url", "origin"], budget).decode("utf-8").strip()
     online = origin == f"https://github.com/{repository.repository}.git"
     _require(online or Path(origin).is_absolute() and Path(origin).is_dir(), "unexpected pinned Git remote")
-    _run_git(repository, ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+    arguments = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
         "-c", "protocol.file.allow=" + ("never" if online else "always"),
         "-c", "fetch.unpackLimit=1", "-c", "fetch.writeCommitGraph=false",
         "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
-        "--no-auto-maintenance", "origin", "--stdin"], budget,
-        input_bytes=("\n".join(object_ids) + "\n").encode("ascii"), file_limit=remaining)
+        "--no-auto-maintenance", "origin", "--stdin"]
+    input_bytes = ("\n".join(object_ids) + "\n").encode("ascii")
+    initial_packs = _object_inventory(repository) if online else None
+    for attempt in range(3 if online else 1):
+        try:
+            _run_git(repository, arguments, budget, input_bytes=input_bytes, file_limit=remaining)
+            return
+        except BridgeError as error:
+            # No retry for missing immutable objects, auth failures, malicious
+            # remotes, offline fixtures, transfer caps or modified pack state.
+            if (not online or attempt == 2
+                    or not any(marker in str(error).casefold() for marker in _TRANSIENT_GITHUB_FETCH_ERRORS)
+                    or _object_inventory(repository) != initial_packs):
+                raise
+            delay = (attempt + 1) * 0.25
+            budget.check()
+            if budget.remaining() <= delay + 1:
+                raise
+            time.sleep(delay)
+            budget.check()
 
 
 def _decode_blobs(body, object_ids, sizes):
