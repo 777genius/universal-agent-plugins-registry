@@ -1,0 +1,110 @@
+name: SkillSpector fork API reference read-only E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-fork-api-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: e00ca21434d65aabac4a9d7c68a430caa3dac4ae
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 89000abff0d5662728849f35f9017a85a64db96a
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: team-telnyx/ai
+          ref: 51066f5c677d00fbfce47fe479f1324837f4acca
+          path: telnyx
+          persist-credentials: false
+          sparse-checkout: skills/telnyx-fax-curl
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.10.x"
+          enable-cache: false
+      - name: Confirm exact immutable source leases
+        run: |
+          test "$(git -C candidate rev-parse HEAD)" = e00ca21434d65aabac4a9d7c68a430caa3dac4ae
+          test "$(git -C baseline rev-parse HEAD)" = 89000abff0d5662728849f35f9017a85a64db96a
+          test "$(git -C telnyx rev-parse HEAD)" = 51066f5c677d00fbfce47fe479f1324837f4acca
+      - name: Install locked scanner (no provider keys)
+        working-directory: candidate
+        run: uv sync --frozen --all-extras --python 3.12
+      - name: Focused real-reference tests and lint
+        working-directory: candidate
+        run: |
+          uv run ruff check src/skillspector/references.py tests/test_schema_table_references.py
+          uv run ruff format --check src/skillspector/references.py tests/test_schema_table_references.py
+          uv run pytest -q tests/test_schema_table_references.py tests/test_reference_destinations.py tests/test_json_version_references.py tests/test_out_of_bundle_reference_coverage.py
+      - name: Full no-provider, no-integration test suite
+        working-directory: candidate
+        timeout-minutes: 16
+        run: uv run pytest -q -m 'not integration and not provider' tests/
+      - name: Real immutable Telnyx Skill before/after no-LLM CLI
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          source="$GITHUB_WORKSPACE/telnyx/skills/telnyx-fax-curl"
+          test -f "$source/SKILL.md"
+          scanner="$GITHUB_WORKSPACE/candidate/.venv/bin/skillspector"
+          for version in baseline candidate; do
+            mkdir -p "$RUNNER_TEMP/$version-home"
+            set +e
+            HOME="$RUNNER_TEMP/$version-home" PYTHONPATH="$GITHUB_WORKSPACE/$version/src" \
+              "$scanner" scan "$source" --no-llm --format json --fail-on-incomplete \
+              > "$RUNNER_TEMP/$version.json"
+            result=$?
+            set -e
+            test "$result" -eq 0 -o "$result" -eq 1
+          done
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          old = json.loads((root / "baseline.json").read_text())
+          new = json.loads((root / "candidate.json").read_text())
+          assert old["execution_successful"] and new["execution_successful"]
+          assert old.get("findings") == new.get("findings"), "security findings changed"
+          def missing_data_id(value):
+              return sum(row["status"] == "missing" and "data.id" in row["evidence"]
+                         for row in value["analysis_completeness"]["references"])
+          before, after = missing_data_id(old), missing_data_id(new)
+          assert before >= 3 and after < before, (before, after)
+          (root / "qualification.json").write_text(json.dumps({
+              "source": "team-telnyx/ai@51066f5c677d00fbfce47fe479f1324837f4acca",
+              "baseline_missing_data_id": before,
+              "candidate_missing_data_id": after,
+              "security_findings_preserved": True,
+          }, sort_keys=True, indent=2))
+          print("Real pinned no-LLM E2E PASS:", before, "->", after,
+                "missing data.id references; risk findings unchanged")
+          PY
+      - name: Preserve original read-only evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-fork-api-qualification
+          path: |
+            ${{ runner.temp }}/baseline.json
+            ${{ runner.temp }}/candidate.json
+            ${{ runner.temp }}/qualification.json
+          if-no-files-found: warn
+          retention-days: 7
