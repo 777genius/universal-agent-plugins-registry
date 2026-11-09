@@ -13,7 +13,7 @@ jobs:
     name: pinned-fork-schema-live-cli
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout exact new scanner fork HEAD
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -45,8 +45,8 @@ jobs:
           enable-cache: false
       - name: Install frozen scanner runtime and test framework
         run: |
-          uv sync --directory fork-head --frozen --no-dev --python 3.12
-          uv pip install --python fork-head/.venv/bin/python "pytest==9.0.2" "pytest-asyncio==1.3.0"
+          uv sync --directory fork-head --frozen --all-extras --python 3.12
+          uv pip install --python fork-head/.venv/bin/python "ruff==0.15.19"
       - name: Run strict targeted unit and negative regression tests
         working-directory: fork-head
         run: |
@@ -55,6 +55,10 @@ jobs:
             tests/test_reference_destinations.py \
             tests/test_json_version_references.py \
             tests/test_out_of_bundle_reference_coverage.py
+      - name: Run full nonprovider nonintegration test suite
+        working-directory: fork-head
+        timeout-minutes: 20
+        run: .venv/bin/python -m pytest -q -m "not integration and not provider" tests/
       - name: Compare old and new real no-LLM CLI on immutable Telnyx source
         run: |
           set -euo pipefail
@@ -84,18 +88,45 @@ jobs:
                       if r.get("status") == "missing" and needle in r.get("evidence", "")]
           assert missing(old, "data.id"), "pinned baseline has no reproduced false missing field"
           assert not missing(new, "data.id"), "new scanner still misclassifies data.id"
-          def findings(report):
-              return sorted(json.dumps(f, sort_keys=True, ensure_ascii=True)
-                            for f in report.get("findings", []))
-          assert findings(new) == findings(old), "content security findings changed"
-          assert new.get("execution_successful") is True, "new static scanner did not finish"
+          # The real scanner JSON stores security findings as 'issues'.
+          # Comparing 'findings' here would vacuously pass with 0 vs 0.
+          def stable_issues(report):
+              return [{k: v for k, v in issue.items() if k != "finding_id"}
+                      for issue in report["issues"]]
+          assert len(old["issues"]) == len(new["issues"]) > 0, "real security issues disappeared"
+          assert stable_issues(old) == stable_issues(new), "real security issues changed"
+          assert old["risk_assessment"] == new["risk_assessment"], "risk assessment changed"
+          assert old["components"] == new["components"], "inspected components changed"
+          assert old["execution_successful"] and new["execution_successful"], "static execution incomplete"
+          assert old["analysis_completeness"]["status"] == "partial"
+          assert new["analysis_completeness"]["status"] == "partial"
+          # Existing real missing dependencies remain explicitly Partial.
+          def ref_key(r):
+              return (r.get("source_path"), r.get("line"), r.get("column"),
+                      r.get("status"), r.get("evidence"))
+          old_rows = {ref_key(row) for row in old["analysis_completeness"]["references"]}
+          new_rows = {ref_key(row) for row in new["analysis_completeness"]["references"]}
+          assert new_rows < old_rows, "missing reference removal did not improve"
+          assert len(old_rows - new_rows) >= 5
+          assert len(new_rows) > 0, "unexpectedly hid all incomplete references"
           out = {"base_missing_data_id": len(missing(old, "data.id")),
                  "head_missing_data_id": len(missing(new, "data.id")),
-                 "security_finding_count": len(findings(old)),
+                 "removed_false_missing_references": len(old_rows - new_rows),
+                 "remaining_missing_references": len(new_rows),
+                 "security_issue_count": len(old["issues"]),
+                 "security_findings_preserved": True,
+                 "remains_honestly_partial": True,
                  "new_execution_successful": True}
           (target / "acceptance.json").write_text(json.dumps(out, sort_keys=True))
           print(json.dumps(out, sort_keys=True))
           PY
+      - name: Check strict Ruff lint and formatting
+        working-directory: fork-head
+        run: |
+          .venv/bin/ruff check --select I001 --diff tests/test_schema_table_references.py || true
+          .venv/bin/ruff format --diff src/skillspector/references.py tests/test_schema_table_references.py || true
+          .venv/bin/ruff check src/skillspector/references.py tests/test_schema_table_references.py
+          .venv/bin/ruff format --check src/skillspector/references.py tests/test_schema_table_references.py
       - name: Retain independent immutable CLI evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
