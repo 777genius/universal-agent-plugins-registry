@@ -20,7 +20,8 @@ REVIEW_FIELDS = {"distribution", "release_sequence", "tree_digest", "transport",
                  "authentication", "evidence_url"}
 TRANSPORTS = {"stdio", "streamable-http", "skills"}
 AUTHENTICATION = {"required", "not_required", "unknown"}
-PLATFORMS = {"linux", "macos", "windows"}
+RUNNER_OS = {"linux": "Linux", "macos": "macOS", "windows": "Windows"}
+PLATFORMS = set(RUNNER_OS)
 SCOPES = ("user", "project")
 MARKETING_KIT = "777genius/marketing-kit"
 
@@ -33,7 +34,8 @@ def expected_cases(sources: list[dict]) -> dict[tuple[str, int, str], dict]:
 def validate_platform_report(report: dict, platform: str, head: str,
                              sources: list[dict]) -> tuple[int, int]:
     """Require complete exact-source evidence; never convert a refusal into PASS."""
-    require(platform in PLATFORMS and report.get("source_commit") == head
+    require(platform in PLATFORMS and report.get("runner_os") == RUNNER_OS[platform]
+            and report.get("source_commit") == head
             and report.get("cli_version") == "0.1.102"
             and report.get("kind") == "pi-direct-source-planning"
             and report.get("signed_pi_policy_published") is False
