@@ -22,6 +22,9 @@ CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
 # new root policy may add Copilot. Never relabel a legacy snapshot as six.
 CLIENTS = ("codex", "cursor", "copilot", "claude", "gemini", "opencode")
 LEGACY_CLIENTS = tuple(client for client in CLIENTS if client != "copilot")
+# Signed policy must grant the prepared VS Code sibling of the requested
+# Copilot CLI backend. VS Code is NOT an additional saved-install target.
+COPILOT_AUTHORIZED_CLIENTS = ("codex", "cursor", "copilot", "vscode", "claude", "gemini", "opencode")
 NATIVE_TARGETS = ("codex", "claude")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
@@ -40,15 +43,30 @@ def expected(snapshot, select):
     policies = [policy for policy in roots[0]["release_policies"]
                 if policy["release_sequence"] == 1 and policy["status"] == "active"]
     require(len(roots) == 1 and len(policies) == 1, "ambiguous managed root policy")
-    clients = tuple(target["client"] for target in policies[0]["targets"])
-    require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed target expansion")
+    authorized = tuple(target["client"] for target in policies[0]["targets"])
+    require(authorized in (LEGACY_CLIENTS, COPILOT_AUTHORIZED_CLIENTS),
+            "unqualified managed target expansion or missing Copilot sibling")
+    clients = tuple(client for client in authorized if client != "vscode")
+    require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified saved-install target set")
     require(all(target["scopes"] == ["user"] and target["authentication"] == "required"
-                and target["delivery"] == "managed" for target in policies[0]["targets"]),
+                and target["delivery"] == ("prepared" if target["client"] == "vscode" else "managed")
+                for target in policies[0]["targets"]),
             "unqualified managed target authority")
     closure = [select(snapshot, selector, clients, cli=CLI) for selector in PINS]
     root = closure[0]
     require(root["policy"]["minimum_installer_version"] == CLI["version"], "managed installer floor changed")
-    require({item["client"] for item in root["policy"]["targets"]} == set(clients), "managed target policy changed")
+    require({item["client"] for item in root["policy"]["targets"]} == set(authorized), "managed target policy changed")
+    if "copilot" in clients:
+        # Actual UAP CLI 0.1.91 directoryEligibilityTargets expands Copilot to
+        # its shared backend sibling, VS Code, for every package in the saved
+        # closure. The sibling is policy-only; no VS Code native install claim.
+        for item in closure:
+            grants = {target["client"]: target for target in item["policy"]["targets"]}
+            companion = grants.get("vscode", {})
+            require(companion.get("delivery") == "prepared"
+                    and companion.get("authentication") == "required"
+                    and companion.get("scopes") == ["user"],
+                    "Copilot requires an authorized prepared VS Code sibling")
     require(all(item["package_version"] == PINS[item["selector"]] for item in closure), "managed package version changed")
     require(root["release_sequence"] == 1, "unqualified managed release")
     proof = {"saved_add": "passed", "info": "passed", "status": "passed",
@@ -67,7 +85,15 @@ def expected(snapshot, select):
 
 
 def coverage(case):
-    return set() if case is None else {(item["distribution_id"], item["release_sequence"], item["client"], "user") for item in case["associations"]}
+    if case is None:
+        return set()
+    rows = {(item["distribution_id"], item["release_sequence"], item["client"], "user")
+            for item in case["associations"]}
+    if "copilot" in case["targets"]:
+        # Policy-only companion authorization is checked by expected() above;
+        # no separate VS Code saved-install lifecycle is attested.
+        rows.add((ROOT, 1, "vscode", "user"))
+    return rows
 
 
 def validate_lock(lock, case):
