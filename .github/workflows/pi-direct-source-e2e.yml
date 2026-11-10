@@ -57,7 +57,8 @@ jobs:
           test "$(agentplugins version)" = "agentplugins 0.1.102"
           command -v agentplugins
           command -v pi
-          pi --version
+          # A preinstalled/shadowing native Pi must not count as Pi 1.5.0.
+          test "$(pi --version)" = "1.5.0"
       - name: Execute pinned exact-source user and project lifecycles
         shell: bash
         env:
