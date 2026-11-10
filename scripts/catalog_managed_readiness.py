@@ -18,7 +18,10 @@ import tomllib
 CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
        "commit": "4555aa53844ee0078e9036cd82638afd67f77c16",
        "binary_digest": "sha256:7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"}
+# Historical signed v1 snapshots retain five clients; only the reviewed
+# new root policy may add Copilot. Never relabel a legacy snapshot as six.
 CLIENTS = ("codex", "cursor", "copilot", "claude", "gemini", "opencode")
+LEGACY_CLIENTS = tuple(client for client in CLIENTS if client != "copilot")
 NATIVE_TARGETS = ("codex", "claude")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
@@ -34,10 +37,15 @@ def expected(snapshot, select):
     roots = [item for item in snapshot["distributions"] if item["id"] == ROOT and item["status"] == "active"]
     if not roots:
         return None
-    closure = [select(snapshot, selector, CLIENTS, cli=CLI) for selector in PINS]
+    policies = [policy for policy in roots[0]["release_policies"]
+                if policy["release_sequence"] == 1 and policy["status"] == "active"]
+    require(len(roots) == 1 and len(policies) == 1, "ambiguous managed root policy")
+    clients = tuple(target["client"] for target in policies[0]["targets"])
+    require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed target expansion")
+    closure = [select(snapshot, selector, clients, cli=CLI) for selector in PINS]
     root = closure[0]
     require(root["policy"]["minimum_installer_version"] == CLI["version"], "managed installer floor changed")
-    require({item["client"] for item in root["policy"]["targets"]} == set(CLIENTS), "managed target policy changed")
+    require({item["client"] for item in root["policy"]["targets"]} == set(clients), "managed target policy changed")
     require(all(item["package_version"] == PINS[item["selector"]] for item in closure), "managed package version changed")
     require(root["release_sequence"] == 1, "unqualified managed release")
     proof = {"saved_add": "passed", "info": "passed", "status": "passed",
@@ -47,12 +55,12 @@ def expected(snapshot, select):
              "doctor": "passed_read_only", "installation_count": 0,
              "retained_installation_count": 4, "active_binding_count": 0,
              "receipt_count": 0, "open_operation_count": 0,
-             "native_plugin_listing": {client: "passed" if client in ("claude", "copilot") else "not_tested" for client in CLIENTS},
+             "native_plugin_listing": {client: "passed" if client in ("claude", "copilot") else "not_tested" for client in clients},
              "account_runtime": "not_tested", "oauth": "not_tested"}
-    return {"cli": CLI, "root": ROOT, "targets": list(CLIENTS), "closure": closure,
+    return {"cli": CLI, "root": ROOT, "targets": list(clients), "closure": closure,
             "edges": [{"parent": ROOT, "dependency": key, "version": value} for key, value in PINS.items() if key != ROOT],
             "associations": [{"distribution_id": item["distribution_id"], "release_sequence": item["release_sequence"], "client": client}
-                             for item in closure for client in CLIENTS], "proof": proof}
+                             for item in closure for client in clients], "proof": proof}
 
 
 def coverage(case):
@@ -79,7 +87,7 @@ def validate_lock(lock, case):
                 registry.get("product_id") == selected["product_id"] and
                 registry.get("repository") == source["repository"] and registry.get("path", "") == source["path"] and
                 registry.get("commit") == source["revision"], "managed lock source identity")
-        require(len(package.get("targets", [])) == len(CLIENTS) and set(package["targets"]) == set(CLIENTS), "managed lock target closure")
+        require(len(package.get("targets", [])) == len(case["targets"]) and set(package["targets"]) == set(case["targets"]), "managed lock target closure")
         alias = package.get("alias")
         require(isinstance(alias, str) and bool(alias) and alias not in aliases.values(), "managed lock alias")
         aliases[selected["distribution_id"]] = alias
@@ -92,7 +100,8 @@ def validate_lock(lock, case):
     return aliases
 
 
-def validate_state(state, case, ctx, root, aliases, *, clients=CLIENTS):
+def validate_state(state, case, ctx, root, aliases, *, clients=None):
+    clients = tuple(case["targets"]) if clients is None else tuple(clients)
     installations = state.get("installations", [])
     require(len(installations) == 4, "managed installation count")
     by_distribution = {item.get("directory", {}).get("distribution_id"): item for item in installations}
@@ -319,6 +328,8 @@ def run(args, root, case, ctx):
     # The composition owner provides confinement and the legacy native-listing
     # parser; no third client engine or portable semantics are introduced here.
     import catalog_publication_readiness as gate
+    clients = tuple(case["targets"])
+    require(clients in (LEGACY_CLIENTS, clients), "unqualified managed lifecycle targets")
     require(getattr(args, "managed_binary", None) is not None, "missing managed released binary")
     binary = args.managed_binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
@@ -347,8 +358,8 @@ def run(args, root, case, ctx):
             return value["data"]
         return value
 
-    added = command("add", "marketing-kit", "--target", ",".join(CLIENTS))
-    require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(CLIENTS), "managed saved add incomplete")
+    added = command("add", "marketing-kit", "--target", ",".join(clients))
+    require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(clients), "managed saved add incomplete")
     state_file = roots["state"] / "state-v2.json"
     manifest, lock_path = roots["state"] / "uap.toml", roots["state"] / "uap.lock"
     # Dependency file location is a released output, but must remain confined to
@@ -360,7 +371,7 @@ def run(args, root, case, ctx):
     aliases = validate_lock(lock, case)
     requirements = tomllib.loads(manifest.read_text())
     require(set(requirements.get("dependencies", {})) == {aliases[ROOT]} and
-            requirements.get("targets") == {client: [aliases[ROOT]] for client in CLIENTS}, "managed root intent")
+            requirements.get("targets") == {client: [aliases[ROOT]] for client in clients}, "managed root intent")
     installations, owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
     store = roots["state"] / "store"
     for selected in case["closure"]:
@@ -371,7 +382,7 @@ def run(args, root, case, ctx):
             require(tomllib.loads((package / "uap.toml").read_text()) == {"schema_version": 1, "dependencies": {key: version for key, version in PINS.items() if key != ROOT}}, "managed declared dependency closure")
         info = command("info", aliases[selected["distribution_id"]])
         require(info.get("installation_id") == installations[selected["distribution_id"]]["installation_id"] and
-                {item["client_id"] for item in info.get("clients", [])} == set(CLIENTS), "managed info identity")
+                {item["client_id"] for item in info.get("clients", [])} == set(clients), "managed info identity")
 
     def native(client, installed):
         # Verify the actual client-owned registry for each immutable package.
@@ -383,10 +394,11 @@ def run(args, root, case, ctx):
                                 expected_marketplace=gate.managed_marketplace(binding["physical_artifact_id"]),
                                 expected_version=selected["package_version"], expected_path=Path(binding["target_locator"]))
     native("claude", True)
-    native("copilot", True)
+    if "copilot" in clients:
+        native("copilot", True)
     status = command("deps", "status")
-    require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(CLIENTS), "managed status incomplete")
-    require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in CLIENTS}, "managed status identities")
+    require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(clients), "managed status incomplete")
+    require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in clients}, "managed status identities")
     require(all(item.get("owner") == "user-default" and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
     immutable = {"manifest": manifest, "lock": lock_path, "state": state_file, "store": store,
                  **{f"owned-{index}": path for index, path in enumerate(owned)}}
@@ -394,13 +406,14 @@ def run(args, root, case, ctx):
         before = snapshot_paths(immutable)
         result = command(*argv)
         require(result.get("outcome") == "completed" and result.get("results") == [] and
-                len(result.get("actions", [])) == len(PINS) * len(CLIENTS) and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
+                len(result.get("actions", [])) == len(PINS) * len(clients) and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
     retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
     retained_before = snapshot_paths(retained)
     require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed Claude removal")
     native("claude", False)
-    native("copilot", True)
+    if "copilot" in clients:
+        native("copilot", True)
 
     def codex_command(*argv, allow_absent=False):
         args.failure_phase = "managed:codex_external_remove"
@@ -426,7 +439,7 @@ def run(args, root, case, ctx):
     remove_codex_plugins(codex_command, identities)
     require(command("remove", "marketing-kit", "--target", "codex", "--external-uninstalled").get("outcome") == "completed", "managed Codex removal")
     partial = gate.read_json(state_file)
-    remaining = tuple(client for client in CLIENTS if client not in NATIVE_TARGETS)
+    remaining = tuple(client for client in clients if client not in NATIVE_TARGETS)
     validate_state(partial, case, ctx, root, aliases, clients=remaining)
     require(command("remove", "marketing-kit").get("outcome") == "completed", "managed orphan removal")
     state = gate.read_json(state_file)
@@ -443,7 +456,8 @@ def run(args, root, case, ctx):
     validate_retained_paths(retained_before, snapshot_paths(retained), data_additions)
     require(command("list").get("installations") == [], "managed list not empty")
     native("claude", False)
-    native("copilot", False)
+    if "copilot" in clients:
+        native("copilot", False)
     before = gate.snapshot_roots(roots)
     doctor = command("doctor")
     gate.validate_doctor({"command": "doctor", "result": "success", "data": doctor}, post_remove=True)
