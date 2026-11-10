@@ -42,6 +42,9 @@ def expected(snapshot, select):
     require(len(roots) == 1 and len(policies) == 1, "ambiguous managed root policy")
     clients = tuple(target["client"] for target in policies[0]["targets"])
     require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed target expansion")
+    require(all(target["scopes"] == ["user"] and target["authentication"] == "required"
+                and target["delivery"] == "managed" for target in policies[0]["targets"]),
+            "unqualified managed target authority")
     closure = [select(snapshot, selector, clients, cli=CLI) for selector in PINS]
     root = closure[0]
     require(root["policy"]["minimum_installer_version"] == CLI["version"], "managed installer floor changed")
