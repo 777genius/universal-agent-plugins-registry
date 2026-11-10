@@ -37,8 +37,12 @@ feedback text together with HubSpot account context and CLI version). The
 candidate MCP E2E now checks the exact complete tool list, tool annotations and
 feedback input contract. A tool-list PASS does not claim `tools/call` or logged-in
 user confirmation. Upstream MCP instructions may encourage autonomous feedback;
-MCP client approval/deny controls remain the user's responsibility. See
-`plugins/hubspot-developer/README.md` and upstream 8.18.0 tool sources.
+MCP client approval/deny controls remain the user's responsibility. The
+existing published `plugins/hubspot-developer/README.md` is immutable as part
+of the old 8.15.0 source tree; `stage_runtime_remediation_preview.py` writes
+the exact disclosure into the **new unsigned 8.18.0 candidate README**, to be
+reviewed and retained when the new immutable release is qualified. See the
+upstream 8.18.0 tool sources.
 
 No signed release, old Directory feed, tool permission setting, or historical
 package version has been changed as part of the isolated preview. Promotion
