@@ -62,10 +62,12 @@ def expected(snapshot, select):
         # closure. The sibling is policy-only; no VS Code native install claim.
         for item in closure:
             grants = {target["client"]: target for target in item["policy"]["targets"]}
-            companion = grants.get("vscode", {})
-            require(companion.get("delivery") == "prepared"
-                    and companion.get("authentication") == "required"
-                    and companion.get("scopes") == ["user"],
+            copilot, companion = grants.get("copilot", {}), grants.get("vscode", {})
+            require(copilot.get("delivery") == "managed"
+                    and companion.get("delivery") == "prepared"
+                    and copilot.get("authentication") in ("required", "not_required")
+                    and companion.get("authentication") == copilot["authentication"]
+                    and copilot.get("scopes") == companion.get("scopes") == ["user"],
                     "Copilot requires an authorized prepared VS Code sibling")
     require(all(item["package_version"] == PINS[item["selector"]] for item in closure), "managed package version changed")
     require(root["release_sequence"] == 1, "unqualified managed release")

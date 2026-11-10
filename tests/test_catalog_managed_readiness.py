@@ -53,7 +53,8 @@ class ManagedReadinessTests(unittest.TestCase):
         self.assertEqual(tuple(prior["targets"]), managed.LEGACY_CLIENTS)
         self.assertEqual(len(managed.coverage(prior)), len(managed.PINS) * 5)
         for change in ("kiro", "project", "missing_sibling", "wrong_delivery",
-                       "sibling_project", "sibling_auth", "dependency_missing_sibling"):
+                       "sibling_project", "sibling_auth", "dependency_missing_sibling",
+                       "dependency_mismatched_auth"):
             invalid = copy.deepcopy(self.snapshot)
             distribution = next(row for row in invalid["distributions"] if row["id"] == managed.ROOT)
             policy = distribution["release_policies"][0]
@@ -71,9 +72,16 @@ class ManagedReadinessTests(unittest.TestCase):
             elif change == "sibling_auth":
                 next(t for t in policy["targets"] if t["client"] == "vscode")["authentication"] = "not_required"
             else:
-                dependency = next(item for item in invalid["distributions"] if item["id"] == "777genius/hubspot-crm")
+                dep_id = ("777genius/hubspot-crm" if change == "dependency_missing_sibling"
+                          else "777genius/playwright-bridge")
+                dependency = next(item for item in invalid["distributions"] if item["id"] == dep_id)
                 dep_policy = next(p for p in dependency["release_policies"] if p["status"] == "active")
-                dep_policy["targets"] = [t for t in dep_policy["targets"] if t["client"] != "vscode"]
+                if change == "dependency_missing_sibling":
+                    dep_policy["targets"] = [t for t in dep_policy["targets"] if t["client"] != "vscode"]
+                else:
+                    # Playwright is credential-free for both backend siblings;
+                    # forcing just VS Code to required is policy drift.
+                    next(t for t in dep_policy["targets"] if t["client"] == "vscode")["authentication"] = "required"
             with self.subTest(change=change), self.assertRaises((ValueError, gate.registry.RegistryError)):
                 managed.expected(invalid, gate.selected)
 
