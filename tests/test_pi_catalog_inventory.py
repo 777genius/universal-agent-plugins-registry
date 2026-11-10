@@ -175,7 +175,8 @@ def saved_pi_receipt(scope: str) -> dict:
         "environment": {"saved": True, "scope": scope,
                         "selected_targets": ["pi"]},
         "actions": [{"alias": "example", "client_id": "pi",
-                     "action": "install", "package_digest": "sha256:" + "a" * 64}],
+                     "action": "install", "revision": "b" * 40,
+                     "package_digest": "sha256:" + "a" * 64}],
     }
 
 
@@ -183,14 +184,37 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
     def test_accepts_saved_dependency_preview_for_both_scopes(self) -> None:
         for scope in ("user", "project"):
             with self.subTest(scope=scope):
-                require_saved_pi_receipt(saved_pi_receipt(scope), scope)
+                require_saved_pi_receipt(saved_pi_receipt(scope), scope, "example", "b" * 40,
+                                         "sha256:" + "a" * 64)
 
     def test_accepts_multiple_pi_dependency_actions(self) -> None:
         receipt = saved_pi_receipt("project")
         receipt["actions"].append({"alias": "dependency", "client_id": "pi",
                                    "action": "install",
                                    "package_digest": "sha256:" + "b" * 64})
-        require_saved_pi_receipt(receipt, "project")
+        require_saved_pi_receipt(receipt, "project", "example", "b" * 40,
+                                 "sha256:" + "a" * 64)
+
+    def test_rejects_wrong_root_identity_despite_valid_dependency_install(self) -> None:
+        # Different root bytes or a no-op root with an unrelated install must
+        # not be counted as eligible just because some dependency would install.
+        for root_change in (
+            {"package_digest": "sha256:" + "c" * 64},
+            {"revision": "c" * 40},
+            {"alias": "other-package"},
+            {"action": "unchanged"},
+        ):
+            receipt = saved_pi_receipt("user")
+            receipt["actions"][0].update(root_change)
+            receipt["actions"].append({
+                "alias": "dependency", "client_id": "pi", "action": "install",
+                "revision": "c" * 40, "package_digest": "sha256:" + "c" * 64,
+            })
+            with self.subTest(root_change=root_change), self.assertRaisesRegex(
+                RuntimeError, "reviewed root installation"
+            ):
+                require_saved_pi_receipt(receipt, "user", "example", "b" * 40,
+                                         "sha256:" + "a" * 64)
 
     def test_rejects_unqualified_saved_dependency_preview(self) -> None:
         mutations = {
@@ -215,7 +239,8 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(RuntimeError):
                 receipt = saved_pi_receipt("user")
                 change(receipt)
-                require_saved_pi_receipt(receipt, "user")
+                require_saved_pi_receipt(receipt, "user", "example", "b" * 40,
+                                         "sha256:" + "a" * 64)
 
 
 

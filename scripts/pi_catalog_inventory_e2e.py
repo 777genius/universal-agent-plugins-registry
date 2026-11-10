@@ -130,7 +130,8 @@ def native_files(profile: Path) -> list[tuple[str, str, str]]:
     return sorted(entries)
 
 
-def require_saved_pi_receipt(data: dict, scope: str) -> None:
+def require_saved_pi_receipt(data: dict, scope: str, manifest_name: str,
+                             revision: str, tree_digest: str) -> None:
     """Validate the published 0.1.102 saved-source dry-run contract."""
     require(data.get("dry_run") is True and data.get("scope") == scope and
             data.get("result") == "success",
@@ -157,6 +158,15 @@ def require_saved_pi_receipt(data: dict, scope: str) -> None:
                 re.fullmatch(r"sha256:[0-9a-f]{64}", action["package_digest"])
                 for action in installs),
             "Pi install plan lacks immutable package digests")
+    # An arbitrary dependency install is not proof that the reviewed root
+    # package was resolved. Match its immutable source identity exactly.
+    require(bool(manifest_name) and SHA.fullmatch(revision) is not None and
+            re.fullmatch(r"sha256:[0-9a-f]{64}", tree_digest) is not None,
+            "invalid reviewed root package identity")
+    require(any(action.get("alias") == manifest_name and
+                action.get("revision") == revision and
+                action.get("package_digest") == tree_digest for action in installs),
+            "saved Pi plan omitted or replaced the reviewed root installation")
 
 
 def active_sources(head: str) -> list[dict]:
@@ -182,11 +192,17 @@ def active_sources(head: str) -> list[dict]:
                     "Pi policy was published: update the old-reader migration proof first")
             require(set(release["components"]) <= {"skills", "mcp", "extensions"},
                     "unqualified portable component in active release")
+            require(bool(release["manifest_name"]) and
+                    re.fullmatch(r"sha256:[0-9a-f]{64}", release["tree_digest"]) is not None,
+                    "active release lacks immutable root package identity")
             sources.append({
                 "distribution": distribution["id"],
                 "distribution_status": distribution["status"],
                 "release_sequence": release["sequence"],
                 "components": release["components"],
+                "manifest_name": release["manifest_name"],
+                "revision": revision,
+                "tree_digest": release["tree_digest"],
                 "source": f"github:{repo}@{revision}//{source['path']}",
             })
     require(bool(sources), "no active release policies were inventoried")
@@ -224,7 +240,10 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str, binar
     baseline = native_files(profile)
     project_baseline = native_files(project)
     state_baseline = native_files(root / "state")
-    result = {key: item[key] for key in ("distribution", "distribution_status", "release_sequence", "components", "source")}
+    result = {key: item[key] for key in (
+        "distribution", "distribution_status", "release_sequence", "components",
+        "manifest_name", "revision", "tree_digest", "source"
+    )}
     result["scope"] = scope
     result["status"] = "unverified"
     try:
@@ -244,7 +263,8 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str, binar
                     data.get("result") == "success" and
                     isinstance(data.get("data"), dict),
                     "successful CLI dry-run must return a structured add envelope")
-            require_saved_pi_receipt(data["data"], scope)
+            require_saved_pi_receipt(data["data"], scope, item["manifest_name"],
+                                     item["revision"], item["tree_digest"])
             # Store only reviewed, non-sensitive plan fields; never echo the CLI
             # environment, transport credentials or arbitrary stderr on success.
             result["planned_actions"] = [
