@@ -1105,6 +1105,21 @@ class PublicationLifecycleTests(unittest.TestCase):
             self.assertEqual(retained["package_source"]["revision"], old_revision)
             self.assertIsNone(retained["published_at"])
 
+            # Sequence 7 was reviewed but never signed; a pinned historical
+            # revision is only valid as a terminally revoked entry. Treating
+            # it as superseded would silently bypass the protected publisher's
+            # immutable current-source binding.
+            unsafe_superseded = copy.deepcopy(retired)
+            unsafe_superseded["distributions"][0]["release_policies"][0]["status"] = "superseded"
+            with self.assertRaisesRegex(
+                publication.PublicationError,
+                "new in-repository release must have an unresolved revision",
+            ):
+                prepare.build_candidate(
+                    unsafe_superseded, config, current_revision, "unsafe-superseded", None,
+                    repository_root=repository,
+                )
+
             unsafe_active = copy.deepcopy(retired)
             unsafe_active["distributions"][0]["release_policies"][0]["status"] = "active"
             with self.assertRaisesRegex(

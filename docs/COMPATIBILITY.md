@@ -114,8 +114,8 @@ record. All listed npm pins are stable releases:
 | `chrome-devtools-mcp` | `1.8.0` |
 | `@playwright/mcp` | `0.0.80` |
 | `@upstash/context7-mcp` | `4.4.4` |
-| `firebase-tools` | `15.34.2` |
-| `@hubspot/cli` | `8.15.0` |
+| `firebase-tools` | `15.35.0` |
+| `@hubspot/cli` | `8.18.0` |
 | `mcp/dockerhub` | OCI digest `sha256:76454af…d4248` |
 
 The exact current closures are bound to the

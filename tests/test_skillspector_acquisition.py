@@ -226,5 +226,143 @@ class ColdAcquisitionTests(unittest.TestCase):
                 self.read(pinned)
 
 
+class OnlineBlobFetchRetryTests(unittest.TestCase):
+    """Transport-only retries; immutable object and resource checks remain separate."""
+
+    def run_fetch(self, failures, *, origin=None, remaining=20, mutate_pack=False, mutate_loose=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packs = root / "objects" / "pack"
+            packs.mkdir(parents=True)
+            source = mock.Mock(root=root, repository="owner/repo")
+            remote = origin or "https://github.com/owner/repo.git"
+            budget = mock.Mock()
+            budget.remaining.return_value = remaining
+            calls = []
+
+            def fake_git(_source, arguments, _budget, **options):
+                if arguments == ["remote", "get-url", "origin"]:
+                    return (remote + "\n").encode("utf-8")
+                self.assertIn("fetch", arguments)
+                calls.append((arguments, options))
+                number = len(calls)
+                if number <= len(failures):
+                    if mutate_pack and number == 1:
+                        (packs / "unexpected.pack").write_bytes(b"changed")
+                    if mutate_loose and number == 1:
+                        loose = packs.parent / "aa"
+                        loose.mkdir()
+                        (loose / ("b" * 38)).write_bytes(b"changed")
+                    raise failures[number - 1]
+                return b""
+
+            result = None
+            with mock.patch.object(acquisition, "_run_git", side_effect=fake_git), \
+                    mock.patch.object(acquisition.time, "sleep") as sleep:
+                try:
+                    acquisition._fetch_objects(source, ["a" * 40], budget, 4 << 20)
+                except Exception as error:
+                    result = error
+            return result, calls, [call.args[0] for call in sleep.call_args_list]
+
+    def test_online_429_then_success_retries_exact_oids_with_same_cap(self):
+        error, calls, sleeps = self.run_fetch([
+            acquisition.BridgeError("The requested URL returned error: 429")
+        ])
+        self.assertIsNone(error)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.25])
+        for arguments, options in calls:
+            self.assertEqual(options["input_bytes"], ("a" * 40 + "\n").encode())
+            self.assertEqual(options["file_limit"], 4 << 20)
+            self.assertIn("protocol.allow=never", arguments)
+            self.assertIn("protocol.https.allow=always", arguments)
+
+    def test_repeated_transient_failure_is_bounded_and_not_reported_as_success(self):
+        error, calls, sleeps = self.run_fetch([
+            acquisition.BridgeError("The requested URL returned error: 503")
+        ] * 3)
+        self.assertIsInstance(error, acquisition.BridgeError)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleeps, [0.25, 0.5])
+
+    def test_permanent_statuses_and_unsupported_remote_do_not_retry(self):
+        for message in (
+            "The requested URL returned error: 403",
+            "The requested URL returned error: 404",
+            "fatal: couldn't find remote ref",
+            "not our ref",
+        ):
+            with self.subTest(message=message):
+                error, calls, sleeps = self.run_fetch([acquisition.BridgeError(message)])
+                self.assertIsInstance(error, acquisition.BridgeError)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(sleeps, [])
+        with tempfile.TemporaryDirectory() as offline:
+            error, calls, sleeps = self.run_fetch(
+                [acquisition.BridgeError("The requested URL returned error: 503")],
+                origin=offline,
+            )
+            self.assertIsInstance(error, acquisition.BridgeError)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(sleeps, [])
+
+    def test_budget_or_pack_changes_prevent_unbounded_transport_retry(self):
+        # The retry cutoff is inclusive: at delay + one reserved second,
+        # the original transport failure must remain the only outcome.
+        for scenario in ({"remaining": 1.1}, {"remaining": 1.25},
+                         {"mutate_pack": True}, {"mutate_loose": True}):
+            with self.subTest(scenario=scenario):
+                error, calls, sleeps = self.run_fetch(
+                    [acquisition.BridgeError("The requested URL returned error: 502")],
+                    **scenario,
+                )
+                self.assertIsInstance(error, acquisition.BridgeError)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(sleeps, [])
+        error, calls, sleeps = self.run_fetch(
+            [acquisition.BridgeError("The requested URL returned error: 502")],
+            remaining=1.251,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.25])
+
+    def test_real_budget_expiring_during_retry_never_launches_another_fetch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "objects" / "pack").mkdir(parents=True)
+            source = mock.Mock(root=root, repository="owner/repo")
+            clock = [0.0]
+            budget = WorkBudget(2, monotonic=lambda: clock[0])
+            fetches = []
+
+            def fake_git(_source, arguments, _budget, **_options):
+                if arguments == ["remote", "get-url", "origin"]:
+                    return b"https://github.com/owner/repo.git\n"
+                fetches.append(arguments)
+                raise acquisition.BridgeError("The requested URL returned error: 503")
+
+            def expire(_seconds):
+                clock[0] = 2.0
+
+            with mock.patch.object(acquisition, "_run_git", side_effect=fake_git), \
+                    mock.patch.object(acquisition.time, "sleep", side_effect=expire), \
+                    self.assertRaises(CheckpointYield):
+                acquisition._fetch_objects(source, ["a" * 40], budget, 4 << 20)
+            self.assertEqual(len(fetches), 1)
+
+    def test_size_and_transfer_limits_are_never_treated_as_transport_retry(self):
+        for exception in (
+            acquisition.AcquisitionTransferLimit("Git pack exceeded cap"),
+            DiscoveryInputLimitError("Source exceeds file cap"),
+        ):
+            with self.subTest(exception=type(exception).__name__):
+                error, calls, sleeps = self.run_fetch([exception])
+                self.assertIs(error, exception)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(sleeps, [])
+
+
 if __name__ == "__main__":
     unittest.main()

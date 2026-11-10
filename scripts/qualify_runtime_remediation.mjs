@@ -400,6 +400,28 @@ export async function mcpSmoke(args, env, cwd, expected, result) {
     assert.equal(new Set(names).size, names.length, "duplicate tools");
     assert.deepEqual([...names].sort(), [...expected.toolNames].sort(), "MCP tool set differs from reviewed expectation");
     for (const tool of listed.tools) assert.equal(tool.inputSchema?.type, "object", "tool must expose object input schema");
+    // HubSpot 8.18 adds explicit remote search and feedback. Verify more than
+    // their names: feedback is an externally transmitting, non-read-only action
+    // whose caller must apply client-side approval. Tool discovery is NOT consent.
+    if (expected.toolNames.includes("submit-feedback")) {
+      const feedback = listed.tools.find((tool) => tool.name === "submit-feedback");
+      const search = listed.tools.find((tool) => tool.name === "search-knowledge-base");
+      assert(feedback && search, "reviewed HubSpot 8.18 tools missing");
+      assert.deepEqual(feedback.annotations, {
+        readOnlyHint: false, destructiveHint: false,
+        idempotentHint: false, openWorldHint: true,
+      }, "feedback tool security annotations changed");
+      assert.equal(search.annotations?.readOnlyHint, true,
+        "knowledge search must remain read-only");
+      assert.equal(search.annotations?.openWorldHint, true,
+        "knowledge search still performs external requests");
+      assert.equal(feedback.inputSchema?.properties?.feedback?.type, "string",
+        "feedback text argument contract changed");
+      assert.deepEqual([...feedback.inputSchema?.properties?.source?.enum || []].sort(),
+        ["agent", "user"], "feedback attribution options changed");
+      assert.equal(search.inputSchema?.properties?.knowledgeSearchQuery?.type, "string",
+        "knowledge query argument contract changed");
+    }
     result.tools = { count: names.length, names, response_digest: digest(JSON.stringify(listed)), called: false };
     if (fatal) throw fatal;
     // Qualification ends at the complete tool list. HubSpot's nested CLI emits

@@ -229,6 +229,39 @@ LOCKED_NPM_REVIEWED_CLOSURES = {
         "ignored_install_scripts": LOCKED_NPM_IGNORED_INSTALL_SCRIPT_ALLOWLIST[("@hubspot/cli", "8.15.0")],
         "optional_install_scripts": LOCKED_NPM_OPTIONAL_INSTALL_SCRIPT_ALLOWLIST[("@hubspot/cli", "8.15.0")],
     },
+    (
+        "firebase-tools", "15.35.0",
+        "sha256:2bcb58637dc986c4caf43571e4e509ab05048d1e5ef994061ec1b1935bc5e41d",
+    ): {
+        "overrides": {
+            "@google-cloud/pubsub": "6.0.1", "gaxios": "8.0.0", "qs": "6.16.1",
+            "glob": "14.0.4", "minimatch": "11.0.5", "rimraf": "6.1.4",
+        },
+        "ignored_install_scripts": frozenset({
+            ("node_modules/protobufjs", "7.6.6",
+             "sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg=="),
+        }),
+        "optional_install_scripts": frozenset(),
+    },
+    (
+        "@hubspot/cli", "8.18.0",
+        "sha256:c024a5cba8b3584985cdae1df1f80f2135a014dda73ecc483ba4c4e6bebf5f7e",
+    ): {
+        "overrides": {
+            "@sentry/node": "10.71.0", "qs": "6.16.1", "js-yaml": "4.3.2",
+            "moment": "2.31.0", "axios": "1.20.0",
+            "@modelcontextprotocol/sdk": "1.32.1", "vite": "6.4.5",
+            "glob": "14.0.4", "minimatch": "11.0.5",
+        },
+        "ignored_install_scripts": frozenset({
+            ("node_modules/esbuild", "0.25.12",
+             "sha512-bbPBYYrtZbkt6Os6FiTLCTFxvq4tt3JKall1vRwshA3fdVztsLAatFaZobhkBC8/BrPetoa0oksYoKXoG4ryJg=="),
+        }),
+        "optional_install_scripts": frozenset({
+            ("node_modules/fsevents", "2.3.3",
+             "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="),
+        }),
+    },
 }
 
 

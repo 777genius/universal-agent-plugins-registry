@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@hubspot/cli": "8.15.0"
+    "@hubspot/cli": "8.18.0"
   },
   "overrides": {
     "@sentry/node": "10.71.0",
@@ -12,6 +12,8 @@
     "moment": "2.31.0",
     "axios": "1.20.0",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "vite": "6.4.5"
+    "vite": "6.4.5",
+    "glob": "14.0.4",
+    "minimatch": "11.0.5"
   }
 }
