@@ -69,6 +69,33 @@ def isolated_cli_env(root: Path) -> dict[str, str]:
     return env
 
 
+
+def seed_verified_cli_cache(cli: str, scratch: Path) -> Path:
+    """Download and verify the released CLI once, then clone its cache per case."""
+    seed = scratch / "cli-seed"
+    home = seed / "home"
+    home.mkdir(parents=True)
+    cache = seed / "binary-cache"
+    env = isolated_cli_env(seed)
+    env.update({"HOME": str(home), "USERPROFILE": str(home),
+                "AGENTPLUGINS_CACHE_DIR": str(cache)})
+    proc = subprocess.run([cli, "version"], cwd=seed, env=env,
+                          capture_output=True, text=True, timeout=180, check=True)
+    require(proc.stdout.strip() == "agentplugins 0.1.102",
+            "isolated launcher did not resolve public CLI 0.1.102")
+    require(cache.is_dir() and
+            any(p.is_file() for p in cache.rglob("*")) and
+            all(not p.is_symlink() for p in cache.rglob("*")),
+            "verified published CLI cache missing or contains symlinks")
+    return cache
+
+
+def clone_verified_cli_cache(seed: Path, destination: Path) -> None:
+    """Use separate verified launcher bytes without giving packages a shared cache."""
+    require(not destination.exists(), "case launcher cache unexpectedly exists")
+    shutil.copytree(seed, destination)
+
+
 def native_files(profile: Path) -> list[tuple[str, str, str]]:
     """Snapshot file bytes, directories and symlink targets without dereferencing links."""
     entries = []
@@ -140,7 +167,7 @@ def active_sources(head: str) -> list[dict]:
     return sources
 
 
-def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> dict:
+def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str, binary_seed: Path) -> dict:
     require(scope in {"user", "project"}, "unsupported scope")
     root = scratch / f"source-{number:02d}-{scope}"
     home = root / "home"
@@ -150,6 +177,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
         path.mkdir(parents=True, exist_ok=True)
         require(not path.is_symlink() and path.resolve().is_relative_to(root.resolve()),
                 "disposable profile path is redirected")
+    clone_verified_cli_cache(binary_seed, root / "binary-cache")
     marker = profile / "foreign-neighbor.txt"
     marker.write_text("unowned Pi profile\n", encoding="utf-8")
     project_marker = project / "foreign-neighbor.txt"
@@ -158,7 +186,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
     env.update({
         "HOME": str(home), "USERPROFILE": str(home), "PI_CODING_AGENT_DIR": str(profile),
         "AGENTPLUGINS_HOME": str(root / "state"),
-        "AGENTPLUGINS_CACHE_DIR": str(root / "cache"),
+        "AGENTPLUGINS_CACHE_DIR": str(root / "binary-cache"),
         "XDG_DATA_HOME": str(root / "data"),
         "XDG_CONFIG_HOME": str(root / "config"),
         "XDG_CACHE_HOME": str(root / "cache"),
@@ -244,13 +272,14 @@ def main() -> int:
     }
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"],
                                      prefix="pi-catalog-planning-") as temp:
+        binary_seed = seed_verified_cli_cache(str(Path(binary).resolve()), Path(temp))
         for number, source in enumerate(sources):
             for scope in ("user", "project"):
                 if source["distribution_status"] != "active":
                     result = {**source, "scope": scope, "status": "not_eligible",
                               "diagnostic": "suspended distribution; active policy is not install authority"}
                 else:
-                    result = run_case(str(Path(binary).resolve()), source, number, Path(temp), scope)
+                    result = run_case(str(Path(binary).resolve()), source, number, Path(temp), scope, binary_seed)
                 evidence["results"].append(result)
                 args.report.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
                 print(f"{number + 1}/{len(sources)} {source['distribution']}/{scope}: {result['status']}",

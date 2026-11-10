@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pi_direct_source_e2e import require_removed_native_payload
 from pi_catalog_inventory_e2e import (
-    isolated_cli_env, native_files, require_exact_checkout,
+    isolated_cli_env, native_files, clone_verified_cli_cache, require_exact_checkout,
     require_published_cli_version,
     require_saved_pi_receipt,
 )
@@ -81,6 +81,34 @@ class PiIsolatedChildEnvironmentTests(unittest.TestCase):
             self.assertEqual(set(child), {
                 "PATH", "CI", "GIT_TERMINAL_PROMPT", "TMP", "TEMP", "TMPDIR",
             })
+
+
+
+class PiLauncherCacheIsolationTests(unittest.TestCase):
+    def test_each_case_has_a_separate_cached_published_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = root / "seed"
+            (seed / "0.1.102" / "platform").mkdir(parents=True)
+            (seed / "0.1.102" / "platform" / "agentplugins").write_bytes(b"verified")
+            first = root / "case-one"
+            second = root / "case-two"
+            clone_verified_cli_cache(seed, first)
+            clone_verified_cli_cache(seed, second)
+            (first / "0.1.102" / "platform" / "agentplugins").write_bytes(b"changed")
+            self.assertEqual((second / "0.1.102" / "platform" / "agentplugins").read_bytes(),
+                             b"verified")
+            self.assertEqual((seed / "0.1.102" / "platform" / "agentplugins").read_bytes(),
+                             b"verified")
+
+    def test_existing_case_cache_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed, existing = root / "seed", root / "existing"
+            seed.mkdir()
+            existing.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "already exists"):
+                clone_verified_cli_cache(seed, existing)
 
 
 class PiNativeSnapshotTests(unittest.TestCase):

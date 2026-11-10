@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from pi_catalog_inventory_e2e import (
     isolated_cli_env, native_files, require_exact_checkout,
-    require_published_cli_version,
+    require_published_cli_version, seed_verified_cli_cache, clone_verified_cli_cache,
 )
 
 PINNED_UPSTREAM = "769c6cd22c3d95462d1f55d789e9532cabefa5a9"
@@ -113,7 +113,7 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
         raise RuntimeError("unsupported Pi materialization kind")
 
 def run_case(cli: str, source_head: str, temp: Path, case: tuple,
-             scope: str) -> dict:
+             scope: str, binary_seed: Path) -> dict:
     case_id, name, source_path, revision, kind = case
     if revision is None:
         revision = source_head
@@ -127,11 +127,12 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     pi_profile = home / ".pi" / "agent"
     for directory in (home, project, pi_profile, case_root / "data",
                       case_root / "config", case_root / "cache",
-                      case_root / "state", case_root / "binary-cache"):
+                      case_root / "state"):
         directory.mkdir(parents=True, exist_ok=True)
         require(not directory.is_symlink() and
                 directory.resolve().is_relative_to(case_root.resolve()),
                 "disposable path crossed case boundary")
+    clone_verified_cli_cache(binary_seed, case_root / "binary-cache")
     original_user = pi_profile / "foreign-neighbor.txt"
     original_project = project / "foreign-neighbor.txt"
     original_user.write_text("unowned pi profile bytes\n")
@@ -284,10 +285,11 @@ def main() -> int:
               "results": []}
     with tempfile.TemporaryDirectory(prefix="pi-direct-e2e-",
                                      dir=os.environ["RUNNER_TEMP"]) as temporary:
+        binary_seed = seed_verified_cli_cache(args.cli, Path(temporary))
         for case in CASES:
             for scope in ("user", "project"):
                 result = run_case(args.cli, args.source_head, Path(temporary),
-                                  case, scope)
+                                  case, scope, binary_seed)
                 report["results"].append(result)
                 args.report.write_text(json.dumps(report, indent=2) + "\n")
                 print(f"{result['case']}/{scope}: {result['status']}", flush=True)
