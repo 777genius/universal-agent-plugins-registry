@@ -13,7 +13,9 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-from pi_catalog_inventory_e2e import native_files
+from pi_catalog_inventory_e2e import (
+    native_files, require_exact_checkout, require_published_cli_version,
+)
 
 PINNED_UPSTREAM = "769c6cd22c3d95462d1f55d789e9532cabefa5a9"
 CASES = (
@@ -216,6 +218,9 @@ def main() -> int:
             os.environ.get("GITHUB_REPOSITORY") ==
             "777genius/universal-agent-plugins-registry" and
             os.environ.get("RUNNER_TEMP"), "only disposable GitHub-hosted E2E")
+    # Self-attest the exact source tree and public CLI, even outside the workflow.
+    require_exact_checkout(args.source_head)
+    require_published_cli_version(args.cli)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {"schema_version": 1, "tested_at": datetime.now(timezone.utc).isoformat(),
               "uap_cli": "public npm 0.1.102", "source_head": args.source_head,
