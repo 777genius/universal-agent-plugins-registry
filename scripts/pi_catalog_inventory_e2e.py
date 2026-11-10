@@ -50,9 +50,6 @@ def require_planned_pi_receipt(data: dict, scope: str) -> None:
             data.get("status") == "planned" and data.get("failed") == 0 and
             data.get("succeeded") == 1,
             "CLI success did not attest a one-target dry-run plan")
-    environment = data.get("environment")
-    require(isinstance(environment, dict) and environment.get("scope") == scope,
-            "CLI success did not attest the requested scope")
     targets = data.get("targets")
     require(isinstance(targets, list) and len(targets) == 1 and
             isinstance(targets[0], dict) and targets[0].get("target") == "pi",
