@@ -31,7 +31,8 @@ def digest(data: bytes) -> str:
 
 
 def write_json(path: Path, value: dict) -> None:
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Signed candidate digests must not depend on Windows text-mode CRLF translation.
+    path.write_bytes((json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
 def main() -> None:
