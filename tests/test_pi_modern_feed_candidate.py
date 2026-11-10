@@ -40,6 +40,7 @@ class ModernPiEvidenceTests(unittest.TestCase):
         self.sources = [self.tool, self.marketing, self.suspended]
         self.report = {
             "kind": "pi-direct-source-planning", "source_commit": HEAD,
+            "runner_os": "Linux",
             "cli_version": "0.1.102", "signed_pi_policy_published": False,
             "active_policy_count": 3,
             "results": [
@@ -56,12 +57,14 @@ class ModernPiEvidenceTests(unittest.TestCase):
     def test_unknown_refusal_cannot_be_counted_as_reviewed(self) -> None:
         report = copy.deepcopy(self.report)
         report["results"][0]["status"] = "refused"
+        report["runner_os"] = "Windows"
         with self.assertRaisesRegex(RuntimeError, "unexpected eligibility failure"):
             validate_platform_report(report, "windows", HEAD, self.sources)
 
     def test_duplicate_or_missing_scope_is_rejected(self) -> None:
         report = copy.deepcopy(self.report)
         report["results"][1] = copy.deepcopy(report["results"][0])
+        report["runner_os"] = "macOS"
         with self.assertRaisesRegex(RuntimeError, "repeated case"):
             validate_platform_report(report, "macos", HEAD, self.sources)
 
@@ -76,6 +79,10 @@ class ModernPiEvidenceTests(unittest.TestCase):
         report["results"][-1]["status"] = "planned"
         with self.assertRaisesRegex(RuntimeError, "suspended source"):
             validate_platform_report(report, "linux", HEAD, self.sources)
+
+    def test_linux_report_cannot_be_mislabeled_windows(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unqualified source evidence"):
+            validate_platform_report(self.report, "windows", HEAD, self.sources)
 
     def test_source_head_mismatch_is_rejected(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unqualified source evidence"):
