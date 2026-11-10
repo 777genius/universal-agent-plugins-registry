@@ -4047,7 +4047,7 @@
             "path": "plugins/firebase"
           },
           "tree_digest_algorithm": "agentplugins-tree-sha256-v1",
-          "tree_digest": "sha256:022a67d9d5a4ec1124e34d55504cd9624a6fac4dda79e09f8d7a47744a331225",
+          "tree_digest": "sha256:023f63215112b322f30ed694b6611258ba04d059654a1b0155a8867226dfe4c3",
           "manifest_digest": "sha256:a6438b9ba1ab794020b8dd463a80d03bbd6e797bc8b7d3d1551ce97190a3cedc"
         }
       ]

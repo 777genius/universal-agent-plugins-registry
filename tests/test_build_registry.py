@@ -1098,7 +1098,7 @@ class DirectoryDomainTests(unittest.TestCase):
             expected_status = "suspended" if distribution["id"] in suspended_live_npx else "active"
             self.assertEqual(distribution["status"], expected_status)
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
-                expected_sequences = [1, 2, 3, 4, 5, 6, 7]
+                expected_sequences = [1, 2, 3, 4, 5, 6, 7, 8]
             elif distribution["id"] == "777genius/context7":
                 expected_sequences = [1, 2, 3, 4, 5, 6]
             elif distribution["id"] in {
@@ -1476,7 +1476,8 @@ class DirectoryDomainTests(unittest.TestCase):
         runtime_path = registry.LOCKED_NPM_RUNTIME_PATH
         old = json.loads((historical / runtime_path / "package.json").read_text())
         new = json.loads((current / runtime_path / "package.json").read_text())
-        self.assertEqual(old["dependencies"], new["dependencies"])
+        self.assertEqual(old["dependencies"], {"@hubspot/cli": "8.15.0"})
+        self.assertEqual(new["dependencies"], {"@hubspot/cli": "8.18.0"})
         self.assertEqual(old["overrides"]["qs"], "6.16.0")
         self.assertEqual(new["overrides"]["qs"], "6.16.1")
 
@@ -1493,7 +1494,7 @@ class DirectoryDomainTests(unittest.TestCase):
             config = json.loads(config_path.read_text())
             config["package_lock_sha256"] = registry.digest_bytes(lock_path.read_bytes())
             config_path.write_text(json.dumps(config))
-            with self.assertRaisesRegex(registry.RegistryError, "runtime security overrides differ"):
+            with self.assertRaisesRegex(registry.RegistryError, "runtime lock does not match a reviewed security closure"):
                 registry.validate_locked_npm_runtime(package)
 
     def test_security_closure_without_historical_policy_cannot_drop_overrides(self) -> None:
@@ -1516,18 +1517,18 @@ class DirectoryDomainTests(unittest.TestCase):
             with self.assertRaisesRegex(registry.RegistryError, "runtime lock does not match a reviewed security closure"):
                 registry.validate_locked_npm_runtime(package)
 
-    def test_firebase_security_runtime_is_active_at_sequence_seven(self) -> None:
+    def test_firebase_security_runtime_is_active_at_sequence_eight(self) -> None:
         package = registry.ROOT / "plugins" / "firebase"
         registry.validate_locked_npm_runtime(package)
         runtime_root = package / registry.LOCKED_NPM_RUNTIME_PATH
         runtime = json.loads((runtime_root / "runtime.json").read_text())
         package_json = json.loads((runtime_root / "package.json").read_text())
         package_lock = json.loads((runtime_root / "package-lock.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.34.2"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("firebase-tools", "15.35.0"))
         self.assertNotIn("stream-json", package_json["overrides"])
         self.assertEqual(
             package_lock["packages"]["node_modules/stream-json"]["version"],
-            "3.7.0",
+            "3.9.0",
         )
         source = self.source()
         distribution = next(
@@ -1538,19 +1539,19 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(
             [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
             [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"),
-             (5, "superseded"), (6, "superseded"), (7, "active")],
+             (5, "superseded"), (6, "superseded"), (7, "superseded"), (8, "active")],
         )
         resolution = registry.resolve_directory(source, "firebase", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/firebase", 7),
+            ("777genius/firebase", 8),
         )
 
-    def test_hubspot_security_runtime_is_active_at_sequence_seven(self) -> None:
+    def test_hubspot_security_runtime_is_active_at_sequence_eight(self) -> None:
         package = registry.ROOT / "plugins" / "hubspot-developer"
         registry.validate_locked_npm_runtime(package)
         runtime = json.loads((package / registry.LOCKED_NPM_RUNTIME_PATH / "runtime.json").read_text())
-        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.15.0"))
+        self.assertEqual((runtime["package"], runtime["version"]), ("@hubspot/cli", "8.18.0"))
         self.assertFalse(runtime["omit_optional"])
         source = self.source()
         distribution = next(
@@ -1568,13 +1569,14 @@ class DirectoryDomainTests(unittest.TestCase):
                 (4, "superseded", "0.1.26"),
                 (5, "superseded", "0.1.26"),
                 (6, "superseded", "0.1.26"),
-                (7, "active", "0.1.26"),
+                (7, "superseded", "0.1.26"),
+                (8, "active", "0.1.26"),
             ],
         )
         resolution = registry.resolve_directory(source, "hubspot-developer", ["codex"])
         self.assertEqual(
             (resolution["distribution_id"], resolution["release_sequence"]),
-            ("777genius/hubspot-developer", 7),
+            ("777genius/hubspot-developer", 8),
         )
 
     def test_locked_npm_runtime_requires_boolean_omit_optional(self) -> None:
