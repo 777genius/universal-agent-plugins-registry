@@ -12,7 +12,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tests.test_catalog_publication_readiness import catalog
+from tests.test_catalog_publication_readiness import catalog, PROJECT_RELEASE_FIXTURE
 import catalog_publication_readiness as gate
 import catalog_managed_readiness as managed
 
@@ -347,7 +347,8 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_offline_artifact_cannot_omit_or_forge_managed_proof(self):
         baseline = copy.deepcopy(self.snapshot)
-        expected = gate.expected_artifact(self.snapshot, baseline, {"sequence": 42}, {"sequence": 43})
+        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
+            expected = gate.expected_artifact(self.snapshot, baseline, {"sequence": 42}, {"sequence": 43})
         for mutation in (
             lambda value: value.pop("managed_dependencies"),
             lambda value: value["managed_dependencies"]["closure"].pop(),

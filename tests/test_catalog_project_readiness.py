@@ -5,28 +5,31 @@ import copy
 import argparse
 import base64
 import json
+import io
+from contextlib import redirect_stderr
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from tests.test_catalog_publication_readiness import catalog
+from tests.test_catalog_publication_readiness import catalog, arguments, PROJECT_RELEASE_FIXTURE
 from tests import test_catalog_managed_readiness as managed_tests
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
 import catalog_publication_readiness as gate
 
 
-# Deliberately synthetic identity used only by offline contract fixtures.
-RELEASE_FIXTURE = {"version": "0.1.103", "tag": "agentplugins-v0.1.103",
-                   "commit": "a" * 40, "binary_digest": "sha256:" + "b" * 64}
-
+# Deliberately synthetic CLI identity used only by offline contract fixtures.
+RELEASE_FIXTURE = PROJECT_RELEASE_FIXTURE["cli"]
 
 class ProjectReadinessTests(unittest.TestCase):
     def setUp(self):
+        release = patch.object(project, "RELEASE", PROJECT_RELEASE_FIXTURE)
+        release.start()
+        self.addCleanup(release.stop)
         self.snapshot = catalog()
-        self.case = project.expected(self.snapshot, gate.selected, RELEASE_FIXTURE)
+        self.case = project.expected(self.snapshot, gate.selected)
 
     def test_five_positive_user_six_positive_project_and_user_refusal(self):
         user = managed.expected(self.snapshot, gate.selected)
@@ -48,7 +51,83 @@ class ProjectReadinessTests(unittest.TestCase):
         prior = copy.deepcopy(self.snapshot)
         root = next(item for item in prior["distributions"] if item["id"] == managed.ROOT)
         root["release_policies"][0]["targets"] = [target for target in root["release_policies"][0]["targets"] if target["client"] != "copilot"]
-        self.assertIsNone(project.expected(prior, gate.selected, RELEASE_FIXTURE))
+        with patch.object(project, "RELEASE", None):
+            self.assertIsNone(project.expected(prior, gate.selected))
+
+    def test_release_authority_is_explicit_unset_and_has_exact_authenticated_assets(self):
+        with patch.object(project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
+            project.reviewed_release()
+        self.assertEqual(project.reviewed_release(), PROJECT_RELEASE_FIXTURE)
+        copied = project.reviewed_release()
+        copied["cli"]["version"] = "modified"
+        self.assertEqual(project.RELEASE, PROJECT_RELEASE_FIXTURE)
+        for mutation in (
+            lambda value: value.pop("checksums_digest"),
+            lambda value: value.update(manifest_digest="unverified"),
+            lambda value: value.update(download_url="https://example.invalid/cli"),
+        ):
+            value = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
+            mutation(value)
+            with self.subTest(mutation=mutation), patch.object(project, "RELEASE", value), self.assertRaises(ValueError):
+                project.reviewed_release()
+        with self.assertRaises(TypeError):
+            gate.expected_artifact(self.snapshot, self.snapshot, {}, {}, project_cli=RELEASE_FIXTURE)
+
+    def entrypoint_argv(self, root, mode, *, project_binary=True):
+        argv = [mode, "--feed", str(root / "feed"), "--baseline-feed", str(root / "baseline"),
+                "--trusted-keys", str(root / "keys.json")]
+        for field, value in vars(arguments(self.snapshot)).items():
+            argv.extend(["--" + field.replace("_", "-"), str(value)])
+        if mode == "verify":
+            argv.extend(["--artifact", str(root / "artifact.json")])
+        else:
+            for name in ("binary", "managed-binary", "claude", "copilot", "opencode", "sandbox", "output"):
+                argv.extend(["--" + name, str(root / name)])
+            if project_binary:
+                argv.extend(["--project-binary", str(root / "project-binary")])
+        return argv
+
+    def test_produce_and_verify_entrypoints_require_fixed_project_contract(self):
+        baseline = {**self.snapshot, "sequence": 19}
+        ctx = {"sequence": 20, "snapshot_digest": "sha256:" + "e" * 64}
+        baseline_identity = {"sequence": 19, "snapshot_digest": "sha256:" + "f" * 64}
+        expected = gate.expected_artifact(self.snapshot, baseline, baseline_identity, ctx)
+        self.assertEqual(expected["project_dependencies"]["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+        for mode in ("produce", "verify"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                artifact = root / "artifact.json"
+                artifact.write_bytes(gate.publication.canonical_json(expected))
+                def invoke(*, unset=False, project_binary=True):
+                    with patch.object(gate, "load_feed", side_effect=((self.snapshot, ctx), (baseline, baseline_identity))), \
+                            patch.object(gate, "context", return_value=ctx), \
+                            patch.object(gate, "produce") as producer, \
+                            patch.object(project, "RELEASE", None if unset else PROJECT_RELEASE_FIXTURE), \
+                            redirect_stderr(io.StringIO()):
+                        result = gate.main(self.entrypoint_argv(root, mode, project_binary=project_binary))
+                    return result, producer
+                result, producer = invoke()
+                self.assertEqual(result, 0)
+                if mode == "produce":
+                    self.assertEqual(producer.call_args.args[2], expected)
+                    self.assertEqual(producer.call_args.args[0].project_binary, root / "project-binary")
+                    result, producer = invoke(project_binary=False)
+                    self.assertEqual(result, 1)
+                    producer.assert_not_called()
+                else:
+                    producer.assert_not_called()
+                    omitted = copy.deepcopy(expected)
+                    omitted.pop("project_dependencies")
+                    artifact.write_bytes(gate.publication.canonical_json(omitted))
+                    self.assertEqual(invoke()[0], 1)
+                    forged = copy.deepcopy(expected)
+                    forged["project_dependencies"]["cli"]["binary_digest"] = "sha256:" + "0" * 64
+                    artifact.write_bytes(gate.publication.canonical_json(forged))
+                    self.assertEqual(invoke()[0], 1)
+                    artifact.write_bytes(gate.publication.canonical_json(expected))
+                result, producer = invoke(unset=True)
+                self.assertEqual(result, 1)
+                producer.assert_not_called()
 
     def test_unreviewed_source_grants_floor_and_release_pin_refused(self):
         for mutate in (
@@ -60,7 +139,7 @@ class ProjectReadinessTests(unittest.TestCase):
             value = copy.deepcopy(self.snapshot)
             mutate(next(item for item in value["distributions"] if item["id"] == managed.ROOT))
             with self.subTest(mutate=mutate), self.assertRaises((ValueError, gate.registry.RegistryError)):
-                project.expected(value, gate.selected, RELEASE_FIXTURE)
+                project.expected(value, gate.selected)
         for mutate in (
             lambda cli: cli.update(version="0.1.102"),
             lambda cli: cli.update(tag="main"),
@@ -71,11 +150,12 @@ class ProjectReadinessTests(unittest.TestCase):
             cli = copy.deepcopy(RELEASE_FIXTURE)
             mutate(cli)
             with self.subTest(mutate=mutate), self.assertRaises(ValueError):
-                project.expected(self.snapshot, gate.selected, cli)
+                with patch.object(project, "RELEASE", {**PROJECT_RELEASE_FIXTURE, "cli": cli}):
+                    project.expected(self.snapshot, gate.selected)
 
     def test_canonical_artifact_rejects_missing_or_forged_project_case(self):
         expected = gate.expected_artifact(self.snapshot, self.snapshot, {"sequence": 19},
-                                          {"sequence": 20}, project_cli=RELEASE_FIXTURE)
+                                          {"sequence": 20})
         gate.validate_artifact(copy.deepcopy(expected), expected)
         for mutate in (
             lambda value: value.pop("project_dependencies"),

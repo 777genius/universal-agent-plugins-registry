@@ -287,9 +287,9 @@ def credential_free_probe(selection: dict) -> bool:
     return bool(targets) and all(target.get("authentication") == "not_required" for target in targets)
 
 
-def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict, *, project_cli: dict | None = None) -> dict:
+def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
     selections = plan(snapshot)
-    project_case = project.expected(snapshot, selected, project_cli) if project_cli is not None else None
+    project_case = project.expected(snapshot, selected)
     policy_scope(baseline, snapshot, selections, project_case=project_case)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
@@ -899,6 +899,8 @@ def main(argv: list[str] | None = None) -> int:
             validate_artifact(read_json(args.artifact, canonical=True), expected)
         else:
             require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot", "opencode")), "producer paths required")
+            require("project_dependencies" not in expected or args.project_binary is not None,
+                    "--project-binary required for Project dependency proof")
             produce(args, snapshot, expected)
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:

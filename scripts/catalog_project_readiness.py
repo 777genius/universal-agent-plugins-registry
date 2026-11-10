@@ -1,7 +1,7 @@
 """Marketing Kit Project placement from signed v1 User-qualified sources.
 
-This module consumes a reviewed released-CLI identity supplied by the catalog
-composition owner. It never downloads an unpinned installer or grants a target.
+This module owns the fixed reviewed Project release identity. It never accepts
+a caller-selected installer identity, downloads an unpinned installer or grants a target.
 Project native configuration is evidence of installed resources, not a claim
 about account authentication, trust approval or successful MCP execution.
 """
@@ -16,6 +16,9 @@ import tomllib
 import catalog_managed_readiness as managed
 
 require = managed.require
+# Remains unset until the actual release commit and all three authenticated
+# release asset digests have been reviewed. No development or guessed pin.
+RELEASE = None
 CLIENTS = managed.CLIENTS
 SKILL_ROOTS = {"codex": ".agents/skills", "cursor": ".cursor/skills",
                "copilot": ".github/skills", "claude": ".claude/skills",
@@ -37,7 +40,17 @@ def validate_cli(cli):
             "Project released CLI identity")
 
 
-def expected(snapshot, select, cli):
+def reviewed_release():
+    require(RELEASE is not None, "reviewed Project CLI release identity is unset")
+    require(isinstance(RELEASE, dict) and set(RELEASE) == {"cli", "checksums_digest", "manifest_digest"},
+            "Project release identity fields")
+    validate_cli(RELEASE["cli"])
+    require(all(isinstance(RELEASE[key], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", RELEASE[key])
+                for key in ("checksums_digest", "manifest_digest")), "Project release asset digests")
+    return copy.deepcopy(RELEASE)
+
+
+def expected(snapshot, select):
     """Construct the exact Project contract only for the reviewed six-source root."""
     base = managed.expected(snapshot, select)
     if base is None:
@@ -47,7 +60,7 @@ def expected(snapshot, select, cli):
     if source_clients == managed.LEGACY_CLIENTS:
         return None
     require(source_clients == CLIENTS, "unqualified Project source targets")
-    validate_cli(cli)
+    cli = reviewed_release()["cli"]
     closure = [select(snapshot, selector, CLIENTS, cli=cli) for selector in managed.PINS]
     require(all(item["package_version"] == managed.PINS[item["selector"]] for item in closure),
             "Project immutable closure changed")
