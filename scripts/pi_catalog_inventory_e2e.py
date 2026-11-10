@@ -146,9 +146,17 @@ def require_saved_pi_receipt(data: dict, scope: str) -> None:
             all(isinstance(action, dict) and
                 action.get("client_id") == "pi" and
                 isinstance(action.get("alias"), str) and action["alias"] and
-                isinstance(action.get("action"), str) and action["action"]
+                action.get("action") in {"install", "unchanged"}
                 for action in actions),
-            "CLI saved dry-run did not report complete Pi dependency actions")
+            "CLI saved dry-run did not report valid Pi dependency actions")
+    # Every case has a fresh, isolated state. A success containing only no-op
+    # actions would not demonstrate that this package is actually installable.
+    installs = [action for action in actions if action["action"] == "install"]
+    require(bool(installs), "fresh saved Pi dry-run planned no installations")
+    require(all(isinstance(action.get("package_digest"), str) and
+                re.fullmatch(r"sha256:[0-9a-f]{64}", action["package_digest"])
+                for action in installs),
+            "Pi install plan lacks immutable package digests")
 
 
 def active_sources(head: str) -> list[dict]:
@@ -237,6 +245,14 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str, binar
                     isinstance(data.get("data"), dict),
                     "successful CLI dry-run must return a structured add envelope")
             require_saved_pi_receipt(data["data"], scope)
+            # Store only reviewed, non-sensitive plan fields; never echo the CLI
+            # environment, transport credentials or arbitrary stderr on success.
+            result["planned_actions"] = [
+                {key: action[key] for key in (
+                    "alias", "client_id", "action", "package_digest", "revision"
+                ) if key in action}
+                for action in data["data"]["actions"]
+            ]
             result["status"] = "planned"
         else:
             result["status"] = "refused"

@@ -175,7 +175,7 @@ def saved_pi_receipt(scope: str) -> dict:
         "environment": {"saved": True, "scope": scope,
                         "selected_targets": ["pi"]},
         "actions": [{"alias": "example", "client_id": "pi",
-                     "action": "install"}],
+                     "action": "install", "package_digest": "sha256:" + "a" * 64}],
     }
 
 
@@ -188,7 +188,8 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
     def test_accepts_multiple_pi_dependency_actions(self) -> None:
         receipt = saved_pi_receipt("project")
         receipt["actions"].append({"alias": "dependency", "client_id": "pi",
-                                   "action": "install"})
+                                   "action": "install",
+                                   "package_digest": "sha256:" + "b" * 64})
         require_saved_pi_receipt(receipt, "project")
 
     def test_rejects_unqualified_saved_dependency_preview(self) -> None:
@@ -204,6 +205,10 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
             "wrong_action_target": lambda data: data["actions"][0].update(client_id="codex"),
             "missing_alias": lambda data: data["actions"][0].update(alias=""),
             "missing_action": lambda data: data["actions"][0].update(action=""),
+            "unrelated_action": lambda data: data["actions"][0].update(action="remove"),
+            "no_install": lambda data: data["actions"][0].update(action="unchanged"),
+            "missing_digest": lambda data: data["actions"][0].pop("package_digest"),
+            "untrusted_digest": lambda data: data["actions"][0].update(package_digest="unsigned"),
             "invalid_action": lambda data: data.update(actions=[None]),
         }
         for name, change in mutations.items():
