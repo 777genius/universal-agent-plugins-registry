@@ -154,7 +154,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$QUALIFICATION_SOURCE_SHA"
-          python -m pip install --disable-pip-version-check jsonschema==4.26.0
+          python -m pip install --disable-pip-version-check jsonschema==4.26.0 tzdata==2026.6
+          python -c "from zoneinfo import ZoneInfo; ZoneInfo('Europe/Kyiv')"
           python scripts/stage_runtime_remediation_preview.py \
             --artifacts "$RUNNER_TEMP/runtime-candidate-input" \
             --report "$RUNNER_TEMP/candidate-stage.json"
