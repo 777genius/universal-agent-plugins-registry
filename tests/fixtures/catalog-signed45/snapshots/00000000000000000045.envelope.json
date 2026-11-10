@@ -1,0 +1,1 @@
+{"algorithm":"Ed25519","envelope_schema_version":1,"key_id":"uap-directory-2026-01","sequence":45,"signature":"Q+BAhxsRfd7YAHWnBFDxsBBVt1xudAo2BR1ZLW8k4nvJJ23IctpYaPKhQ1XKOjdJRVz4XuBI5f7XeDjzKBRaAQ==","signature_domain":"UAP-DIRECTORY-SNAPSHOT-ED25519-V1","snapshot_digest":"sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50","snapshot_schema_version":1}

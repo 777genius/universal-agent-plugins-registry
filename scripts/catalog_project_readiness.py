@@ -59,6 +59,8 @@ def expected(snapshot, select):
     source_clients = tuple(target["client"] for target in root["policy"]["targets"])
     if source_clients == managed.LEGACY_CLIENTS:
         return None
+    require(source_clients != managed.COPILOT_AUTHORIZED_CLIENTS,
+            "seven-grant policy requires separate final publication qualification")
     require(source_clients == CLIENTS, "unqualified Project source targets")
     cli = reviewed_release()["cli"]
     closure = [select(snapshot, selector, CLIENTS, cli=cli) for selector in managed.PINS]

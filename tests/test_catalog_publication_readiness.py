@@ -26,8 +26,12 @@ PROJECT_RELEASE_FIXTURE = {"cli": {"version": "0.1.103", "tag": "agentplugins-v0
     "checksums_digest": "sha256:" + "c" * 64, "manifest_digest": "sha256:" + "d" * 64}
 
 
-def catalog():
-    value = json.loads((ROOT / "registry/directory.json").read_text())
+SIGNED45_FEED = ROOT / "tests/fixtures/catalog-signed45"
+
+
+def synthetic_catalog(value):
+    """Copy policy/source facts into synthetic offline unit context only."""
+    value = copy.deepcopy(value)
     for distribution in value["distributions"]:
         for release in distribution["releases"]:
             if release["package_source"]["revision"] is None:
@@ -35,6 +39,15 @@ def catalog():
     value.update(sequence=20, publication_id="test-publication", source_commit="a" * 40,
                  snapshot_schema_version=1, generated_at="2026-08-30T00:00:00Z", expires_at="2099-01-01T00:00:00Z")
     return value
+
+
+def catalog():
+    # Keep final signed45 source authority independent of unsigned future policy.
+    return synthetic_catalog(json.loads((SIGNED45_FEED / "snapshots/00000000000000000045.json").read_text()))
+
+
+def unsigned_source_catalog():
+    return synthetic_catalog(json.loads((ROOT / "registry/directory.json").read_text()))
 
 
 def arguments(snapshot):
@@ -61,6 +74,23 @@ class CatalogContractTests(unittest.TestCase):
     def expected(self):
         return gate.expected_artifact(self.snapshot, self.baseline, self.baseline_identity,
                                       gate.context(self.args, self.snapshot, self.identity))
+
+    def test_frozen_signed45_feed_authenticates_untouched_bytes_and_provenance(self):
+        # This loads original signed bytes, not catalog()'s synthetic unit
+        # context. Only historical expiry is relaxed by baseline=True.
+        snapshot, identity = gate.load_feed(SIGNED45_FEED, ROOT / "registry/publication/trusted-keys.json", baseline=True)
+        provenance = json.loads((SIGNED45_FEED / "provenance.json").read_text())
+        self.assertEqual(identity, {"sequence": 45, "snapshot_digest": "sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50"})
+        self.assertEqual(snapshot["publication_id"], provenance["publication_id"])
+        self.assertEqual(snapshot["source_commit"], provenance["source_commit"])
+        self.assertEqual(provenance["publication_id"], "42888897655")
+        self.assertEqual(provenance["source_commit"], "8c032ba2169637c1c42f0b8080da7ba3713a48ac")
+        self.assertEqual(provenance["materialized_ledger_sha"], "3509baaac8e4f7ee3d565440f8c0d0bd1f928fba")
+        self.assertEqual(provenance["snapshot_digest"], identity["snapshot_digest"])
+        root = next(item for item in snapshot["distributions"] if item["id"] == gate.managed.ROOT)
+        clients = tuple(target["client"] for target in root["release_policies"][0]["targets"])
+        self.assertEqual(clients, gate.managed.CLIENTS)
+        self.assertNotIn("vscode", clients)
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()

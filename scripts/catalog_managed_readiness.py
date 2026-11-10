@@ -22,6 +22,9 @@ CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
 # new root policy may add Copilot. Never relabel a legacy snapshot as six.
 CLIENTS = ("codex", "cursor", "copilot", "claude", "gemini", "opencode")
 LEGACY_CLIENTS = tuple(client for client in CLIENTS if client != "copilot")
+# The legacy .91 resolver requires this prepared VSCode sibling grant for six
+# requested User clients. It is not an additional saved-install target.
+COPILOT_AUTHORIZED_CLIENTS = ("codex", "cursor", "copilot", "vscode", "claude", "gemini", "opencode")
 NATIVE_TARGETS = ("codex", "claude")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
@@ -40,18 +43,34 @@ def expected(snapshot, select):
     policies = [policy for policy in roots[0]["release_policies"]
                 if policy["release_sequence"] == 1 and policy["status"] == "active"]
     require(len(roots) == 1 and len(policies) == 1, "ambiguous managed root policy")
-    source_clients = tuple(target["client"] for target in policies[0]["targets"])
-    require(source_clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed target expansion")
-    # Preserve the five-positive historical 0.1.91 case independently of the
-    # corrected release used by the separate six-positive User/Project cases.
-    clients = LEGACY_CLIENTS
+    authorized = tuple(target["client"] for target in policies[0]["targets"])
+    require(authorized in (LEGACY_CLIENTS, CLIENTS, COPILOT_AUTHORIZED_CLIENTS),
+            "unqualified managed target expansion")
+    # Five grants and signed45's six own grants retain the historical .91
+    # five-User proof. That release can qualify six only with the explicit
+    # prepared VSCode sibling grant, as required by its shared-backend resolver.
+    clients = CLIENTS if authorized == COPILOT_AUTHORIZED_CLIENTS else LEGACY_CLIENTS
     require(all(target["scopes"] == ["user"] and target["authentication"] == "required"
-                and target["delivery"] == "managed" for target in policies[0]["targets"]),
+                and target["delivery"] == ("prepared" if target["client"] == "vscode" else "managed")
+                for target in policies[0]["targets"]),
             "unqualified managed target authority")
     closure = [select(snapshot, selector, clients, cli=CLI) for selector in PINS]
     root = closure[0]
     require(root["policy"]["minimum_installer_version"] == CLI["version"], "managed installer floor changed")
-    require({item["client"] for item in root["policy"]["targets"]} == set(source_clients), "managed target policy changed")
+    require({item["client"] for item in root["policy"]["targets"]} == set(authorized), "managed target policy changed")
+    if "copilot" in clients:
+        # Actual UAP CLI 0.1.91 directoryEligibilityTargets expands Copilot to
+        # its shared backend sibling, VS Code, for every package in the saved
+        # closure. The sibling is policy-only; no VS Code native install claim.
+        for item in closure:
+            grants = {target["client"]: target for target in item["policy"]["targets"]}
+            copilot, companion = grants.get("copilot", {}), grants.get("vscode", {})
+            require(copilot.get("delivery") == "managed"
+                    and companion.get("delivery") == "prepared"
+                    and copilot.get("authentication") in ("required", "not_required")
+                    and companion.get("authentication") == copilot["authentication"]
+                    and copilot.get("scopes") == companion.get("scopes") == ["user"],
+                    "Copilot requires an authorized prepared VS Code sibling")
     require(all(item["package_version"] == PINS[item["selector"]] for item in closure), "managed package version changed")
     require(root["release_sequence"] == 1, "unqualified managed release")
     proof = {"saved_add": "passed", "info": "passed", "status": "passed",
@@ -90,7 +109,16 @@ def release_expected(snapshot, select):
 
 
 def coverage(case):
-    return set() if case is None else {(item["distribution_id"], item["release_sequence"], item["client"], "user") for item in case["associations"]}
+    if case is None:
+        return set()
+    rows = {(item["distribution_id"], item["release_sequence"], item["client"], "user")
+            for item in case["associations"]}
+    root = next(item for item in case["closure"] if item["distribution_id"] == ROOT)
+    if tuple(target["client"] for target in root["policy"]["targets"]) == COPILOT_AUTHORIZED_CLIENTS:
+        # Policy-only companion authorization is checked by expected() above;
+        # no separate VS Code saved-install lifecycle is attested.
+        rows.add((ROOT, 1, "vscode", "user"))
+    return rows
 
 
 def validate_lock(lock, case):
@@ -506,13 +534,20 @@ def run(args, root, case, ctx):
     import catalog_publication_readiness as gate
     clients = tuple(case["targets"])
     scope = case.get("placement_scope", "user")
-    release_user = scope == "user" and clients == CLIENTS
-    require((scope == "user" and clients in (LEGACY_CLIENTS, CLIENTS)) or
+    release_user = case.get("placement_scope") == "user" and clients == CLIENTS
+    historical_user = "placement_scope" not in case and scope == "user"
+    require((historical_user and clients in (LEGACY_CLIENTS, CLIENTS)) or release_user or
             (scope == "project" and clients == CLIENTS and case.get("signed_source_scope") == "user"),
             "unqualified managed lifecycle targets or scope")
-    if release_user:
+    if historical_user:
+        require(case["cli"] == CLI, "wrong historical managed CLI authority")
+        if clients == CLIENTS:
+            root_selection = next(item for item in case["closure"] if item["distribution_id"] == ROOT)
+            require(tuple(target["client"] for target in root_selection["policy"]["targets"]) == COPILOT_AUTHORIZED_CLIENTS,
+                    "historical six-target User requires prepared VSCode source grant")
+    if release_user or scope == "project":
         import catalog_project_readiness as project
-        require(case["cli"] == project.reviewed_release()["cli"], "wrong six-target User release authority")
+        require(case["cli"] == project.reviewed_release()["cli"], "wrong corrected managed CLI authority")
     binary_arg = getattr(args, "project_binary" if scope == "project" or release_user else "managed_binary", None)
     require(binary_arg is not None, "missing managed released binary")
     binary = binary_arg.resolve(strict=True)
@@ -605,8 +640,9 @@ def run(args, root, case, ctx):
         project.validate_native_resources(installations, case, roots["workspace"], store)
     else:
         native("claude", True)
-        if release_user:
+        if "copilot" in clients:
             native("copilot", True)
+        if release_user:
             validate_release_user_bindings(installations, case, root)
             listed = command("list")
             require({item.get("installation_id") for item in listed.get("installations", [])} ==
@@ -702,6 +738,7 @@ def run(args, root, case, ctx):
             native("claude", False)
             if release_user:
                 project.validate_native_cleanup(installations, root)
+            if "copilot" in clients:
                 native("copilot", False)
     remove_closure()
     if release_user:

@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from tests.test_catalog_publication_readiness import catalog, arguments, PROJECT_RELEASE_FIXTURE
+from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE
 from tests import test_catalog_managed_readiness as managed_tests
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
@@ -62,6 +62,24 @@ class ProjectReadinessTests(unittest.TestCase):
         root["release_policies"][0]["targets"] = [target for target in root["release_policies"][0]["targets"] if target["client"] != "copilot"]
         with patch.object(project, "RELEASE", None):
             self.assertIsNone(project.expected(prior, gate.selected))
+
+    def test_seven_grant_future_policy_cannot_emit_final_publication_contract(self):
+        future = unsigned_source_catalog()
+        for release in (None, PROJECT_RELEASE_FIXTURE):
+            with self.subTest(release_set=release is not None), patch.object(project, "RELEASE", release):
+                for construct in (project.expected, managed.release_expected):
+                    with self.assertRaisesRegex(ValueError, "seven-grant policy requires separate"):
+                        construct(future, gate.selected)
+                with self.assertRaisesRegex(ValueError, "seven-grant policy requires separate"):
+                    gate.expected_artifact(future, future, {"sequence": 19}, {"sequence": 20})
+                for mode in ("produce", "verify"):
+                    with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        with patch.object(gate, "load_feed", side_effect=((future, {"sequence": 20}), ({**future, "sequence": 19}, {"sequence": 19}))), \
+                                patch.object(gate, "context", return_value={"sequence": 20}), \
+                                patch.object(gate, "produce") as producer, redirect_stderr(io.StringIO()):
+                            self.assertEqual(gate.main(self.entrypoint_argv(root, mode)), 1)
+                            producer.assert_not_called()
 
     def test_release_authority_is_explicit_unset_and_has_exact_authenticated_assets(self):
         with patch.object(project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
