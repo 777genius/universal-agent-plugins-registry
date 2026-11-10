@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 import sys
 import tempfile
@@ -10,12 +11,34 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_direct_source_e2e import require_removed_native_payload
+from pi_direct_source_e2e import CASES, require_removed_native_payload
 from pi_catalog_inventory_e2e import (
     isolated_cli_env, native_files, clone_verified_cli_cache, require_exact_checkout,
     require_published_cli_version,
     require_saved_pi_receipt,
 )
+
+
+class PiRepresentativeHubSpotTests(unittest.TestCase):
+    def test_pinned_hubspot_case_matches_active_signed_dependency_source(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        directory = json.loads((root / "registry/directory.json").read_text(encoding="utf-8"))
+        hubspot = next(d for d in directory["distributions"]
+                       if d["id"] == "777genius/hubspot-crm")
+        self.assertEqual(hubspot["status"], "active")
+        active = [p for p in hubspot["release_policies"] if p["status"] == "active"]
+        self.assertEqual(len(active), 1)
+        release = next(r for r in hubspot["releases"]
+                       if r["sequence"] == active[0]["release_sequence"])
+        self.assertEqual(release["components"], ["mcp"])
+        source = release["package_source"]
+        self.assertIsNotNone(source["revision"], "HubSpot qualification must be pinned")
+        self.assertIn(
+            ("hubspot-crm-http", "hubspot-crm", source["path"],
+             source["revision"], "mcp", source["repository"]),
+            CASES,
+            "Pi HubSpot lifecycle must test the exact immutable signed dependency source",
+        )
 
 
 class PiEvidenceIdentityTests(unittest.TestCase):

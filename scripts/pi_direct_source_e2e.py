@@ -19,10 +19,17 @@ from pi_catalog_inventory_e2e import (
 )
 
 PINNED_UPSTREAM = "769c6cd22c3d95462d1f55d789e9532cabefa5a9"
+PINNED_HUBSPOT = "2ddbb99dd190c1792b79904f9875e6322bccd243"
 CASES = (
-    ("context7-stdio", "context7", "plugins/context7", None, "mcp"),
-    ("context7-http", "context7", "plugins/agent-plugins/context7", PINNED_UPSTREAM, "mcp"),
-    ("navigator-skills", "agent-code-navigator", "plugins/agent-code-navigator", None, "skill"),
+    ("context7-stdio", "context7", "plugins/context7", None, "mcp",
+     "777genius/universal-agent-plugins-registry"),
+    ("context7-http", "context7", "plugins/agent-plugins/context7", PINNED_UPSTREAM, "mcp",
+     "upstash/context7"),
+    ("navigator-skills", "agent-code-navigator", "plugins/agent-code-navigator", None, "skill",
+     "777genius/universal-agent-plugins-registry"),
+    # Real Marketing Kit dependency source, but no signed Pi eligibility yet.
+    ("hubspot-crm-http", "hubspot-crm", "plugins/hubspot-crm", PINNED_HUBSPOT, "mcp",
+     "777genius/universal-agent-plugins"),
 )
 
 
@@ -114,12 +121,9 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
 
 def run_case(cli: str, source_head: str, temp: Path, case: tuple,
              scope: str, binary_seed: Path) -> dict:
-    case_id, name, source_path, revision, kind = case
+    case_id, name, source_path, revision, kind, repository = case
     if revision is None:
         revision = source_head
-        repository = "777genius/universal-agent-plugins-registry"
-    else:
-        repository = "upstash/context7"
     selector = f"github:{repository}@{revision}//{source_path}"
     case_root = temp / f"{case_id}-{scope}"
     home = case_root / "home"
@@ -293,7 +297,7 @@ def main() -> int:
                 report["results"].append(result)
                 args.report.write_text(json.dumps(report, indent=2) + "\n")
                 print(f"{result['case']}/{scope}: {result['status']}", flush=True)
-    require(len(report["results"]) == 6 and
+    require(len(report["results"]) == 2 * len(CASES) and
             all(x["status"] == "passed" for x in report["results"]),
             "Pi direct source lifecycle incomplete: review exact case JSON")
     return 0
