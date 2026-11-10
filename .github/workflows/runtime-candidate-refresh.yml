@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/runtime-candidate-refresh.yml'
       - 'docs/plans/2026-11-09-runtime-dependency-advisory-remediation.md'
+      - 'scripts/stage_runtime_remediation_preview.py'
+      - 'scripts/qualify_runtime_remediation.mjs'
   workflow_dispatch:
 
 permissions:
