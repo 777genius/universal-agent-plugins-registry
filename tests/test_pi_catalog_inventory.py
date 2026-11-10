@@ -187,6 +187,35 @@ class PiNativeRemovalTests(unittest.TestCase):
             skill.unlink()
             require_removed_native_payload(root, "skill")
 
+    def test_remove_keeps_existing_mcp_server_but_rejects_ours(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            foreign = {"command": "node", "args": ["--version"]}
+            config = root / "mcp.json"
+            config.write_text('{"mcpServers":{"foreign-neighbor":'
+                              '{"command":"node","args":["--version"]}}}', encoding="utf-8")
+            expected = {"foreign-neighbor": foreign}
+            require_removed_native_payload(root, "mcp", surviving_servers=expected)
+            config.write_text('{"mcpServers":{"foreign-neighbor":'
+                              '{"command":"node","args":["--version"]},"stale":{}}}',
+                              encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "registration remains"):
+                require_removed_native_payload(root, "mcp", surviving_servers=expected)
+
+    def test_remove_keeps_existing_skill_but_rejects_ours(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            foreign = root / "skills" / "foreign-neighbor" / "SKILL.md"
+            foreign.parent.mkdir(parents=True)
+            foreign.write_text("existing", encoding="utf-8")
+            expected = {"foreign-neighbor/SKILL.md"}
+            require_removed_native_payload(root, "skill", surviving_skills=expected)
+            own = root / "skills" / "our-package" / "SKILL.md"
+            own.parent.mkdir()
+            own.write_text("ours", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "still present"):
+                require_removed_native_payload(root, "skill", surviving_skills=expected)
+
     def test_removal_accepts_unowned_neighbor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -90,22 +90,27 @@ def plugin_record(envelope: dict, name: str, revision: str) -> dict:
     return matching[0]
 
 
-def require_removed_native_payload(native_root: Path, kind: str) -> None:
-    """Removal must leave no installed native Pi payload in this isolated case."""
+def require_removed_native_payload(native_root: Path, kind: str, *,
+                                   surviving_skills: set[str] | None = None,
+                                   surviving_servers: dict | None = None) -> None:
+    """Removal must clean the owned Pi payload without destroying pre-existing registrations."""
     if kind == "skill":
         skills = native_root / "skills"
-        require(not skills.is_symlink() and not any(skills.rglob("SKILL.md")),
-                "removed Pi skill still has native SKILL.md")
+        require(not skills.is_symlink(), "Pi skills root became a symlink")
+        remaining = {path.relative_to(skills).as_posix()
+                     for path in skills.rglob("SKILL.md")}
+        require(remaining == (surviving_skills or set()),
+                "removed Pi skill is still present or a foreign skill was lost")
     elif kind == "mcp":
         config = native_root / "mcp.json"
         require(not config.is_symlink(), "removed Pi MCP configuration became a symlink")
+        servers = {}
         if config.exists():
             servers = strict_json(config.read_text(encoding="utf-8")).get("mcpServers", {})
-            require(isinstance(servers, dict) and not servers,
-                    "removed Pi MCP still has native server registrations")
+        require(isinstance(servers, dict) and servers == (surviving_servers or {}),
+                "removed Pi MCP registration remains or a foreign server was changed")
     else:
         raise RuntimeError("unsupported Pi materialization kind")
-
 
 def run_case(cli: str, source_head: str, temp: Path, case: tuple,
              scope: str) -> dict:
@@ -143,6 +148,22 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         "APPDATA": str(case_root / "config"),
         "LOCALAPPDATA": str(case_root / "data"),
     })
+    # Unowned native Pi registrations must survive add, repair and remove.
+    # This is stronger than preserving only unrelated sentinel text files.
+    native_root = pi_profile if scope == "user" else project / ".pi"
+    native_root.mkdir(parents=True, exist_ok=True)
+    foreign_skill = native_root / "skills" / "foreign-neighbor" / "SKILL.md"
+    foreign_skill_text = ("---\nname: foreign-neighbor\n"
+                          "description: Existing unowned Pi skill\n---\n\nKeep intact.\n")
+    foreign_server = {"command": "node", "args": ["--version"]}
+    if kind == "skill":
+        foreign_skill.parent.mkdir(parents=True, exist_ok=True)
+        foreign_skill.write_text(foreign_skill_text, encoding="utf-8")
+    else:
+        (native_root / "mcp.json").write_text(
+            json.dumps({"mcpServers": {"foreign-neighbor": foreign_server}}) + "\n",
+            encoding="utf-8")
+
     args = ["--target", "pi", "--scope", scope, "--format", "json"]
     if scope == "project":
         subprocess.run(["git", "init", "-q"], cwd=project, env=env,
@@ -166,7 +187,6 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         # An exact full-SHA source is immutable. The CLI must refuse update
         # with explicit switch guidance *before changing native Pi files*.
         call("info", first["installation_id"])
-        native_root = pi_profile if scope == "user" else project / ".pi"
         # A denied immutable-source update must not create directories or
         # symlinks either: comparing file bytes alone misses these mutations.
         before_update = native_files(native_root)
@@ -192,16 +212,29 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         require(maintained["installation_id"] == first["installation_id"],
                 "maintenance switched or duplicated the pinned Pi installation")
         if kind == "skill":
-            require(any(native_root.joinpath("skills").rglob("SKILL.md")),
-                    "Pi native skills not installed")
+            skills = native_root / "skills"
+            installed = {path.relative_to(skills).as_posix()
+                         for path in skills.rglob("SKILL.md")}
+            require("foreign-neighbor/SKILL.md" in installed and len(installed) > 1
+                    and foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
+                    "Pi native skill absent or pre-existing Pi skill was changed")
         else:
             config = native_root / "mcp.json"
             require(config.is_file(), "Pi native MCP configuration absent")
             server_entries = strict_json(config.read_text(encoding="utf-8")).get("mcpServers")
-            require(isinstance(server_entries, dict) and server_entries,
-                    "Pi native MCP server registration absent")
+            require(isinstance(server_entries, dict)
+                    and server_entries.get("foreign-neighbor") == foreign_server
+                    and any(name != "foreign-neighbor" for name in server_entries),
+                    "Pi native MCP registration absent or foreign server was changed")
         call("remove", first["installation_id"], timeout=120)
-        require_removed_native_payload(native_root, kind)
+        if kind == "skill":
+            require_removed_native_payload(
+                native_root, kind, surviving_skills={"foreign-neighbor/SKILL.md"})
+            require(foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
+                    "remove changed pre-existing Pi skill bytes")
+        else:
+            require_removed_native_payload(
+                native_root, kind, surviving_servers={"foreign-neighbor": foreign_server})
         require(not any(isinstance(x, dict) and x.get("installation_id") ==
                         first["installation_id"]
                         for x in call("list")["data"].get("installations", [])),
