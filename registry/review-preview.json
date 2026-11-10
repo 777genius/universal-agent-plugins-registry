@@ -6676,6 +6676,16 @@
         {
           "targets": [
             {
+              "client": "vscode",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "codex",
               "authentication": "required"
             },
@@ -6685,6 +6695,10 @@
             },
             {
               "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
               "authentication": "required"
             },
             {
@@ -6725,6 +6739,10 @@
             },
             {
               "client": "copilot",
+              "authentication": "required"
+            },
+            {
+              "client": "vscode",
               "authentication": "required"
             },
             {
