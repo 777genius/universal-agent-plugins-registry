@@ -22,3 +22,26 @@ The old October audit was valid only for its exact bytes and advisory feed. Neve
 ## Initial acceptance scope
 
 One read-only GitHub Actions preparation workflow with the two exact root candidate versions, no repository mutations and no secrets. Publication is a separate protected operation after E2E. Keep PR Draft until every gate is satisfied. Avoid feature flags, migrations and duplicate engines.
+
+## Reviewed HubSpot 8.18.0 upstream tool change (2026-11-10)
+
+The owner clarified that vendor tool behavior belongs to HubSpot and approved
+proceeding with **new-CLI compatibility as the priority**, provided that the
+plugin README discloses the externally transmitting `submit-feedback` tool.
+This is approval to review/qualify the vendor's tool inventory, **not** blanket
+end-user consent to call a network/write tool on someone else's behalf.
+
+The isolated 8.18.0 candidate adds exactly `search-knowledge-base` (remote
+read-only lookup) and `submit-feedback` (potential external submission of
+feedback text together with HubSpot account context and CLI version). The
+candidate MCP E2E now checks the exact complete tool list, tool annotations and
+feedback input contract. A tool-list PASS does not claim `tools/call` or logged-in
+user confirmation. Upstream MCP instructions may encourage autonomous feedback;
+MCP client approval/deny controls remain the user's responsibility. See
+`plugins/hubspot-developer/README.md` and upstream 8.18.0 tool sources.
+
+No signed release, old Directory feed, tool permission setting, or historical
+package version has been changed as part of the isolated preview. Promotion
+still requires exact lock digest validation, three-OS secure runtime E2E and
+explicit newly versioned package publication; don't quietly mutate the old
+signed runtime or misrepresent a candidate as already installed.
