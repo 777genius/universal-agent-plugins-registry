@@ -24,6 +24,12 @@ RUNNER_OS = {"linux": "Linux", "macos": "macOS", "windows": "Windows"}
 PLATFORMS = set(RUNNER_OS)
 SCOPES = ("user", "project")
 MARKETING_KIT = "777genius/marketing-kit"
+# Exact published CLI 0.1.102 stderr confirmed on Linux, macOS and Windows.
+# Any different nonzero exit is an unexpected failure, not the known policy block.
+KNOWN_MARKETING_REFUSAL = (
+    "agentplugins: dependency conflict for directory:777genius/hubspot-crm: "
+    "marketing-kit version 0.1.0"
+)
 
 
 def expected_cases(sources: list[dict]) -> dict[tuple[str, int, str], dict]:
@@ -95,6 +101,9 @@ def validate_platform_report(report: dict, platform: str, head: str,
             require(type(case.get("exit_code")) is int and case["exit_code"] != 0
                     and "planned_actions" not in case,
                     f"{platform}: refusal lacks a real failed CLI exit")
+            require(isinstance(case.get("diagnostic"), str)
+                    and case["diagnostic"].strip() == KNOWN_MARKETING_REFUSAL,
+                    f"{platform}: refusal is not the verified signed HubSpot policy conflict")
             refused += 1
     require(len(seen) == len(expected), f"{platform}: incomplete evidence")
     eligible = sum(source["distribution_status"] == "active" for source in sources) * 2

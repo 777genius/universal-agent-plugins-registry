@@ -32,7 +32,10 @@ def receipt(source: dict, scope: str, status: str) -> dict:
         }]
     elif status == "refused":
         value["exit_code"] = 1
-        value["diagnostic"] = "signed Pi dependency not eligible"
+        value["diagnostic"] = (
+            "agentplugins: dependency conflict for directory:777genius/hubspot-crm: "
+            "marketing-kit version 0.1.0\n"
+        )
     return value
 
 
@@ -104,6 +107,22 @@ class ModernPiEvidenceTests(unittest.TestCase):
         report["results"][2]["exit_code"] = 0
         with self.assertRaisesRegex(RuntimeError, "real failed CLI exit"):
             validate_platform_report(report, "linux", HEAD, self.sources)
+
+    def test_marketing_refusal_must_be_exact_signed_dependency_denial(self) -> None:
+        # Transient failures and other dependency errors are not proof of
+        # the one observed 0.1.102 Marketing Kit signed-policy refusal.
+        for diagnostic in (
+            "",
+            "agentplugins: network timeout",
+            "agentplugins: dependency conflict for directory:777genius/notion: marketing-kit version 0.1.0",
+            "agentplugins: dependency conflict for directory:777genius/hubspot-crm: marketing-kit version 0.1.1",
+        ):
+            report = copy.deepcopy(self.report)
+            report["results"][2]["diagnostic"] = diagnostic
+            with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(
+                RuntimeError, "verified signed HubSpot policy conflict"
+            ):
+                validate_platform_report(report, "linux", HEAD, self.sources)
 
     def test_planned_actions_cannot_include_other_clients(self) -> None:
         report = copy.deepcopy(self.report)
