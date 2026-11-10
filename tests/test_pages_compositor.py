@@ -389,6 +389,7 @@ class PagesExternalReceiptTests(unittest.TestCase):
             pages.require_terminal_previous_deployments(REPOSITORY, "fake", fetch=fetch)
 
     def test_unstarted_cancelled_job_requires_cancelled_backend(self) -> None:
+        """Accept only a never-assigned job with independently cancelled Pages."""
         sha = "a" * 40
         job = {"id": 901, "run_id": 73, "head_sha": sha, "name": pages.COMPOSITOR_JOB_NAME,
                "status": "completed", "conclusion": "cancelled", "runner_id": 0,

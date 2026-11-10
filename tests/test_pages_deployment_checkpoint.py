@@ -237,6 +237,7 @@ class CheckpointTests(unittest.TestCase):
             REPOSITORY, "fake", frontier=self.baseline, checkpoint_repo=self.repo, fetch=self.fetch)
 
     def test_cancelled_before_runner_requires_exact_job_and_cancelled_backend(self) -> None:
+        """Persist exact terminal evidence while rejecting ambiguous jobs."""
         self.add(11, "error")
         sha = self.deployments[11]["sha"]
         self.add(12, "error", sha=sha)  # The same source SHA has another deployment.
