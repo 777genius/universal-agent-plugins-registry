@@ -116,21 +116,30 @@ def main() -> None:
             readme = readme.replace(previous_pin,
                                     "integrity-locked `@hubspot/cli@8.18.0`")
             readme += (
-                "\\n## HubSpot CLI 8.18.0 tools and external feedback\\n\\n"
+                "\n## HubSpot CLI 8.18.0 tools and external feedback\n\n"
                 "The upstream MCP server adds `search-knowledge-base` (remote read-only "
                 "search) and `submit-feedback` (external network/write action). "
                 "Feedback may send agent-provided text and account/user context plus "
                 "the CLI version to HubSpot. The server instructions encourage "
                 "feedback after some errors; disabling general usage tracking "
-                "does not disable an explicit feedback tool call.\\n\\n"
+                "does not disable an explicit feedback tool call.\n\n"
                 "Review and approve the exact feedback text before allowing this "
                 "tool to run, or deny the tool in your MCP client. Installation "
                 "alone does not submit feedback. The [upstream implementation]"
                 "(https://github.com/HubSpot/hubspot-cli/blob/8.18.0/"
                 "mcp-server/tools/project/SubmitFeedbackTool.ts) describes the "
-                "external operation.\\n"
+                "external operation.\n"
             )
             readme_path.write_bytes(readme.encode("utf-8"))
+        # A changed immutable plugin tree must become a NEW package release:
+        # never reuse the published 0.2.5 identity with different runtime bytes.
+        manifest_path = root / "plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        require(manifest["name"] == name and manifest["version"] == "0.2.5",
+                "staged package release identity is not the reviewed predecessor")
+        manifest["version"] = "0.2.6"
+        write_json(manifest_path, manifest)
+        candidate["candidate_package_version"] = "0.2.6"
         candidate["candidate_manifest_digest"] = digest((root / "plugin.json").read_bytes())
         candidate["candidate_tree_digest"] = registry.directory_tree_digest(root)
         require(candidate["candidate_tree_digest"].startswith("sha256:"), "tree digest absent")
