@@ -106,6 +106,31 @@ def main() -> None:
                     all(tool not in expected for tool in HUBSPOT_818_ADDED_TOOLS),
                     "HubSpot upstream MCP expectations already modified")
             expected.extend(HUBSPOT_818_ADDED_TOOLS)
+            # Review the README as part of the new source tree; the prior
+            # signed 8.15.0 tree (and its digest) must remain unchanged.
+            readme_path = root / "README.md"
+            readme = readme_path.read_text(encoding="utf-8")
+            previous_pin = "integrity-locked `@hubspot/cli@8.15.0`"
+            require(readme.count(previous_pin) == 1,
+                    "HubSpot previous published README pin changed")
+            readme = readme.replace(previous_pin,
+                                    "integrity-locked `@hubspot/cli@8.18.0`")
+            readme += (
+                "\\n## HubSpot CLI 8.18.0 tools and external feedback\\n\\n"
+                "The upstream MCP server adds `search-knowledge-base` (remote read-only "
+                "search) and `submit-feedback` (external network/write action). "
+                "Feedback may send agent-provided text and account/user context plus "
+                "the CLI version to HubSpot. The server instructions encourage "
+                "feedback after some errors; disabling general usage tracking "
+                "does not disable an explicit feedback tool call.\\n\\n"
+                "Review and approve the exact feedback text before allowing this "
+                "tool to run, or deny the tool in your MCP client. Installation "
+                "alone does not submit feedback. The [upstream implementation]"
+                "(https://github.com/HubSpot/hubspot-cli/blob/8.18.0/"
+                "mcp-server/tools/project/SubmitFeedbackTool.ts) describes the "
+                "external operation.\\n"
+            )
+            readme_path.write_bytes(readme.encode("utf-8"))
         candidate["candidate_manifest_digest"] = digest((root / "plugin.json").read_bytes())
         candidate["candidate_tree_digest"] = registry.directory_tree_digest(root)
         require(candidate["candidate_tree_digest"].startswith("sha256:"), "tree digest absent")
