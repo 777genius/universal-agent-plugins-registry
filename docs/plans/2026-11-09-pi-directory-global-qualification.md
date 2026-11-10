@@ -79,3 +79,25 @@ Clean Architecture / SOLID / DRY. The central invariant is that signed install a
 5. **Protected promotion and production verification:** only after editor-approved signing and readiness, publish the separate v1 `latest.json`/snapshot/envelope, verify signature and monotonically advancing sequence at CDN, confirm released CLI resolution and production website mirror's **actual feed** (not merely a positive Pi badge). Explicitly disclose which installed CLI versions use which feed and what users must update.
 
 **Current acceptance state:** 18/18 native Pi lifecycle passes and 70/72 eligible saved source dry-runs on each OS in previous exact-head evidence. The two Marketing Kit failures remain real. Neither a modern-feed signed snapshot nor automatic modern-client feed routing nor a production Pi catalog has been established. The legacy reader is not a Pi client; safeguarding its original feed is still mandatory.
+
+## Unsigned modern-feed source staging (2026-11-10)
+
+A narrow **non-production** staging helper now exists at `scripts/pi_modern_feed_candidate.py`.
+It requires the exact PR HEAD, independent Linux/macOS/Windows source-planning JSON reports
+and a separately reviewed transport/authentication record for every active Pi target.
+Each reviewed record must match the immutable distribution/release/tree digest and cite
+public evidence; authentication is explicitly `required`, `not_required` or `unknown`.
+
+The helper refuses duplicate or missing cases, wrong source identity, suspended source
+eligibility, unexpected failures, absent reviews, and violations of ordinary Directory v1
+policy validation. The known Marketing Kit -> HubSpot signed Pi dependency may appear
+only as a real `refused` outcome, never a PASS. The helper does not convert 70/72 into
+72/72 and never manufactures positive upstream materialization evidence.
+
+Output is **only an unsigned source candidate outside the repository**: no keys, Ed25519
+signature, protected promotion, production feed, source policy mutation or approval.
+The legacy shared signed Directory v1 feed is unchanged. A future modern-only signed
+v1 feed still needs separate origin/trust/cache/anti-rollback isolation, owner-approved
+signing, a released new CLI route, 72/72 genuine saved dependency eligibility,
+short-name lifecycle and production CDN/site post-merge E2E. This helper alone
+does not satisfy any of those gates.
