@@ -35,11 +35,17 @@ def validate_platform_report(report: dict, platform: str, head: str,
                              sources: list[dict]) -> tuple[int, int]:
     """Require complete exact-source evidence; never convert a refusal into PASS."""
     require(platform in PLATFORMS and report.get("runner_os") == RUNNER_OS[platform]
+            and type(report.get("schema_version")) is int
+            and report["schema_version"] == 1
             and report.get("source_commit") == head
             and report.get("cli_version") == "0.1.102"
             and report.get("kind") == "pi-direct-source-planning"
             and report.get("signed_pi_policy_published") is False
-            and report.get("active_policy_count") == len(sources),
+            and report.get("runtime_claims") is False
+            and report.get("account_authentication") == "not_tested"
+            and report.get("scopes") == list(SCOPES)
+            and type(report.get("active_policy_count")) is int
+            and report["active_policy_count"] == len(sources),
             f"{platform}: invalid or unqualified source evidence")
     expected = expected_cases(sources)
     results = report.get("results")
@@ -49,7 +55,9 @@ def validate_platform_report(report: dict, platform: str, head: str,
     planned = refused = 0
     for case in results:
         require(isinstance(case, dict), f"{platform}: malformed case")
-        key = (case.get("distribution"), case.get("release_sequence"), case.get("scope"))
+        require(type(case.get("release_sequence")) is int,
+                f"{platform}: invalid release sequence in case")
+        key = (case.get("distribution"), case["release_sequence"], case.get("scope"))
         require(key in expected and key not in seen, f"{platform}: unknown or repeated case")
         seen.add(key)
         source = expected[key]
@@ -59,13 +67,21 @@ def validate_platform_report(report: dict, platform: str, head: str,
                 f"{platform}: mismatched immutable source evidence")
         status = case.get("status")
         if source["distribution_status"] != "active":
-            require(status == "not_eligible", f"{platform}: suspended source was accepted")
+            require(status == "not_eligible" and "exit_code" not in case
+                    and "planned_actions" not in case,
+                    f"{platform}: suspended source was accepted")
         elif status == "planned":
+            require(type(case.get("exit_code")) is int and case["exit_code"] == 0,
+                    f"{platform}: planned case has no successful CLI exit")
             actions = case.get("planned_actions")
-            require(isinstance(actions, list) and any(
-                isinstance(action, dict)
-                and action.get("client_id") == "pi"
-                and action.get("action") == "install"
+            require(isinstance(actions, list) and len(actions) > 0
+                    and all(isinstance(action, dict)
+                            and action.get("client_id") == "pi"
+                            and action.get("action") in {"install", "unchanged"}
+                            for action in actions),
+                    f"{platform}: invalid Pi-only installation plan")
+            require(any(
+                action.get("action") == "install"
                 and action.get("alias") == source["manifest_name"]
                 and action.get("revision") == source["revision"]
                 and action.get("package_digest") == source["tree_digest"]
@@ -73,10 +89,12 @@ def validate_platform_report(report: dict, platform: str, head: str,
                 f"{platform}: planned root identity missing")
             planned += 1
         else:
-            # The current old feed cannot authorize Marketing Kit's required
-            # signed HubSpot Pi dependency. This is a real refusal, not PASS.
+            # Source-planning refusals are never positive signed eligibility.
             require(source["distribution"] == MARKETING_KIT and status == "refused",
                     f"{platform}: unexpected eligibility failure")
+            require(type(case.get("exit_code")) is int and case["exit_code"] != 0
+                    and "planned_actions" not in case,
+                    f"{platform}: refusal lacks a real failed CLI exit")
             refused += 1
     require(len(seen) == len(expected), f"{platform}: incomplete evidence")
     eligible = sum(source["distribution_status"] == "active" for source in sources) * 2
