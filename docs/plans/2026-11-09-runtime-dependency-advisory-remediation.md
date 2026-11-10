@@ -49,3 +49,84 @@ package version has been changed as part of the isolated preview. Promotion
 still requires exact lock digest validation, three-OS secure runtime E2E and
 explicit newly versioned package publication; don't quietly mutate the old
 signed runtime or misrepresent a candidate as already installed.
+
+## Exact-head qualification and safe promotion checklist (2026-11-10)
+
+### Four scoped review passes
+
+1. **Integrity and advisories.** Retain original GitHub-hosted candidate ZIPs,
+   verify their ZIP CRC, SHA-256 and exact manifest/lock bytes, and cross-check
+   root package version, npm integrity, lock SHA-256, and real zero-vulnerability
+   `npm audit`. Never edit the generated lock or re-resolve it in another npm
+   version. In the unchanged **published** 0.2.5 source, the live audit still
+   fails (9 Firebase and 13 HubSpot advisories); that is not a waiver candidate.
+2. **Executable behavior.** On current source SHA
+   `e997b3b9a04024393b08e7482c8d2f07e496219d`, the read-only
+   [candidate run #42804832308](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42804832308)
+   passed both root probes and three disposable OS MCP previews: Context7
+   (2 tools), Firebase (19), and HubSpot (24). Real cold launcher,
+   `initialize`/`tools/list`, scripts disabled, exact tool annotations and
+   feedback input schema, zero installed-closure audits and npm registry
+   signatures are covered. These are **unsigned preview** results, not approval
+   of a published runtime, installer activation, authenticated tools/call, or
+   end-user feedback transmission. Any source commit requires fresh exact-head
+   qualification; green results from earlier SHAs are not transferable.
+3. **Privacy and permission boundary.** Preserve the *new version's* README
+   disclosure of `submit-feedback` external data transmission and
+   `search-knowledge-base` remote search. Do not infer consent from upstream
+   MCP server instructions or from `tools/list`. Leave existing installer/client
+   permission and authentication gates unchanged. No unauthenticated preview
+   should call `submit-feedback`.
+4. **Immutable release provenance.** Independently review source, audit
+   evidence, signed prior release identity, new release metadata, target policies,
+   and publication rules. A separate CodeRabbit review was requested; it does
+   not replace human/security approval. Merge only with all required checks on
+   the **final** HEAD and successful protected post-merge verification.
+
+### Release delivery (not performed by the preview)
+
+- Reacquire the five exact run artifacts through an approved GitHub workflow
+  artifact client, verify original archive SHA-256/CRC and expected files, then
+  place the exact verified `package.json` and `package-lock.json` bytes under
+  each product's runtime directory. Keep Firebase `15.35.0` and HubSpot
+  `8.18.0`; use npm 12.0.2/Node 24.20.0 for reproduction, scripts disabled.
+  The lock SHA-256 are Firebase
+  `2bcb58637dc986c4caf43571e4e509ab05048d1e5ef994061ec1b1935bc5e41d`
+  and HubSpot
+  `c024a5cba8b3584985cdae1df1f80f2135a014dda73ecc483ba4c4e6bebf5f7e`.
+- Package the modified runtime and documented tool surface under **new plugin
+  version 0.2.6**, never under old signed 0.2.5. Verify source bytes, package
+  tree and manifest SHA-256 before recording them in the reviewed candidate
+  record. Keep `context7` unchanged.
+- For each existing distribution, the next release is **sequence 8** after
+  existing 0.2.5 sequence 7. Before adding 8, reconcile the old unresolved
+  source revision in the review Directory with the already authenticated,
+  immutable signed sequence-7 source binding; only a byte-identical historic
+  source revision binding is acceptable. Do not alter any historical version,
+  tree/manifest digest, signed release identity, prior target policy or evidence.
+  Append release 8 and its one-for-one policy; preserve authentication requirements,
+  installer minimum and delivery semantics absent a separate reviewed change.
+  Source revision for the new release follows the existing protected post-merge
+  binding process; never pre-claim a signed/public release from ephemeral ZIPs.
+- Regenerate and check deterministic Directory review outputs using
+  `python3 scripts/build_registry.py --check` and existing tests. Remove
+  preview-only staging machinery as appropriate when committed-source
+  qualification supersedes it; do not leave a stale preview job failing against
+  the newly published 0.2.6 source.
+- Run the *committed-source* three-OS qualification on the exact final PR HEAD,
+  independently examine all artifacts and CodeQL/security review, safely merge
+  with normal branch protection, then verify the protected signed publication,
+  immutable sequence marker/digest, consumer resolution and post-merge E2E.
+  A successful preview is never sufficient to merge.
+
+### Tooling boundary
+
+The present connected GitHub interface can download artifact ZIPs and update
+UTF-8 repository files, but it does not expose a supported, direct artifact
+bytes-to-repository file handoff. It exposes `create_blob` text/base64 input,
+not a file-reference upload for downloaded artifact bytes. Do **not** shuttle
+locks through Actions logs, PR comments, a write-token CI workflow, or an
+unreviewed text conversion. Until an approved exact-byte Git/GitHub client can
+commit both large locks, keep this PR Draft and the existing failing published
+runtime audit mandatory. This is a source-delivery blocker, not a claim that
+the candidate itself failed or that CI waiting is an error.
