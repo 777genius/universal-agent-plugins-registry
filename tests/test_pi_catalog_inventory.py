@@ -107,7 +107,7 @@ class PiLauncherCacheIsolationTests(unittest.TestCase):
             seed, existing = root / "seed", root / "existing"
             seed.mkdir()
             existing.mkdir()
-            with self.assertRaisesRegex(RuntimeError, "already exists"):
+            with self.assertRaisesRegex(RuntimeError, "unexpectedly exists"):
                 clone_verified_cli_cache(seed, existing)
 
 
