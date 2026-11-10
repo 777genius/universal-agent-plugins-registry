@@ -90,6 +90,23 @@ def plugin_record(envelope: dict, name: str, revision: str) -> dict:
     return matching[0]
 
 
+def require_removed_native_payload(native_root: Path, kind: str) -> None:
+    """Removal must leave no installed native Pi payload in this isolated case."""
+    if kind == "skill":
+        skills = native_root / "skills"
+        require(not skills.is_symlink() and not any(skills.rglob("SKILL.md")),
+                "removed Pi skill still has native SKILL.md")
+    elif kind == "mcp":
+        config = native_root / "mcp.json"
+        require(not config.is_symlink(), "removed Pi MCP configuration became a symlink")
+        if config.exists():
+            servers = strict_json(config.read_text(encoding="utf-8")).get("mcpServers", {})
+            require(isinstance(servers, dict) and not servers,
+                    "removed Pi MCP still has native server registrations")
+    else:
+        raise RuntimeError("unsupported Pi materialization kind")
+
+
 def run_case(cli: str, source_head: str, temp: Path, case: tuple,
              scope: str) -> dict:
     case_id, name, source_path, revision, kind = case
@@ -184,6 +201,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
             require(isinstance(server_entries, dict) and server_entries,
                     "Pi native MCP server registration absent")
         call("remove", first["installation_id"], timeout=120)
+        require_removed_native_payload(native_root, kind)
         require(not any(isinstance(x, dict) and x.get("installation_id") ==
                         first["installation_id"]
                         for x in call("list")["data"].get("installations", [])),

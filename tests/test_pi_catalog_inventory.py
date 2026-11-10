@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from pi_direct_source_e2e import require_removed_native_payload
 from pi_catalog_inventory_e2e import (
     isolated_cli_env, native_files, require_exact_checkout,
     require_published_cli_version,
@@ -160,6 +161,40 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
                 change(receipt)
                 require_saved_pi_receipt(receipt, "user")
 
+
+
+class PiNativeRemovalTests(unittest.TestCase):
+    def test_removed_mcp_cannot_leave_registered_server(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "mcp.json"
+            config.write_text('{"mcpServers":{"stale":{}}}', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "still has native server"):
+                require_removed_native_payload(root, "mcp")
+            config.write_text('{"mcpServers":{}}', encoding="utf-8")
+            require_removed_native_payload(root, "mcp")
+            config.unlink()
+            require_removed_native_payload(root, "mcp")
+
+    def test_removed_skill_cannot_leave_skill_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = root / "skills" / "package" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("stale skill", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "still has native SKILL"):
+                require_removed_native_payload(root, "skill")
+            skill.unlink()
+            require_removed_native_payload(root, "skill")
+
+    def test_removal_accepts_unowned_neighbor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            foreign = root / "foreign-neighbor.txt"
+            foreign.write_text("do not touch", encoding="utf-8")
+            for kind in ("skill", "mcp"):
+                require_removed_native_payload(root, kind)
+            self.assertEqual(foreign.read_text(encoding="utf-8"), "do not touch")
 
 if __name__ == "__main__":
     unittest.main()
