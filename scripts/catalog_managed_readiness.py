@@ -329,7 +329,7 @@ def run(args, root, case, ctx):
     # parser; no third client engine or portable semantics are introduced here.
     import catalog_publication_readiness as gate
     clients = tuple(case["targets"])
-    require(clients in (LEGACY_CLIENTS, clients), "unqualified managed lifecycle targets")
+    require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed lifecycle targets")
     require(getattr(args, "managed_binary", None) is not None, "missing managed released binary")
     binary = args.managed_binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
