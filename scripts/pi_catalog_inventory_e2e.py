@@ -28,6 +28,25 @@ def require(condition: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
+def require_exact_checkout(source_head: str) -> None:
+    """Refuse provenance reports when the script and package sources use different trees."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+        capture_output=True, text=True, timeout=15, check=True,
+    )
+    require(result.stdout.strip() == source_head,
+            "actual checkout HEAD differs from requested source HEAD")
+
+
+def require_published_cli_version(binary: str) -> None:
+    """The evidence must come from the released CLI, not a silently substituted version."""
+    result = subprocess.run(
+        [binary, "version"], capture_output=True, text=True, timeout=15, check=True,
+    )
+    require(result.stdout.strip() == "agentplugins 0.1.102",
+            "installed CLI is not the qualified public 0.1.102 release")
+
+
 def native_files(profile: Path) -> list[tuple[str, str, str]]:
     """Snapshot file bytes, directories and symlink targets without dereferencing links."""
     entries = []
@@ -193,6 +212,8 @@ def main() -> int:
             and os.environ.get("RUNNER_TEMP"), "requires a disposable GitHub Actions runner")
     binary = shutil.which(args.cli)
     require(binary is not None and Path(binary).is_file(), "published CLI not installed")
+    require_exact_checkout(args.source_head)
+    require_published_cli_version(str(Path(binary).resolve()))
     sources = active_sources(args.source_head)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     evidence = {

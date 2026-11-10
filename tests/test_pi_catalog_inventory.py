@@ -2,13 +2,51 @@
 from __future__ import annotations
 
 import copy
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_catalog_inventory_e2e import native_files, require_saved_pi_receipt
+from pi_catalog_inventory_e2e import (
+    native_files, require_exact_checkout, require_published_cli_version,
+    require_saved_pi_receipt,
+)
+
+
+class PiEvidenceIdentityTests(unittest.TestCase):
+    def test_source_report_accepts_only_actual_checkout_head(self) -> None:
+        expected = "a" * 40
+        for actual in (expected, "b" * 40):
+            result = subprocess.CompletedProcess([], 0, actual + "\n", "")
+            with self.subTest(actual=actual), patch(
+                "pi_catalog_inventory_e2e.subprocess.run", return_value=result
+            ) as run:
+                if actual == expected:
+                    require_exact_checkout(expected)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "checkout HEAD differs"):
+                        require_exact_checkout(expected)
+                self.assertEqual(run.call_args.args[0],
+                                 ["git", "rev-parse", "--verify", "HEAD"])
+
+    def test_source_report_rejects_other_cli_versions(self) -> None:
+        for version in ("agentplugins 0.1.89", "0.1.102", "", "agentplugins 0.1.102\nextra"):
+            result = subprocess.CompletedProcess([], 0, version + "\n", "")
+            with self.subTest(version=version), patch(
+                "pi_catalog_inventory_e2e.subprocess.run", return_value=result
+            ) as run:
+                with self.assertRaisesRegex(RuntimeError, "qualified public 0.1.102"):
+                    require_published_cli_version("/exact/bin/agentplugins")
+                self.assertEqual(run.call_args.args[0], ["/exact/bin/agentplugins", "version"])
+
+    def test_source_report_accepts_exact_public_cli_version(self) -> None:
+        result = subprocess.CompletedProcess([], 0, "agentplugins 0.1.102\n", "")
+        with patch("pi_catalog_inventory_e2e.subprocess.run", return_value=result) as run:
+            require_published_cli_version("/exact/bin/agentplugins")
+            self.assertEqual(run.call_args.args[0], ["/exact/bin/agentplugins", "version"])
 
 
 class PiNativeSnapshotTests(unittest.TestCase):
