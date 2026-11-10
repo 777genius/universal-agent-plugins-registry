@@ -6636,6 +6636,16 @@
         {
           "targets": [
             {
+              "client": "copilot",
+              "authentication": "required"
+            }
+          ],
+          "distribution_id": "777genius/marketing-kit",
+          "release_sequence": 1
+        },
+        {
+          "targets": [
+            {
               "client": "cursor",
               "authentication": "required"
             }
@@ -6671,6 +6681,10 @@
             },
             {
               "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
               "authentication": "required"
             },
             {
@@ -6707,6 +6721,10 @@
             },
             {
               "client": "cursor",
+              "authentication": "required"
+            },
+            {
+              "client": "copilot",
               "authentication": "required"
             },
             {

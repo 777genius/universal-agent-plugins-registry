@@ -26,7 +26,7 @@ class ManagedReadinessTests(unittest.TestCase):
         self.assertEqual(gate.CLI["version"], "0.1.89")
         self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
         self.assertEqual(self.case["cli"]["version"], "0.1.91")
-        self.assertEqual(len(managed.coverage(self.case)), 20)
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]))
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
         gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
@@ -35,6 +35,28 @@ class ManagedReadinessTests(unittest.TestCase):
         self.snapshot["distributions"].append(unknown)
         with self.assertRaisesRegex(ValueError, "uncovered target"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
+
+    def test_published_legacy_and_candidate_copilot_source_coverage_are_distinct(self):
+        self.assertEqual(tuple(self.case["targets"]), managed.CLIENTS)
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 6)
+        historical = copy.deepcopy(self.snapshot)
+        root = next(row for row in historical["distributions"] if row["id"] == managed.ROOT)
+        root["release_policies"][0]["targets"] = [
+            row for row in root["release_policies"][0]["targets"] if row["client"] != "copilot"
+        ]
+        prior = managed.expected(historical, gate.selected)
+        self.assertEqual(tuple(prior["targets"]), managed.LEGACY_CLIENTS)
+        self.assertEqual(len(managed.coverage(prior)), len(managed.PINS) * 5)
+        for change in ("kiro", "project"):
+            invalid = copy.deepcopy(self.snapshot)
+            policy = next(row for row in invalid["distributions"] if row["id"] == managed.ROOT)["release_policies"][0]
+            if change == "kiro":
+                policy["targets"].append({"client": "kiro", "authentication": "required",
+                                          "scopes": ["user"], "delivery": "managed"})
+            else:
+                policy["targets"][-1]["scopes"] = ["project"]
+            with self.subTest(change=change), self.assertRaises((ValueError, gate.registry.RegistryError)):
+                managed.expected(invalid, gate.selected)
 
     def test_user_coverage_cannot_qualify_a_project_scope_expansion(self):
         baseline = copy.deepcopy(self.snapshot)
@@ -151,7 +173,7 @@ class ManagedReadinessTests(unittest.TestCase):
             source = selected["package_source"]
             packages.append({"alias": selected["product_id"], "source_key": "directory:" + selected["distribution_id"],
                 "version": selected["package_version"], "digest_algorithm": "agentplugins-tree-sha256-v1",
-                "tree_digest": selected["tree_digest"], "manifest_digest": selected["manifest_digest"], "targets": list(managed.CLIENTS),
+                "tree_digest": selected["tree_digest"], "manifest_digest": selected["manifest_digest"], "targets": list(self.case["targets"]),
                 "source": {"registry": {"distribution_id": selected["distribution_id"], "release_sequence": selected["release_sequence"],
                     "product_id": selected["product_id"], "repository": source["repository"], "path": source["path"], "commit": source["revision"]}},
                 "required_by": [] if selected["distribution_id"] == managed.ROOT else [{"alias": "marketing-kit", "selector": {"kind": "version", "value": selected["package_version"]}}]})
@@ -185,7 +207,7 @@ class ManagedReadinessTests(unittest.TestCase):
                 "package": {"version": selected["package_version"], "manifest_digest": selected["manifest_digest"]},
                 "source": {"repository": source["repository"], "package_subpath": source["path"], "resolved_revision": source["revision"], "tree_digest": selected["tree_digest"]},
                 "directory": {"distribution_id": selected["distribution_id"], "desired_release_sequence": selected["release_sequence"], "snapshot_sequence": ctx["sequence"], "snapshot_digest": ctx["snapshot_digest"]}, "clients": {}}
-            for client in managed.CLIENTS:
+            for client in self.case["targets"]:
                 path = root / f"{index}-{client}"
                 path.mkdir()
                 binding = {"client_binding_id": f"b{index}-{client}", "client_id": client, "scope": "user", "materialization": "materialized", "verification": "installation_verified", "target_locator": str(path),
@@ -203,7 +225,7 @@ class ManagedReadinessTests(unittest.TestCase):
             state, ctx, aliases = self.state(root)
             installations, owned = managed.validate_state(state, self.case, ctx, root, aliases)
             self.assertEqual(len(installations), 4)
-            self.assertEqual(len(owned), 20)
+            self.assertEqual(len(owned), len(managed.PINS) * len(self.case["targets"]))
             for mutation in (
                 lambda value: value["environment_receipts"].pop(),
                 lambda value: value["environment_receipts"][0].update(phase="pending"),
@@ -224,12 +246,12 @@ class ManagedReadinessTests(unittest.TestCase):
             root = Path(temporary).resolve()
             state, ctx, aliases = self.state(root)
             before = copy.deepcopy(state)
-            remaining = tuple(client for client in managed.CLIENTS if client not in managed.NATIVE_TARGETS)
+            remaining = tuple(client for client in self.case["targets"] if client not in managed.NATIVE_TARGETS)
             for installation in state["installations"]:
                 installation["clients"] = {client: binding for client, binding in installation["clients"].items() if client in remaining}
             state["environment_receipts"] = [receipt for receipt in state["environment_receipts"] if receipt["client_id"] in remaining]
             _, owned = managed.validate_state(state, self.case, ctx, root, aliases, clients=remaining)
-            self.assertEqual(len(owned), 12)
+            self.assertEqual(len(owned), len(managed.PINS) * len(remaining))
             for mutation in (
                 lambda value: value["environment_receipts"].append(before["environment_receipts"][0]),
                 lambda value: value["installations"][0]["clients"].update(codex=before["installations"][0]["clients"]["codex"]),
@@ -308,7 +330,7 @@ class ManagedReadinessTests(unittest.TestCase):
                     installation["data_receipts"][receipt_id] = receipt
             state["environment_receipts"] = []
             additions = managed.validate_retained_state(state, self.case, ctx, root, aliases, initial)
-            self.assertEqual(len(additions), 24)
+            self.assertEqual(len(additions), 2 * len(managed.PINS) * (len(self.case["targets"]) - len(managed.NATIVE_TARGETS)))
             managed.validate_retained_paths(before_paths, managed.snapshot_paths(paths), additions)
             (paths["plugin-data"] / "unrelated").write_text("PRIVATE")
             with self.assertRaisesRegex(ValueError, "unrelated"):
