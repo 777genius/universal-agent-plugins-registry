@@ -14,7 +14,8 @@ import tempfile
 from datetime import datetime, timezone
 
 from pi_catalog_inventory_e2e import (
-    native_files, require_exact_checkout, require_published_cli_version,
+    isolated_cli_env, native_files, require_exact_checkout,
+    require_published_cli_version,
 )
 
 PINNED_UPSTREAM = "769c6cd22c3d95462d1f55d789e9532cabefa5a9"
@@ -113,10 +114,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     original_project = project / "foreign-neighbor.txt"
     original_user.write_text("unowned pi profile bytes\n")
     original_project.write_text("unowned project bytes\n")
-    env = dict(os.environ)
-    for key in ("GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
-        env.pop(key, None)
+    env = isolated_cli_env(case_root)
     env.update({
         "HOME": str(home), "USERPROFILE": str(home),
         "PI_CODING_AGENT_DIR": str(pi_profile),
@@ -127,7 +125,6 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         "XDG_CACHE_HOME": str(case_root / "cache"),
         "APPDATA": str(case_root / "config"),
         "LOCALAPPDATA": str(case_root / "data"),
-        "CI": "true",
     })
     args = ["--target", "pi", "--scope", scope, "--format", "json"]
     if scope == "project":

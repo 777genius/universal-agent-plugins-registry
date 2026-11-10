@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pi_catalog_inventory_e2e import (
-    native_files, require_exact_checkout, require_published_cli_version,
+    isolated_cli_env, native_files, require_exact_checkout,
+    require_published_cli_version,
     require_saved_pi_receipt,
 )
 
@@ -47,6 +48,38 @@ class PiEvidenceIdentityTests(unittest.TestCase):
         with patch("pi_catalog_inventory_e2e.subprocess.run", return_value=result) as run:
             require_published_cli_version("/exact/bin/agentplugins")
             self.assertEqual(run.call_args.args[0], ["/exact/bin/agentplugins", "version"])
+
+
+
+class PiIsolatedChildEnvironmentTests(unittest.TestCase):
+    def test_preview_does_not_inherit_runner_tokens_or_shell_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.dict(
+                "pi_catalog_inventory_e2e.os.environ",
+                {
+                    "PATH": "trusted-bin",
+                    "GITHUB_TOKEN": "secret", "NPM_TOKEN": "secret",
+                    "AWS_SECRET_ACCESS_KEY": "secret",
+                    "ACTIONS_RUNTIME_TOKEN": "secret",
+                    "NODE_OPTIONS": "--require /untrusted/hook.js",
+                    "GIT_CONFIG_KEY_0": "http.extraheader",
+                    "GIT_CONFIG_VALUE_0": "AUTHORIZATION: secret",
+                    "CI": "host-value",
+                },
+                clear=True,
+            ):
+                child = isolated_cli_env(root)
+            self.assertEqual(child["PATH"], "trusted-bin")
+            self.assertEqual(child["CI"], "true")
+            self.assertEqual(child["GIT_TERMINAL_PROMPT"], "0")
+            self.assertEqual(child["TMP"], str(root / "tmp"))
+            self.assertEqual(child["TEMP"], child["TMP"])
+            self.assertEqual(child["TMPDIR"], child["TMP"])
+            self.assertTrue((root / "tmp").is_dir())
+            self.assertEqual(set(child), {
+                "PATH", "CI", "GIT_TERMINAL_PROMPT", "TMP", "TEMP", "TMPDIR",
+            })
 
 
 class PiNativeSnapshotTests(unittest.TestCase):

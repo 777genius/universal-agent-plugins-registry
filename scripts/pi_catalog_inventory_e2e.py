@@ -47,6 +47,28 @@ def require_published_cli_version(binary: str) -> None:
             "installed CLI is not the qualified public 0.1.102 release")
 
 
+
+# Only carry native launcher/toolchain inputs into untrusted source previews.
+# Do not forward arbitrary Actions, npm, cloud, model or Git credential variables.
+SAFE_RUNNER_ENV_KEYS = (
+    "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
+    "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE",
+    "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO",
+)
+
+
+def isolated_cli_env(root: Path) -> dict[str, str]:
+    env = {key: os.environ[key] for key in SAFE_RUNNER_ENV_KEYS if key in os.environ}
+    scratch = root / "tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    env.update({
+        "TMP": str(scratch), "TEMP": str(scratch), "TMPDIR": str(scratch),
+        "CI": "true", "GIT_TERMINAL_PROMPT": "0",
+    })
+    return env
+
+
 def native_files(profile: Path) -> list[tuple[str, str, str]]:
     """Snapshot file bytes, directories and symlink targets without dereferencing links."""
     entries = []
@@ -132,11 +154,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
     marker.write_text("unowned Pi profile\n", encoding="utf-8")
     project_marker = project / "foreign-neighbor.txt"
     project_marker.write_text("unowned Pi project\n", encoding="utf-8")
-    env = dict(os.environ)
-    for key in list(env):
-        if key in {"GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY",
-                   "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"}:
-            env.pop(key, None)
+    env = isolated_cli_env(root)
     env.update({
         "HOME": str(home), "USERPROFILE": str(home), "PI_CODING_AGENT_DIR": str(profile),
         "AGENTPLUGINS_HOME": str(root / "state"),
@@ -145,7 +163,6 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
         "XDG_CONFIG_HOME": str(root / "config"),
         "XDG_CACHE_HOME": str(root / "cache"),
         "APPDATA": str(root / "config"), "LOCALAPPDATA": str(root / "data"),
-        "GIT_TERMINAL_PROMPT": "0", "CI": "true",
     })
     if scope == "project":
         subprocess.run(["git", "init", "-q"], cwd=project, env=env,
