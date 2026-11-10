@@ -174,6 +174,63 @@ jobs:
           set -euo pipefail
           node scripts/qualify_runtime_remediation.mjs \
             --output "$RUNNER_TEMP/candidate-mcp-preview.json"
+      - name: Package exact unsigned v0.2.6 sources for reviewed handoff
+        if: matrix.os == 'ubuntu-24.04' && success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from build_registry import directory_tree_digest
+
+          source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert source == os.environ["QUALIFICATION_SOURCE_SHA"], "source HEAD changed"
+          run_temp = Path(os.environ["RUNNER_TEMP"])
+          stage = json.loads((run_temp / "candidate-stage.json").read_text(encoding="utf-8"))
+          mcp = json.loads((run_temp / "candidate-mcp-preview.json").read_text(encoding="utf-8"))
+          assert stage["stage"] == "ephemeral-preview-only" and stage["unsigned"] is True
+          assert mcp["status"] == "passed" and mcp["source_sha"] == source
+          outputs = {entry["product"]: entry for entry in stage["outcomes"]}
+          assert set(outputs) == {"firebase", "hubspot-developer"}
+          destination = run_temp / "runtime-unsigned-source-v0.2.6"
+          assert not destination.exists(), "source handoff root unexpectedly exists"
+          for name, item in sorted(outputs.items()):
+              root = Path("plugins") / name
+              assert root.is_dir() and not root.is_symlink()
+              assert not any(child.is_symlink() for child in root.rglob("*")), "symlink in source"
+              assert not any(child.name == "node_modules" for child in root.rglob("*")), "vendored runtime"
+              manifest = json.loads((root / "plugin.json").read_text(encoding="utf-8"))
+              assert (manifest["name"], manifest["version"]) == (name, "0.2.6")
+              lock_bytes = (root / "io.github.777genius.agentplugins/runtime/package-lock.json").read_bytes()
+              assert "sha256:" + hashlib.sha256(lock_bytes).hexdigest() == item["lock_sha256"]
+              assert directory_tree_digest(root) == item["tree_sha256"]
+              assert "sha256:" + hashlib.sha256((root / "plugin.json").read_bytes()).hexdigest() == item["manifest_sha256"]
+              if name == "hubspot-developer":
+                  readme = (root / "README.md").read_text(encoding="utf-8")
+                  assert "submit-feedback" in readme and "external" in readme
+              shutil.copytree(root, destination / "plugins" / name)
+          (destination / "SOURCE_EVIDENCE.json").write_text(
+              json.dumps({"source_head": source, "unsigned": True, "review_only": True,
+                          "run_id": os.environ["QUALIFICATION_RUN_ID"],
+                          "outcomes": stage["outcomes"]}, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8")
+          PY
+      - name: Retain qualified unsigned source trees (not a signed release)
+        if: matrix.os == 'ubuntu-24.04' && success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-unsigned-source-v0.2.6
+          path: ${{ runner.temp }}/runtime-unsigned-source-v0.2.6/
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain exact ephemeral candidate and MCP evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
