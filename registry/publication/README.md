@@ -356,6 +356,10 @@ without a checkpoint. It scans up to 10,000 deployment records in descending
 ID order until it reaches the exact prior frontier, then advances oldest-first only
 through exact success, prior success behind an inactive status, a completed
 skipped/successful deploy action, or a uniquely bound backend cancellation.
+An environment job cancelled before runner assignment may also close when its
+exact completed job has no assigned runner or steps, its source SHA matches the
+deployment, and the Pages backend independently reports cancellation. The
+checkpoint retains the job identity and these facts as terminal evidence.
 An in-flight or ambiguous deployment stops the prefix; a failed/inactive
 environment status alone never closes it. A compare-and-swap Git push, exact
 readback after an uncertain response, and bounded retry resolve competing

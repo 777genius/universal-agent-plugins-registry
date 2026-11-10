@@ -174,6 +174,18 @@ def _valid_receipt(receipt: object, repository: str) -> bool:
         return evidence == {"kind": "backend_cancelled", "deployment_sha": receipt["deployment_sha"],
                             "backend_status": "deployment_cancelled",
                             "unique_deployment_id": receipt["deployment_id"]}
+    if kind == "cancelled_before_runner":
+        return (set(evidence) == {"kind", "run_id", "job_id", "deployment_sha", "backend_status",
+                                  "runner_id", "step_count", "job_conclusion"}
+                and type(evidence["run_id"]) is int and evidence["run_id"] > 0
+                and type(evidence["job_id"]) is int and evidence["job_id"] > 0
+                and type(evidence["runner_id"]) is int and evidence["runner_id"] == 0
+                and type(evidence["step_count"]) is int and evidence["step_count"] == 0
+                and evidence["job_conclusion"] == "cancelled"
+                and evidence["deployment_sha"] == receipt["deployment_sha"]
+                and evidence["backend_status"] == "deployment_cancelled"
+                and receipt["status_state"] == "error"
+                and receipt["status_log_url"] == f"https://github.com/{repository}/actions/runs/{evidence['run_id']}/job/{evidence['job_id']}")
     return (kind == "action_step" and set(evidence) == {"kind", "run_id", "job_id", "step_name", "status", "conclusion"}
             and type(evidence["run_id"]) is int and evidence["run_id"] > 0
             and type(evidence["job_id"]) is int and evidence["job_id"] > 0
@@ -404,6 +416,13 @@ def _terminal_receipt(repository: str, token: str, deployment: dict,
         if evidence is None and pages._backend_cancelled_for_unique_sha(repository, token, deployment, fetch):
             evidence = {"kind": "backend_cancelled", "deployment_sha": sha,
                         "backend_status": "deployment_cancelled", "unique_deployment_id": deployment_id}
+        if evidence is None:
+            identity = pages._cancelled_unstarted_pages_job(repository, token, deployment, latest, fetch)
+            if identity:
+                run_id, job_id = identity
+                evidence = {"kind": "cancelled_before_runner", "run_id": run_id, "job_id": job_id,
+                            "deployment_sha": sha, "backend_status": "deployment_cancelled",
+                            "runner_id": 0, "step_count": 0, "job_conclusion": "cancelled"}
     if evidence is None:
         return None
     receipt = {"deployment_id": deployment_id, "deployment_sha": sha, "status_id": sid,
