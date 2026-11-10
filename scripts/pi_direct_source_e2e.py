@@ -153,6 +153,10 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         # A denied immutable-source update must not create directories or
         # symlinks either: comparing file bytes alone misses these mutations.
         before_update = native_files(native_root)
+        # The immutable-source refusal must not mutate the installer's own
+        # persisted receipt or fetch cache, not only Pi's native files.
+        before_installer_state = native_files(case_root / "state")
+        before_installer_cache = native_files(case_root / "binary-cache")
         refused = command([cli, "update", first["installation_id"], *args],
                           project, env, timeout=240)
         report["operations"].append({k: v for k, v in refused.items()
@@ -163,6 +167,9 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                 "pinned Git update must refuse with explicit switch guidance")
         require(native_files(native_root) == before_update,
                 "refused immutable source update changed Pi native files")
+        require(native_files(case_root / "state") == before_installer_state and
+                native_files(case_root / "binary-cache") == before_installer_cache,
+                "refused immutable source update changed installer state or cache")
         call("repair", first["installation_id"], timeout=240)
         maintained = plugin_record(call("list"), name, revision)
         require(maintained["installation_id"] == first["installation_id"],
