@@ -77,10 +77,28 @@ def seed_verified_cli_cache(cli: str, scratch: Path) -> Path:
     home.mkdir(parents=True)
     cache = seed / "binary-cache"
     env = isolated_cli_env(seed)
-    env.update({"HOME": str(home), "USERPROFILE": str(home),
-                "AGENTPLUGINS_CACHE_DIR": str(cache)})
+    # Windows npm .cmd + the released Node launcher expect a user profile
+    # and application-data homes even when the binary cache is overridden.
+    # Keep these inside the disposable seed; never inherit host profile paths.
+    env.update({
+        "HOME": str(home), "USERPROFILE": str(home),
+        "APPDATA": str(seed / "config"), "LOCALAPPDATA": str(seed / "data"),
+        "XDG_CONFIG_HOME": str(seed / "config"),
+        "XDG_DATA_HOME": str(seed / "data"),
+        "XDG_CACHE_HOME": str(seed / "cache"),
+        "AGENTPLUGINS_HOME": str(seed / "state"),
+        "AGENTPLUGINS_CACHE_DIR": str(cache),
+    })
+    for name in ("config", "data", "cache", "state"):
+        (seed / name).mkdir(parents=True, exist_ok=True)
     proc = subprocess.run([cli, "version"], cwd=seed, env=env,
-                          capture_output=True, text=True, timeout=180, check=True)
+                          capture_output=True, text=True, timeout=180, check=False)
+    if proc.returncode != 0:
+        # Never echo the launcher stderr or inherited environment into CI.
+        kind = ("bootstrap" if "agentplugins npm launcher:" in proc.stderr
+                else "native-command")
+        raise RuntimeError(
+            f"isolated public CLI launcher failed: {kind}, exit={proc.returncode}")
     require(proc.stdout.strip() == "agentplugins 0.1.102",
             "isolated launcher did not resolve public CLI 0.1.102")
     require(cache.is_dir() and
