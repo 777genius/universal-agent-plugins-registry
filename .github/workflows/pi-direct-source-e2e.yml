@@ -6,6 +6,8 @@ on:
       - 'registry/directory.json'
       - 'scripts/pi_direct_source_e2e.py'
       - 'scripts/pi_catalog_inventory_e2e.py'
+      - 'tests/test_pi_catalog_inventory.py'
+      - 'tests/test_pi_legacy_feed_boundary.py'
       - '.github/workflows/pi-direct-source-e2e.yml'
   workflow_dispatch:
 
