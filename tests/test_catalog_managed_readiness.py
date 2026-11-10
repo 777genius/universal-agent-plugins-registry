@@ -26,7 +26,7 @@ class ManagedReadinessTests(unittest.TestCase):
         self.assertEqual(gate.CLI["version"], "0.1.89")
         self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
         self.assertEqual(self.case["cli"]["version"], "0.1.91")
-        self.assertEqual(len(managed.coverage(self.case)), 20)
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(managed.CLIENTS))
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
         gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
@@ -203,7 +203,7 @@ class ManagedReadinessTests(unittest.TestCase):
             state, ctx, aliases = self.state(root)
             installations, owned = managed.validate_state(state, self.case, ctx, root, aliases)
             self.assertEqual(len(installations), 4)
-            self.assertEqual(len(owned), 20)
+            self.assertEqual(len(owned), len(managed.PINS) * len(managed.CLIENTS))
             for mutation in (
                 lambda value: value["environment_receipts"].pop(),
                 lambda value: value["environment_receipts"][0].update(phase="pending"),

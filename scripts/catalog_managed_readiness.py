@@ -18,7 +18,7 @@ import tomllib
 CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
        "commit": "4555aa53844ee0078e9036cd82638afd67f77c16",
        "binary_digest": "sha256:7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"}
-CLIENTS = ("codex", "cursor", "claude", "gemini", "opencode")
+CLIENTS = ("codex", "cursor", "copilot", "claude", "gemini", "opencode")
 NATIVE_TARGETS = ("codex", "claude")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
@@ -79,7 +79,7 @@ def validate_lock(lock, case):
                 registry.get("product_id") == selected["product_id"] and
                 registry.get("repository") == source["repository"] and registry.get("path", "") == source["path"] and
                 registry.get("commit") == source["revision"], "managed lock source identity")
-        require(len(package.get("targets", [])) == 5 and set(package["targets"]) == set(CLIENTS), "managed lock target closure")
+        require(len(package.get("targets", [])) == len(CLIENTS) and set(package["targets"]) == set(CLIENTS), "managed lock target closure")
         alias = package.get("alias")
         require(isinstance(alias, str) and bool(alias) and alias not in aliases.values(), "managed lock alias")
         aliases[selected["distribution_id"]] = alias
@@ -348,7 +348,7 @@ def run(args, root, case, ctx):
         return value
 
     added = command("add", "marketing-kit", "--target", ",".join(CLIENTS))
-    require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == 20, "managed saved add incomplete")
+    require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(CLIENTS), "managed saved add incomplete")
     state_file = roots["state"] / "state-v2.json"
     manifest, lock_path = roots["state"] / "uap.toml", roots["state"] / "uap.lock"
     # Dependency file location is a released output, but must remain confined to
@@ -381,7 +381,7 @@ def run(args, root, case, ctx):
                                 expected_version=selected["package_version"], expected_path=Path(binding["target_locator"]))
     native(True)
     status = command("deps", "status")
-    require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == 20, "managed status incomplete")
+    require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(CLIENTS), "managed status incomplete")
     require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in CLIENTS}, "managed status identities")
     require(all(item.get("owner") == "user-default" and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
     immutable = {"manifest": manifest, "lock": lock_path, "state": state_file, "store": store,
@@ -390,7 +390,7 @@ def run(args, root, case, ctx):
         before = snapshot_paths(immutable)
         result = command(*argv)
         require(result.get("outcome") == "completed" and result.get("results") == [] and
-                len(result.get("actions", [])) == 20 and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
+                len(result.get("actions", [])) == len(PINS) * len(CLIENTS) and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
     retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
     retained_before = snapshot_paths(retained)

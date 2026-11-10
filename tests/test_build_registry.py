@@ -1357,7 +1357,7 @@ class DirectoryDomainTests(unittest.TestCase):
                 if product["id"] == "marketing-kit":
                     # New dependency-managed packages qualify their own target subset;
                     # they do not inherit the legacy catalog's broad target claims.
-                    admitted = ["codex", "cursor", "claude", "gemini", "opencode"]
+                    admitted = ["codex", "cursor", "copilot", "claude", "gemini", "opencode"]
                     with self.assertRaises(registry.RegistryError):
                         registry.resolve_directory(source, product["id"], clients)
                     resolved = registry.resolve_directory(source, product["id"], admitted)
