@@ -44,31 +44,26 @@ def native_files(profile: Path) -> list[tuple[str, str, str]]:
     return sorted(entries)
 
 
-def require_planned_pi_receipt(data: dict, scope: str) -> None:
-    """Require the real batch add envelope, even when one Pi target is selected."""
-    require(data.get("dry_run") is True and data.get("batch") is True and
-            data.get("status") == "planned" and data.get("failed") == 0 and
-            data.get("succeeded") == 1,
-            "CLI success did not attest a one-target dry-run plan")
-    # The published 0.1.102 renderer adds this field to the batch envelope.
+def require_saved_pi_receipt(data: dict, scope: str) -> None:
+    """Validate the published 0.1.102 saved-source dry-run contract."""
+    require(data.get("dry_run") is True and data.get("scope") == scope and
+            data.get("result") == "success",
+            "CLI response did not attest a saved dry-run for the requested scope")
     environment = data.get("environment")
-    require(isinstance(environment, dict) and environment.get("scope") == scope,
-            "CLI success did not attest the requested scope")
-    targets = data.get("targets")
-    require(isinstance(targets, list) and len(targets) == 1 and
-            isinstance(targets[0], dict) and targets[0].get("target") == "pi",
-            "CLI success did not select exactly one Pi target")
-    output = targets[0].get("output")
-    require(isinstance(output, dict) and output.get("dry_run") is True and
-            output.get("scope") == scope,
-            "CLI Pi output did not attest the requested dry-run scope")
-    result = output.get("result")
-    require(isinstance(result, dict) and result.get("mutated") is False,
-            "CLI Pi output did not attest a non-mutating plan")
-    plan = result.get("plan")
-    require(isinstance(plan, dict) and plan.get("client_id") == "pi" and
-            plan.get("scope") == scope and plan.get("status") != "unsupported",
-            "CLI Pi output did not contain a supported plan for the requested scope")
+    require(isinstance(environment, dict) and
+            environment.get("saved") is True and
+            environment.get("scope") == scope and
+            environment.get("selected_targets") == ["pi"],
+            "CLI did not plan exactly Pi in the saved dependency environment")
+    actions = data.get("actions")
+    require(isinstance(actions, list) and len(actions) > 0 and
+            all(isinstance(action, dict) and
+                action.get("client_id") == "pi" and
+                isinstance(action.get("alias"), str) and action["alias"] and
+                isinstance(action.get("action"), str) and action["action"]
+                for action in actions),
+            "CLI saved dry-run did not report complete Pi dependency actions")
+
 
 def active_sources(head: str) -> list[dict]:
     directory = json.loads((ROOT / "registry/directory.json").read_text(encoding="utf-8"))
@@ -143,9 +138,10 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
     result["scope"] = scope
     result["status"] = "unverified"
     try:
-        # --no-save selects the direct installer preview, not saved-dependency planning.
+        # Ordinary remote add uses the published saved dependency planner;
+        # --no-save bypasses its signed dependency closure and is not equivalent.
         argv = [cli, "add", item["source"], "--target", "pi", "--scope", scope,
-                "--no-save", "--dry-run", "--format", "json"]
+                "--dry-run", "--format", "json"]
         if scope == "project":
             argv.extend(["--project-root", str(project)])
         proc = subprocess.run(argv, cwd=project, env=env,
@@ -158,7 +154,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
                     data.get("result") == "success" and
                     isinstance(data.get("data"), dict),
                     "successful CLI dry-run must return a structured add envelope")
-            require_planned_pi_receipt(data["data"], scope)
+            require_saved_pi_receipt(data["data"], scope)
             result["status"] = "planned"
         else:
             result["status"] = "refused"
@@ -169,8 +165,13 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
         require(native_files(project) == project_baseline and
                 project_marker.read_text(encoding="utf-8") == "unowned Pi project\n",
                 "dry-run changed project files or Pi native state")
-        require(native_files(root / "state") == state_baseline,
-                "dry-run changed the isolated managed installer state")
+        state_after = native_files(root / "state")
+        if state_after != state_baseline:
+            before, after = set(state_baseline), set(state_after)
+            added = [(path, kind) for path, kind, _ in sorted(after - before)][:8]
+            removed = [(path, kind) for path, kind, _ in sorted(before - after)][:8]
+            raise RuntimeError(
+                f"dry-run changed managed state; added={added}; removed={removed}")
         require(not (project / "uap.toml").exists() and
                 not (project / "uap.lock").exists(),
                 "dry-run changed portable project dependency state")

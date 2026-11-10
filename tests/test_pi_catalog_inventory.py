@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_catalog_inventory_e2e import native_files, require_planned_pi_receipt
+from pi_catalog_inventory_e2e import native_files, require_saved_pi_receipt
 
 
 class PiNativeSnapshotTests(unittest.TestCase):
@@ -45,51 +45,50 @@ class PiNativeSnapshotTests(unittest.TestCase):
                                 for entry in entries))
 
 
-def planned_pi_receipt(scope: str) -> dict:
-    # Published CLI 0.1.102 emits addMultiResult even for one --target pi.
+def saved_pi_receipt(scope: str) -> dict:
+    # The released CLI's ordinary remote add previews saved dependency actions.
     return {
-        "dry_run": True, "batch": True, "status": "planned",
-        "failed": 0, "succeeded": 1,
-        "environment": {"scope": scope},
-        "targets": [{"target": "pi", "output": {
-            "dry_run": True, "scope": scope, "result": {
-                "mutated": False, "plan": {
-                    "client_id": "pi", "scope": scope, "status": "ready",
-                },
-            },
-        }}],
+        "dry_run": True, "scope": scope, "result": "success",
+        "environment": {"saved": True, "scope": scope,
+                        "selected_targets": ["pi"]},
+        "actions": [{"alias": "example", "client_id": "pi",
+                     "action": "install"}],
     }
 
 
 class PiPlanningEnvelopeTests(unittest.TestCase):
-    def test_validates_one_real_pi_batch_plan_for_both_scopes(self) -> None:
+    def test_accepts_saved_dependency_preview_for_both_scopes(self) -> None:
         for scope in ("user", "project"):
             with self.subTest(scope=scope):
-                require_planned_pi_receipt(planned_pi_receipt(scope), scope)
+                require_saved_pi_receipt(saved_pi_receipt(scope), scope)
 
-    def test_rejects_invalid_batch_or_nested_pi_receipts(self) -> None:
-        changes = {
+    def test_accepts_multiple_pi_dependency_actions(self) -> None:
+        receipt = saved_pi_receipt("project")
+        receipt["actions"].append({"alias": "dependency", "client_id": "pi",
+                                   "action": "install"})
+        require_saved_pi_receipt(receipt, "project")
+
+    def test_rejects_unqualified_saved_dependency_preview(self) -> None:
+        mutations = {
             "not_dry_run": lambda data: data.update(dry_run=False),
-            "not_batch": lambda data: data.update(batch=False),
-            "not_planned": lambda data: data.update(status="preflight_failed"),
-            "failed": lambda data: data.update(failed=1),
-            "no_success": lambda data: data.update(succeeded=0),
+            "wrong_scope": lambda data: data.update(scope="project"),
+            "failed_result": lambda data: data.update(result="failure"),
+            "no_environment": lambda data: data.update(environment=None),
+            "not_saved": lambda data: data["environment"].update(saved=False),
             "wrong_environment_scope": lambda data: data["environment"].update(scope="project"),
-            "two_targets": lambda data: data["targets"].append(copy.deepcopy(data["targets"][0])),
-            "wrong_target": lambda data: data["targets"][0].update(target="codex"),
-            "not_target_dry_run": lambda data: data["targets"][0]["output"].update(dry_run=False),
-            "wrong_output_scope": lambda data: data["targets"][0]["output"].update(scope="project"),
-            "mutated": lambda data: data["targets"][0]["output"]["result"].update(mutated=True),
-            "no_plan": lambda data: data["targets"][0]["output"]["result"].update(plan=None),
-            "wrong_client": lambda data: data["targets"][0]["output"]["result"]["plan"].update(client_id="codex"),
-            "wrong_plan_scope": lambda data: data["targets"][0]["output"]["result"]["plan"].update(scope="project"),
-            "unsupported": lambda data: data["targets"][0]["output"]["result"]["plan"].update(status="unsupported"),
+            "wrong_selected_targets": lambda data: data["environment"].update(selected_targets=["codex"]),
+            "no_actions": lambda data: data.update(actions=[]),
+            "wrong_action_target": lambda data: data["actions"][0].update(client_id="codex"),
+            "missing_alias": lambda data: data["actions"][0].update(alias=""),
+            "missing_action": lambda data: data["actions"][0].update(action=""),
+            "invalid_action": lambda data: data.update(actions=[None]),
         }
-        for name, change in changes.items():
+        for name, change in mutations.items():
             with self.subTest(name=name), self.assertRaises(RuntimeError):
-                receipt = planned_pi_receipt("user")
+                receipt = saved_pi_receipt("user")
                 change(receipt)
-                require_planned_pi_receipt(receipt, "user")
+                require_saved_pi_receipt(receipt, "user")
+
 
 if __name__ == "__main__":
     unittest.main()
