@@ -1357,13 +1357,18 @@ class DirectoryDomainTests(unittest.TestCase):
                 if product["id"] == "marketing-kit":
                     # New dependency-managed packages qualify their own target subset;
                     # they do not inherit the legacy catalog's broad target claims.
-                    admitted = ["codex", "cursor", "copilot", "claude", "gemini", "opencode"]
+                    admitted = ["codex", "cursor", "copilot", "vscode", "claude", "gemini", "opencode"]
                     with self.assertRaises(registry.RegistryError):
                         registry.resolve_directory(source, product["id"], clients)
                     resolved = registry.resolve_directory(source, product["id"], admitted)
                     distribution = next(item for item in source["distributions"] if item["id"] == resolved["distribution_id"])
                     policy = distribution["release_policies"][0]
                     self.assertEqual([target["client"] for target in policy["targets"]], admitted)
+                    self.assertEqual(
+                        {target["client"]: target["delivery"] for target in policy["targets"]},
+                        {client: ("prepared" if client == "vscode" else "managed")
+                         for client in admitted},
+                    )
                     self.assertTrue(all(target["authentication"] == "required" for target in policy["targets"]))
                     self.assertTrue(all(target["scopes"] == ["user"] for target in policy["targets"]))
                     self.assertEqual(policy["minimum_installer_version"], "0.1.91")
