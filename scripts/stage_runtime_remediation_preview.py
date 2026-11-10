@@ -20,6 +20,10 @@ SOURCES = {
     "hubspot-developer": ("@hubspot/cli", "8.18.0"),
 }
 
+# HubSpot CLI 8.18.0 upstream registration, qualified only in the ephemeral
+# preview; historical signed releases and old expected contracts stay intact.
+HUBSPOT_818_ADDED_TOOLS = ("search-knowledge-base", "submit-feedback")
+
 
 def require(condition: bool, detail: str) -> None:
     if not condition:
@@ -94,6 +98,14 @@ def main() -> None:
             require("8.15.0" in plugin["description"], "HubSpot description drift")
             plugin["description"] = plugin["description"].replace("8.15.0", version)
             write_json(manifest_path, plugin)
+            # The owner has accepted the vendor's added tool inventory for
+            # qualification, with its external-feedback side effect documented
+            # in the plugin README. Do not waive tool/schema/permission checks.
+            expected = candidate["expected_mcp"]["toolNames"]
+            require(isinstance(expected, list) and
+                    all(tool not in expected for tool in HUBSPOT_818_ADDED_TOOLS),
+                    "HubSpot upstream MCP expectations already modified")
+            expected.extend(HUBSPOT_818_ADDED_TOOLS)
         candidate["candidate_manifest_digest"] = digest((root / "plugin.json").read_bytes())
         candidate["candidate_tree_digest"] = registry.directory_tree_digest(root)
         require(candidate["candidate_tree_digest"].startswith("sha256:"), "tree digest absent")
