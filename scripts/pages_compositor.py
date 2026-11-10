@@ -289,6 +289,33 @@ def _failed_environment_has_no_uncertain_backend(
     return step.get("conclusion") == "skipped"
 
 
+def _cancelled_before_runner(job: object, run_id: int, job_id: int, sha: str) -> bool:
+    """Recognize a cancelled Pages job that GitHub never assigned to a runner."""
+    return (isinstance(job, dict) and job.get("id") == job_id and job.get("run_id") == run_id
+            and job.get("name") == COMPOSITOR_JOB_NAME and job.get("head_sha") == sha
+            and job.get("status") == "completed" and job.get("conclusion") == "cancelled"
+            and type(job.get("runner_id")) is int and job["runner_id"] == 0
+            and job.get("runner_name") == "" and job.get("steps") == [])
+
+
+def _cancelled_unstarted_pages_job(
+    repository: str, token: str, deployment: dict, status: dict,
+    fetch: Callable[[str, str], object],
+) -> tuple[int, int] | None:
+    """Require both a never-assigned job and a cancelled Pages backend."""
+    sha = deployment.get("sha")
+    identity = _status_run_job_ids(repository, status)
+    if (status.get("state") != "error" or identity is None or not isinstance(sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", sha) is None):
+        return None
+    run_id, job_id = identity
+    job = fetch(f"repos/{repository}/actions/jobs/{job_id}", token)
+    if not _cancelled_before_runner(job, run_id, job_id, sha):
+        return None
+    backend = fetch(f"repos/{repository}/pages/deployments/{sha}", token)
+    return identity if isinstance(backend, dict) and backend.get("status") == "deployment_cancelled" else None
+
+
 def _inactive_has_prior_success(
     repository: str, token: str, deployment_id: int, latest: dict,
     fetch: Callable[[str, str], object],
@@ -435,7 +462,8 @@ def require_terminal_previous_deployments(
                     raise CasError(f"Pages deployment {deployment_id} has uncertain external backend state")
             elif state in {"failure", "error"}:
                 if (not _failed_environment_has_no_uncertain_backend(repository, token, statuses[0], fetch)
-                        and not _backend_cancelled_for_unique_sha(repository, token, by_id[deployment_id], fetch)):
+                        and not _backend_cancelled_for_unique_sha(repository, token, by_id[deployment_id], fetch)
+                        and not _cancelled_unstarted_pages_job(repository, token, by_id[deployment_id], statuses[0], fetch)):
                     raise CasError(f"Pages deployment {deployment_id} has uncertain external backend state")
             elif state not in TERMINAL_DEPLOYMENT_STATES:
                 if (run_id is None or _status_job_id(repository, statuses[0], run_id)
@@ -499,7 +527,8 @@ def require_successful_current_deployment(
                 repository, token, deployment_id, statuses[0], fetch,
             )) or (state in {"failure", "error"} and not _failed_environment_has_no_uncertain_backend(
                 repository, token, statuses[0], fetch,
-            ) and not _backend_cancelled_for_unique_sha(repository, token, deployment, fetch))):
+            ) and not _backend_cancelled_for_unique_sha(repository, token, deployment, fetch)
+                    and not _cancelled_unstarted_pages_job(repository, token, deployment, statuses[0], fetch))):
                 raise CasError(f"Pages deployment {deployment_id} has uncertain external backend state")
             receipts.append((deployment_id, state))
             if _status_job_id(repository, statuses[0], run_id) == job_id:
