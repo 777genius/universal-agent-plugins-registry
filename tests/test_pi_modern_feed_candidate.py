@@ -25,10 +25,14 @@ def source_case(name: str, status: str = "active") -> dict:
 def receipt(source: dict, scope: str, status: str) -> dict:
     value = {**source, "scope": scope, "status": status}
     if status == "planned":
+        value["exit_code"] = 0
         value["planned_actions"] = [{
             "client_id": "pi", "action": "install", "alias": source["manifest_name"],
             "revision": source["revision"], "package_digest": source["tree_digest"],
         }]
+    elif status == "refused":
+        value["exit_code"] = 1
+        value["diagnostic"] = "signed Pi dependency not eligible"
     return value
 
 
@@ -39,10 +43,11 @@ class ModernPiEvidenceTests(unittest.TestCase):
         self.suspended = source_case("owner/suspended", "suspended")
         self.sources = [self.tool, self.marketing, self.suspended]
         self.report = {
-            "kind": "pi-direct-source-planning", "source_commit": HEAD,
-            "runner_os": "Linux",
+            "schema_version": 1, "kind": "pi-direct-source-planning",
+            "source_commit": HEAD, "runner_os": "Linux",
             "cli_version": "0.1.102", "signed_pi_policy_published": False,
-            "active_policy_count": 3,
+            "runtime_claims": False, "account_authentication": "not_tested",
+            "scopes": ["user", "project"], "active_policy_count": 3,
             "results": [
                 *[receipt(self.tool, s, "planned") for s in ("user", "project")],
                 *[receipt(self.marketing, s, "refused") for s in ("user", "project")],
@@ -87,6 +92,44 @@ class ModernPiEvidenceTests(unittest.TestCase):
     def test_source_head_mismatch_is_rejected(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unqualified source evidence"):
             validate_platform_report(self.report, "linux", "d" * 40, self.sources)
+
+    def test_planned_status_needs_actual_successful_cli_exit(self) -> None:
+        report = copy.deepcopy(self.report)
+        report["results"][0]["exit_code"] = 1
+        with self.assertRaisesRegex(RuntimeError, "successful CLI exit"):
+            validate_platform_report(report, "linux", HEAD, self.sources)
+
+    def test_refused_status_needs_actual_failed_cli_exit(self) -> None:
+        report = copy.deepcopy(self.report)
+        report["results"][2]["exit_code"] = 0
+        with self.assertRaisesRegex(RuntimeError, "real failed CLI exit"):
+            validate_platform_report(report, "linux", HEAD, self.sources)
+
+    def test_planned_actions_cannot_include_other_clients(self) -> None:
+        report = copy.deepcopy(self.report)
+        report["results"][0]["planned_actions"].append({
+            "client_id": "codex", "action": "install",
+            "alias": "other", "revision": HEAD, "package_digest": DIGEST,
+        })
+        with self.assertRaisesRegex(RuntimeError, "Pi-only"):
+            validate_platform_report(report, "linux", HEAD, self.sources)
+
+    def test_source_only_report_must_not_claim_runtime_or_account_auth(self) -> None:
+        for field, value in (("runtime_claims", True),
+                             ("account_authentication", "tested"),
+                             ("signed_pi_policy_published", True),
+                             ("scopes", ["user"])):
+            with self.subTest(field=field):
+                report = copy.deepcopy(self.report)
+                report[field] = value
+                with self.assertRaisesRegex(RuntimeError, "unqualified source evidence"):
+                    validate_platform_report(report, "linux", HEAD, self.sources)
+
+    def test_reject_boolean_release_sequence_spoof(self) -> None:
+        report = copy.deepcopy(self.report)
+        report["results"][0]["release_sequence"] = True
+        with self.assertRaisesRegex(RuntimeError, "invalid release sequence"):
+            validate_platform_report(report, "linux", HEAD, self.sources)
 
 
 class ModernPiCandidateTests(unittest.TestCase):
