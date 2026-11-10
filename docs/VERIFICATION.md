@@ -72,6 +72,18 @@ the September run above is historical evidence only.
 The Docker Hub package is pinned to the multi-architecture OCI digest recorded
 in `plugins/docker-hub/mcp.json`.
 
+## Current 2026-11-10 runtime remediation candidate
+
+The new reviewed **plugin 0.2.6** source pins `firebase-tools@15.35.0`
+and `@hubspot/cli@8.18.0` in exact runtime manifests and npm lockfiles.
+The 2026-10-29 record above is historical evidence for the previous pins,
+not a present-day vulnerability verdict. CI must verify the committed source
+on Linux, macOS and Windows with fresh npm audit, exact lock integrity,
+MCP `initialize`/`tools/list`, registry signatures and cleanup before
+promotion. HubSpot's upstream `submit-feedback` tool is an external write
+action disclosed in the new plugin README; enumeration is not permission to
+transmit user data. A review-source package is not a signed Directory release.
+
 ## Generated-site browser verification
 
 Pages pull requests generate and CSP-finalize the static production HTML before
