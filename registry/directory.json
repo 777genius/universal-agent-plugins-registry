@@ -7034,6 +7034,14 @@
               "delivery": "managed"
             },
             {
+              "client": "vscode",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "prepared"
+            },
+            {
               "client": "claude",
               "authentication": "required",
               "scopes": [
