@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 import tempfile
@@ -66,6 +67,280 @@ class ManagedReadinessTests(unittest.TestCase):
         target["scopes"].append("project")
         with self.assertRaisesRegex(ValueError, "uncovered target policy"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
+
+    def test_release_user_requires_fixed_authority_and_preserves_historical_case(self):
+        with patch.object(gate.project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
+            managed.release_expected(self.snapshot, gate.selected)
+        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
+            case = managed.release_expected(self.snapshot, gate.selected)
+        self.assertEqual(case["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+        self.assertEqual(case["targets"], list(managed.CLIENTS))
+        self.assertEqual(len(case["associations"]), 24)
+        self.assertEqual(self.case["cli"], managed.CLI)
+        self.assertEqual(self.case["targets"], list(managed.LEGACY_CLIENTS))
+        historical = copy.deepcopy(self.snapshot)
+        policy = next(item for item in historical["distributions"] if item["id"] == managed.ROOT)["release_policies"][0]
+        policy["targets"] = [target for target in policy["targets"] if target["client"] != "copilot"]
+        with patch.object(gate.project, "RELEASE", None):
+            self.assertIsNone(managed.release_expected(historical, gate.selected))
+
+    def test_release_user_foreign_skills_project_and_native_members_survive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            roots = {name: root / name for name in ("home", "config", "workspace")}
+            for path in roots.values():
+                path.mkdir()
+            paths, configs = managed.seed_foreign_state(roots)
+            before = managed.snapshot_paths(paths)
+            managed.validate_foreign_state(paths, before, configs)
+            for path in (paths["copilot"] / "SKILL.md", roots["workspace"] / "foreign.txt"):
+                original = path.read_bytes()
+                path.write_text("modified")
+                with self.assertRaises(ValueError):
+                    managed.validate_foreign_state(paths, before, configs)
+                path.write_bytes(original)
+            path = next(iter(configs))
+            original = path.read_bytes()
+            path.write_text('{}')
+            with self.assertRaisesRegex(ValueError, "foreign native member"):
+                managed.validate_foreign_state(paths, before, configs)
+            path.write_bytes(original)
+            # Managed additions to a shared config are allowed; its foreign
+            # member must retain exactly the seeded logical value.
+            document = json.loads(path.read_text())
+            document[configs[path][0]]["managed-addition"] = {"url": "https://managed.invalid/mcp"}
+            path.write_text(json.dumps(document))
+            managed.validate_foreign_state(paths, before, configs)
+
+    def test_release_user_real_bindings_receipts_skills_and_copilot_marketplace(self):
+        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
+            self.case = managed.release_expected(self.snapshot, gate.selected)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state, ctx, aliases = self.state(root)
+            installations = {item["directory"]["distribution_id"]: item for item in state["installations"]}
+            for selected in self.case["closure"]:
+                package = root / "state/store/packages/agentplugins-tree-sha256-v1" / selected["tree_digest"].removeprefix("sha256:") / "package"
+                skill = package / "skills/proof/SKILL.md"
+                skill.parent.mkdir(parents=True)
+                skill.write_text("Immutable Skill bytes\n")
+                for client, binding in installations[selected["distribution_id"]]["clients"].items():
+                    binding["affected_surfaces"] = ["copilot", "vscode"] if client == "copilot" else [client]
+                    target = Path(binding["target_locator"])
+                    installed_skill = target / (".agentplugins-runtime/skills/proof" if client == "claude" else "skills/proof")
+                    installed_skill.mkdir(parents=True)
+                    (installed_skill / "SKILL.md").write_bytes(skill.read_bytes())
+                    binding["receipts"] = [{"client_binding_id": binding["client_binding_id"], "phase": "committed", "active_path": str(target), "operation_id": "op"}]
+                    if client in ("gemini", "opencode"):
+                        binding["native_objects"] = [{"logical_name": "proof", "kind": client + "_skill_directory", "path": str(installed_skill)}]
+                    if client == "copilot":
+                        marketplace = target / ".github/plugin/marketplace.json"
+                        marketplace.parent.mkdir(parents=True)
+                        marketplace.write_text(json.dumps({"name": gate.managed_marketplace(binding["physical_artifact_id"]), "plugins": [{"name": selected["product_id"], "version": selected["package_version"], "source": "."}]}))
+            managed.validate_release_user_bindings(installations, self.case, root)
+            for mutation in (
+                lambda binding: binding.update(scope="project"),
+                lambda binding: binding.update(affected_surfaces=["copilot"]),
+                lambda binding: binding.update(receipts=[]),
+                lambda binding: binding["receipts"][0].update(client_binding_id="foreign"),
+                lambda binding: binding["receipts"][0].update(phase="prepared"),
+                lambda binding: binding["receipts"][0].update(active_path=str(root / "substitute")),
+            ):
+                value = copy.deepcopy(installations)
+                mutation(value[managed.ROOT]["clients"]["copilot"])
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    managed.validate_release_user_bindings(value, self.case, root)
+            binding = installations[managed.ROOT]["clients"]["copilot"]
+            path = Path(binding["target_locator"]) / "skills/proof/SKILL.md"
+            path.write_text("substitute")
+            with self.assertRaisesRegex(ValueError, "Skill bytes"):
+                managed.validate_release_user_bindings(installations, self.case, root)
+
+    def test_retained_application_bytes_use_only_existing_owned_user_data_slots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = {"installations": []}
+            for index in range(4):
+                locator = root / "state/plugin-data" / ("backend-" + str(index))
+                locator.mkdir(parents=True)
+                receipt = {"locator": str(locator), "scope": "user", "data_receipt_id": "data-" + str(index)}
+                (locator / ".agentplugins-data-owner.json").write_text(json.dumps(receipt))
+                state["installations"].append({"data_retained": True, "clients": {}, "data_receipts": {"data": receipt}})
+            managed.seed_retained_data(state, root)
+            for installation in state["installations"]:
+                path = Path(installation["data_receipts"]["data"]["locator"]) / "readiness-retained-data.txt"
+                self.assertEqual(path.read_bytes(), b"Credential-free retained application data.\n")
+                path.unlink()
+            for mutation in (
+                lambda value: value["installations"][0].update(data_retained=False),
+                lambda value: value["installations"][0]["data_receipts"]["data"].update(locator=str(root / "outside")),
+                lambda value: value["installations"][0]["data_receipts"]["data"].update(scope="project"),
+            ):
+                value = copy.deepcopy(state)
+                mutation(value)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    managed.seed_retained_data(value, root)
+            receipt = state["installations"][-1]["data_receipts"]["data"]
+            marker = Path(receipt["locator"]) / ".agentplugins-data-owner.json"
+            substitute = root / "substitute-marker.json"
+            substitute.write_bytes(marker.read_bytes())
+            marker.unlink()
+            marker.symlink_to(substitute)
+            with self.assertRaisesRegex(ValueError, "substituted"):
+                managed.seed_retained_data(state, root)
+            self.assertEqual(list(root.rglob("readiness-retained-data.txt")), [])
+
+    def test_retained_data_rejects_symlinked_data_root_and_state_ancestor(self):
+        for substituted in ("plugin-data", "state"):
+            for locator_style in ("outside", "lexical"):
+                with self.subTest(substituted=substituted, locator_style=locator_style), tempfile.TemporaryDirectory() as temporary:
+                    parent = Path(temporary).resolve()
+                    root, outside = parent / "isolated", parent / "outside"
+                    root.mkdir()
+                    outside.mkdir()
+                    data_root = root / "state/plugin-data"
+                    if substituted == "state":
+                        (root / "state").symlink_to(outside, target_is_directory=True)
+                        outside_data = outside / "plugin-data"
+                        outside_data.mkdir()
+                    else:
+                        (root / "state").mkdir()
+                        data_root.symlink_to(outside, target_is_directory=True)
+                        outside_data = outside
+                    state = {"installations": []}
+                    for index in range(4):
+                        actual = outside_data / ("backend-" + str(index))
+                        actual.mkdir()
+                        locator = actual if locator_style == "outside" else data_root / actual.name
+                        receipt = {"locator": str(locator), "scope": "user", "data_receipt_id": "data-" + str(index)}
+                        (actual / ".agentplugins-data-owner.json").write_text(json.dumps(receipt))
+                        state["installations"].append({"data_retained": True, "clients": {}, "data_receipts": {"data": receipt}})
+                    before = managed.snapshot_paths({"outside": outside})
+                    with self.assertRaises(ValueError):
+                        managed.seed_retained_data(state, root)
+                    self.assertEqual(managed.snapshot_paths({"outside": outside}), before)
+                    self.assertEqual(list(outside.rglob("readiness-retained-data.txt")), [])
+
+    def test_retained_data_descriptor_writes_cannot_follow_a_late_data_root_swap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root, outside = parent / "isolated", parent / "outside"
+            root.mkdir()
+            outside.mkdir()
+            data_root = root / "state/plugin-data"
+            original_data = root / "state/original-plugin-data"
+            state = {"installations": []}
+            for index in range(4):
+                locator = data_root / ("backend-" + str(index))
+                locator.mkdir(parents=True)
+                (outside / locator.name).mkdir()
+                receipt = {"locator": str(locator), "scope": "user", "data_receipt_id": "data-" + str(index)}
+                (locator / ".agentplugins-data-owner.json").write_text(json.dumps(receipt))
+                state["installations"].append({"data_retained": True, "clients": {}, "data_receipts": {"data": receipt}})
+            before = managed.snapshot_paths({"outside": outside})
+            native_open, swapped = os.open, False
+            def swap_before_create(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if path == "readiness-retained-data.txt" and not swapped:
+                    data_root.rename(original_data)
+                    data_root.symlink_to(outside, target_is_directory=True)
+                    swapped = True
+                return native_open(path, flags, *args, **kwargs)
+            with patch.object(managed.os, "open", side_effect=swap_before_create):
+                managed.seed_retained_data(state, root)
+            self.assertTrue(swapped)
+            self.assertEqual(managed.snapshot_paths({"outside": outside}), before)
+            self.assertEqual(len(list(original_data.rglob("readiness-retained-data.txt"))), 4)
+
+    def test_retained_data_descriptors_close_on_owner_validation_and_create_failure(self):
+        for failure in ("owner_mismatch", "owner_fifo", "create_failure"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                state = {"installations": []}
+                for index in range(4):
+                    locator = root / "state/plugin-data" / ("backend-" + str(index))
+                    locator.mkdir(parents=True)
+                    receipt = {"locator": str(locator), "scope": "user", "data_receipt_id": "data-" + str(index)}
+                    marker = locator / ".agentplugins-data-owner.json"
+                    marker.write_text(json.dumps(receipt))
+                    state["installations"].append({"data_retained": True, "clients": {}, "data_receipts": {"data": receipt}})
+                if failure == "owner_mismatch":
+                    marker.write_text('{"foreign": true}')
+                elif failure == "owner_fifo":
+                    marker.unlink()
+                    os.mkfifo(marker)
+                native_open, opened = os.open, []
+                def track_open(path, flags, *args, **kwargs):
+                    if failure == "create_failure" and path == "readiness-retained-data.txt":
+                        raise OSError("fixture create failure")
+                    descriptor = native_open(path, flags, *args, **kwargs)
+                    opened.append(descriptor)
+                    return descriptor
+                with patch.object(managed.os, "open", side_effect=track_open):
+                    with self.assertRaises((ValueError, OSError)):
+                        managed.seed_retained_data(state, root)
+                self.assertTrue(opened)
+                for descriptor in set(opened):
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+                self.assertEqual(list(root.rglob("readiness-retained-data.txt")), [])
+
+    def test_six_user_run_applies_real_scoped_add_validation_before_acquisition(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "codex", "claude", "copilot", "opencode"):
+                path = tools / name
+                path.write_text("#!/bin/sh\nexit 1\n")
+                path.chmod(0o700)
+            args = SimpleNamespace(binary=tools / "agentplugins", project_binary=tools / "agentplugins",
+                                   codex=tools / "codex", claude=tools / "claude", copilot=tools / "copilot",
+                                   opencode=tools / "opencode", inspector=None, npx=None)
+            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
+            release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
+            actual_validator = gate.project.validate_operation
+            with patch.object(gate.project, "RELEASE", release):
+                self.case = managed.release_expected(self.snapshot, gate.selected)
+                for payload_scope in ("user", "project"):
+                    case_root = root / ("case-" + payload_scope)
+                    ctx = {"sequence": 43, "snapshot_digest": "sha256:" + "f" * 64,
+                           "directory_origin": "https://example.invalid/exact-ledger/"}
+                    def add(argv, **kwargs):
+                        self.assertEqual(argv[1:5], ["add", "marketing-kit", "--target", ",".join(managed.CLIENTS)])
+                        self.assertEqual(argv[5:], ["--scope", "user", "--format", "json"])
+                        state, state_ctx, aliases = self.state(case_root)
+                        ctx.update(state_ctx)
+                        state_root = Path(kwargs["env"]["AGENTPLUGINS_HOME"])
+                        manifest, lock = state_root / "uap.toml", state_root / "uap.lock"
+                        manifest.write_text('[dependencies]\nmarketing-kit = "' + managed.PINS[managed.ROOT] +
+                                            '"\n[targets]\n' + ''.join(client + ' = ["marketing-kit"]\n' for client in managed.CLIENTS))
+                        lock.write_text(json.dumps(self.lock()))
+                        (state_root / "state-v2.json").write_text(json.dumps(state))
+                        by_distribution = {item["directory"]["distribution_id"]: item for item in state["installations"]}
+                        actions = [{"alias": aliases[distribution], "client_id": client, "action": "install"}
+                                   for distribution in managed.PINS for client in managed.CLIENTS]
+                        results = [{"client_id": client, "operation": "install", "outcome": "completed",
+                                    "installation_id": by_distribution[distribution]["installation_id"]}
+                                   for distribution in managed.PINS for client in managed.CLIENTS]
+                        data = {"scope": payload_scope, "outcome": "completed", "actions": actions, "results": results,
+                                "environment": {"saved": True, "manifest_path": str(manifest), "lock_path": str(lock)}}
+                        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"command": "add", "result": "success", "data": data}))
+                    with self.subTest(payload_scope=payload_scope), patch.object(gate, "child", side_effect=add) as child, \
+                            patch.object(gate.project, "validate_operation", wraps=actual_validator) as validate, \
+                            patch.object(gate.registry, "directory_tree_digest", side_effect=RuntimeError("stop_after_user_add")) as acquire:
+                        if payload_scope == "user":
+                            with self.assertRaisesRegex(RuntimeError, "stop_after_user_add"):
+                                managed.run(args, case_root, self.case, ctx)
+                            self.assertEqual(validate.call_count, 2)
+                            acquire.assert_called_once()
+                        else:
+                            with self.assertRaisesRegex(ValueError, "scope or outcome"):
+                                managed.run(args, case_root, self.case, ctx)
+                            self.assertEqual(validate.call_count, 1)
+                            acquire.assert_not_called()
+                        child.assert_called_once()
+                        self.assertTrue(all(call.kwargs["expected_scope"] == "user" for call in validate.call_args_list))
 
     def test_runtime_exposes_explicit_codex_and_owned_cursor_version_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:

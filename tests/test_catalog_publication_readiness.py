@@ -1114,9 +1114,12 @@ class CatalogContractTests(unittest.TestCase):
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                self.assertEqual(managed_run.call_count, 2)
+                self.assertEqual(managed_run.call_count, 3)
                 self.assertEqual(managed_run.call_args_list[0].args[2]["targets"], list(gate.managed.LEGACY_CLIENTS))
-                self.assertEqual(managed_run.call_args_list[1].args[2]["placement_scope"], "project")
+                self.assertEqual(managed_run.call_args_list[1].args[2]["placement_scope"], "user")
+                self.assertEqual(managed_run.call_args_list[1].args[2]["targets"], list(gate.managed.CLIENTS))
+                self.assertEqual(managed_run.call_args_list[2].args[2]["placement_scope"], "project")
+                self.assertEqual(managed_run.call_args_list[1].args[2]["cli"], managed_run.call_args_list[2].args[2]["cli"])
                 user_refusal.assert_called_once()
                 self.assertEqual(lifecycle.call_count, 30)
                 default_call = next(call for call in lifecycle.call_args_list
@@ -1129,8 +1132,33 @@ class CatalogContractTests(unittest.TestCase):
                 self.assertFalse(args.sandbox.exists())
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 
+    def test_direct_producer_rejects_omitted_or_substituted_dependency_blocks_before_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json")
+            args.binary.write_bytes(b"fixture binary")
+            expected = self.expected()
+            mutations = [lambda value, name=name: value.pop(name) for name in
+                         ("project_dependencies", "release_user_dependencies", "vscode_user_refusal")]
+            mutations.extend((
+                lambda value: value["release_user_dependencies"]["proof"].update(locked_restore="not_tested"),
+                lambda value: value["release_user_dependencies"]["cli"].update(binary_digest="sha256:" + "0" * 64),
+                lambda value: value["vscode_user_refusal"].update(target="copilot"),
+            ))
+            with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                    patch.object(gate.managed, "run") as managed_run, patch.object(gate.project, "run_user_refusal") as refusal:
+                for mutation in mutations:
+                    value = copy.deepcopy(expected)
+                    mutation(value)
+                    with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                        gate.produce(args, self.snapshot, value)
+                    self.assertFalse(args.sandbox.exists())
+                    self.assertFalse(args.output.exists())
+                managed_run.assert_not_called()
+                refusal.assert_not_called()
+
     def test_failed_cli_mcp_static_or_cleanup_never_emits_success(self):
-        for failing in ("managed", "project", "project_refusal", "run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
+        for failing in ("managed", "release_user", "project", "project_refusal", "run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
             with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
@@ -1150,9 +1178,10 @@ class CatalogContractTests(unittest.TestCase):
                             with self.assertRaises(OSError):
                                 gate.produce(args, self.snapshot, expected)
                     else:
-                        if failing == "project":
+                        if failing in ("project", "release_user"):
                             def fail_project(_args, _root, case, _ctx):
-                                if case.get("placement_scope") == "project":
+                                if (failing == "project" and case.get("placement_scope") == "project") or (
+                                        failing == "release_user" and case.get("placement_scope") == "user" and tuple(case["targets"]) == gate.managed.CLIENTS):
                                     raise ValueError("fixture Project failure")
                             managed_run.side_effect = fail_project
                         else:

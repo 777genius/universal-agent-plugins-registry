@@ -207,7 +207,7 @@ def plan(snapshot: dict) -> list[tuple[dict, tuple[str, ...]]]:
     return selections
 
 
-def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_case: dict | None = None) -> None:
+def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_case: dict | None = None, release_user_case: dict | None = None) -> None:
     """Fail new target expansions outside the fixed lifecycle/static coverage.
 
     Requiring authentication is a restriction, not a claim that accounts work.
@@ -218,9 +218,8 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_ca
     covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt", "user")
                    for selection in (selected(snapshot, selector, ("chatgpt",)) for selector in STATIC))
     covered.update(managed.coverage(managed.expected(snapshot, selected)))
-    # Signed-v1 source eligibility is distinct from positive User placement.
-    # The separate Project case also proves the User shared-backend refusal.
-    covered.update(project.source_coverage(project_case))
+    # Positive User placement is proved independently of Project resources.
+    covered.update(managed.coverage(release_user_case))
     old = {item["id"]: item for item in baseline["distributions"]}
     for distribution in snapshot["distributions"]:
         before = old.get(distribution["id"], {})
@@ -290,7 +289,9 @@ def credential_free_probe(selection: dict) -> bool:
 def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
     selections = plan(snapshot)
     project_case = project.expected(snapshot, selected)
-    policy_scope(baseline, snapshot, selections, project_case=project_case)
+    release_user_case = managed.release_expected(snapshot, selected)
+    refusal_case = project.expected_user_refusal(project_case)
+    policy_scope(baseline, snapshot, selections, project_case=project_case, release_user_case=release_user_case)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
               if selection["product_id"] in ("context7", "cloudflare-docs")
@@ -310,6 +311,8 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
         result["managed_dependencies"] = case
     if project_case is not None:
         result["project_dependencies"] = project_case
+        result["release_user_dependencies"] = release_user_case
+        result["vscode_user_refusal"] = refusal_case
     return result
 
 
@@ -823,6 +826,16 @@ def check_static_package(package: Path, selection: dict) -> None:
 
 def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     require(digest(args.binary.read_bytes()) == CLI["binary_digest"], "wrong released binary")
+    # Both positive scopes and the independent refusal are mandatory together;
+    # direct producer callers cannot silently omit or substitute a proof block.
+    project_case = project.expected(snapshot, selected)
+    dependency_cases = {"project_dependencies": project_case,
+                        "release_user_dependencies": managed.release_expected(snapshot, selected),
+                        "vscode_user_refusal": project.expected_user_refusal(project_case)}
+    for name, case in dependency_cases.items():
+        require((name in expected) == (case is not None), "missing or unexpected dependency proof block")
+        if case is not None:
+            validate_artifact(expected[name], case)
     root = args.sandbox.absolute()
     require(not root.exists() and not root.is_symlink() and root.parent.exists(), "sandbox must be a new directory")
     require(not args.output.absolute().is_relative_to(root), "output cannot be inside disposable root")
@@ -832,10 +845,14 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
         if "managed_dependencies" in expected:
             args.failure_phase = "managed:prepare"
             managed.run(args, root / "managed-marketing-kit", expected["managed_dependencies"], expected["context"])
+        if "release_user_dependencies" in expected:
+            args.failure_phase = "release_user:prepare"
+            managed.run(args, root / "release-user-marketing-kit", expected["release_user_dependencies"], expected["context"])
         if "project_dependencies" in expected:
             args.failure_phase = "project:prepare"
             managed.run(args, root / "project-marketing-kit", expected["project_dependencies"], expected["context"])
-            project.run_user_refusal(args, root / "project-user-refusal", expected["project_dependencies"], expected["context"])
+        if "vscode_user_refusal" in expected:
+            project.run_user_refusal(args, root / "vscode-user-refusal", expected["vscode_user_refusal"], expected["context"])
         for selection, clients in plan(snapshot):
             case_id = selection.get("_case_id", selection["selector"])
             args.failure_phase = "lifecycle:" + case_id
@@ -900,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot", "opencode")), "producer paths required")
             require("project_dependencies" not in expected or args.project_binary is not None,
-                    "--project-binary required for Project dependency proof")
+                    "--project-binary required for six-target User/Project dependency proof")
             produce(args, snapshot, expected)
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:

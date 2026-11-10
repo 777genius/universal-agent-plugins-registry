@@ -1,6 +1,6 @@
 """Marketing Kit Project placement from signed v1 User-qualified sources.
 
-This module owns the fixed reviewed Project release identity. It never accepts
+This module owns the fixed reviewed User/Project release identity. It never accepts
 a caller-selected installer identity, downloads an unpinned installer or grants a target.
 Project native configuration is evidence of installed resources, not a claim
 about account authentication, trust approval or successful MCP execution.
@@ -90,11 +90,20 @@ def expected(snapshot, select):
             "associations": [{"distribution_id": item["distribution_id"],
                               "release_sequence": item["release_sequence"], "client": client}
                              for item in closure for client in CLIENTS],
-            "user_refusal": {"target": "copilot", "placement_scope": "user",
-                             "outcome": "refused", "reason": "missing_vscode_shared_backend_grant",
-                             "native_and_portable_state_unchanged": True,
-                             "authenticated_directory_cache": "allowed"},
             "proof": proof}
+
+
+def expected_user_refusal(case):
+    """A separate explicit VSCode request cannot borrow Copilot's source grant."""
+    if case is None:
+        return None
+    require(all("vscode" not in {target["client"] for target in item["policy"]["targets"]}
+                for item in case["closure"] if item["distribution_id"] == managed.ROOT), "VSCode refusal source grant changed")
+    return {"cli": copy.deepcopy(case["cli"]), "root": managed.ROOT,
+            "target": "vscode", "placement_scope": "user", "outcome": "refused",
+            "reason": "missing_vscode_signed_target_grant",
+            "native_and_portable_state_unchanged": True,
+            "authenticated_directory_cache": "warmed_unchanged"}
 
 
 def source_coverage(case):
@@ -285,12 +294,13 @@ def refusal_snapshot(roots):
     return result
 
 
-def validate_directory_cache(path, keys, ctx):
+def validate_directory_cache(path, keys, ctx, *, required=False):
     import catalog_publication_readiness as gate
     lock = path.with_name(path.name + ".lock")
     require(not lock.is_symlink() and (not lock.exists() or lock.is_file() and lock.stat().st_size == 0
                                       and lock.stat().st_mode & 0o077 == 0), "Directory cache lock substituted")
     if not path.exists():
+        require(not required, "authenticated Directory cache missing")
         require(not path.is_symlink(), "Directory cache substituted")
         return
     require(path.is_file() and not path.is_symlink() and path.stat().st_mode & 0o077 == 0,
@@ -307,10 +317,10 @@ def validate_directory_cache(path, keys, ctx):
                                      signature_verifier=gate.verify_signature)
 
 
-def validate_operation(value, aliases, clients, *, operation, installations=None):
-    """Bind actual dependency actions/results to the selected Project closure."""
-    require(value.get("scope") == "project" and value.get("outcome") == "completed",
-            "Project operation scope or outcome")
+def validate_operation(value, aliases, clients, *, operation, expected_scope, installations=None):
+    """Bind actual dependency actions/results to one explicitly selected scope."""
+    require(expected_scope in ("user", "project") and value.get("scope") == expected_scope
+            and value.get("outcome") == "completed", "dependency operation scope or outcome")
     expected = {(alias, client) for alias in aliases.values() for client in clients}
     if operation == "repair":
         expected = {(aliases[managed.ROOT], client) for client in clients}
@@ -337,21 +347,34 @@ def validate_operation(value, aliases, clients, *, operation, installations=None
 
 def run_user_refusal(args, root, case, ctx):
     import catalog_publication_readiness as gate
-    require(case["user_refusal"]["outcome"] == "refused", "User refusal mislabeled as success")
+    require(case["outcome"] == "refused", "VSCode User refusal mislabeled as success")
     binary = args.project_binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong Project released binary")
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.codex, args.claude, args.copilot, args.opencode))
     managed.seed_runtime(root / "bin", env, args.codex)
-    before = refusal_snapshot(roots)
-    args.failure_phase = "project:user_refusal"
-    result = gate.child([str(binary), "add", "marketing-kit", "--target", "copilot", "--scope", "user", "--format", "json"],
+    args.failure_phase = "vscode:warm_directory"
+    initial = refusal_snapshot(roots)
+    readonly = (*gate.tool_paths(args), binary.parent)
+    warmed = gate.child([str(binary), "info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"],
+                        root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
+    require(warmed.returncode == 0 and not warmed.stderr.strip(), "VSCode refusal Directory warmup failed")
+    info = gate.publication.parse_json_bytes(warmed.stdout.encode(), "Directory warmup", max_bytes=gate.LIMIT)
+    require(isinstance(info, dict) and info.get("command") == "info" and info.get("result") == "success"
+            and info.get("data", {}).get("snapshot_sequence") == ctx["sequence"]
+            and info["data"].get("snapshot_digest") == ctx["snapshot_digest"], "VSCode refusal warmed wrong signed publication")
+    validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
+    require(refusal_snapshot(roots) == initial, "Directory warmup changed non-cache state")
+    before = managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")})
+    args.failure_phase = "vscode:user_refusal"
+    result = gate.child([str(binary), "add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"],
                         root=root, readonly=(*gate.tool_paths(args), binary.parent), env=env,
                         cwd=roots["workspace"], timeout=600)
-    reason = ('agentplugins: no eligible directory release for "marketing-kit": '
+    reason = ('Resolving and validating one Agent Plugin package for every selected target...\n'
+              'agentplugins: no eligible directory release for "marketing-kit": '
               '777genius/marketing-kit: release does not support complete target set; missing vscode')
     require(result.returncode == 1 and not result.stdout.strip() and result.stderr.strip() == reason,
-            "Copilot User did not receive exact shared-backend refusal")
-    require(refusal_snapshot(roots) == before,
-            "Copilot User refusal mutated native, portable or durable state")
-    validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx)
+            "VSCode User did not receive exact signed-target refusal")
+    require(managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
+            "VSCode User refusal mutated native, portable or durable state")
+    validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)

@@ -382,8 +382,8 @@ sys.modules['catalog_process_isolation']=module
     def test_project_release_is_one_fixed_authority_for_download_and_canonical_proof(self) -> None:
         workflow = load(CATALOG_READINESS)
         steps = workflow["jobs"]["produce"]["steps"]
-        preflight = next(step for step in steps if step.get("name") == "Require the reviewed Project CLI release identity")
-        download = next(step for step in steps if step.get("name") == "Download and authenticate the reviewed Project CLI before execution")
+        preflight = next(step for step in steps if step.get("name") == "Require the reviewed six User and six Project CLI release identity")
+        download = next(step for step in steps if step.get("name") == "Download and authenticate the reviewed User/Project CLI before execution")
         managed = next(step for step in steps if step.get("name") == "Download and authenticate the managed dependency CLI 0.1.91 before execution")
         for step in (preflight, download):
             self.assertNotIn("if", step)

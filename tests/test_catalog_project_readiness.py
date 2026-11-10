@@ -31,7 +31,7 @@ class ProjectReadinessTests(unittest.TestCase):
         self.snapshot = catalog()
         self.case = project.expected(self.snapshot, gate.selected)
 
-    def test_five_positive_user_six_positive_project_and_user_refusal(self):
+    def test_six_positive_user_six_positive_project_and_separate_vscode_refusal(self):
         user = managed.expected(self.snapshot, gate.selected)
         self.assertEqual(tuple(user["targets"]), managed.LEGACY_CLIENTS)
         self.assertEqual(tuple(self.case["targets"]), managed.CLIENTS)
@@ -39,12 +39,21 @@ class ProjectReadinessTests(unittest.TestCase):
         self.assertEqual(self.case["signed_source_scope"], "user")
         self.assertEqual(len(managed.coverage(user)), 20)
         self.assertEqual(len(project.source_coverage(self.case)), 24)
-        self.assertEqual(self.case["user_refusal"]["outcome"], "refused")
+        release_user = managed.release_expected(self.snapshot, gate.selected)
+        refusal = project.expected_user_refusal(self.case)
+        self.assertEqual(tuple(release_user["targets"]), managed.CLIENTS)
+        self.assertEqual(len(managed.coverage(release_user)), 24)
+        self.assertEqual(release_user["cli"], self.case["cli"])
+        self.assertEqual(release_user["closure"], self.case["closure"])
+        self.assertEqual(refusal["target"], "vscode")
+        self.assertEqual(refusal["outcome"], "refused")
+        self.assertNotIn("user_refusal", self.case)
+        self.assertNotIn("user_refusal", release_user)
         self.assertNotIn("native_plugin_listing", self.case["proof"])
         self.assertEqual(self.case["proof"]["account_runtime"], "not_tested")
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
-        gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot), project_case=self.case)
+        gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot), project_case=self.case, release_user_case=release_user)
         self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
 
     def test_historical_five_source_snapshot_has_no_project_case(self):
@@ -165,7 +174,16 @@ class ProjectReadinessTests(unittest.TestCase):
             lambda value: value["project_dependencies"]["targets"].append("kiro"),
             lambda value: value["project_dependencies"]["closure"][0].update(tree_digest="sha256:" + "0" * 64),
             lambda value: value["project_dependencies"]["closure"][0]["policy"]["targets"][0].update(scopes=["project"]),
-            lambda value: value["project_dependencies"]["user_refusal"].update(outcome="passed"),
+            lambda value: value["vscode_user_refusal"].update(outcome="passed"),
+            lambda value: value["vscode_user_refusal"].update(target="copilot"),
+            lambda value: value.pop("vscode_user_refusal"),
+            lambda value: value.pop("release_user_dependencies"),
+            lambda value: value["release_user_dependencies"]["targets"].remove("copilot"),
+            lambda value: value["release_user_dependencies"]["cli"].update(binary_digest="sha256:" + "0" * 64),
+            lambda value: value["release_user_dependencies"]["closure"].pop(),
+            lambda value: value["release_user_dependencies"]["associations"].pop(),
+            lambda value: value["release_user_dependencies"]["proof"].update(locked_restore="not_tested"),
+            lambda value: value["release_user_dependencies"]["proof"].update(repair="not_tested"),
             lambda value: value["project_dependencies"]["proof"].update(native_project_cleanup="not_tested"),
             lambda value: value["managed_dependencies"]["targets"].insert(2, "copilot"),
             lambda value: value["context"].update(sequence=21),
@@ -310,7 +328,7 @@ class ProjectReadinessTests(unittest.TestCase):
         actions = [{"alias": aliases[managed.ROOT], "client_id": client, "action": "repair"} for client in project.CLIENTS]
         results = [{"client_id": client, "operation": "repair", "installation_id": installations[managed.ROOT]["installation_id"], "outcome": "completed"} for client in project.CLIENTS]
         result = {"scope": "project", "outcome": "completed", "actions": actions, "results": results}
-        project.validate_operation(result, aliases, project.CLIENTS, operation="repair", installations=installations)
+        project.validate_operation(result, aliases, project.CLIENTS, operation="repair", expected_scope="project", installations=installations)
         for mutate in (
             lambda value: value.update(scope="user"),
             lambda value: value.update(outcome="refused"),
@@ -324,7 +342,35 @@ class ProjectReadinessTests(unittest.TestCase):
             value = copy.deepcopy(result)
             mutate(value)
             with self.subTest(mutate=mutate), self.assertRaises(ValueError):
-                project.validate_operation(value, aliases, project.CLIENTS, operation="repair", installations=installations)
+                project.validate_operation(value, aliases, project.CLIENTS, operation="repair", expected_scope="project", installations=installations)
+
+    def test_dependency_operation_scopes_remain_separate_for_every_positive_phase(self):
+        aliases = {distribution: distribution.split("/")[1] for distribution in managed.PINS}
+        installations = {distribution: {"installation_id": "i-" + alias} for distribution, alias in aliases.items()}
+        for phase, operation, action in (("add", "add", "install"),
+                                         ("repeat_locked_replay_update", "unchanged", "unchanged"),
+                                         ("repair", "repair", "repair"),
+                                         ("locked_restore", "add", "repair")):
+            distributions = [managed.ROOT] if operation == "repair" else list(aliases)
+            actions = [{"alias": aliases[distribution], "client_id": client, "action": action}
+                       for distribution in distributions for client in managed.CLIENTS]
+            results = [] if action == "unchanged" else [
+                {"client_id": client, "operation": action, "installation_id": installations[distribution]["installation_id"],
+                 "outcome": "completed"} for distribution in distributions for client in managed.CLIENTS]
+            for scope, other_scope in (("user", "project"), ("project", "user")):
+                value = {"scope": scope, "outcome": "completed", "actions": actions, "results": results}
+                with self.subTest(phase=phase, scope=scope):
+                    project.validate_operation(value, aliases, managed.CLIENTS, operation=operation,
+                                               expected_scope=scope, installations=installations)
+                    with self.assertRaisesRegex(ValueError, "scope or outcome"):
+                        project.validate_operation(value, aliases, managed.CLIENTS, operation=operation,
+                                                   expected_scope=other_scope, installations=installations)
+                    with self.assertRaises(TypeError):
+                        project.validate_operation(value, aliases, managed.CLIENTS, operation=operation,
+                                                   installations=installations)
+                    with self.assertRaisesRegex(ValueError, "scope or outcome"):
+                        project.validate_operation(value, aliases, managed.CLIENTS, operation=operation,
+                                                   expected_scope="all", installations=installations)
 
     def test_stdio_project_resource_binds_released_launcher_context_and_child_arguments(self):
         for encoded in (False, True):
@@ -358,7 +404,7 @@ class ProjectReadinessTests(unittest.TestCase):
                     project.validate_server(entry, source, package, cli_digest="sha256:" + "0" * 64, project_root=root, data_root=root / ".uap/plugin-data/backend")
 
     def test_user_refusal_requires_reason_nonzero_and_zero_native_portable_state_mutation(self):
-        for behavior in ("refused", "directory_cache", "success", "unrelated_error", "native_mutation", "portable_mutation", "durable_mutation", "journal_mutation", "unrelated_mention", "cache_wrong_sequence"):
+        for behavior in ("refused", "directory_cache", "success", "unrelated_error", "native_mutation", "portable_mutation", "durable_mutation", "journal_mutation", "unrelated_mention", "cache_wrong_sequence", "warm_wrong_digest", "warm_no_cache"):
             with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 tools = root / "tools"
@@ -376,11 +422,20 @@ class ProjectReadinessTests(unittest.TestCase):
                 args.trusted_keys = fixture / "trusted-keys.json"
                 snapshot_bytes = (fixture / "snapshot.json").read_bytes()
                 ctx = {"directory_origin": "https://example.invalid/exact-ledger/", "sequence": 15, "snapshot_digest": gate.digest(snapshot_bytes)}
-                case = copy.deepcopy(self.case)
+                case = project.expected_user_refusal(self.case)
                 case["cli"]["binary_digest"] = gate.digest(args.binary.read_bytes())
                 def invoke(argv, **kwargs):
-                    self.assertEqual(argv[1:8], ["add", "marketing-kit", "--target", "copilot", "--scope", "user", "--format"])
                     profile = Path(kwargs["env"]["AGENTPLUGINS_HOME"])
+                    def write_cache(sequence=15):
+                        cache = profile / "directory-v1-cache.json"
+                        cache.write_text(json.dumps({"schema_version": 1, "sequence": sequence, "snapshot": base64.b64encode(snapshot_bytes).decode(), "envelope": base64.b64encode((fixture / "envelope-current.json").read_bytes()).decode()}))
+                        cache.chmod(0o600)
+                    if argv[1] == "info":
+                        self.assertEqual(argv[1:], ["info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"])
+                        if behavior != "warm_no_cache":
+                            write_cache()
+                        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"command": "info", "result": "success", "data": {"snapshot_sequence": 15, "snapshot_digest": "wrong" if behavior == "warm_wrong_digest" else ctx["snapshot_digest"]}}))
+                    self.assertEqual(argv[1:], ["add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"])
                     if behavior in ("directory_cache", "cache_wrong_sequence"):
                         cache = profile / "directory-v1-cache.json"
                         cache.write_text(json.dumps({"schema_version": 1, "sequence": 14 if behavior == "cache_wrong_sequence" else 15, "snapshot": base64.b64encode(snapshot_bytes).decode(), "envelope": base64.b64encode((fixture / "envelope-current.json").read_bytes()).decode()}))
@@ -397,7 +452,7 @@ class ProjectReadinessTests(unittest.TestCase):
                     return SimpleNamespace(returncode=0 if behavior == "success" else 1,
                                            stdout="", stderr=("network timeout" if behavior == "unrelated_error" else
                                             "network timeout; source log mentioned missing vscode" if behavior == "unrelated_mention" else
-                                            'agentplugins: no eligible directory release for "marketing-kit": 777genius/marketing-kit: release does not support complete target set; missing vscode'))
+                                            'Resolving and validating one Agent Plugin package for every selected target...\nagentplugins: no eligible directory release for "marketing-kit": 777genius/marketing-kit: release does not support complete target set; missing vscode'))
                 with patch.object(gate, "child", side_effect=invoke):
                     if behavior in ("refused", "directory_cache"):
                         project.run_user_refusal(args, root / "case", case, ctx)
