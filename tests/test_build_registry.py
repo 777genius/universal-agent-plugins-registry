@@ -1539,7 +1539,7 @@ class DirectoryDomainTests(unittest.TestCase):
         self.assertEqual(
             [(policy["release_sequence"], policy["status"]) for policy in distribution["release_policies"]],
             [(1, "revoked"), (2, "revoked"), (3, "superseded"), (4, "superseded"),
-             (5, "superseded"), (6, "superseded"), (7, "superseded"), (8, "active")],
+             (5, "superseded"), (6, "superseded"), (7, "revoked"), (8, "active")],
         )
         resolution = registry.resolve_directory(source, "firebase", ["codex"])
         self.assertEqual(
@@ -1569,7 +1569,7 @@ class DirectoryDomainTests(unittest.TestCase):
                 (4, "superseded", "0.1.26"),
                 (5, "superseded", "0.1.26"),
                 (6, "superseded", "0.1.26"),
-                (7, "superseded", "0.1.26"),
+                (7, "revoked", "0.1.26"),
                 (8, "active", "0.1.26"),
             ],
         )

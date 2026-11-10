@@ -98,16 +98,19 @@ signed runtime or misrepresent a candidate as already installed.
   version 0.2.6**, never under old signed 0.2.5. Verify source bytes, package
   tree and manifest SHA-256 before recording them in the reviewed candidate
   record. Keep `context7` unchanged.
-- For each existing distribution, the next release is **sequence 8** after
-  existing 0.2.5 sequence 7. Before adding 8, reconcile the old unresolved
-  source revision in the review Directory with the already authenticated,
-  immutable signed sequence-7 source binding; only a byte-identical historic
-  source revision binding is acceptable. Do not alter any historical version,
-  tree/manifest digest, signed release identity, prior target policy or evidence.
-  Append release 8 and its one-for-one policy; preserve authentication requirements,
-  installer minimum and delivery semantics absent a separate reviewed change.
-  Source revision for the new release follows the existing protected post-merge
-  binding process; never pre-claim a signed/public release from ephemeral ZIPs.
+- The protected signed ledger at snapshot sequence 43 has Firebase and HubSpot
+  releases only through **sequence 6 / plugin 0.2.4**. Source release 7 / 0.2.5
+  was reviewed but **never signed**; it must be pinned to byte-identical
+  historical commit `e8d3d940f2faa60ab8391156b279f8f71315b9d6` and
+  **revoked** rather than `superseded` to satisfy the fail-closed publisher's
+  historical-archive exception. Revocation prevents inadvertent new installs
+  of the unpublished, vulnerable runtime; the immutable historic package
+  version, source, tree/manifest digest and metadata are preserved.
+- Append **release 8 / plugin 0.2.6** and its one-for-one active policy;
+  preserve authentication requirements, installer minimum and delivery
+  semantics absent a separate reviewed change. Its source revision follows
+  protected post-merge binding, never an unsigned preview claim. Preserve
+  every actually signed sequence 1–6 and its immutable source and history.
 - Regenerate and check deterministic Directory review outputs using
   `python3 scripts/build_registry.py --check` and existing tests. Remove
   preview-only staging machinery as appropriate when committed-source

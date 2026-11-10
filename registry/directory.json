@@ -4718,7 +4718,7 @@
         },
         {
           "release_sequence": 7,
-          "status": "superseded",
+          "status": "revoked",
           "minimum_installer_version": "0.1.26",
           "targets": [
             {
@@ -6611,7 +6611,7 @@
         },
         {
           "release_sequence": 7,
-          "status": "superseded",
+          "status": "revoked",
           "minimum_installer_version": "0.1.26",
           "targets": [
             {
