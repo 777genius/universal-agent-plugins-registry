@@ -559,19 +559,29 @@ def native_listing(tool: Path, env: dict, workspace: Path, plugin: str, installe
         if lines and lines[0] == live_header:
             mark("section")
             mark("format")
-            require(len(lines) == 3, "malformed Copilot live listing")
-            entry = re.fullmatch(r"  • ([A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*) \(v([^() ]+)\) \(([^() ]+)\)", lines[1])
-            require(entry is not None and lines[2].startswith("      from "), "malformed Copilot live listing")
+            require(len(lines) > 1 and (len(lines) - 1) % 2 == 0, "malformed Copilot live listing")
+            entries, seen = [], set()
+            for index in range(1, len(lines), 2):
+                entry = re.fullmatch(r"  • ([A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*) \(v([^() ]+)\) \(([^() ]+)\)", lines[index])
+                location = lines[index + 1]
+                require(entry is not None and location.startswith("      from ")
+                        and len(location) > len("      from "), "malformed Copilot live listing")
+                require(entry[1] not in seen, "duplicate Copilot live identity")
+                seen.add(entry[1])
+                entries.append((entry[1], entry[2], entry[3], location[len("      from "):]))
             mark("identity")
-            require(entry[1] == f"{plugin}@{expected_marketplace}", "Copilot live identity mismatch")
-            mark("version")
-            require(entry[2] == expected_version, "Copilot live version mismatch")
-            mark("status")
-            require(entry[3] == "enabled", "Copilot live status mismatch")
-            mark("path")
-            live_path = lines[2][len("      from "):]
-            require(expected_path is not None and Path(live_path).is_absolute()
-                    and Path(live_path).resolve() == expected_path.resolve(), "Copilot live path mismatch")
+            matches = [entry for entry in entries if entry[0].split("@", 1)[0] == plugin]
+            require(len(matches) == int(installed), "Copilot live identity mismatch")
+            if installed:
+                identity, version, status, live_path = matches[0]
+                require(identity == f"{plugin}@{expected_marketplace}", "Copilot live identity mismatch")
+                mark("version")
+                require(version == expected_version, "Copilot live version mismatch")
+                mark("status")
+                require(status == "enabled", "Copilot live status mismatch")
+                mark("path")
+                require(expected_path is not None and Path(live_path).is_absolute()
+                        and Path(live_path).resolve() == expected_path.resolve(), "Copilot live path mismatch")
             mark("count")
             return
         section, recognized, entries = False, False, []
