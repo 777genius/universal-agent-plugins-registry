@@ -25,13 +25,12 @@ class PiLegacyFeedBoundaryTests(unittest.TestCase):
         ]
         self.assertTrue(policies, "empty shared Directory would make this check vacuous")
         for distribution_id, policy in policies:
-            with self.subTest(distribution=distribution_id, release=policy["release_sequence"]):
-                self.assertNotIn(
-                    "pi", [target["client"] for target in policy["targets"]],
-                    "publishing Pi into the shared 0.1.89 feed requires an explicit "
-                    "old-reader compatibility/cutoff decision; use an isolated "
-                    "modern-client v1 feed instead",
-                )
+            self.assertNotIn(
+                "pi", [target["client"] for target in policy["targets"]],
+                f"{distribution_id}@{policy['release_sequence']}: publishing Pi into "
+                "the shared 0.1.89 feed requires an explicit old-reader "
+                "compatibility/cutoff decision; use an isolated modern-client v1 feed",
+            )
 
     def test_existing_shared_directory_does_not_publish_pi(self) -> None:
         source = json.loads((ROOT / "registry" / "directory.json").read_text(encoding="utf-8"))
