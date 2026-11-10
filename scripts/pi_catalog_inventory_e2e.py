@@ -314,10 +314,13 @@ def main() -> int:
     require_exact_checkout(args.source_head)
     require_published_cli_version(str(Path(binary).resolve()))
     sources = active_sources(args.source_head)
+    require(os.environ.get("RUNNER_OS") in {"Linux", "macOS", "Windows"},
+            "Pi catalog evidence requires an identified native Actions OS")
     args.report.parent.mkdir(parents=True, exist_ok=True)
     evidence = {
         "schema_version": 1, "kind": "pi-direct-source-planning",
         "source_commit": args.source_head, "cli_version": "0.1.102",
+        "runner_os": os.environ["RUNNER_OS"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "signed_pi_policy_published": False, "runtime_claims": False,
         "account_authentication": "not_tested",
