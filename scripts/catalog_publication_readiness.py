@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import catalog_managed_readiness as managed
+import catalog_project_readiness as project
 import build_registry as registry
 import directory_publication as publication
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -206,7 +207,7 @@ def plan(snapshot: dict) -> list[tuple[dict, tuple[str, ...]]]:
     return selections
 
 
-def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
+def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_case: dict | None = None) -> None:
     """Fail new target expansions outside the fixed lifecycle/static coverage.
 
     Requiring authentication is a restriction, not a claim that accounts work.
@@ -217,6 +218,9 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list) -> None:
     covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt", "user")
                    for selection in (selected(snapshot, selector, ("chatgpt",)) for selector in STATIC))
     covered.update(managed.coverage(managed.expected(snapshot, selected)))
+    # Signed-v1 source eligibility is distinct from positive User placement.
+    # The separate Project case also proves the User shared-backend refusal.
+    covered.update(project.source_coverage(project_case))
     old = {item["id"]: item for item in baseline["distributions"]}
     for distribution in snapshot["distributions"]:
         before = old.get(distribution["id"], {})
@@ -283,9 +287,10 @@ def credential_free_probe(selection: dict) -> bool:
     return bool(targets) and all(target.get("authentication") == "not_required" for target in targets)
 
 
-def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
+def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict, *, project_cli: dict | None = None) -> dict:
     selections = plan(snapshot)
-    policy_scope(baseline, snapshot, selections)
+    project_case = project.expected(snapshot, selected, project_cli) if project_cli is not None else None
+    policy_scope(baseline, snapshot, selections, project_case=project_case)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
               if selection["product_id"] in ("context7", "cloudflare-docs")
@@ -303,6 +308,8 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     case = managed.expected(snapshot, selected)
     if case is not None:
         result["managed_dependencies"] = case
+    if project_case is not None:
+        result["project_dependencies"] = project_case
     return result
 
 
@@ -825,6 +832,10 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
         if "managed_dependencies" in expected:
             args.failure_phase = "managed:prepare"
             managed.run(args, root / "managed-marketing-kit", expected["managed_dependencies"], expected["context"])
+        if "project_dependencies" in expected:
+            args.failure_phase = "project:prepare"
+            managed.run(args, root / "project-marketing-kit", expected["project_dependencies"], expected["context"])
+            project.run_user_refusal(args, root / "project-user-refusal", expected["project_dependencies"], expected["context"])
         for selection, clients in plan(snapshot):
             case_id = selection.get("_case_id", selection["selector"])
             args.failure_phase = "lifecycle:" + case_id
@@ -868,7 +879,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "managed-binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
+    for name in ("binary", "managed-binary", "project-binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result

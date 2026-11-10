@@ -40,15 +40,18 @@ def expected(snapshot, select):
     policies = [policy for policy in roots[0]["release_policies"]
                 if policy["release_sequence"] == 1 and policy["status"] == "active"]
     require(len(roots) == 1 and len(policies) == 1, "ambiguous managed root policy")
-    clients = tuple(target["client"] for target in policies[0]["targets"])
-    require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed target expansion")
+    source_clients = tuple(target["client"] for target in policies[0]["targets"])
+    require(source_clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed target expansion")
+    # Copilot's User backend also owns VS Code. A signed Copilot source grant
+    # cannot qualify a successful User install while the sibling is ungranted.
+    clients = LEGACY_CLIENTS
     require(all(target["scopes"] == ["user"] and target["authentication"] == "required"
                 and target["delivery"] == "managed" for target in policies[0]["targets"]),
             "unqualified managed target authority")
     closure = [select(snapshot, selector, clients, cli=CLI) for selector in PINS]
     root = closure[0]
     require(root["policy"]["minimum_installer_version"] == CLI["version"], "managed installer floor changed")
-    require({item["client"] for item in root["policy"]["targets"]} == set(clients), "managed target policy changed")
+    require({item["client"] for item in root["policy"]["targets"]} == set(source_clients), "managed target policy changed")
     require(all(item["package_version"] == PINS[item["selector"]] for item in closure), "managed package version changed")
     require(root["release_sequence"] == 1, "unqualified managed release")
     proof = {"saved_add": "passed", "info": "passed", "status": "passed",
@@ -127,7 +130,7 @@ def validate_state(state, case, ctx, root, aliases, *, clients=None):
         bindings = list(installation.get("clients", {}).values())
         require(len(bindings) == len(clients) and {binding.get("client_id") for binding in bindings} == set(clients), "managed bindings")
         for binding in bindings:
-            require(binding.get("scope") == "user" and binding.get("materialization") == "materialized" and
+            require(binding.get("scope") == case.get("placement_scope", "user") and binding.get("materialization") == "materialized" and
                     binding.get("verification") in ("installation_verified", "package_validated"), "managed binding not materialized")
             revision = binding.get("package_revision", {})
             require(all(revision.get(key) == value for key, value in {
@@ -146,7 +149,7 @@ def validate_state(state, case, ctx, root, aliases, *, clients=None):
                                    binding["client_binding_id"], "directory:" + selected["distribution_id"], selected["tree_digest"]))
     actual_receipts = set()
     for receipt in receipts:
-        require(receipt.get("environment_id") == "user-default" and receipt.get("phase") == "committed", "managed receipt owner or phase")
+        require(receipt.get("environment_id") == case.get("placement_scope", "user") + "-default" and receipt.get("phase") == "committed", "managed receipt owner or phase")
         actual_receipts.add(tuple(receipt.get(key) for key in ("alias", "client_id", "installation_id", "client_binding_id", "source_key", "package_digest")))
     require(actual_receipts == expected_receipts, "managed receipt identity")
     return by_distribution, owned
@@ -214,12 +217,12 @@ def validate_retained_state(state, case, ctx, root, aliases, initial):
         # finalizeLastBindingState creates data only when the installation had
         # none. It uses precisely the bindings removed in the last operation.
         backends = {(binding["physical_artifact_id"], binding["scope"]) for binding in before["clients"].values()
-                    if binding["client_id"] not in NATIVE_TARGETS}
+                    if binding["client_id"] not in case.get("native_removal_targets", NATIVE_TARGETS)}
         expected_ids = set()
         for backend, scope in backends:
-            require(isinstance(backend, str) and backend not in ("", ".", "..") and Path(backend).name == backend and scope == "user", "managed retained data backend")
+            require(isinstance(backend, str) and backend not in ("", ".", "..") and Path(backend).name == backend and scope == case.get("placement_scope", "user"), "managed retained data backend")
             receipt_id = "data_" + hashlib.sha256((before["installation_id"] + "\0" + backend + "\0" + scope).encode()).hexdigest()[:24]
-            locator = root / "state" / "plugin-data" / backend
+            locator = (root / "workspace" / ".uap" if case.get("placement_scope") == "project" else root / "state") / "plugin-data" / backend
             ownership = "sha256:" + hashlib.sha256(("agentplugins-plugin-data-v1\0" + receipt_id + "\0" + str(locator)).encode()).hexdigest()
             receipt = installation["data_receipts"].get(receipt_id, {})
             require(isinstance(receipt, dict) and set(receipt) <= {"data_receipt_id", "physical_backend_id", "scope", "locator", "ownership_digest", "state", "created_at", "updated_at"} and
@@ -332,22 +335,33 @@ def run(args, root, case, ctx):
     # parser; no third client engine or portable semantics are introduced here.
     import catalog_publication_readiness as gate
     clients = tuple(case["targets"])
-    require(clients in (LEGACY_CLIENTS, CLIENTS), "unqualified managed lifecycle targets")
-    require(getattr(args, "managed_binary", None) is not None, "missing managed released binary")
-    binary = args.managed_binary.resolve(strict=True)
-    require(gate.digest(binary.read_bytes()) == CLI["binary_digest"], "wrong managed released binary")
+    scope = case.get("placement_scope", "user")
+    require((scope == "user" and clients == LEGACY_CLIENTS) or
+            (scope == "project" and clients == CLIENTS and case.get("signed_source_scope") == "user"),
+            "unqualified managed lifecycle targets or scope")
+    binary_arg = getattr(args, "project_binary" if scope == "project" else "managed_binary", None)
+    require(binary_arg is not None, "missing managed released binary")
+    binary = binary_arg.resolve(strict=True)
+    require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong managed released binary")
     codex = getattr(args, "codex", None)
     require(isinstance(codex, Path) and codex.is_absolute(), "managed Codex path must be absolute")
     require(codex.resolve(strict=True).is_file(), "managed Codex executable missing")
-    args.failure_phase = "managed:prepare"
+    prefix = "project" if scope == "project" else "managed"
+    args.failure_phase = prefix + ":prepare"
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (codex, args.claude, args.copilot, args.opencode))
     readonly = (*gate.tool_paths(args), binary.parent)
     seed_runtime(root / "bin", env, codex)
+    state_root = roots["workspace"] / ".uap" if scope == "project" else roots["state"]
+    intent_root = roots["workspace"] if scope == "project" else state_root
+    scope_args = ["--scope", "project", "--project-root", str(roots["workspace"])] if scope == "project" else []
+    if scope == "project":
+        import catalog_project_readiness as project
+        protected_user = snapshot_paths(project.user_paths(roots))
 
     def command(*argv):
-        args.failure_phase = "managed:" + argv[0]
-        result = gate.child([str(binary), *argv, "--format", "json"], root=root, readonly=readonly,
+        args.failure_phase = prefix + ":" + argv[0]
+        result = gate.child([str(binary), *argv, *scope_args, "--format", "json"], root=root, readonly=readonly,
                             env=env, cwd=roots["workspace"], timeout=600)
         if result.returncode != 0:
             if callable(getattr(args, "on_failure", None)):
@@ -356,6 +370,8 @@ def run(args, root, case, ctx):
             raise ValueError("managed CLI command failed")
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)
         require(isinstance(value, dict), "managed CLI JSON shape")
+        if scope == "project":
+            project.validate_user_isolation(protected_user, roots)
         if argv[0] in ("add", "info", "list", "doctor"):
             require(value.get("command") == argv[0] and value.get("result") == "success" and isinstance(value.get("data"), dict), "managed CLI envelope")
             return value["data"]
@@ -363,8 +379,9 @@ def run(args, root, case, ctx):
 
     added = command("add", "marketing-kit", "--target", ",".join(clients))
     require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(clients), "managed saved add incomplete")
-    state_file = roots["state"] / "state-v2.json"
-    manifest, lock_path = roots["state"] / "uap.toml", roots["state"] / "uap.lock"
+    require(scope != "project" or added.get("scope") == "project", "managed placement scope")
+    state_file = state_root / "state-v2.json"
+    manifest, lock_path = intent_root / "uap.toml", intent_root / "uap.lock"
     # Dependency file location is a released output, but must remain confined to
     # the new state root rather than trusting arbitrary JSON paths.
     environment = added["environment"]
@@ -372,10 +389,15 @@ def run(args, root, case, ctx):
             Path(environment["lock_path"]).resolve() == lock_path.resolve(), "managed environment paths")
     lock = gate.read_json(lock_path)
     aliases = validate_lock(lock, case)
+    if scope == "project":
+        project.validate_operation(added, aliases, clients, operation="add")
     requirements = tomllib.loads(manifest.read_text())
     require(set(requirements.get("dependencies", {})) == {aliases[ROOT]} and
             requirements.get("targets") == {client: [aliases[ROOT]] for client in clients}, "managed root intent")
     installations, owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
+    if scope == "project":
+        project.validate_operation(added, aliases, clients, operation="add", installations=installations)
+    # Immutable package acquisition uses the shared cache store in released CLI.
     store = roots["state"] / "store"
     for selected in case["closure"]:
         package = store / "packages" / "agentplugins-tree-sha256-v1" / selected["tree_digest"].removeprefix("sha256:") / "package"
@@ -396,54 +418,70 @@ def run(args, root, case, ctx):
             gate.native_listing(tool, env, roots["workspace"], selected["product_id"], installed, root=root, readonly=readonly,
                                 expected_marketplace=gate.managed_marketplace(binding["physical_artifact_id"]),
                                 expected_version=selected["package_version"], expected_path=Path(binding["target_locator"]))
-    native("claude", True)
-    if "copilot" in clients:
-        native("copilot", True)
+    if scope == "project":
+        import catalog_project_readiness as project
+        project.validate_native_resources(installations, case, roots["workspace"], store)
+    else:
+        native("claude", True)
     status = command("deps", "status")
-    require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(clients), "managed status incomplete")
+    require(status.get("scope") == scope and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(clients), "managed status incomplete")
     require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in clients}, "managed status identities")
-    require(all(item.get("owner") == "user-default" and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
+    require(all(item.get("owner") == scope + "-default" and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
     immutable = {"manifest": manifest, "lock": lock_path, "state": state_file, "store": store,
                  **{f"owned-{index}": path for index, path in enumerate(owned)}}
-    for argv in (("install", "--locked", "--yes"), ("update", "marketing-kit")):
+    replays = (("add", "marketing-kit", "--target", ",".join(clients)),) if scope == "project" else ()
+    for argv in (*replays, ("install", "--locked", "--yes"), ("update", "marketing-kit")):
         before = snapshot_paths(immutable)
         result = command(*argv)
         require(result.get("outcome") == "completed" and result.get("results") == [] and
                 len(result.get("actions", [])) == len(PINS) * len(clients) and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
+        if scope == "project":
+            project.validate_operation(result, aliases, clients, operation="unchanged")
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
-    retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
+    if scope == "project":
+        portable_before = snapshot_paths({"manifest": manifest, "lock": lock_path})
+        repaired = command("repair", "marketing-kit", "--target", ",".join(clients), "--yes")
+        project.validate_operation(repaired, aliases, clients, operation="repair", installations=installations)
+        repaired_installations, repaired_owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
+        require({key: item["installation_id"] for key, item in repaired_installations.items()} ==
+                {key: item["installation_id"] for key, item in installations.items()}, "Project repair changed closure identity")
+        require(snapshot_paths({"manifest": manifest, "lock": lock_path}) == portable_before, "Project repair changed portable pins")
+        project.validate_native_resources(repaired_installations, case, roots["workspace"], store)
+        installations, owned = repaired_installations, repaired_owned
+    retained = {"store": store, "plugin-data": state_root / "plugin-data"}
     retained_before = snapshot_paths(retained)
-    require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed Claude removal")
-    native("claude", False)
-    if "copilot" in clients:
-        native("copilot", True)
+    if scope == "user":
+        require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed Claude removal")
+        native("claude", False)
+        if "copilot" in clients:
+            native("copilot", True)
 
-    def codex_command(*argv, allow_absent=False):
-        args.failure_phase = "managed:codex_external_remove"
-        result = gate.child([str(codex), *argv], root=root, readonly=readonly,
-                            env={**env, "CODEX_HOME": str(roots["home"] / ".codex")},
-                            cwd=roots["workspace"], timeout=60)
-        if result.returncode != 0:
-            # This is the same idempotent negative recognized by the released
-            # adapter. Every removal is followed by a strict absence listing.
-            if allow_absent and "not configured or installed" in result.stdout + result.stderr:
-                return None
-            if callable(getattr(args, "on_failure", None)):
-                args.on_failure(result)
-            print("managed CLI failure: " + failure_diagnostics("remove", result), file=sys.stderr, flush=True)
-            raise ValueError("managed Codex external command failed")
-        if argv[:2] == ("plugin", "list"):
-            return gate.publication.parse_json_bytes(result.stdout.encode(), "managed Codex listing", max_bytes=gate.LIMIT)
-        return None
+        def codex_command(*argv, allow_absent=False):
+            args.failure_phase = "managed:codex_external_remove"
+            result = gate.child([str(codex), *argv], root=root, readonly=readonly,
+                                env={**env, "CODEX_HOME": str(roots["home"] / ".codex")},
+                                cwd=roots["workspace"], timeout=60)
+            if result.returncode != 0:
+                # This is the same idempotent negative recognized by the released
+                # adapter. Every removal is followed by a strict absence listing.
+                if allow_absent and "not configured or installed" in result.stdout + result.stderr:
+                    return None
+                if callable(getattr(args, "on_failure", None)):
+                    args.on_failure(result)
+                print("managed CLI failure: " + failure_diagnostics("remove", result), file=sys.stderr, flush=True)
+                raise ValueError("managed Codex external command failed")
+            if argv[:2] == ("plugin", "list"):
+                return gate.publication.parse_json_bytes(result.stdout.encode(), "managed Codex listing", max_bytes=gate.LIMIT)
+            return None
 
-    identities = [(selected["product_id"], gate.managed_marketplace(next(binding for binding in
-        installations[selected["distribution_id"]]["clients"].values() if binding["client_id"] == "codex")["physical_artifact_id"]))
-        for selected in case["closure"]]
-    remove_codex_plugins(codex_command, identities)
-    require(command("remove", "marketing-kit", "--target", "codex", "--external-uninstalled").get("outcome") == "completed", "managed Codex removal")
-    partial = gate.read_json(state_file)
-    remaining = tuple(client for client in clients if client not in NATIVE_TARGETS)
-    validate_state(partial, case, ctx, root, aliases, clients=remaining)
+        identities = [(selected["product_id"], gate.managed_marketplace(next(binding for binding in
+            installations[selected["distribution_id"]]["clients"].values() if binding["client_id"] == "codex")["physical_artifact_id"]))
+            for selected in case["closure"]]
+        remove_codex_plugins(codex_command, identities)
+        require(command("remove", "marketing-kit", "--target", "codex", "--external-uninstalled").get("outcome") == "completed", "managed Codex removal")
+        partial = gate.read_json(state_file)
+        remaining = tuple(client for client in clients if client not in NATIVE_TARGETS)
+        validate_state(partial, case, ctx, root, aliases, clients=remaining)
     require(command("remove", "marketing-kit").get("outcome") == "completed", "managed orphan removal")
     state = gate.read_json(state_file)
     try:
@@ -458,12 +496,16 @@ def run(args, root, case, ctx):
                 for installation in installations.values() for binding in installation["clients"].values()), "managed owned package remains")
     validate_retained_paths(retained_before, snapshot_paths(retained), data_additions)
     require(command("list").get("installations") == [], "managed list not empty")
-    native("claude", False)
-    if "copilot" in clients:
-        native("copilot", False)
+    if scope == "project":
+        project.validate_native_cleanup(installations, roots["workspace"])
+        # The authenticated Directory cache may be populated. Native User
+        # configuration, portable intent and durable User state stay unchanged.
+        project.validate_user_isolation(protected_user, roots)
+    else:
+        native("claude", False)
     before = gate.snapshot_roots(roots)
     doctor = command("doctor")
     gate.validate_doctor({"command": "doctor", "result": "success", "data": doctor}, post_remove=True)
     require(doctor.get("read_only") is True and doctor.get("installation_count") == 0 and doctor.get("open_operation_count") == 0 and
             gate.snapshot_roots(roots) == before, "managed doctor not clean/read-only")
-    args.failure_phase = "managed:complete"
+    args.failure_phase = prefix + ":complete"

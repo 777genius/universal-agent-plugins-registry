@@ -29,7 +29,8 @@ class ManagedReadinessTests(unittest.TestCase):
         self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]))
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
-        gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
+        with self.assertRaisesRegex(ValueError, "uncovered target"):
+            gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
         unknown = copy.deepcopy(next(item for item in self.snapshot["distributions"] if item["id"] == managed.ROOT))
         unknown["id"] = "unqualified/new-package"
         self.snapshot["distributions"].append(unknown)
@@ -37,8 +38,8 @@ class ManagedReadinessTests(unittest.TestCase):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
 
     def test_published_legacy_and_candidate_copilot_source_coverage_are_distinct(self):
-        self.assertEqual(tuple(self.case["targets"]), managed.CLIENTS)
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 6)
+        self.assertEqual(tuple(self.case["targets"]), managed.LEGACY_CLIENTS)
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 5)
         historical = copy.deepcopy(self.snapshot)
         root = next(row for row in historical["distributions"] if row["id"] == managed.ROOT)
         root["release_policies"][0]["targets"] = [
