@@ -119,14 +119,45 @@ signed runtime or misrepresent a candidate as already installed.
   immutable sequence marker/digest, consumer resolution and post-merge E2E.
   A successful preview is never sufficient to merge.
 
-### Tooling boundary
+### Verified source delivery and release binding — 2026-11-10
 
-The present connected GitHub interface can download artifact ZIPs and update
-UTF-8 repository files, but it does not expose a supported, direct artifact
-bytes-to-repository file handoff. It exposes `create_blob` text/base64 input,
-not a file-reference upload for downloaded artifact bytes. Do **not** shuttle
-locks through Actions logs, PR comments, a write-token CI workflow, or an
-unreviewed text conversion. Until an approved exact-byte Git/GitHub client can
-commit both large locks, keep this PR Draft and the existing failing published
-runtime audit mandatory. This is a source-delivery blocker, not a claim that
-the candidate itself failed or that CI waiting is an error.
+The prior GitHub artifact-bytes transfer limitation is **resolved without a
+write-token workflow**. The original current-head artifact ZIPs were read
+through the approved GitHub artifact connector, independently SHA-256/CRC
+verified, and their exact UTF-8 npm lock bytes re-read through the file
+interface into the standard GitHub Git-blob API. Blob SHA-1 was verified
+against the independently computed Git object hashes before any tree or
+commit update:
+
+- Firebase `package-lock.json`: SHA-256
+  `2bcb58637dc986c4caf43571e4e509ab05048d1e5ef994061ec1b1935bc5e41d`;
+  Git blob `9deefca7b9e17c095c095dd91f74eff33482cbad`.
+- HubSpot `package-lock.json`: SHA-256
+  `c024a5cba8b3584985cdae1df1f80f2135a014dda73ecc483ba4c4e6bebf5f7e`;
+  Git blob `e7dfeada25d8e1fcb0d0fd25483ae7577b81787e`.
+
+The protected ledger `directory-publication-ledger` signed snapshot 43
+currently contains sequences **through 6** for Firebase and HubSpot, not
+sequence 7. The review source already contains **unresolved, unsigned**
+sequence 7 / plugin `0.2.5`. Do not call this particular review entry
+previously published or signed. The exact predecessor package trees were
+verified byte-identical between main `e8d3d940f2faa60ab8391156b279f8f71315b9d6`
+and the PR source, so bind their existing sequence 7 entries to this
+immutable predecessor commit without changing version, package path, tree,
+manifest, or authentication claims. Supersede its install eligibility and
+append sequence 8 / `0.2.6` with distinct exact runtime lock and package
+digests. Signer validation and protected publication must still validate
+the currently authenticated production feed and the monotonic sequence
+transition; this note is not a claim that 0.2.5 was signed.
+
+The versioned source commit must atomically include both exact locks, root
+manifests, runtime descriptors, HubSpot privacy README/MCP pin, immutable
+closure policy, candidate audit metadata, and Directory review source/output.
+The stale read-only candidate-probe workflow and staging script should be
+removed after committed-source qualification supersedes them: no plugin
+version 0.2.5 may be rewritten and no preview result counts as a production
+signature. Keep all three OS runtime audit/MCP/signature checks required.
+After final HEAD CI and independent review, merge normally and verify the
+protected signer, published snapshot, resolver, and consumer E2E. Never
+weaken audit thresholds, change the old signed source revisions or publish
+the preview directly.
