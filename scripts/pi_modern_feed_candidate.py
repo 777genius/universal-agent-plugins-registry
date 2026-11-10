@@ -124,7 +124,6 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
                 "client": "pi", "scopes": ["user"], "delivery": "managed",
                 "authentication": review_map[key]["authentication"],
             })
-            policy["targets"].sort(key=lambda target: target["client"])
             version = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
             require(len(version) == 3, "invalid installer version")
             if version < (0, 1, 102):
@@ -160,6 +159,11 @@ def main() -> int:
     reviews = json.loads(args.review.read_text(encoding="utf-8"))
     require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
     candidate = proposed_source(json.loads(original), sources, reviews)
+    # The ordinary v1 validator also enforces canonical client order, signed
+    # source constraints and positive upstream materialization evidence.
+    # Never emit an apparently ready modern feed when those checks fail.
+    from build_registry import validate_directory
+    validate_directory(candidate, verify_packages=False)
     require(source_path.read_bytes() == original, "legacy Directory source changed")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     require(not args.output.exists(), "refusing to overwrite candidate")
