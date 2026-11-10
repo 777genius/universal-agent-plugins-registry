@@ -762,6 +762,66 @@ class CatalogContractTests(unittest.TestCase):
                                         diagnostic=seen.append)
                 self.assertEqual(seen[-1], "native_list_copilot_installed_count")
 
+    def test_copilot_multi_live_listing_qualifies_only_the_requested_package(self):
+        # The native Copilot marketplace can list all four mandatory managed
+        # packages at once. Validate each entry and never mistake another
+        # package for this selection or accept a duplicate identity.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = [
+                ("notion", "1.0.0"), ("marketing-kit", "0.1.0"),
+                ("hubspot-crm", "1.0.0"), ("playwright-bridge", "0.0.80"),
+            ]
+            entries = [
+                (f"  • {name}@agentplugins-{index:012x} (v{version}) (enabled)",
+                 f"      from {root / 'state' / name}")
+                for index, (name, version) in enumerate(records)
+            ]
+            header = "Live Plugins (loaded from a local marketplace directory, never copied):"
+            def document(values):
+                return header + "\n" + "\n".join(line for pair in values for line in pair)
+            for index, (name, version) in enumerate(records):
+                with self.subTest(client_package=name), patch.object(
+                    gate, "child", return_value=subprocess.CompletedProcess([], 0, document(entries), "")
+                ):
+                    gate.native_listing(Path("copilot"), {}, root, name, True,
+                                        root=root, readonly=(),
+                                        expected_marketplace=f"agentplugins-{index:012x}",
+                                        expected_version=version, expected_path=root / "state" / name)
+            without_kit = entries[:1] + entries[2:]
+            with patch.object(gate, "child",
+                              return_value=subprocess.CompletedProcess([], 0, document(without_kit), "")):
+                gate.native_listing(Path("copilot"), {}, root, "marketing-kit", False,
+                                    root=root, readonly=())
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    gate.native_listing(Path("copilot"), {}, root, "marketing-kit", True,
+                                        root=root, readonly=(),
+                                        expected_marketplace="agentplugins-000000000001",
+                                        expected_version="0.1.0",
+                                        expected_path=root / "state/marketing-kit")
+            for name, altered in (
+                ("duplicate", entries + [entries[1]]),
+                ("trailing", entries + [("extra", "unpaired")]),
+                ("wrong_version", [*entries[:1],
+                                   (entries[1][0].replace("v0.1.0", "v9.9.9"), entries[1][1]),
+                                   *entries[2:]]),
+                ("disabled", [*entries[:1],
+                              (entries[1][0].replace("(enabled)", "(disabled)"), entries[1][1]),
+                              *entries[2:]]),
+                ("wrong_path", [*entries[:1],
+                                (entries[1][0], "      from relative/path"),
+                                *entries[2:]]),
+            ):
+                with self.subTest(bad=name), patch.object(
+                    gate, "child", return_value=subprocess.CompletedProcess([], 0, document(altered), "")
+                ):
+                    with self.assertRaises(ValueError):
+                        gate.native_listing(Path("copilot"), {}, root, "marketing-kit", True,
+                                            root=root, readonly=(),
+                                            expected_marketplace="agentplugins-000000000001",
+                                            expected_version="0.1.0",
+                                            expected_path=root / "state/marketing-kit")
+
     def test_copilot_live_plugin_rejects_malformed_or_unbound_fields(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

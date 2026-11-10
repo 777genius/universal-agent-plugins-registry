@@ -7026,6 +7026,14 @@
               "delivery": "managed"
             },
             {
+              "client": "copilot",
+              "authentication": "required",
+              "scopes": [
+                "user"
+              ],
+              "delivery": "managed"
+            },
+            {
               "client": "claude",
               "authentication": "required",
               "scopes": [

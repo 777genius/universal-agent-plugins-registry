@@ -236,6 +236,33 @@ class CheckpointTests(unittest.TestCase):
         pages.require_terminal_previous_deployments(
             REPOSITORY, "fake", frontier=self.baseline, checkpoint_repo=self.repo, fetch=self.fetch)
 
+    def test_cancelled_before_runner_requires_exact_job_and_cancelled_backend(self) -> None:
+        """Persist exact terminal evidence while rejecting ambiguous jobs."""
+        self.add(11, "error")
+        sha = self.deployments[11]["sha"]
+        self.add(12, "error", sha=sha)  # The same source SHA has another deployment.
+        self.jobs[2011] = {"id": 2011, "run_id": 1011, "head_sha": sha,
+                           "name": pages.COMPOSITOR_JOB_NAME, "status": "completed",
+                           "conclusion": "cancelled", "runner_id": 0,
+                           "runner_name": "", "steps": []}
+        self.assertEqual(self.advance(), "published")  # bootstrap only
+        self.assertEqual(self.read()[1], 10)
+        self.backend[sha] = "deployment_cancelled"
+        for key, value in (("runner_id", 17), ("runner_id", False), ("runner_name", "runner"),
+                           ("steps", [{"name": "Deploy"}]), ("head_sha", "b" * 40),
+                           ("status", "in_progress"), ("conclusion", "failure"),
+                           ("name", "another job")):
+            old = self.jobs[2011][key]
+            self.jobs[2011][key] = value
+            self.assertEqual(self.advance(), "unchanged", key)
+            self.jobs[2011][key] = old
+        self.assertEqual(self.advance(), "published")
+        self.assertEqual(self.read()[1], 11)
+        self.assertEqual(self.read()[2][11]["terminal_evidence"], {
+            "kind": "cancelled_before_runner", "run_id": 1011, "job_id": 2011,
+            "deployment_sha": sha, "backend_status": "deployment_cancelled",
+            "runner_id": 0, "step_count": 0, "job_conclusion": "cancelled"})
+
     def test_late_inactive_reuses_archived_success_after_status_expiry(self) -> None:
         self.add(11, "success")
         self.assertEqual(self.advance(), "published")

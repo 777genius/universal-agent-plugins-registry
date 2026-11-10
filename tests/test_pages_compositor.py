@@ -388,6 +388,38 @@ class PagesExternalReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(cas.CasError, "uncertain external backend"):
             pages.require_terminal_previous_deployments(REPOSITORY, "fake", fetch=fetch)
 
+    def test_unstarted_cancelled_job_requires_cancelled_backend(self) -> None:
+        """Accept only a never-assigned job with independently cancelled Pages."""
+        sha = "a" * 40
+        job = {"id": 901, "run_id": 73, "head_sha": sha, "name": pages.COMPOSITOR_JOB_NAME,
+               "status": "completed", "conclusion": "cancelled", "runner_id": 0,
+               "runner_name": "", "steps": []}
+        backend = {"status": "deployment_cancelled"}
+
+        def fetch(path: str, _token: str) -> object:
+            if "deployments?sha=" in path:
+                return [{"id": 22, "environment": "github-pages", "sha": sha},
+                        {"id": 23, "environment": "github-pages", "sha": sha}]
+            if "deployments?" in path:
+                return [{"id": 22, "environment": "github-pages", "sha": sha}]
+            if "/statuses?" in path:
+                return [{"state": "error", "log_url":
+                         f"https://github.com/{REPOSITORY}/actions/runs/73/job/901"}]
+            if "/actions/jobs/901" in path:
+                return job
+            if "/pages/deployments/" in path:
+                return backend
+            raise AssertionError(path)
+
+        pages.require_terminal_previous_deployments(REPOSITORY, "fake", fetch=fetch)
+        backend["status"] = ""
+        with self.assertRaisesRegex(cas.CasError, "uncertain external backend"):
+            pages.require_terminal_previous_deployments(REPOSITORY, "fake", fetch=fetch)
+        backend["status"] = "deployment_cancelled"
+        job["runner_id"] = 1
+        with self.assertRaisesRegex(cas.CasError, "uncertain external backend"):
+            pages.require_terminal_previous_deployments(REPOSITORY, "fake", fetch=fetch)
+
     def test_missing_disabled_or_mismatched_intent_ruleset_fails_closed(self) -> None:
         names = (pages.INTENT_CREATION_RULESET, pages.INTENT_IMMUTABLE_RULESET)
         details = {
