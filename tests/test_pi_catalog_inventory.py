@@ -45,53 +45,51 @@ class PiNativeSnapshotTests(unittest.TestCase):
                                 for entry in entries))
 
 
-class PiPlanningEnvelopeTests(unittest.TestCase):
-    def test_validates_both_scopes_without_claiming_installation(self) -> None:
-        for scope in ("user", "project"):
-            receipt = {
-                "dry_run": True, "scope": scope,
-                "result": {"mutated": False, "plan": {
+def planned_pi_receipt(scope: str) -> dict:
+    # Published CLI 0.1.102 emits addMultiResult even for one --target pi.
+    return {
+        "dry_run": True, "batch": True, "status": "planned",
+        "failed": 0, "succeeded": 1,
+        "environment": {"scope": scope},
+        "targets": [{"target": "pi", "output": {
+            "dry_run": True, "scope": scope, "result": {
+                "mutated": False, "plan": {
                     "client_id": "pi", "scope": scope, "status": "ready",
-                }},
-            }
+                },
+            },
+        }}],
+    }
+
+
+class PiPlanningEnvelopeTests(unittest.TestCase):
+    def test_validates_one_real_pi_batch_plan_for_both_scopes(self) -> None:
+        for scope in ("user", "project"):
             with self.subTest(scope=scope):
-                require_planned_pi_receipt(receipt, scope)
+                require_planned_pi_receipt(planned_pi_receipt(scope), scope)
 
-    def test_rejects_success_envelopes_without_real_pi_plan(self) -> None:
-        original = {
-            "dry_run": True, "scope": "user",
-            "result": {"mutated": False, "plan": {
-                "client_id": "pi", "scope": "user", "status": "ready",
-            }},
+    def test_rejects_invalid_batch_or_nested_pi_receipts(self) -> None:
+        changes = {
+            "not_dry_run": lambda data: data.update(dry_run=False),
+            "not_batch": lambda data: data.update(batch=False),
+            "not_planned": lambda data: data.update(status="preflight_failed"),
+            "failed": lambda data: data.update(failed=1),
+            "no_success": lambda data: data.update(succeeded=0),
+            "wrong_environment_scope": lambda data: data["environment"].update(scope="project"),
+            "two_targets": lambda data: data["targets"].append(copy.deepcopy(data["targets"][0])),
+            "wrong_target": lambda data: data["targets"][0].update(target="codex"),
+            "not_target_dry_run": lambda data: data["targets"][0]["output"].update(dry_run=False),
+            "wrong_output_scope": lambda data: data["targets"][0]["output"].update(scope="project"),
+            "mutated": lambda data: data["targets"][0]["output"]["result"].update(mutated=True),
+            "no_plan": lambda data: data["targets"][0]["output"]["result"].update(plan=None),
+            "wrong_client": lambda data: data["targets"][0]["output"]["result"]["plan"].update(client_id="codex"),
+            "wrong_plan_scope": lambda data: data["targets"][0]["output"]["result"]["plan"].update(scope="project"),
+            "unsupported": lambda data: data["targets"][0]["output"]["result"]["plan"].update(status="unsupported"),
         }
-        cases = {
-            "not_dry_run": ("dry_run", False),
-            "wrong_scope": ("scope", "project"),
-            "no_outcome": ("result", None),
-        }
-        for label, (field, value) in cases.items():
-            with self.subTest(label=label), self.assertRaises(RuntimeError):
-                changed = copy.deepcopy(original)
-                changed[field] = value
-                require_planned_pi_receipt(changed, "user")
-        for label, key, value in (
-            ("mutation", "mutated", True),
-            ("no_plan", "plan", None),
-        ):
-            with self.subTest(label=label), self.assertRaises(RuntimeError):
-                changed = copy.deepcopy(original)
-                changed["result"][key] = value
-                require_planned_pi_receipt(changed, "user")
-        for label, field, value in (
-            ("wrong_target", "client_id", "codex"),
-            ("plan_wrong_scope", "scope", "project"),
-            ("unsupported", "status", "unsupported"),
-        ):
-            with self.subTest(label=label), self.assertRaises(RuntimeError):
-                changed = copy.deepcopy(original)
-                changed["result"]["plan"][field] = value
-                require_planned_pi_receipt(changed, "user")
-
+        for name, change in changes.items():
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                receipt = planned_pi_receipt("user")
+                change(receipt)
+                require_planned_pi_receipt(receipt, "user")
 
 if __name__ == "__main__":
     unittest.main()

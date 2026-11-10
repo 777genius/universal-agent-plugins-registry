@@ -45,17 +45,29 @@ def native_files(profile: Path) -> list[tuple[str, str, str]]:
 
 
 def require_planned_pi_receipt(data: dict, scope: str) -> None:
-    """A successful envelope alone does not establish a Pi dry-run plan."""
-    require(data.get("dry_run") is True and data.get("scope") == scope,
-            "CLI success did not attest the requested dry-run scope")
-    result = data.get("result")
+    """Require the real batch add envelope, even when one Pi target is selected."""
+    require(data.get("dry_run") is True and data.get("batch") is True and
+            data.get("status") == "planned" and data.get("failed") == 0 and
+            data.get("succeeded") == 1,
+            "CLI success did not attest a one-target dry-run plan")
+    environment = data.get("environment")
+    require(isinstance(environment, dict) and environment.get("scope") == scope,
+            "CLI success did not attest the requested scope")
+    targets = data.get("targets")
+    require(isinstance(targets, list) and len(targets) == 1 and
+            isinstance(targets[0], dict) and targets[0].get("target") == "pi",
+            "CLI success did not select exactly one Pi target")
+    output = targets[0].get("output")
+    require(isinstance(output, dict) and output.get("dry_run") is True and
+            output.get("scope") == scope,
+            "CLI Pi output did not attest the requested dry-run scope")
+    result = output.get("result")
     require(isinstance(result, dict) and result.get("mutated") is False,
-            "CLI success did not attest a non-mutating plan")
+            "CLI Pi output did not attest a non-mutating plan")
     plan = result.get("plan")
     require(isinstance(plan, dict) and plan.get("client_id") == "pi" and
             plan.get("scope") == scope and plan.get("status") != "unsupported",
-            "CLI success did not plan the requested Pi target")
-
+            "CLI Pi output did not contain a supported plan for the requested scope")
 
 def active_sources(head: str) -> list[dict]:
     directory = json.loads((ROOT / "registry/directory.json").read_text(encoding="utf-8"))
