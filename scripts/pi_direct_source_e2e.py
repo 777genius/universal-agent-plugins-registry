@@ -101,7 +101,8 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     project = case_root / "project"
     pi_profile = home / ".pi" / "agent"
     for directory in (home, project, pi_profile, case_root / "data",
-                      case_root / "config", case_root / "cache"):
+                      case_root / "config", case_root / "cache",
+                      case_root / "state", case_root / "binary-cache"):
         directory.mkdir(parents=True, exist_ok=True)
         require(not directory.is_symlink() and
                 directory.resolve().is_relative_to(case_root.resolve()),
@@ -117,6 +118,8 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     env.update({
         "HOME": str(home), "USERPROFILE": str(home),
         "PI_CODING_AGENT_DIR": str(pi_profile),
+        "AGENTPLUGINS_HOME": str(case_root / "state"),
+        "AGENTPLUGINS_CACHE_DIR": str(case_root / "binary-cache"),
         "XDG_DATA_HOME": str(case_root / "data"),
         "XDG_CONFIG_HOME": str(case_root / "config"),
         "XDG_CACHE_HOME": str(case_root / "cache"),

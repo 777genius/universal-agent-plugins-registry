@@ -44,6 +44,19 @@ def native_files(profile: Path) -> list[tuple[str, str, str]]:
     return sorted(entries)
 
 
+def require_planned_pi_receipt(data: dict, scope: str) -> None:
+    """A successful envelope alone does not establish a Pi dry-run plan."""
+    require(data.get("dry_run") is True and data.get("scope") == scope,
+            "CLI success did not attest the requested dry-run scope")
+    result = data.get("result")
+    require(isinstance(result, dict) and result.get("mutated") is False,
+            "CLI success did not attest a non-mutating plan")
+    plan = result.get("plan")
+    require(isinstance(plan, dict) and plan.get("client_id") == "pi" and
+            plan.get("scope") == scope and plan.get("status") != "unsupported",
+            "CLI success did not plan the requested Pi target")
+
+
 def active_sources(head: str) -> list[dict]:
     directory = json.loads((ROOT / "registry/directory.json").read_text(encoding="utf-8"))
     sources = []
@@ -84,7 +97,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
     home = root / "home"
     profile = home / ".pi" / "agent"
     project = root / "project"
-    for path in (profile, project, root / "data", root / "config", root / "cache"):
+    for path in (profile, project, root / "data", root / "config", root / "cache", root / "state"):
         path.mkdir(parents=True, exist_ok=True)
         require(not path.is_symlink() and path.resolve().is_relative_to(root.resolve()),
                 "disposable profile path is redirected")
@@ -99,6 +112,8 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
             env.pop(key, None)
     env.update({
         "HOME": str(home), "USERPROFILE": str(home), "PI_CODING_AGENT_DIR": str(profile),
+        "AGENTPLUGINS_HOME": str(root / "state"),
+        "AGENTPLUGINS_CACHE_DIR": str(root / "cache"),
         "XDG_DATA_HOME": str(root / "data"),
         "XDG_CONFIG_HOME": str(root / "config"),
         "XDG_CACHE_HOME": str(root / "cache"),
@@ -110,6 +125,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
                        capture_output=True, timeout=20, check=True)
     baseline = native_files(profile)
     project_baseline = native_files(project)
+    state_baseline = native_files(root / "state")
     result = {key: item[key] for key in ("distribution", "distribution_status", "release_sequence", "components", "source")}
     result["scope"] = scope
     result["status"] = "unverified"
@@ -128,6 +144,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
                     data.get("result") == "success" and
                     isinstance(data.get("data"), dict),
                     "successful CLI dry-run must return a structured add envelope")
+            require_planned_pi_receipt(data["data"], scope)
             result["status"] = "planned"
         else:
             result["status"] = "refused"
@@ -138,6 +155,8 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
         require(native_files(project) == project_baseline and
                 project_marker.read_text(encoding="utf-8") == "unowned Pi project\n",
                 "dry-run changed project files or Pi native state")
+        require(native_files(root / "state") == state_baseline,
+                "dry-run changed the isolated managed installer state")
         require(not (project / "uap.toml").exists() and
                 not (project / "uap.lock").exists(),
                 "dry-run changed portable project dependency state")

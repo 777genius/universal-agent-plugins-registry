@@ -1,13 +1,14 @@
 """Regression tests for fail-closed Pi dry-run native-state checks."""
 from __future__ import annotations
 
+import copy
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_catalog_inventory_e2e import native_files
+from pi_catalog_inventory_e2e import native_files, require_planned_pi_receipt
 
 
 class PiNativeSnapshotTests(unittest.TestCase):
@@ -42,6 +43,54 @@ class PiNativeSnapshotTests(unittest.TestCase):
             self.assertNotEqual(entries, baseline)
             self.assertTrue(any(entry[0] == "escape" and entry[1] == "symlink"
                                 for entry in entries))
+
+
+class PiPlanningEnvelopeTests(unittest.TestCase):
+    def test_validates_both_scopes_without_claiming_installation(self) -> None:
+        for scope in ("user", "project"):
+            receipt = {
+                "dry_run": True, "scope": scope,
+                "result": {"mutated": False, "plan": {
+                    "client_id": "pi", "scope": scope, "status": "ready",
+                }},
+            }
+            with self.subTest(scope=scope):
+                require_planned_pi_receipt(receipt, scope)
+
+    def test_rejects_success_envelopes_without_real_pi_plan(self) -> None:
+        original = {
+            "dry_run": True, "scope": "user",
+            "result": {"mutated": False, "plan": {
+                "client_id": "pi", "scope": "user", "status": "ready",
+            }},
+        }
+        cases = {
+            "not_dry_run": ("dry_run", False),
+            "wrong_scope": ("scope", "project"),
+            "no_outcome": ("result", None),
+        }
+        for label, (field, value) in cases.items():
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                changed = copy.deepcopy(original)
+                changed[field] = value
+                require_planned_pi_receipt(changed, "user")
+        for label, key, value in (
+            ("mutation", "mutated", True),
+            ("no_plan", "plan", None),
+        ):
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                changed = copy.deepcopy(original)
+                changed["result"][key] = value
+                require_planned_pi_receipt(changed, "user")
+        for label, field, value in (
+            ("wrong_target", "client_id", "codex"),
+            ("plan_wrong_scope", "scope", "project"),
+            ("unsupported", "status", "unsupported"),
+        ):
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                changed = copy.deepcopy(original)
+                changed["result"]["plan"][field] = value
+                require_planned_pi_receipt(changed, "user")
 
 
 if __name__ == "__main__":
