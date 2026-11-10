@@ -47,7 +47,7 @@ def expected(snapshot, select):
              "doctor": "passed_read_only", "installation_count": 0,
              "retained_installation_count": 4, "active_binding_count": 0,
              "receipt_count": 0, "open_operation_count": 0,
-             "native_plugin_listing": {client: "passed" if client == "claude" else "not_tested" for client in CLIENTS},
+             "native_plugin_listing": {client: "passed" if client in ("claude", "copilot") else "not_tested" for client in CLIENTS},
              "account_runtime": "not_tested", "oauth": "not_tested"}
     return {"cli": CLI, "root": ROOT, "targets": list(CLIENTS), "closure": closure,
             "edges": [{"parent": ROOT, "dependency": key, "version": value} for key, value in PINS.items() if key != ROOT],
@@ -373,13 +373,17 @@ def run(args, root, case, ctx):
         require(info.get("installation_id") == installations[selected["distribution_id"]]["installation_id"] and
                 {item["client_id"] for item in info.get("clients", [])} == set(CLIENTS), "managed info identity")
 
-    def native(installed):
+    def native(client, installed):
+        # Verify the actual client-owned registry for each immutable package.
+        # A prepared Skills file alone cannot qualify Copilot native delivery.
+        tool = args.claude if client == "claude" else args.copilot
         for selected in case["closure"]:
-            binding = gate.native_binding(list(installations[selected["distribution_id"]]["clients"].values()), "claude")
-            gate.native_listing(args.claude, env, roots["workspace"], selected["product_id"], installed, root=root, readonly=readonly,
+            binding = gate.native_binding(list(installations[selected["distribution_id"]]["clients"].values()), client)
+            gate.native_listing(tool, env, roots["workspace"], selected["product_id"], installed, root=root, readonly=readonly,
                                 expected_marketplace=gate.managed_marketplace(binding["physical_artifact_id"]),
                                 expected_version=selected["package_version"], expected_path=Path(binding["target_locator"]))
-    native(True)
+    native("claude", True)
+    native("copilot", True)
     status = command("deps", "status")
     require(status.get("scope") == "user" and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(CLIENTS), "managed status incomplete")
     require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in CLIENTS}, "managed status identities")
@@ -395,7 +399,8 @@ def run(args, root, case, ctx):
     retained = {"store": store, "plugin-data": roots["state"] / "plugin-data"}
     retained_before = snapshot_paths(retained)
     require(command("remove", "marketing-kit", "--target", "claude").get("outcome") == "completed", "managed Claude removal")
-    native(False)
+    native("claude", False)
+    native("copilot", True)
 
     def codex_command(*argv, allow_absent=False):
         args.failure_phase = "managed:codex_external_remove"
@@ -437,7 +442,8 @@ def run(args, root, case, ctx):
                 for installation in installations.values() for binding in installation["clients"].values()), "managed owned package remains")
     validate_retained_paths(retained_before, snapshot_paths(retained), data_additions)
     require(command("list").get("installations") == [], "managed list not empty")
-    native(False)
+    native("claude", False)
+    native("copilot", False)
     before = gate.snapshot_roots(roots)
     doctor = command("doctor")
     gate.validate_doctor({"command": "doctor", "result": "success", "data": doctor}, post_remove=True)
