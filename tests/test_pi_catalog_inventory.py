@@ -50,6 +50,7 @@ def planned_pi_receipt(scope: str) -> dict:
     return {
         "dry_run": True, "batch": True, "status": "planned",
         "failed": 0, "succeeded": 1,
+        "environment": {"scope": scope},
         "targets": [{"target": "pi", "output": {
             "dry_run": True, "scope": scope, "result": {
                 "mutated": False, "plan": {
@@ -73,6 +74,7 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
             "not_planned": lambda data: data.update(status="preflight_failed"),
             "failed": lambda data: data.update(failed=1),
             "no_success": lambda data: data.update(succeeded=0),
+            "wrong_environment_scope": lambda data: data["environment"].update(scope="project"),
             "two_targets": lambda data: data["targets"].append(copy.deepcopy(data["targets"][0])),
             "wrong_target": lambda data: data["targets"][0].update(target="codex"),
             "not_target_dry_run": lambda data: data["targets"][0]["output"].update(dry_run=False),

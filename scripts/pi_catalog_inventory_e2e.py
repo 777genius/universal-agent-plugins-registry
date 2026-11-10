@@ -50,6 +50,10 @@ def require_planned_pi_receipt(data: dict, scope: str) -> None:
             data.get("status") == "planned" and data.get("failed") == 0 and
             data.get("succeeded") == 1,
             "CLI success did not attest a one-target dry-run plan")
+    # The published 0.1.102 renderer adds this field to the batch envelope.
+    environment = data.get("environment")
+    require(isinstance(environment, dict) and environment.get("scope") == scope,
+            "CLI success did not attest the requested scope")
     targets = data.get("targets")
     require(isinstance(targets, list) and len(targets) == 1 and
             isinstance(targets[0], dict) and targets[0].get("target") == "pi",
@@ -139,8 +143,9 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str) -> di
     result["scope"] = scope
     result["status"] = "unverified"
     try:
+        # --no-save selects the direct installer preview, not saved-dependency planning.
         argv = [cli, "add", item["source"], "--target", "pi", "--scope", scope,
-                "--dry-run", "--format", "json"]
+                "--no-save", "--dry-run", "--format", "json"]
         if scope == "project":
             argv.extend(["--project-root", str(project)])
         proc = subprocess.run(argv, cwd=project, env=env,
