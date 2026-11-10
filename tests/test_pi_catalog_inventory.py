@@ -169,7 +169,7 @@ class PiNativeRemovalTests(unittest.TestCase):
             root = Path(tmp)
             config = root / "mcp.json"
             config.write_text('{"mcpServers":{"stale":{}}}', encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "still has native server"):
+            with self.assertRaisesRegex(RuntimeError, "registration remains"):
                 require_removed_native_payload(root, "mcp")
             config.write_text('{"mcpServers":{}}', encoding="utf-8")
             require_removed_native_payload(root, "mcp")
@@ -182,7 +182,7 @@ class PiNativeRemovalTests(unittest.TestCase):
             skill = root / "skills" / "package" / "SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("stale skill", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "still has native SKILL"):
+            with self.assertRaisesRegex(RuntimeError, "skill is still present"):
                 require_removed_native_payload(root, "skill")
             skill.unlink()
             require_removed_native_payload(root, "skill")
