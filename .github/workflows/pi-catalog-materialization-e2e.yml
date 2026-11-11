@@ -1,0 +1,119 @@
+name: Pi active catalog real native materialization (unsigned)
+
+on:
+  pull_request:
+    paths:
+      - 'registry/directory.json'
+      - 'scripts/pi_catalog_materialization_e2e.py'
+      - 'scripts/pi_direct_source_e2e.py'
+      - 'scripts/pi_catalog_inventory_e2e.py'
+      - 'tests/test_pi_catalog_materialization.py'
+      - '.github/workflows/pi-catalog-materialization-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-catalog-materialization-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-materialization:
+    name: pinned native Pi / ${{ matrix.os }} / shard ${{ matrix.shard }}
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.21.1'
+          package-manager-cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Exact source HEAD, published CLI and actual native Pi
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          python -m unittest discover -s tests -p test_pi_catalog_materialization.py -v
+          test "$(npm view universal-agent-plugins@0.1.102 version)" = 0.1.102
+          npm install --global universal-agent-plugins@0.1.102
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.5.0
+          test "$(agentplugins version)" = "agentplugins 0.1.102"
+          test "$(pi --version)" = "1.5.0"
+      - name: macOS native Docker CLI prerequisite for Docker Hub
+        if: matrix.os == 'macos-15'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v docker >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install docker
+          fi
+          docker --version
+      - name: Execute real native add/repair/remove for assigned immutable releases
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/pi_catalog_materialization_e2e.py \
+            --source-head "$SOURCE_HEAD" --platform "${{ matrix.os }}" \
+            --shard "${{ matrix.shard }}" \
+            --report "$RUNNER_TEMP/pi-materialization-${{ matrix.os }}-${{ matrix.shard }}.json"
+      - name: Preserve original positive AND failed native materialization outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-materialization-${{ matrix.os }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/pi-materialization-${{ matrix.os }}-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  exact-coverage:
+    name: All 72 active native sources on every OS (not signed entitlement)
+    needs: [native-materialization]
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Retrieve the nine original case-level reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: pi-materialization-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/pi-original-reports
+      - name: Verify exact HEAD, immutable sources, full original 3-OS coverage
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          args=()
+          for file in "$RUNNER_TEMP"/pi-original-reports/pi-materialization-*.json; do
+            test -f "$file" || { echo "Missing native materialization artifact"; exit 1; }
+            args+=(--verify-report "$file")
+          done
+          python scripts/pi_catalog_materialization_e2e.py \
+            --source-head "$SOURCE_HEAD" "${args[@]}"
+          test "${{ needs.native-materialization.result }}" = success
