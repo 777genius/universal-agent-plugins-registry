@@ -104,6 +104,15 @@ class GuardTests(unittest.TestCase):
                                        bwrap=self.base / "missing")
             popen.assert_not_called()
 
+    @unittest.skipUnless(sys.platform == "linux" and hasattr(os, "pidfd_open"), "Linux pidfds required")
+    def test_missing_pidfd_support_never_launches_a_child(self):
+        with patch.object(isolation.os, "pidfd_open", side_effect=OSError("unavailable")), \
+                patch.object(isolation.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "working Linux pidfds"):
+                isolation.run_isolated(["/usr/bin/true"], writable_root=self.case, cwd=self.case,
+                                       env={}, read_only_paths=(), timeout=1)
+            popen.assert_not_called()
+
 
 @unittest.skipUnless(sys.platform == "linux", "real isolation requires Linux namespaces")
 class LinuxIsolationTests(GuardTests):
