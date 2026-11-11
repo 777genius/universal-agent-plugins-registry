@@ -28,6 +28,13 @@ PLATFORMS = {"ubuntu-24.04": "Linux", "macos-15": "macOS", "windows-2025": "Wind
 SCOPES = ("user", "project")
 SHARDS = 3
 KIND = "pi-pinned-source-native-materialization"
+# This root has mandatory signed saved dependencies. The immutable public CLI
+# must refuse a direct --no-save install; it needs a distinct managed signed E2E.
+MANAGED_ROOT = "777genius/marketing-kit"
+MANAGED_NO_SAVE_DIAGNOSTIC = (
+    "package marketing-kit declares UAP requirements; use a managed saved "
+    "add/install workflow instead of --no-save or local/manual installation"
+)
 SOURCE = re.compile(r"^github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@([a-f0-9]{40})//([A-Za-z0-9_./-]+)$")
 
 
@@ -53,6 +60,24 @@ def source_identity(item: dict) -> dict:
         "distribution", "distribution_status", "release_sequence", "components",
         "manifest_name", "revision", "tree_digest", "source"
     )}
+
+
+def require_managed_refusal(result: dict) -> None:
+    """Require the actual public CLI denial, never a synthetic negative PASS."""
+    operations = result.get("operations")
+    require(result.get("status") == "failed"
+            and isinstance(result.get("error"), str)
+            and MANAGED_NO_SAVE_DIAGNOSTIC in result["error"]
+            and isinstance(operations, list) and len(operations) == 1
+            and isinstance(operations[0], dict)
+            and isinstance(operations[0].get("argv"), list)
+            and len(operations[0]["argv"]) >= 2
+            and operations[0]["argv"][1] == "add"
+            and type(operations[0].get("exit")) is int
+            and operations[0]["exit"] != 0
+            and isinstance(operations[0].get("error_tail"), str)
+            and MANAGED_NO_SAVE_DIAGNOSTIC in operations[0]["error_tail"],
+            "Marketing Kit direct-source denial was not the expected managed-dependency gate")
 
 
 def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple[int, dict]]:
@@ -105,6 +130,14 @@ def verify_report(report: dict, sources: list[dict], head: str,
                     and "operations" not in case,
                     f"{platform}/{shard}: suspended package got an installation")
             continue
+        if item["distribution"] == MANAGED_ROOT:
+            require(case.get("status") == "requires_managed_saved_install",
+                    f"{platform}/{shard}: Marketing Kit was misreported as native evidence")
+            require_managed_refusal({**case, "status": "failed"})
+            require(case.get("verification") is None
+                    and case.get("runtime_claims") is None,
+                    f"{platform}/{shard}: a denied install gained positive native evidence")
+            continue
         require(case.get("status") == "passed"
                 and case.get("verification") == "native-files-and-receipt-only"
                 and case.get("runtime_claims") is False
@@ -145,11 +178,19 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> None:
             report, sources, head, platform, shard, SHARDS)
         remaining.remove((platform, shard))
     require(not remaining, "OS/shard materialization evidence missing")
-    expected = sum(item["distribution_status"] == "active" for item in sources) * len(SCOPES)
+    expected = sum(
+        item["distribution_status"] == "active"
+        and item["distribution"] != MANAGED_ROOT for item in sources
+    ) * len(SCOPES)
     require(all(count == expected for count in counts.values()),
-            f"incomplete positive native Pi source materialization: {counts}, expected {expected}")
-    print(f"Native direct-source materialization: {counts} across three OS; "
-          "signed saved dependency authority and account authentication NOT tested")
+            f"incomplete positive no-save Pi materialization: {counts}, expected {expected}")
+    require(any(item["distribution_status"] == "active"
+                and item["distribution"] == MANAGED_ROOT for item in sources),
+            "mandatory managed-only root absent from source inventory")
+    print(f"Real pinned --no-save Pi lifecycle: {counts} across three OS; "
+          "Marketing Kit user/project explicitly refused by managed-dependency gate "
+          "(NOT materialized; requires separate signed saved E2E); "
+          "72/72 signed eligibility and account authentication NOT tested")
 
 
 def run_shard(args: argparse.Namespace, sources: list[dict]) -> int:
@@ -191,6 +232,10 @@ def run_shard(args: argparse.Namespace, sources: list[dict]) -> int:
                     require(outcome.get("scope") == scope
                             and outcome.get("source") == item["source"],
                             "Pi lifecycle executed a different source or scope")
+                    if item["distribution"] == MANAGED_ROOT:
+                        require_managed_refusal(outcome)
+                        # This is a verified refusal, NOT a positive install.
+                        outcome["status"] = "requires_managed_saved_install"
                     result = {**identity, **outcome}
                 else:
                     result = {**identity, "scope": scope, "status": "not_eligible"}

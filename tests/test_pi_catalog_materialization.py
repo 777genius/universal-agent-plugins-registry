@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from pi_catalog_inventory_e2e import active_sources
 from pi_catalog_materialization_e2e import (
-    KIND, PLATFORMS, SCOPES, SHARDS, case_tuple, selected_sources, source_identity,
-    verify_report, verify_all,
+    KIND, MANAGED_ROOT, MANAGED_NO_SAVE_DIAGNOSTIC, PLATFORMS, SCOPES, SHARDS,
+    case_tuple, selected_sources, source_identity, verify_report, verify_all,
 )
 
 HEAD = "a" * 40
@@ -22,7 +22,15 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
     for _, item in selected_sources(sources, shard, SHARDS):
         for scope in SCOPES:
             record = {**source_identity(item), "scope": scope}
-            if item["distribution_status"] == "active":
+            if item["distribution_status"] == "active" and item["distribution"] == MANAGED_ROOT:
+                diagnostic = "agentplugins: " + MANAGED_NO_SAVE_DIAGNOSTIC
+                record.update({
+                    "status": "requires_managed_saved_install",
+                    "error": f"catalog-case/{scope}: add failed: {diagnostic}",
+                    "operations": [{"argv": ["agentplugins", "add"],
+                                    "exit": 1, "error_tail": diagnostic}],
+                })
+            elif item["distribution_status"] == "active":
                 record.update({
                     "status": "passed", "verification": "native-files-and-receipt-only",
                     "runtime_claims": False, "account_oauth_qualified": False,
@@ -80,6 +88,7 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 with self.subTest(platform=platform, shard=shard):
                     report = fixture(self.sources, platform, shard)
                     expected = sum(item["distribution_status"] == "active"
+                                   and item["distribution"] != MANAGED_ROOT
                                    for _, item in selected_sources(self.sources, shard, SHARDS)) * 2
                     self.assertEqual(
                         verify_report(report, self.sources, HEAD, platform, shard, SHARDS),
@@ -100,6 +109,37 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 RuntimeError, "native Pi lifecycle incomplete"
             ):
                 verify_report(variant, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
+
+    def test_managed_dependency_denial_is_real_and_never_positive_evidence(self) -> None:
+        selected = next(
+            (shard for shard in range(SHARDS)
+             if any(item["distribution"] == MANAGED_ROOT
+                    for _, item in selected_sources(self.sources, shard, SHARDS))),
+            None,
+        )
+        self.assertIsNotNone(selected, "Marketing Kit must be present in the inventory")
+        baseline = fixture(self.sources, "ubuntu-24.04", selected)
+        denied = next(case for case in baseline["results"]
+                      if case["distribution"] == MANAGED_ROOT)
+        self.assertEqual(denied["status"], "requires_managed_saved_install")
+        self.assertEqual(denied["operations"][0]["exit"], 1)
+        for changed in ("false_pass", "arbitrary_refusal", "zero_exit", "extra_operation"):
+            variant = copy.deepcopy(baseline)
+            candidate = next(case for case in variant["results"]
+                             if case["distribution"] == MANAGED_ROOT
+                             and case["scope"] == denied["scope"])
+            if changed == "false_pass":
+                candidate["status"] = "passed"
+            elif changed == "arbitrary_refusal":
+                candidate["error"] = "unrelated refusal"
+            elif changed == "zero_exit":
+                candidate["operations"][0]["exit"] = 0
+            else:
+                candidate["operations"].append({"argv": ["agentplugins", "remove"],
+                                                "exit": 0})
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                verify_report(variant, self.sources, HEAD, "ubuntu-24.04",
+                              selected, SHARDS)
 
     def test_signed_entitlement_and_oauth_claims_are_forbidden(self) -> None:
         for field, value in (

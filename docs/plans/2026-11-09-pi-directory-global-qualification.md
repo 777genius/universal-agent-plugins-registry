@@ -115,3 +115,23 @@ back to the actual v1 wire contract while preserving real project-native E2E.
 A separate modern-client feed is still necessary to isolate Pi from old 0.1.89;
 no signature, 72/72 status, production routing or project runtime assurance
 can be inferred from this correction.
+
+## 2026-11-11: separate real native direct-source evidence from managed dependency closure
+
+The nine-shard published-CLI materialization run on exact source HEAD
+`8b8ad395d9e626c5301bb9fad0296b2eb40e5043` exposed an incorrect harness
+assumption: all 36 active packages could be installed with `--no-save`.
+The released CLI correctly rejects Marketing Kit because its manifest declares
+mandatory saved dependencies. The new verification contract still runs the
+original add operation and requires the **exact actual refusal** in each scope,
+but records it as `requires_managed_saved_install`, **never as a native PASS**.
+It counts only the other 35 active distributions × two scopes as positive
+direct-source lifecycle evidence on each OS, with separately reported suspended
+exclusions. Missing Marketing Kit records, unexpected denials, or fake PASS
+still fail the entire native suite.
+
+This is a test-mode correction, **not a relaxation of signed eligibility**:
+the independent saved-dependency planner remains red at **70/72** per OS,
+and the two Marketing Kit cases remain mandatory for the subsequent
+editor-approved modern-v1 signed-feed managed-install E2E. No signed policy,
+source pin, public CLI, production origin or release was modified.
