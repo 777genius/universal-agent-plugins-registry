@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_modern_feed_candidate import (proposed_source, require_complete_source_eligibility,
+from directory_publication import PublicationError
+from pi_modern_feed_candidate import (proposed_source, read_evidence_object,
+                                      require_complete_source_eligibility,
                                       validate_platform_report)
 
 HEAD = "a" * 40
@@ -58,6 +61,26 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 *[receipt(self.suspended, s, "not_eligible") for s in ("user", "project")],
             ],
         }
+
+    def test_duplicate_json_keys_cannot_reinterpret_ci_or_auth_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.json"
+            for body in (
+                '{"runner_os":"Linux","runner_os":"Windows"}',
+                '{"authentication":"required","authentication":"not_required"}',
+            ):
+                path.write_text(body, encoding="utf-8")
+                with self.subTest(body=body), self.assertRaisesRegex(
+                    PublicationError, "duplicate JSON key"
+                ):
+                    read_evidence_object(path)
+
+    def test_review_and_ci_evidence_must_be_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.json"
+            path.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "expected a JSON object"):
+                read_evidence_object(path)
 
     def test_known_marketing_refusal_remains_explicit_failure(self) -> None:
         self.assertEqual(validate_platform_report(self.report, "linux", HEAD, self.sources),

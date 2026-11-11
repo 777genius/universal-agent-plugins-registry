@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import sys
 
+from directory_publication import PublicationError, read_json
 from pi_catalog_inventory_e2e import ROOT, SHA, active_sources, require, require_exact_checkout
 
 REVIEW_FIELDS = {"distribution", "release_sequence", "tree_digest", "transport",
@@ -30,6 +31,13 @@ KNOWN_MARKETING_REFUSAL = (
     "agentplugins: dependency conflict for directory:777genius/hubspot-crm: "
     "marketing-kit version 0.1.0"
 )
+
+
+def read_evidence_object(path: Path) -> dict:
+    """Reject ambiguous JSON before interpreting source, reviews or CI reports."""
+    value = read_json(path)
+    require(isinstance(value, dict), f"{path}: expected a JSON object")
+    return value
 
 
 def expected_cases(sources: list[dict]) -> dict[tuple[str, int, str], dict]:
@@ -195,16 +203,16 @@ def main() -> int:
     for value in args.report:
         label, sep, name = value.partition("=")
         require(sep and label in PLATFORMS and label not in reports, "duplicate or invalid OS report")
-        reports[label] = json.loads(Path(name).read_text(encoding="utf-8"))
+        reports[label] = read_evidence_object(Path(name))
     require(set(reports) == PLATFORMS, "all three independent OS reports required")
     counts = {platform: validate_platform_report(data, platform, args.source_head, sources)
               for platform, data in reports.items()}
     require(len(set(counts.values())) == 1, "cross-OS outcomes differ")
     require_complete_source_eligibility(counts)
 
-    reviews = json.loads(args.review.read_text(encoding="utf-8"))
+    reviews = read_evidence_object(args.review)
     require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
-    candidate = proposed_source(json.loads(original), sources, reviews)
+    candidate = proposed_source(read_evidence_object(source_path), sources, reviews)
     # The ordinary v1 validator also enforces canonical client order, signed
     # source constraints and positive upstream materialization evidence.
     # Never emit an apparently ready modern feed when those checks fail.
@@ -223,6 +231,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError, TypeError, RuntimeError) as error:
+    except (OSError, ValueError, TypeError, RuntimeError, PublicationError) as error:
         print(f"Pi modern candidate refused: {error}", file=sys.stderr)
         sys.exit(1)
