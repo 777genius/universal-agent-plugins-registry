@@ -198,7 +198,7 @@ class ModernPiCandidateTests(unittest.TestCase):
         active = candidate["distributions"][0]["release_policies"][0]
         self.assertEqual(active["minimum_installer_version"], "0.1.102")
         self.assertEqual(active["targets"][-1], {
-            "client": "pi", "scopes": ["user"], "delivery": "managed",
+            "client": "pi", "scopes": ["user", "project"], "delivery": "managed",
             "authentication": "required",
         })
         self.assertEqual(candidate["distributions"][0]["release_policies"][1],
