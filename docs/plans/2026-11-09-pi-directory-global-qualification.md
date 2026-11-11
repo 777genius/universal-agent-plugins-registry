@@ -101,3 +101,17 @@ v1 feed still needs separate origin/trust/cache/anti-rollback isolation, owner-a
 signing, a released new CLI route, 72/72 genuine saved dependency eligibility,
 short-name lifecycle and production CDN/site post-merge E2E. This helper alone
 does not satisfy any of those gates.
+
+## 2026-11-11 signed v1 scope clarification (source verified)
+
+On CLI Draft #844 HEAD `936e9e82b72530c1ae54d8603ab6a1c348166df4`,
+`selectDirectorySourceForPlacement` calls `ResolveDirectoryV1ProjectSource`
+for explicit project placement. That resolver authenticates the signed **User**
+publication and independently verifies native **Project** client policy. It
+neither expects nor authorizes a signed `scopes: ["project"]` grant. The existing
+v1 publication schema explicitly requires `scopes: ["user"]`. An earlier
+unsigned candidate erroneously used `["user", "project"]`; this is corrected
+back to the actual v1 wire contract while preserving real project-native E2E.
+A separate modern-client feed is still necessary to isolate Pi from old 0.1.89;
+no signature, 72/72 status, production routing or project runtime assurance
+can be inferred from this correction.

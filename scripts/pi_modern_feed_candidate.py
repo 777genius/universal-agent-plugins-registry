@@ -121,8 +121,9 @@ def require_complete_source_eligibility(counts: dict[str, tuple[int, int]]) -> N
 def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
     """Add reviewed Pi targets to a separate, unsigned modern-feed proposal.
 
-    Keep the legacy v1 publisher scope validator strict. Modern-only project
-    grants need a separately routed validator before any protected signing.
+    Keep v1 signed grants User-scoped on both feeds. Released CLI 0.1.102
+    selects a signed v1 User source for explicit local Project placement,
+    while independently checking the native Project client policy.
     """
     require(isinstance(reviews, dict) and set(reviews) == {"schema_version", "source_commit", "reviews"}
             and reviews["schema_version"] == 1 and isinstance(reviews["reviews"], list),
@@ -159,8 +160,10 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
                 continue
             require(key in review_map and not any(t["client"] == "pi" for t in policy["targets"]),
                     "modern candidate overlaps a legacy Pi policy")
+            # Project placement is independently qualified by the CLI's
+            # native client policy, not by a fabricated v1 project grant.
             policy["targets"].append({
-                "client": "pi", "scopes": ["user", "project"], "delivery": "managed",
+                "client": "pi", "scopes": ["user"], "delivery": "managed",
                 "authentication": review_map[key]["authentication"],
             })
             version = tuple(int(part) for part in policy["minimum_installer_version"].split("."))

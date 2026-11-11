@@ -198,12 +198,20 @@ class ModernPiCandidateTests(unittest.TestCase):
         active = candidate["distributions"][0]["release_policies"][0]
         self.assertEqual(active["minimum_installer_version"], "0.1.102")
         self.assertEqual(active["targets"][-1], {
-            "client": "pi", "scopes": ["user", "project"], "delivery": "managed",
+            "client": "pi", "scopes": ["user"], "delivery": "managed",
             "authentication": "required",
         })
         self.assertEqual(candidate["distributions"][0]["release_policies"][1],
                          self.source["distributions"][0]["release_policies"][1])
         self.assertEqual(candidate["distributions"][1], self.source["distributions"][1])
+
+    def test_project_planning_does_not_fabricate_a_signed_v1_project_grant(self) -> None:
+        # E2E user/project placements do not change v1's User-only wire grant.
+        candidate = proposed_source(self.source, [self.tool], self.review)
+        targets = candidate["distributions"][0]["release_policies"][0]["targets"]
+        self.assertEqual([target["scopes"] for target in targets if target["client"] == "pi"],
+                         [["user"]])
+
 
     def test_without_explicit_review_candidate_cannot_be_generated(self) -> None:
         review = copy.deepcopy(self.review)
