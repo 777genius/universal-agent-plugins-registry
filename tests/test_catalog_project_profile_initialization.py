@@ -288,6 +288,12 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                             self.assertRaises((ValueError, gate.publication.PublicationError)):
                         project.initialize_user_profile(args, case, roots, env, readonly)
                     self.assertEqual(len(calls), control)
+                    expected_phase = {"nonzero": "native_exit", "nonempty": "native_empty",
+                                      "malformed": "native_json", "trailing": "native_json",
+                                      "duplicate": "native_json", "boolean_exit": "native_exit",
+                                      "object": "native_empty"}[name]
+                    self.assertEqual(args.failure_phase,
+                                     f"project:claude_profile:{'initialize' if control == 1 else 'stable'}:{expected_phase}")
 
     def test_timeout_at_either_control_is_not_retried(self):
         for control in (1, 2):
@@ -305,6 +311,8 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                 with patch.object(gate, "child", side_effect=native), self.assertRaises(subprocess.TimeoutExpired):
                     project.initialize_user_profile(args, case, roots, env, readonly)
                 self.assertEqual(len(calls), control)
+                self.assertEqual(args.failure_phase,
+                                 f"project:claude_profile:{'initialize' if control == 1 else 'stable'}:native_execution")
 
     def test_first_control_preserves_preexisting_claude_foreign_entries(self):
         for mutation in (None, "content", "remove", "mode"):
@@ -605,11 +613,11 @@ class ProjectProfileInitializationTests(unittest.TestCase):
             failure = output.parent / "catalog-readiness-failure.json"
             self.assertEqual(json.loads(failure.read_text()), {
                 "kind": "catalog-readiness-failure-v1", "outcome": "failed",
-                "phase": "project:claude_profile:initialize", "error_class": "PublicationError",
+                "phase": "project:claude_profile:initialize:native_json", "error_class": "PublicationError",
             })
             self.assertEqual(stdout.getvalue(), "")
             self.assertEqual(stderr.getvalue(),
-                             "catalog readiness failed: project:claude_profile:initialize: PublicationError\n")
+                             "catalog readiness failed: project:claude_profile:initialize:native_json: PublicationError\n")
             for diagnostic in (failure.read_text(), stdout.getvalue(), stderr.getvalue()):
                 self.assertNotIn(private, diagnostic)
                 self.assertNotIn(str(root), diagnostic)
