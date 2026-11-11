@@ -62,7 +62,9 @@ jobs:
         run: scripts/build-bridges check
 
   portable-catalog:
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    # Use the same supported isolation image as production and the managed smoke.
+    # Keep the preexisting-policy refusal and all real confinement tests below.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
