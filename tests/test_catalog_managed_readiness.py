@@ -374,6 +374,50 @@ class ManagedReadinessTests(unittest.TestCase):
                         child.assert_called_once()
                         self.assertTrue(all(call.kwargs["expected_scope"] == "user" for call in validate.call_args_list))
 
+    def test_project_add_reports_fixed_failure_checkpoints_without_child_data(self):
+        # Only a fixed phase and exception class may reach the persisted
+        # catalog failure artifact, even if the child returns private text.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "codex", "claude", "copilot", "opencode"):
+                path = tools / name
+                path.write_text("#!/bin/sh\\nexit 1\\n")
+                path.chmod(0o700)
+            args = SimpleNamespace(
+                project_binary=tools / "agentplugins", codex=tools / "codex",
+                claude=tools / "claude", copilot=tools / "copilot",
+                opencode=tools / "opencode", inspector=None, npx=None,
+                failure_phase=None)
+            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
+            release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
+            ctx = {"directory_origin": "https://example.invalid/exact-signed-feed/"}
+            private = "PRIVATE_CHILD_RESPONSE_DO_NOT_LOG"
+            def response(*, code=0, payload=None):
+                return SimpleNamespace(returncode=code, stderr=private,
+                                       stdout=json.dumps(payload or {}))
+            cases = [
+                ("isolated_child", ValueError(private), None),
+                ("exit", None, response(code=1)),
+                ("decode", None, response(payload={"command": "add", "result": "success", "data": []})),
+                ("user_isolation", None, response(payload={"command": "add", "result": "success", "data": {}})),
+            ]
+            with patch.object(gate.project, "RELEASE", release):
+                case = gate.project.expected(self.snapshot, gate.selected)
+                self.assertIsNotNone(case)
+                for index, (expected, raised, completed) in enumerate(cases):
+                    with self.subTest(checkpoint=expected), patch.object(
+                        gate, "child", side_effect=raised if raised is not None else None,
+                        return_value=completed), patch.object(
+                        gate.project, "validate_user_isolation",
+                        side_effect=ValueError(private) if expected == "user_isolation" else None):
+                        args.failure_phase = None
+                        with self.assertRaises(ValueError):
+                            managed.run(args, root / f"checkpoint-{index}", case, ctx)
+                        self.assertEqual(args.failure_phase, f"project:add:{expected}")
+                        self.assertNotIn(private, args.failure_phase)
+
     def test_runtime_exposes_explicit_codex_and_owned_cursor_version_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
