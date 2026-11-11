@@ -26,7 +26,7 @@ class ManagedReadinessTests(unittest.TestCase):
         self.assertEqual(gate.CLI["version"], "0.1.89")
         self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
         self.assertEqual(self.case["cli"]["version"], "0.1.91")
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]))
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]) + 1)
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
         gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
@@ -38,23 +38,50 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_published_legacy_and_candidate_copilot_source_coverage_are_distinct(self):
         self.assertEqual(tuple(self.case["targets"]), managed.CLIENTS)
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 6)
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 6 + 1)
+        self.assertIn((managed.ROOT, 1, "vscode", "user"), managed.coverage(self.case))
+        self.assertNotIn("vscode", self.case["targets"])
+        actual = next(item for item in self.snapshot["distributions"] if item["id"] == managed.ROOT)
+        self.assertEqual(tuple(t["client"] for t in actual["release_policies"][0]["targets"]),
+                         managed.COPILOT_AUTHORIZED_CLIENTS)
         historical = copy.deepcopy(self.snapshot)
         root = next(row for row in historical["distributions"] if row["id"] == managed.ROOT)
         root["release_policies"][0]["targets"] = [
-            row for row in root["release_policies"][0]["targets"] if row["client"] != "copilot"
+            row for row in root["release_policies"][0]["targets"] if row["client"] not in ("copilot", "vscode")
         ]
         prior = managed.expected(historical, gate.selected)
         self.assertEqual(tuple(prior["targets"]), managed.LEGACY_CLIENTS)
         self.assertEqual(len(managed.coverage(prior)), len(managed.PINS) * 5)
-        for change in ("kiro", "project"):
+        for change in ("kiro", "project", "missing_sibling", "wrong_delivery",
+                       "sibling_project", "sibling_auth", "dependency_missing_sibling",
+                       "dependency_mismatched_auth"):
             invalid = copy.deepcopy(self.snapshot)
-            policy = next(row for row in invalid["distributions"] if row["id"] == managed.ROOT)["release_policies"][0]
+            distribution = next(row for row in invalid["distributions"] if row["id"] == managed.ROOT)
+            policy = distribution["release_policies"][0]
             if change == "kiro":
                 policy["targets"].append({"client": "kiro", "authentication": "required",
                                           "scopes": ["user"], "delivery": "managed"})
-            else:
+            elif change == "project":
                 policy["targets"][-1]["scopes"] = ["project"]
+            elif change == "missing_sibling":
+                policy["targets"] = [target for target in policy["targets"] if target["client"] != "vscode"]
+            elif change == "wrong_delivery":
+                next(t for t in policy["targets"] if t["client"] == "vscode")["delivery"] = "managed"
+            elif change == "sibling_project":
+                next(t for t in policy["targets"] if t["client"] == "vscode")["scopes"] = ["project"]
+            elif change == "sibling_auth":
+                next(t for t in policy["targets"] if t["client"] == "vscode")["authentication"] = "not_required"
+            else:
+                dep_id = ("777genius/hubspot-crm" if change == "dependency_missing_sibling"
+                          else "777genius/playwright-bridge")
+                dependency = next(item for item in invalid["distributions"] if item["id"] == dep_id)
+                dep_policy = next(p for p in dependency["release_policies"] if p["status"] == "active")
+                if change == "dependency_missing_sibling":
+                    dep_policy["targets"] = [t for t in dep_policy["targets"] if t["client"] != "vscode"]
+                else:
+                    # Playwright is credential-free for both backend siblings;
+                    # forcing just VS Code to required is policy drift.
+                    next(t for t in dep_policy["targets"] if t["client"] == "vscode")["authentication"] = "required"
             with self.subTest(change=change), self.assertRaises((ValueError, gate.registry.RegistryError)):
                 managed.expected(invalid, gate.selected)
 
