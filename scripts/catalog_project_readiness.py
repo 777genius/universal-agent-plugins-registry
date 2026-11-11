@@ -16,9 +16,18 @@ import tomllib
 import catalog_managed_readiness as managed
 
 require = managed.require
-# Remains unset until the actual release commit and all three authenticated
-# release asset digests have been reviewed. No development or guessed pin.
-RELEASE = None
+# Immutable public release and asset digests reviewed for the six-client
+# User/Project qualification. No development or caller-selected pin.
+RELEASE = {
+    "cli": {
+        "version": "0.1.104",
+        "tag": "agentplugins-v0.1.104",
+        "commit": "79db603603235e5b8fe2b79b07fab6832256dc3a",
+        "binary_digest": "sha256:043c3f2d66a578239204f3bebaaf4d7eaab1a70b8f0be08f4e2cda03e8443e01",
+    },
+    "checksums_digest": "sha256:63aaff2c7a0347402b6246712b75c8875f5239491b9369d5f03f9732e32beb3f",
+    "manifest_digest": "sha256:3284ce5edcba9a919f9e64813a1e136beeedace3ed4533dd2485937c8c419071",
+}
 # Historical point-in-time evidence identity; never a recurring runtime feed.
 # Grants are read only from authenticated feed data.
 # The materialized commit has the signed commit as its direct parent, and both
