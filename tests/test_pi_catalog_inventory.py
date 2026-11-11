@@ -41,6 +41,27 @@ class PiRepresentativeHubSpotTests(unittest.TestCase):
         )
 
 
+    def test_pinned_context7_mixed_case_checks_both_skill_and_mcp(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        directory = json.loads((root / "registry/directory.json").read_text(encoding="utf-8"))
+        upstream = next(d for d in directory["distributions"]
+                        if d["id"] == "upstash/context7")
+        self.assertEqual(upstream["status"], "active")
+        active = [p for p in upstream["release_policies"] if p["status"] == "active"]
+        self.assertEqual(len(active), 1)
+        release = next(r for r in upstream["releases"]
+                       if r["sequence"] == active[0]["release_sequence"])
+        self.assertEqual(release["components"], ["mcp", "skills"])
+        source = release["package_source"]
+        self.assertIsNotNone(source["revision"], "upstream review must be pinned")
+        self.assertIn(
+            ("context7-http", "context7", source["path"], source["revision"],
+             "mixed", source["repository"]),
+            CASES,
+            "Pi lifecycle must verify both native Skills and MCP for the pinned source",
+        )
+
+
 class PiEvidenceIdentityTests(unittest.TestCase):
     def test_source_report_accepts_only_actual_checkout_head(self) -> None:
         expected = "a" * 40

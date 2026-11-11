@@ -23,7 +23,7 @@ PINNED_HUBSPOT = "2ddbb99dd190c1792b79904f9875e6322bccd243"
 CASES = (
     ("context7-stdio", "context7", "plugins/context7", None, "mcp",
      "777genius/universal-agent-plugins-registry"),
-    ("context7-http", "context7", "plugins/agent-plugins/context7", PINNED_UPSTREAM, "mcp",
+    ("context7-http", "context7", "plugins/agent-plugins/context7", PINNED_UPSTREAM, "mixed",
      "upstash/context7"),
     ("navigator-skills", "agent-code-navigator", "plugins/agent-code-navigator", None, "skill",
      "777genius/universal-agent-plugins-registry"),
@@ -122,6 +122,7 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
 def run_case(cli: str, source_head: str, temp: Path, case: tuple,
              scope: str, binary_seed: Path) -> dict:
     case_id, name, source_path, revision, kind, repository = case
+    require(kind in {"skill", "mcp", "mixed"}, "unsupported Pi materialization kind")
     if revision is None:
         revision = source_head
     selector = f"github:{repository}@{revision}//{source_path}"
@@ -161,10 +162,10 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     foreign_skill_text = ("---\nname: foreign-neighbor\n"
                           "description: Existing unowned Pi skill\n---\n\nKeep intact.\n")
     foreign_server = {"command": "node", "args": ["--version"]}
-    if kind == "skill":
+    if kind in {"skill", "mixed"}:
         foreign_skill.parent.mkdir(parents=True, exist_ok=True)
         foreign_skill.write_text(foreign_skill_text, encoding="utf-8")
-    else:
+    if kind in {"mcp", "mixed"}:
         (native_root / "mcp.json").write_text(
             json.dumps({"mcpServers": {"foreign-neighbor": foreign_server}}) + "\n",
             encoding="utf-8")
@@ -216,14 +217,14 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         maintained = plugin_record(call("list"), name, revision)
         require(maintained["installation_id"] == first["installation_id"],
                 "maintenance switched or duplicated the pinned Pi installation")
-        if kind == "skill":
+        if kind in {"skill", "mixed"}:
             skills = native_root / "skills"
             installed = {path.relative_to(skills).as_posix()
                          for path in skills.rglob("SKILL.md")}
             require("foreign-neighbor/SKILL.md" in installed and len(installed) > 1
                     and foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
                     "Pi native skill absent or pre-existing Pi skill was changed")
-        else:
+        if kind in {"mcp", "mixed"}:
             config = native_root / "mcp.json"
             require(config.is_file(), "Pi native MCP configuration absent")
             server_entries = strict_json(config.read_text(encoding="utf-8")).get("mcpServers")
@@ -232,14 +233,14 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                     and any(name != "foreign-neighbor" for name in server_entries),
                     "Pi native MCP registration absent or foreign server was changed")
         call("remove", first["installation_id"], timeout=120)
-        if kind == "skill":
+        if kind in {"skill", "mixed"}:
             require_removed_native_payload(
-                native_root, kind, surviving_skills={"foreign-neighbor/SKILL.md"})
+                native_root, "skill", surviving_skills={"foreign-neighbor/SKILL.md"})
             require(foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
                     "remove changed pre-existing Pi skill bytes")
-        else:
+        if kind in {"mcp", "mixed"}:
             require_removed_native_payload(
-                native_root, kind, surviving_servers={"foreign-neighbor": foreign_server})
+                native_root, "mcp", surviving_servers={"foreign-neighbor": foreign_server})
         require(not any(isinstance(x, dict) and x.get("installation_id") ==
                         first["installation_id"]
                         for x in call("list")["data"].get("installations", [])),
