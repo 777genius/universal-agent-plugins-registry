@@ -386,7 +386,7 @@ class ManagedReadinessTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\\nexit 1\\n")
                 path.chmod(0o700)
             args = SimpleNamespace(
-                project_binary=tools / "agentplugins", codex=tools / "codex",
+                binary=tools / "agentplugins", project_binary=tools / "agentplugins", codex=tools / "codex",
                 claude=tools / "claude", copilot=tools / "copilot",
                 opencode=tools / "opencode", inspector=None, npx=None,
                 failure_phase=None)
