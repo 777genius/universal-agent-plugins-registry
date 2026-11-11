@@ -576,7 +576,7 @@ def run(args, root, case, ctx):
         foreign_before = snapshot_paths(foreign_paths)
     if scope == "project":
         import catalog_project_readiness as project
-        protected_user = snapshot_paths(project.user_paths(roots))
+        protected_user = project.initialize_user_profile(args, root, roots, env, readonly)
 
     def command(*argv):
         # Fixed, non-sensitive checkpoints distinguish a sandbox setup failure,

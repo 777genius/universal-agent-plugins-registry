@@ -24,6 +24,7 @@ _ENV = frozenset({
     "NPM_CONFIG_AUDIT", "NPM_CONFIG_FUND", "NPM_CONFIG_UPDATE_NOTIFIER",
     "NPM_CONFIG_GLOBALCONFIG", "AGENTPLUGINS_HOME", "AGENTPLUGINS_DIRECTORY_ORIGIN",
     "PLUGIN_ROOT", "PLUGIN_DATA", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     "COREPACK_HOME", "NODE_REPL_HISTORY", "npm_config_audit", "npm_config_cache",
     "npm_config_fund", "npm_config_globalconfig", "npm_config_update_notifier",
     "npm_config_userconfig",
@@ -85,6 +86,14 @@ def _command(argv, writable_root, cwd, env, read_only_paths, bwrap):
         raise ValueError("argv must be a nonempty sequence of strings")
     if isinstance(argv, (str, bytes)):
         raise ValueError("argv must not be a shell string")
+    claude = {"CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"}
+    if claude & env.keys():
+        profile = Path(env.get("CLAUDE_CONFIG_DIR", ""))
+        if (env.get("DISABLE_AUTOUPDATER") != "1"
+                or env.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") != "1"
+                or not profile.is_absolute() or profile != profile.resolve()
+                or not profile.is_relative_to(root)):
+            raise ValueError("Claude profile setup requires a confined profile and disabled background traffic")
     command = [str(bwrap), "--unshare-user", "--unshare-pid", "--unshare-ipc",
                "--unshare-uts", "--unshare-cgroup", "--disable-userns",
                "--die-with-parent", "--as-pid-1", "--new-session", "--cap-drop", "ALL",

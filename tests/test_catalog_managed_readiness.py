@@ -403,7 +403,11 @@ class ManagedReadinessTests(unittest.TestCase):
                 ("decode", None, response(payload=["not-a-dict"])),
                 ("user_isolation", None, response(payload={"command": "add", "result": "success", "data": {}})),
             ]
-            with patch.object(gate.project, "RELEASE", release):
+            # This test isolates command failure labels. Genuine profile setup
+            # and its integration with this runner have a separate test suite.
+            with patch.object(gate.project, "RELEASE", release), patch.object(
+                    gate.project, "initialize_user_profile", side_effect=lambda _args, _root, roots, _env, _readonly:
+                    managed.snapshot_paths(gate.project.user_paths(roots))):
                 case = gate.project.expected(self.snapshot, gate.selected)
                 self.assertIsNotNone(case)
                 for index, (expected, raised, completed) in enumerate(cases):
