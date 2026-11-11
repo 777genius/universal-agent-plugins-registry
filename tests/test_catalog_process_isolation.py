@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -103,6 +106,226 @@ class GuardTests(unittest.TestCase):
                                        env={}, read_only_paths=(), timeout=1,
                                        bwrap=self.base / "missing")
             popen.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "linux" and hasattr(os, "pidfd_open"), "Linux pidfds required")
+    def test_missing_pidfd_support_never_launches_a_child(self):
+        with patch.object(isolation.os, "pidfd_open", side_effect=OSError("unavailable")), \
+                patch.object(isolation.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "working Linux pidfds"):
+                isolation.run_isolated(["/usr/bin/true"], writable_root=self.case, cwd=self.case,
+                                       env={}, read_only_paths=(), timeout=1)
+            popen.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == "linux" and hasattr(os, "pidfd_open")
+                     and hasattr(signal, "pidfd_send_signal"), "Linux pidfds required")
+class StartupHandshakeTests(unittest.TestCase):
+    setUp = GuardTests.setUp
+
+    def protocol_case(self, mode="normal", *, delay=None, bad_status=None, signal_error=False):
+        # Inert wrapper models upstream info-before-block ordering. It is not a
+        # namespace/confinement substitute; the real Linux probes remain below.
+        for name in ("child.json", "executed"):
+            (self.case / name).unlink(missing_ok=True)
+        wrapper = self.base / "protocol.py"
+        wrapper.write_text('''#!/usr/bin/python3
+import ctypes, json, os, sys, time
+from pathlib import Path
+info = int(sys.argv[sys.argv.index('--info-fd') + 1])
+gate = int(sys.argv[sys.argv.index('--block-fd') + 1]) if '--block-fd' in sys.argv else None
+case = Path(sys.argv[sys.argv.index('--chdir') + 1])
+mode = sys.argv[-1]
+ready_read, ready_write = os.pipe()
+pid = os.fork()
+if pid == 0:
+    os.close(info)
+    os.close(ready_write)
+    os.read(ready_read, 1)
+    os.close(ready_read)
+    (case / 'child.json').write_text(json.dumps({'pid': os.getpid()}))
+    if mode == 'setup_failure':
+        os._exit(7)
+    if gate is not None:
+        os.read(gate, 1)  # Upstream also releases on EOF; model that exactly.
+        os.close(gate)
+    os.setsid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    assert libc.prctl(1, 9, 0, 0, 0) == 0
+    assert libc.prctl(1, 0, 0, 0, 0) == 0  # An untrusted client can clear PDEATHSIG.
+    (case / 'executed').write_text('yes')
+    if mode == 'sleep':
+        os.close(1)
+        os.close(2)
+        time.sleep(3)
+    os._exit(0)
+os.close(ready_read)
+payload = b'{broken' if mode == 'malformed' else json.dumps({'child-pid': pid}).encode()
+os.write(info, payload)
+os.close(info)
+os.write(ready_write, b'1')
+os.close(ready_write)
+_, status = os.waitpid(pid, 0)
+os._exit(os.waitstatus_to_exitcode(status) if os.WIFEXITED(status) else 1)
+''')
+        wrapper.chmod(0o700)
+        timeout = 1 if delay or mode == "sleep" else 2
+        real_popen, real_pipe, real_pidfd = subprocess.Popen, os.pipe, os.pidfd_open
+        real_signal = signal.pidfd_send_signal
+        observed = {"pipes": [], "control_fd": None, "status_read": False}
+
+        def pipe():
+            pair = real_pipe()
+            if len(observed["pipes"]) < 4:
+                observed["pipes"].extend(pair)
+            return pair
+
+        def popen(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            observed["process"] = process
+            limit = time.monotonic() + 1.5
+            while True:
+                try:
+                    observed["child"] = json.loads((self.case / "child.json").read_text())["pid"]
+                    break
+                except (OSError, ValueError):
+                    if time.monotonic() >= limit:
+                        raise AssertionError("protocol fixture did not start")
+                    time.sleep(0.002)
+            try:
+                observed["control_fd"] = real_pidfd(observed["child"])
+            except ProcessLookupError:
+                self.assertEqual(mode, "setup_failure")
+            if delay == "before_capture":
+                time.sleep(timeout + 0.02)
+            return process
+
+        def status(path, **_):
+            self.assertEqual(path, f"/proc/{observed['child']}/status")
+            observed["status_read"] = True
+            if delay == "after_capture":
+                time.sleep(timeout + 0.02)
+            parent = 0 if bad_status == "parent" else observed["process"].pid
+            namespace = 2 if bad_status == "namespace" else 1
+            return io.StringIO(f"PPid:\t{parent}\nNSpid:\t{observed['child']} {namespace}\n")
+
+        def send(fd, sig):
+            if signal_error and sig != 0:
+                raise PermissionError("controlled pidfd signal error")
+            return real_signal(fd, sig)
+
+        try:
+            with patch.object(isolation.os, "pipe", side_effect=pipe), \
+                    patch.object(isolation.subprocess, "Popen", side_effect=popen), \
+                    patch.object(isolation, "open", side_effect=status, create=True), \
+                    patch.object(isolation.signal, "pidfd_send_signal", side_effect=send):
+                try:
+                    observed["result"] = isolation.run_isolated(
+                        ["fixture", mode], writable_root=self.case, cwd=self.case,
+                        env={}, read_only_paths=(), timeout=timeout, bwrap=wrapper)
+                except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                    observed["error"] = error
+            fd = observed["control_fd"]
+            observed["alive"] = fd is not None and not select.select([fd], [], [], 0.2)[0]
+            observed["executed"] = (self.case / "executed").exists()
+            for fd in observed["pipes"]:
+                with self.assertRaises(OSError):
+                    os.fstat(fd)
+            return observed
+        finally:
+            fd = observed["control_fd"]
+            if fd is not None:
+                try:
+                    real_signal(fd, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.close(fd)
+            if "process" in observed:
+                try:
+                    os.killpg(observed["process"].pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                observed["process"].communicate(timeout=3)
+
+    def test_expired_startup_never_releases_client_or_leaves_live_child(self):
+        result = self.protocol_case("sleep", delay="before_capture")
+        self.assertIsInstance(result.get("error"), subprocess.TimeoutExpired)
+        self.assertFalse(result["status_read"])
+        self.assertFalse(result["executed"])
+        self.assertFalse(result["alive"])
+
+    def test_rejected_metadata_and_expired_identity_never_release_client(self):
+        cases = (({"mode": "malformed"}, RuntimeError, "incomplete bubblewrap"),
+                 ({"bad_status": "parent"}, RuntimeError, "unexpected namespace"),
+                 ({"bad_status": "namespace"}, RuntimeError, "unexpected namespace"),
+                 ({"delay": "after_capture"}, subprocess.TimeoutExpired, "timed out"),
+                 ({"delay": "after_capture", "signal_error": True}, PermissionError, "controlled pidfd signal"))
+        for changes, error_type, message in cases:
+            with self.subTest(changes=changes):
+                result = self.protocol_case(**changes)
+                self.assertIsInstance(result.get("error"), error_type)
+                self.assertIn(message, str(result["error"]))
+                self.assertEqual(result["status_read"], changes.get("mode") != "malformed")
+                self.assertFalse(result["executed"])
+                self.assertFalse(result["alive"])
+
+    def test_valid_identity_releases_client_and_timeout_kills_it(self):
+        for mode in ("normal", "sleep", "setup_failure"):
+            with self.subTest(mode=mode):
+                result = self.protocol_case(mode)
+                self.assertFalse(result["alive"])
+                if mode == "sleep":
+                    self.assertIsInstance(result.get("error"), subprocess.TimeoutExpired)
+                    self.assertTrue(result["status_read"])
+                    self.assertTrue(result["executed"])
+                else:
+                    self.assertNotIn("error", result)
+                    self.assertEqual(result["result"].returncode, 7 if mode == "setup_failure" else 0)
+                if mode == "normal":
+                    self.assertTrue(result["status_read"])
+                    self.assertTrue(result["executed"])
+                if mode == "setup_failure":
+                    self.assertFalse(result["executed"])
+
+    def test_failed_launch_closes_all_protocol_descriptors(self):
+        real_pipe = os.pipe
+        for fail_pipe in (False, True):
+            with self.subTest(fail_pipe=fail_pipe):
+                descriptors = []
+                def pipe():
+                    if fail_pipe and descriptors:
+                        raise OSError("controlled pipe error")
+                    pair = real_pipe()
+                    descriptors.extend(pair)
+                    return pair
+                with patch.object(isolation.os, "pipe", side_effect=pipe), \
+                        patch.object(isolation.subprocess, "Popen", side_effect=OSError("controlled launch error")) as popen:
+                    with self.assertRaisesRegex(OSError, "controlled (pipe|launch) error"):
+                        isolation.run_isolated(["fixture"], writable_root=self.case, cwd=self.case,
+                                               env={}, read_only_paths=(), timeout=1, bwrap=Path(sys.executable))
+                    if fail_pipe:
+                        popen.assert_not_called()
+                self.assertEqual(len(descriptors), 2 if fail_pipe else 4)
+                for fd in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(fd)
+
+    def test_unavailable_pidfd_signal_refuses_before_launch_and_closes_probe(self):
+        descriptors = []
+        real_pidfd = os.pidfd_open
+        def pidfd(pid):
+            fd = real_pidfd(pid)
+            descriptors.append(fd)
+            return fd
+        with patch.object(isolation.os, "pidfd_open", side_effect=pidfd), \
+                patch.object(isolation.signal, "pidfd_send_signal", side_effect=OSError("controlled unavailable signal")), \
+                patch.object(isolation.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "working Linux pidfds"):
+                isolation.run_isolated(["fixture"], writable_root=self.case, cwd=self.case,
+                                       env={}, read_only_paths=(), timeout=1, bwrap=Path(sys.executable))
+            popen.assert_not_called()
+        self.assertEqual(len(descriptors), 1)
+        with self.assertRaises(OSError):
+            os.fstat(descriptors[0])
 
 
 @unittest.skipUnless(sys.platform == "linux", "real isolation requires Linux namespaces")

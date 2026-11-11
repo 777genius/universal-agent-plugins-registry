@@ -211,29 +211,70 @@ def validate_state(state, case, ctx, root, aliases, *, clients=None):
 
 
 def snapshot_paths(paths):
-    """Snapshot owned files/directories without following symlink objects."""
-    result = {}
-    for name, root in sorted(paths.items()):
-        members = [root]
-        if root.is_dir() and not root.is_symlink():
-            members.extend(sorted(root.rglob("*")))
-        entries = []
-        for path in members:
-            relative = "." if path == root else path.relative_to(root).as_posix()
+    """Snapshot owned state without following symlink ancestors during reads."""
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+    def collect(parent_fd, name, relative, entries):
+        try:
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            entries.append((relative, "absent"))
+            return
+        mode = stat.S_IMODE(info.st_mode)
+        if stat.S_ISLNK(info.st_mode):
+            target = os.readlink(name, dir_fd=parent_fd)
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            require((current.st_dev, current.st_ino) == (info.st_dev, info.st_ino),
+                    "managed snapshot symlink changed during read")
+            entries.append((relative, mode, "symlink", target))
+        elif stat.S_ISREG(info.st_mode):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                         | getattr(os, "O_CLOEXEC", 0), dir_fd=parent_fd)
             try:
-                info = path.lstat()
-            except FileNotFoundError:
-                entries.append((relative, "absent"))
-                continue
-            mode = stat.S_IMODE(info.st_mode)
-            if stat.S_ISLNK(info.st_mode):
-                entries.append((relative, mode, "symlink", os.readlink(path)))
-            elif stat.S_ISREG(info.st_mode):
-                entries.append((relative, mode, "file", hashlib.sha256(path.read_bytes()).hexdigest()))
-            else:
-                require(stat.S_ISDIR(info.st_mode), "unsupported managed snapshot object")
+                opened = os.fstat(fd)
+                require(stat.S_ISREG(opened.st_mode)
+                        and (opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                        "managed snapshot file changed during read")
+                digest = hashlib.sha256()
+                while chunk := os.read(fd, 1024 * 1024):
+                    digest.update(chunk)
+            finally:
+                os.close(fd)
+            entries.append((relative, mode, "file", digest.hexdigest()))
+        else:
+            require(stat.S_ISDIR(info.st_mode), "unsupported managed snapshot object")
+            fd = os.open(name, dir_flags, dir_fd=parent_fd)
+            try:
+                opened = os.fstat(fd)
+                require((opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                        "managed snapshot directory changed during read")
                 entries.append((relative, mode, "directory"))
-        result[name] = entries
+                for child in sorted(os.listdir(fd)):
+                    collect(fd, child, child if relative == "." else relative + "/" + child, entries)
+            finally:
+                os.close(fd)
+
+    result = {}
+    for key, root in sorted(paths.items()):
+        require(root.is_absolute() and root.name not in ("", ".", ".."),
+                "managed snapshot requires an absolute named path")
+        entries = []
+        fd = os.open(root.anchor, dir_flags)
+        try:
+            try:
+                for part in root.parts[1:-1]:
+                    next_fd = os.open(part, dir_flags, dir_fd=fd)
+                    os.close(fd)
+                    fd = next_fd
+            except FileNotFoundError:
+                entries = [(".", "absent")]
+            else:
+                collect(fd, root.name, ".", entries)
+        except OSError as error:
+            raise ValueError("managed snapshot path is not an ordinary directory") from error
+        finally:
+            os.close(fd)
+        result[key] = sorted(entries, key=lambda entry: entry[0])
     return result
 
 
@@ -576,29 +617,40 @@ def run(args, root, case, ctx):
         foreign_before = snapshot_paths(foreign_paths)
     if scope == "project":
         import catalog_project_readiness as project
-        protected_user = snapshot_paths(project.user_paths(roots))
+        protected_user = project.initialize_user_profile(args, root, roots, env, readonly)
 
     def command(*argv):
-        args.failure_phase = prefix + ":" + argv[0]
+        # Fixed, non-sensitive checkpoints distinguish a sandbox setup failure,
+        # released CLI refusal, malformed response, and cross-scope mutation.
+        # The producer still publishes only phase + exception class; no raw
+        # response, filesystem path, token, or diagnostic payload is persisted.
+        phase = prefix + ":" + argv[0]
+        args.failure_phase = phase + ":isolated_child"
         result = gate.child([str(binary), *argv, *scope_args, "--format", "json"], root=root, readonly=readonly,
                             env=env, cwd=roots["workspace"], timeout=600)
+        args.failure_phase = phase + ":exit"
         if result.returncode != 0:
             if callable(getattr(args, "on_failure", None)):
                 args.on_failure(result)
             print("managed CLI failure: " + failure_diagnostics(argv[0], result), file=sys.stderr, flush=True)
             raise ValueError("managed CLI command failed")
+        args.failure_phase = phase + ":decode"
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)
         require(isinstance(value, dict), "managed CLI JSON shape")
         if release_user:
+            args.failure_phase = phase + ":foreign_state"
             validate_foreign_state(foreign_paths, foreign_before, foreign_configs)
         if scope == "project":
+            args.failure_phase = phase + ":user_isolation"
             project.validate_user_isolation(protected_user, roots)
+        args.failure_phase = phase + ":envelope"
         if argv[0] in ("add", "info", "list", "doctor"):
             require(value.get("command") == argv[0] and value.get("result") == "success" and isinstance(value.get("data"), dict), "managed CLI envelope")
             return value["data"]
         return value
 
     added = command("add", "marketing-kit", "--target", ",".join(clients))
+    args.failure_phase = prefix + ":validate_add"
     require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(clients), "managed saved add incomplete")
     require(scope != "project" or added.get("scope") == "project", "managed placement scope")
     state_file = state_root / "state-v2.json"

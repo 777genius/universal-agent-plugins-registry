@@ -870,9 +870,14 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     validate_artifact(expected, canonical_expected)
     snapshot, expected = canonical_snapshot, canonical_expected
     require(digest(args.binary.read_bytes()) == CLI["binary_digest"], "wrong released binary")
-    root = args.sandbox.absolute()
+    # Canonicalize the existing parent; reject final-component aliases.
+    require(not args.sandbox.is_symlink(), "sandbox must be a new directory")
+    root = args.sandbox.parent.resolve(strict=True) / args.sandbox.name
     require(not root.exists() and not root.is_symlink() and root.parent.exists(), "sandbox must be a new directory")
-    require(not args.output.absolute().is_relative_to(root), "output cannot be inside disposable root")
+    require(args.output.name not in ("", ".", ".."), "output must name a new file")
+    args.output = args.output.parent.resolve(strict=False) / args.output.name
+    require(not args.output.is_symlink(), "output must be new; refusing stale success artifact")
+    require(not args.output.is_relative_to(root), "output cannot be inside disposable root")
     require(not args.output.exists(), "output must be new; refusing stale success artifact")
     root.mkdir(mode=0o700)
     try:
@@ -959,11 +964,23 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:
         # Never persist raw command responses, paths, credentials or native logs.
         if args.mode == "produce" and args.output is not None:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            (args.output.parent / "catalog-readiness-failure.json").write_bytes(publication.canonical_json({
-                "kind": "catalog-readiness-failure-v1", "outcome": "failed",
-                "phase": args.failure_phase, "error_class": type(error).__name__,
-            }))
+            # Input validation can fail before produce canonicalizes the output.
+            # Never create the rejected case just to report its own refusal.
+            try:
+                if args.output.name not in ("", ".", ".."):
+                    failure_parent = args.output.parent.resolve(strict=False)
+                    if args.sandbox is None or not failure_parent.is_relative_to(args.sandbox.resolve(strict=False)):
+                        failure_path = failure_parent / "catalog-readiness-failure.json"
+                        if not failure_path.is_symlink():
+                            failure_parent.mkdir(parents=True, exist_ok=True)
+                            failure_path.write_bytes(publication.canonical_json({
+                                "kind": "catalog-readiness-failure-v1", "outcome": "failed",
+                                "phase": args.failure_phase, "error_class": type(error).__name__,
+                            }))
+            except (OSError, ValueError, RuntimeError):
+                # An invalid/unwritable diagnostic destination is still a
+                # failed invocation; retain the bounded stderr below.
+                pass
         print(f"catalog readiness failed: {args.failure_phase}: {type(error).__name__}", file=sys.stderr)
         return 1
 

@@ -201,6 +201,7 @@ def expected(snapshot, select):
     proof.update(native_project_resources={client: "passed_exact_resources" for client in CLIENTS},
                  repeat_add="passed_no_change", repair="passed_same_signed_identity",
                  user_native_and_durable_state_unchanged=True,
+                 claude_profile_setup="native_first_start_then_fixed_unchanged_control_before_uap",
                  native_client_discovery="not_qualified_by_this_case", client_tools_call="not_tested",
                  native_project_cleanup="passed_exact_absence")
     case = {"cli": copy.deepcopy(cli), "root": managed.ROOT,
@@ -435,6 +436,104 @@ def user_paths(roots):
 
 def validate_user_isolation(before, roots):
     require(managed.snapshot_paths(user_paths(roots)) == before, "Project operation changed User native or durable state")
+
+
+def initialize_user_profile(args, root, roots, env, readonly):
+    """Initialize only native first-start metadata, then freeze it before UAP.
+
+    The real selected Claude profile is required for User precedence and Project
+    suppression. Exactly two native empty-list controls establish one baseline;
+    no installer operation or later native call can replace that baseline.
+    """
+    import catalog_publication_readiness as gate
+    profile_root = roots["home"] / ".claude"
+    profile = profile_root / ".claude.json"
+    backups = profile_root / "backups"
+    def require_profile_anchor():
+        require(not root.is_symlink() and root.is_dir() and root.resolve() == root
+                and roots["home"] == root / "home" and not roots["home"].is_symlink()
+                and roots["home"].is_dir() and roots["home"].resolve() == roots["home"],
+                "Claude initialization substituted the case or HOME anchor")
+    require_profile_anchor()
+    require(not profile.exists() and not profile.is_symlink()
+            and not backups.exists() and not backups.is_symlink(),
+            "Claude profile initialization requires a fresh disposable profile")
+    require(not profile_root.is_symlink()
+            and (not profile_root.exists() or profile_root.is_dir()),
+            "Claude profile root is not an ordinary directory")
+    paths = {**user_paths(roots), "workspace": roots["workspace"],
+             "all-state": roots["state"], "cache": roots["cache"]}
+    before = managed.snapshot_paths(paths)
+    old_home = {entry[0]: entry[1:] for entry in before["home"]}
+    # Exact environment selected by public .104's bounded Claude list probe
+    # from isolated_environment(); do not pass XDG, Directory, auth or CI flags.
+    native_env = {key: env[key] for key in ("HOME", "USERPROFILE", "PATH", "TMPDIR", "LANG")}
+    native_env.update(CLAUDE_CONFIG_DIR=str(profile_root), DISABLE_AUTOUPDATER="1",
+                      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
+
+    def empty_list(stage):
+        args.failure_phase = "project:claude_profile:" + stage
+        completed = gate.child([str(args.claude), "plugin", "list", "--json"],
+                               root=root, readonly=readonly, cwd=roots["workspace"],
+                               env=native_env, timeout=60)
+        require(type(completed.returncode) is int and completed.returncode == 0
+                and completed.stderr == "", "Claude empty profile control failed")
+        value = gate.publication.parse_json_bytes(completed.stdout.encode(),
+                                                "Claude empty profile control", max_bytes=65536)
+        require(type(value) is list and value == [], "Claude initial profile is not empty")
+
+    def admitted_profile():
+        # Check new native objects before the whole-tree hash reads their bytes.
+        require_profile_anchor()
+        require(profile_root.is_dir() and not profile_root.is_symlink(), "Claude profile root substituted")
+        files, seen = [], 0
+        limit = sum(name == ".claude" or name.startswith(".claude/") for name in old_home) + 11
+        for path in profile_root.rglob("*"):
+            seen += 1
+            require(seen <= limit, "Claude initialization profile object count")
+            name = path.relative_to(roots["home"]).as_posix()
+            if name in old_home:
+                continue  # Existing objects remain under the exact snapshot guard.
+            require(not path.is_symlink(), "Claude initialization substituted a profile object")
+            if path == backups:
+                require(path.is_dir(), "Claude backup root substituted")
+                continue
+            require((path == profile or re.fullmatch(r"\.claude/backups/\.claude\.json\.backup\.[0-9]+", name))
+                    and path.is_file() and path.stat().st_size <= 65536,
+                    "Claude initialization created unexpected or oversized User state")
+            files.append(path)
+            require(len(files) <= 6, "Claude initialization profile or backup count")
+        require(profile in files, "Claude initialization profile missing")
+        metadata = {"firstStartTime", "firstStartVersion", "machineID"}
+        documents = {}
+        for path in files:
+            value = gate.read_json(path, limit=65536)
+            require(type(value) is dict and set(value) <= metadata
+                    and all(type(item) is str and 0 < len(item) <= 256 for item in value.values()),
+                    "Claude initialization exceeded first-start metadata")
+            if path == profile:
+                require(set(value) == metadata, "Claude first-start metadata is incomplete")
+            documents[path] = value
+        require(all(all(documents[profile].get(key) == value for key, value in document.items())
+                    for document in documents.values()), "Claude backup metadata differs from initialized profile")
+
+    empty_list("initialize")
+    admitted_profile()
+    after = managed.snapshot_paths(paths)
+    require(all(after[key] == value for key, value in before.items() if key != "home"),
+            "Claude initialization changed non-profile fixture state")
+    new_home = {entry[0]: entry[1:] for entry in after["home"]}
+    require(all(new_home.get(name) == entry for name, entry in old_home.items()),
+            "Claude initialization changed existing User state")
+    require(all(name in old_home or name == ".claude" or name.startswith(".claude/") for name in new_home),
+            "Claude initialization created state outside its profile")
+    # This is the only accepted User baseline. The second control and the
+    # public installer both compare to these exact bytes, types and modes.
+    protected_user = {key: after[key] for key in user_paths(roots)}
+    empty_list("stable")
+    admitted_profile()
+    require(managed.snapshot_paths(paths) == after, "Claude native profile did not stabilize before UAP")
+    return protected_user
 
 
 def refusal_snapshot(roots):
