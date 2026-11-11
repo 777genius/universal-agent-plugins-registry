@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_modern_feed_candidate import proposed_source, validate_platform_report
+from pi_modern_feed_candidate import (proposed_source, require_complete_source_eligibility,
+                                      validate_platform_report)
 
 HEAD = "a" * 40
 DIGEST = "sha256:" + "b" * 64
@@ -61,6 +62,19 @@ class ModernPiEvidenceTests(unittest.TestCase):
     def test_known_marketing_refusal_remains_explicit_failure(self) -> None:
         self.assertEqual(validate_platform_report(self.report, "linux", HEAD, self.sources),
                          (2, 2))
+
+    def test_source_refusal_cannot_stage_unsigned_modern_candidate(self) -> None:
+        # Reviewed, exact-head source evidence is not enough if the real CLI
+        # still refuses Marketing Kit's signed HubSpot dependency closure.
+        counts = {"linux": (2, 2), "macos": (2, 2), "windows": (2, 2)}
+        with self.assertRaisesRegex(RuntimeError, "zero refused saved dependency plans"):
+            require_complete_source_eligibility(counts)
+
+    def test_all_os_source_plans_can_reach_review_stage(self) -> None:
+        # This helper is only a source-planning gate, NOT signed entitlement.
+        require_complete_source_eligibility(
+            {"linux": (4, 0), "macos": (4, 0), "windows": (4, 0)}
+        )
 
     def test_unknown_refusal_cannot_be_counted_as_reviewed(self) -> None:
         report = copy.deepcopy(self.report)
