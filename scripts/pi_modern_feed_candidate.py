@@ -112,6 +112,12 @@ def validate_platform_report(report: dict, platform: str, head: str,
     return planned, refused
 
 
+def require_complete_source_eligibility(counts: dict[str, tuple[int, int]]) -> None:
+    """Block staging when any OS still refuses a real saved dependency plan."""
+    require(bool(counts) and all(refused == 0 for _, refused in counts.values()),
+            "modern Pi candidate requires zero refused saved dependency plans on every OS")
+
+
 def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
     """Add reviewed Pi targets only to active policies in an in-memory copy."""
     require(isinstance(reviews, dict) and set(reviews) == {"schema_version", "source_commit", "reviews"}
@@ -184,6 +190,7 @@ def main() -> int:
     counts = {platform: validate_platform_report(data, platform, args.source_head, sources)
               for platform, data in reports.items()}
     require(len(set(counts.values())) == 1, "cross-OS outcomes differ")
+    require_complete_source_eligibility(counts)
 
     reviews = json.loads(args.review.read_text(encoding="utf-8"))
     require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
