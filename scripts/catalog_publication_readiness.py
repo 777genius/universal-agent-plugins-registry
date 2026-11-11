@@ -874,7 +874,10 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     require(not args.sandbox.is_symlink(), "sandbox must be a new directory")
     root = args.sandbox.parent.resolve(strict=True) / args.sandbox.name
     require(not root.exists() and not root.is_symlink() and root.parent.exists(), "sandbox must be a new directory")
-    require(not args.output.resolve(strict=False).is_relative_to(root), "output cannot be inside disposable root")
+    require(args.output.name not in ("", ".", ".."), "output must name a new file")
+    args.output = args.output.parent.resolve(strict=False) / args.output.name
+    require(not args.output.is_symlink(), "output must be new; refusing stale success artifact")
+    require(not args.output.is_relative_to(root), "output cannot be inside disposable root")
     require(not args.output.exists(), "output must be new; refusing stale success artifact")
     root.mkdir(mode=0o700)
     try:

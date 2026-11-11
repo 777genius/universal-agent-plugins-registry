@@ -132,26 +132,41 @@ def run_isolated(argv: list[str], *, writable_root: Path, cwd: Path,
     command = _command(argv, writable_root, cwd, env, read_only_paths, bwrap)
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         raise RuntimeError("catalog isolation requires Linux pidfd support")
+    probe_fd = None
     try:
         probe_fd = os.pidfd_open(os.getpid())
+        signal.pidfd_send_signal(probe_fd, 0)
     except OSError as error:
         raise RuntimeError("catalog isolation requires working Linux pidfds") from error
-    os.close(probe_fd)
+    finally:
+        if probe_fd is not None:
+            os.close(probe_fd)
     # bubblewrap reports the host PID of the sandbox's PID 1 before executing
     # the client. Hold a pidfd so timeout cleanup cannot target a reused PID.
     read_fd, write_fd = os.pipe()
-    command[1:1] = ["--info-fd", str(write_fd)]
+    try:
+        release_read, release_write = os.pipe()
+    except BaseException:
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
+    # --block-fd pauses before --new-session and exec. Do not let client code
+    # run until its namespace init is pinned and validated. EOF also releases
+    # this gate, so exceptional cleanup must finish before closing the writer.
+    command[1:1] = ["--info-fd", str(write_fd), "--block-fd", str(release_read)]
     deadline = time.monotonic() + timeout
     try:
         process = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin"}, cwd="/",
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True, close_fds=True,
-                                   pass_fds=(write_fd,), start_new_session=True)
+                                   pass_fds=(write_fd, release_read), start_new_session=True)
     except BaseException:
         os.close(read_fd)
+        os.close(release_write)
         raise
     finally:
         os.close(write_fd)
+        os.close(release_read)
     pidfd = None
     try:
         data = bytearray()
@@ -193,20 +208,33 @@ def run_isolated(argv: list[str], *, writable_root: Path, cwd: Path,
                     raise
                 pidfd = candidate_fd
             break
+        if pidfd is not None:
+            if deadline - time.monotonic() <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                os.write(release_write, b"\0")
+            except BrokenPipeError:
+                pass  # The sandbox already exited during setup.
+            os.close(release_write)
+            release_write = None
         stdout, stderr = process.communicate(timeout=max(0, deadline - time.monotonic()))
     except BaseException:
-        if pidfd is not None:
+        try:
+            if pidfd is not None:
+                try:
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        finally:
             try:
-                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.communicate()
+            process.communicate()
         raise
     finally:
+        if release_write is not None:
+            os.close(release_write)
         os.close(read_fd)
         if pidfd is not None:
             os.close(pidfd)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -1197,6 +1198,133 @@ class CatalogContractTests(unittest.TestCase):
                 self.assertEqual(probe.call_count, 4)
                 self.assertFalse(args.sandbox.exists())
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
+
+    @contextmanager
+    def _producer_path_calls(self, args):
+        args.binary.write_bytes(b"fixture binary")
+        with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                patch.object(gate.managed, "run") as managed_run, \
+                patch.object(gate.project, "run_user_refusal") as refusal, \
+                patch.object(gate, "run_lifecycle") as lifecycle, \
+                patch.object(gate, "acquired_package", return_value=args.binary.parent), \
+                patch.object(gate, "check_static_package"), \
+                patch.object(gate, "inspector_check", return_value={"status": "passed"}):
+            yield managed_run, refusal, lifecycle
+
+    def test_producer_canonical_output_preserves_parent_alias_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            physical, alias = root / "physical", root / "alias"
+            physical.mkdir()
+            alias.symlink_to(physical, target_is_directory=True)
+            sandbox = alias / "case"
+            args = argparse.Namespace(binary=root / "binary", sandbox=sandbox,
+                                      output=sandbox / ".." / "report.json", npx=Path("npx"), inspector=None)
+            with self._producer_path_calls(args) as (managed_run, _, _):
+                expected = copy.deepcopy(self.expected())
+                gate.produce(args, self.snapshot, expected)
+                self.assertEqual(managed_run.call_count, 3)
+                for call in managed_run.call_args_list:
+                    self.assertTrue(call.args[1].is_relative_to(physical / "case"))
+            self.assertFalse((physical / "case").exists())
+            gate.validate_artifact(gate.read_json(physical / "report.json", canonical=True), expected)
+
+    def test_producer_canonical_output_rejects_stale_artifact_before_execution(self):
+        for through_case in (False, True):
+            with self.subTest(through_case=through_case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                stale = root / "report.json"
+                stale.write_bytes(b"existing success must survive")
+                sandbox = root / "case"
+                output = sandbox / ".." / stale.name if through_case else stale
+                args = argparse.Namespace(binary=root / "binary", sandbox=sandbox, output=output)
+                with self._producer_path_calls(args) as calls:
+                    with self.assertRaisesRegex(ValueError, "stale success artifact"):
+                        gate.produce(args, self.snapshot, self.expected())
+                    for call in calls:
+                        call.assert_not_called()
+                self.assertFalse(sandbox.exists())
+                self.assertEqual(stale.read_bytes(), b"existing success must survive")
+
+    def test_producer_final_symlinks_and_inside_outputs_refuse_before_execution(self):
+        for invalid in ("sandbox_dangling", "sandbox_existing", "output_dangling", "output_existing",
+                        "output_hidden_dangling", "output_hidden_existing", "output_dotdot",
+                        "inside", "aliased_inside"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                sandbox, output = root / "case", root / "report.json"
+                target = root / "target"
+                if invalid.startswith("sandbox_"):
+                    if invalid == "sandbox_existing":
+                        target.mkdir()
+                    sandbox.symlink_to(target, target_is_directory=True)
+                elif invalid == "output_dotdot":
+                    output = root / "not-created" / "child" / ".."
+                elif invalid.startswith("output_"):
+                    if invalid.endswith("_existing"):
+                        target.write_bytes(b"existing output target")
+                    output.symlink_to(target)
+                    if invalid.startswith("output_hidden_"):
+                        output = sandbox / ".." / output.name
+                elif invalid == "inside":
+                    output = sandbox / "report.json"
+                else:
+                    alias = root / "case-alias"
+                    alias.symlink_to(sandbox, target_is_directory=True)
+                    output = alias / "report.json"
+                args = argparse.Namespace(binary=root / "binary", sandbox=sandbox, output=output,
+                                          npx=Path("npx"), inspector=None)
+                message = "sandbox must be a new directory" if invalid.startswith("sandbox_") else "output"
+                with self._producer_path_calls(args) as calls:
+                    with self.assertRaisesRegex(ValueError, message):
+                        gate.produce(args, self.snapshot, self.expected())
+                    for call in calls:
+                        call.assert_not_called()
+                if invalid.startswith("sandbox_"):
+                    self.assertTrue(sandbox.is_symlink())
+                else:
+                    self.assertFalse(sandbox.exists())
+                if invalid in ("output_existing", "output_hidden_existing"):
+                    self.assertEqual(target.read_bytes(), b"existing output target")
+                if invalid == "output_dotdot":
+                    self.assertFalse((root / "not-created").exists())
+
+    def test_main_canonical_failure_output_does_not_recreate_disposable_root(self):
+        for failing in ("managed", "hidden_dangling", "hidden_existing"):
+            with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                sandbox, report, target = root / "case", root / "report.json", root / "target"
+                if failing.startswith("hidden_"):
+                    if failing == "hidden_existing":
+                        target.write_bytes(b"existing output target")
+                    report.symlink_to(target)
+                args = argparse.Namespace(mode="produce", binary=root / "binary", sandbox=sandbox,
+                                          output=sandbox / ".." / report.name, claude=Path("claude"),
+                                          copilot=Path("copilot"), opencode=Path("opencode"),
+                                          project_binary=root / "project-binary")
+                with self._producer_path_calls(args) as calls, patch.object(gate, "parser") as parser:
+                    parser.return_value.parse_args.return_value = args
+                    if failing == "managed":
+                        calls[0].side_effect = ValueError("fixture lifecycle failure")
+                    self.assertEqual(gate.main([]), 1)
+                    if failing == "managed":
+                        calls[0].assert_called_once()
+                    else:
+                        for call in calls:
+                            call.assert_not_called()
+                self.assertFalse(sandbox.exists())
+                if failing.startswith("hidden_"):
+                    self.assertTrue(report.is_symlink())
+                else:
+                    self.assertFalse(report.exists())
+                if failing == "hidden_existing":
+                    self.assertEqual(target.read_bytes(), b"existing output target")
+                else:
+                    self.assertFalse(target.exists())
+                failure = gate.read_json(root / "catalog-readiness-failure.json", canonical=True)
+                self.assertEqual(failure["phase"], "managed:prepare" if failing == "managed" else "validate_inputs")
+                self.assertEqual(failure["outcome"], "failed")
 
     def test_direct_producer_rejects_omitted_or_substituted_dependency_blocks_before_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
