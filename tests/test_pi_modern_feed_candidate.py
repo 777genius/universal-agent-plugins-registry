@@ -234,6 +234,12 @@ class ModernPiCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "overlaps a legacy Pi policy"):
             proposed_source(source, [self.tool], self.review)
 
+    def test_unknown_authentication_does_not_become_a_signed_pi_target(self) -> None:
+        review = copy.deepcopy(self.review)
+        review["reviews"][0]["authentication"] = "unknown"
+        with self.assertRaisesRegex(RuntimeError, "Pi authentication is unresolved"):
+            proposed_source(self.source, [self.tool], review)
+
     def test_only_skills_may_use_skills_transport(self) -> None:
         review = copy.deepcopy(self.review)
         review["reviews"][0]["transport"] = "skills"

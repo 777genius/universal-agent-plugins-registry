@@ -145,6 +145,9 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
                 and record["evidence_url"].startswith("https://")
                 and len(record["evidence_url"]) > len("https://"),
                 "Pi review is not pinned to the exact source and public evidence")
+        # "unknown" is valid registry metadata but not reviewed Pi signing authority.
+        require(record["authentication"] != "unknown",
+                "Pi authentication is unresolved; do not propose a signed Pi target")
         require((record["transport"] == "skills") == (reviewed["components"] == ["skills"]),
                 "Pi component/transport classification mismatches reviewed source")
         review_map[key] = record
