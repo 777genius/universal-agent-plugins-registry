@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import io
+import os
 from contextlib import redirect_stderr
 from pathlib import Path
 import tempfile
@@ -13,7 +14,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE
+from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime
 from tests import test_catalog_managed_readiness as managed_tests
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
@@ -30,6 +31,56 @@ class ProjectReadinessTests(unittest.TestCase):
         self.addCleanup(release.stop)
         self.snapshot = catalog()
         self.case = project.expected(self.snapshot, gate.selected)
+
+    def test_paired_authority_rejects_closure_context_and_policy_substitutions(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}), \
+                patch.object(gate, "datetime", ProofTime):
+            args = paired_arguments(Path(temporary))
+            snapshot, artifact = gate.canonical_inputs(args)
+            case = artifact["project_dependencies"]
+            negative = gate.load_refusal_source(args, artifact["context"])
+            project.validate_refusal_pair(case, negative, gate.selected)
+            for field in ("product_id", "distribution_id", "release_sequence", "package_version", "package_source", "tree_digest", "manifest_digest"):
+                changed = copy.deepcopy(case)
+                changed["closure"][0][field] = {**changed["closure"][0][field], "revision": "f" * 40} if field == "package_source" else 999 if field == "release_sequence" else "changed"
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    project.validate_refusal_pair(changed, negative, gate.selected)
+            for field in ("signed_ledger_sha", "materialized_ledger_sha", "snapshot_digest", "sequence", "directory_origin", "source_sha", "publication_id"):
+                changed = copy.deepcopy(negative)
+                changed[1][field] = 46 if field == "sequence" else "changed"
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    project.validate_refusal_pair(case, changed, gate.selected)
+            for field in ("run_id", "run_attempt", "workflow_sha"):
+                changed = copy.deepcopy(negative)
+                changed[1][field] = 2 if field == "run_attempt" else "456" if field == "run_id" else "f" * 40
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "another workflow invocation"):
+                    gate.dependency_cases(snapshot, artifact["context"], refusal_source=changed)
+            for mutation in ("authentication", "scopes", "floor", "dependency", "grant_mask"):
+                changed = copy.deepcopy(case)
+                root = changed["closure"][0]["policy"]
+                if mutation == "authentication":
+                    root["targets"][0]["authentication"] = "not_required"
+                elif mutation == "scopes":
+                    root["targets"][0]["scopes"] = ["project"]
+                elif mutation == "floor":
+                    root["minimum_installer_version"] = "0.1.104"
+                elif mutation == "dependency":
+                    changed["closure"][1]["policy"]["minimum_installer_version"] = "0.1.104"
+                else:
+                    root["targets"] = [row for row in root["targets"] if row["client"] != "copilot"]
+                with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, "policy delta"):
+                    project.validate_refusal_pair(changed, negative, gate.selected)
+            with self.assertRaisesRegex(ValueError, "source grant changed"):
+                project.expected_user_refusal(case)
+            changed = copy.deepcopy(negative)
+            changed[0]["distributions"][0]["release_policies"][0]["minimum_installer_version"] = "0.1.999"
+            with self.assertRaisesRegex(ValueError, "snapshot changed"):
+                project.validate_refusal_pair(case, changed, gate.selected)
+            stale = copy.deepcopy(case)
+            stale["cli"] = gate.managed.CLI
+            with self.assertRaisesRegex(ValueError, "CLI differs"):
+                project.validate_refusal_pair(stale, negative, gate.selected)
 
     def test_six_positive_user_six_positive_project_and_separate_vscode_refusal(self):
         user = managed.expected(self.snapshot, gate.selected)
@@ -422,7 +473,7 @@ class ProjectReadinessTests(unittest.TestCase):
                     project.validate_server(entry, source, package, cli_digest="sha256:" + "0" * 64, project_root=root, data_root=root / ".uap/plugin-data/backend")
 
     def test_user_refusal_requires_reason_nonzero_and_zero_native_portable_state_mutation(self):
-        for behavior in ("refused", "directory_cache", "success", "unrelated_error", "native_mutation", "portable_mutation", "durable_mutation", "journal_mutation", "unrelated_mention", "cache_wrong_sequence", "warm_wrong_digest", "warm_no_cache"):
+        for behavior in ("refused", "directory_cache", "success", "unrelated_error", "native_mutation", "portable_mutation", "durable_mutation", "journal_mutation", "unrelated_mention", "cache_wrong_sequence", "warm_wrong_digest", "warm_no_cache", "stdout_space", "stdout_lf", "padded_prefix", "padded_suffix", "truncated", "extra_lf", "missing_lf", "warm_stderr_space"):
             with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 tools = root / "tools"
@@ -452,7 +503,7 @@ class ProjectReadinessTests(unittest.TestCase):
                         self.assertEqual(argv[1:], ["info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"])
                         if behavior != "warm_no_cache":
                             write_cache()
-                        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"command": "info", "result": "success", "data": {"snapshot_sequence": 15, "snapshot_digest": "wrong" if behavior == "warm_wrong_digest" else ctx["snapshot_digest"]}}))
+                        return SimpleNamespace(returncode=0, stderr=" " if behavior == "warm_stderr_space" else "", stdout=json.dumps({"command": "info", "result": "success", "data": {"snapshot_sequence": 15, "snapshot_digest": "wrong" if behavior == "warm_wrong_digest" else ctx["snapshot_digest"]}}))
                     self.assertEqual(argv[1:], ["add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"])
                     if behavior in ("directory_cache", "cache_wrong_sequence"):
                         cache = profile / "directory-v1-cache.json"
@@ -467,10 +518,14 @@ class ProjectReadinessTests(unittest.TestCase):
                     elif behavior == "journal_mutation":
                         (profile / "operations-v2").mkdir()
                         (profile / "operations-v2/open.json").write_text("{}")
+                    stderr = ('Resolving and validating one Agent Plugin package for every selected target...\n'
+                              'agentplugins: no eligible directory release for "marketing-kit": '
+                              '777genius/marketing-kit: release does not support complete target set; missing vscode\n')
+                    stderr = {"unrelated_error": "network timeout", "unrelated_mention": "network timeout; source log mentioned missing vscode",
+                              "padded_prefix": " " + stderr, "padded_suffix": stderr + " ", "truncated": stderr.split("\n", 1)[1],
+                              "extra_lf": stderr + "\n", "missing_lf": stderr[:-1]}.get(behavior, stderr)
                     return SimpleNamespace(returncode=0 if behavior == "success" else 1,
-                                           stdout="", stderr=("network timeout" if behavior == "unrelated_error" else
-                                            "network timeout; source log mentioned missing vscode" if behavior == "unrelated_mention" else
-                                            'Resolving and validating one Agent Plugin package for every selected target...\nagentplugins: no eligible directory release for "marketing-kit": 777genius/marketing-kit: release does not support complete target set; missing vscode'))
+                                           stdout=" " if behavior == "stdout_space" else "\n" if behavior == "stdout_lf" else "", stderr=stderr)
                 with patch.object(gate, "child", side_effect=invoke):
                     if behavior in ("refused", "directory_cache"):
                         project.run_user_refusal(args, root / "case", case, ctx)

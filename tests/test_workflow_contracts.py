@@ -379,6 +379,36 @@ sys.modules['catalog_process_isolation']=module
         self.assertEqual(profiles, [profiles[0]] * 3)
         self.assertEqual(cleanups, [cleanups[0]] * 3)
 
+    def test_paired_refusal_checkout_is_fixed_and_revalidated_in_every_proof_job(self) -> None:
+        workflow = load(CATALOG_READINESS)
+        exports = []
+        for name in ("produce", "attest", "verify"):
+            job = workflow["jobs"][name]
+            bind = next(step for step in job["steps"] if step.get("name") == "Bind the fixed authenticated signed45 refusal source")
+            checkout = next(step for step in job["steps"] if step.get("with", {}).get("path") == "refusal-staged")
+            self.assertEqual(checkout["with"]["ref"], "${{ env.REFUSAL_LEDGER_SHA }}")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
+            self.assertLess(job["steps"].index(bind), job["steps"].index(checkout))
+            self.assertIn("refusal_source_identity", bind["run"])
+            self.assertNotIn("inputs.", bind["run"])
+            self.assertNotIn("if", bind)
+            self.assertNotIn("continue-on-error", bind)
+            body = commands(job)
+            self.assertIn('test "$(git -C refusal-staged rev-parse HEAD)" = "$REFUSAL_LEDGER_SHA"', body)
+            self.assertIn("--refusal-feed refusal-staged/registry/schemas/1", body)
+            exports.append(bind["run"])
+        self.assertEqual(exports, [exports[0]] * 3)
+        with mock.patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
+            import catalog_project_readiness as project
+        code = "\n".join(exports[0].splitlines()[1:-1])
+        with tempfile.TemporaryDirectory() as temporary:
+            exported = Path(temporary) / "environment"
+            with mock.patch.dict(os.environ, {"GITHUB_ENV": str(exported)}):
+                exec(compile(code, "fixed refusal source binding", "exec"), {})
+            self.assertEqual(exported.read_text(), "REFUSAL_LEDGER_SHA=" + project.refusal_source_identity()["materialized_ledger_sha"] + "\n")
+        # No caller-selectable signed source or release authority is added.
+        self.assertNotIn("refusal", " ".join(workflow["on"]["workflow_call"].get("inputs", {})))
+
     def test_project_release_is_one_fixed_authority_for_download_and_canonical_proof(self) -> None:
         workflow = load(CATALOG_READINESS)
         steps = workflow["jobs"]["produce"]["steps"]

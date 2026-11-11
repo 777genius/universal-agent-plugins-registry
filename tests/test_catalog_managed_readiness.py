@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, PROJECT_RELEASE_FIXTURE
+from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime
 import catalog_publication_readiness as gate
 import catalog_managed_readiness as managed
 
@@ -22,6 +22,38 @@ class ManagedReadinessTests(unittest.TestCase):
     def setUp(self):
         self.snapshot = catalog()
         self.case = managed.expected(self.snapshot, gate.selected)
+
+    def test_paired_release_user_preserves_four_identities_and_truthful_vscode_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}), \
+                patch.object(gate, "datetime", ProofTime), patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
+            args = paired_arguments(Path(temporary))
+            snapshot, artifact = gate.canonical_inputs(args)
+            historical = artifact["managed_dependencies"]
+            user, project = artifact["release_user_dependencies"], artifact["project_dependencies"]
+            prior_snapshot, _ = gate.load_refusal_source(args, artifact["context"])
+            prior = gate.project.expected(prior_snapshot, gate.selected)
+            self.assertEqual(historical["cli"]["version"], "0.1.91")
+            self.assertEqual(user["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+            self.assertEqual(user["cli"], project["cli"])
+            self.assertEqual(user["placement_scope"], "user")
+            self.assertEqual(user["proof"]["vscode_qualification"], "source_grant_prepared_only")
+            self.assertEqual(managed.immutable_closure(user), managed.immutable_closure(prior))
+            self.assertEqual(managed.immutable_closure(user), managed.immutable_closure(project))
+            # Root prepared grant belongs to positive policy coverage, never
+            # negative45 or an invented seventh positive User installation.
+            self.assertIn((managed.ROOT, 1, "vscode", "user"), managed.coverage(user))
+            self.assertNotIn("vscode", user["targets"])
+            for change in ("missing", "duplicate", "foreign"):
+                invalid = copy.deepcopy(user)
+                if change == "missing":
+                    invalid["closure"].pop()
+                elif change == "duplicate":
+                    invalid["closure"][-1] = copy.deepcopy(invalid["closure"][0])
+                else:
+                    invalid["closure"][-1]["distribution_id"] = "unqualified/package"
+                with self.subTest(change=change), self.assertRaisesRegex(ValueError, "cardinality"):
+                    managed.immutable_closure(invalid)
 
     def test_separate_case_preserves_legacy_matrix_and_exact_coverage(self):
         self.assertEqual(gate.CLI["version"], "0.1.89")

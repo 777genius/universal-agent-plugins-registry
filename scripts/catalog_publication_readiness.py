@@ -286,11 +286,42 @@ def credential_free_probe(selection: dict) -> bool:
     return bool(targets) and all(target.get("authentication") == "not_required" for target in targets)
 
 
-def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
+def load_refusal_source(args: argparse.Namespace, positive_context: dict) -> tuple[dict, dict]:
+    """Authenticate the fixed evidence source with normal expiry, never baseline rules."""
+    require(getattr(args, "refusal_feed", None) is not None, "--refusal-feed required for seven-grant proof")
+    snapshot, identity = load_feed(args.refusal_feed, args.trusted_keys)
+    pins = project.refusal_source_identity()
+    require(identity == {key: pins[key] for key in ("sequence", "snapshot_digest")}, "wrong fixed refusal feed")
+    fields = {**positive_context, **pins, "source_sha": snapshot["source_commit"],
+              "publication_id": snapshot["publication_id"]}
+    fields["directory_origin"] = f"https://raw.githubusercontent.com/{fields['repository']}/{pins['materialized_ledger_sha']}/registry/schemas/1/"
+    ctx = context(argparse.Namespace(**fields), snapshot, identity)
+    project.validate_refusal_context(ctx)
+    return snapshot, ctx
+
+
+def dependency_cases(snapshot: dict, ctx: dict, *, refusal_source=None) -> dict:
+    paired = project.needs_refusal_source(snapshot, selected)
+    require(paired or refusal_source is None, "unexpected separate refusal source")
+    project_case = project.expected(snapshot, selected, refusal_source=refusal_source)
+    release_user_case = managed.release_expected(snapshot, selected, refusal_source=refusal_source)
+    if paired:
+        negative_case = project.validate_refusal_pair(project_case, refusal_source, selected)
+        negative_ctx = refusal_source[1]
+        require(all(ctx.get(key) == negative_ctx[key] for key in ("repository", "workflow_sha", "run_id", "run_attempt")),
+                "refusal context belongs to another workflow invocation")
+        refusal_case = project.expected_user_refusal(negative_case, context=negative_ctx)
+        require(refusal_case["cli"] == project_case["cli"] == release_user_case["cli"], "paired released CLI differs")
+    else:
+        refusal_case = project.expected_user_refusal(project_case)
+    return {"project_dependencies": project_case, "release_user_dependencies": release_user_case,
+            "vscode_user_refusal": refusal_case}
+
+
+def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict, *, refusal_source=None) -> dict:
     selections = plan(snapshot)
-    project_case = project.expected(snapshot, selected)
-    release_user_case = managed.release_expected(snapshot, selected)
-    refusal_case = project.expected_user_refusal(project_case)
+    dependencies = dependency_cases(snapshot, ctx, refusal_source=refusal_source)
+    project_case, release_user_case = dependencies["project_dependencies"], dependencies["release_user_dependencies"]
     policy_scope(baseline, snapshot, selections, project_case=project_case, release_user_case=release_user_case)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
@@ -310,9 +341,7 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     if case is not None:
         result["managed_dependencies"] = case
     if project_case is not None:
-        result["project_dependencies"] = project_case
-        result["release_user_dependencies"] = release_user_case
-        result["vscode_user_refusal"] = refusal_case
+        result.update(dependencies)
     return result
 
 
@@ -824,18 +853,26 @@ def check_static_package(package: Path, selection: dict) -> None:
     require(server.get("type") == "streamable-http" and server.get("url") == "https://docs.mcp.cloudflare.com/mcp", "ChatGPT binding does not name acquired Cloudflare HTTP interface")
 
 
+def canonical_inputs(args: argparse.Namespace) -> tuple[dict, dict]:
+    """Reconstruct the complete proof from authenticated feeds and invocation."""
+    snapshot, identity = load_feed(args.feed, args.trusted_keys)
+    baseline, baseline_identity = load_feed(args.baseline_feed, args.trusted_keys, baseline=True)
+    require(baseline_identity["sequence"] < identity["sequence"], "baseline must precede candidate")
+    ctx = context(args, snapshot, identity)
+    refusal_source = load_refusal_source(args, ctx) if project.needs_refusal_source(snapshot, selected) else None
+    expected = expected_artifact(snapshot, baseline, baseline_identity, ctx, refusal_source=refusal_source)
+    return snapshot, expected
+
+
 def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
+    # Reauthenticate the same canonical inputs used by main. A direct caller
+    # cannot supply another invocation, closure or partial success contract.
+    canonical_snapshot, canonical_expected = canonical_inputs(args)
+    require(publication.canonical_json(snapshot) == publication.canonical_json(canonical_snapshot),
+            "producer snapshot differs from authenticated inputs")
+    validate_artifact(expected, canonical_expected)
+    snapshot, expected = canonical_snapshot, canonical_expected
     require(digest(args.binary.read_bytes()) == CLI["binary_digest"], "wrong released binary")
-    # Both positive scopes and the independent refusal are mandatory together;
-    # direct producer callers cannot silently omit or substitute a proof block.
-    project_case = project.expected(snapshot, selected)
-    dependency_cases = {"project_dependencies": project_case,
-                        "release_user_dependencies": managed.release_expected(snapshot, selected),
-                        "vscode_user_refusal": project.expected_user_refusal(project_case)}
-    for name, case in dependency_cases.items():
-        require((name in expected) == (case is not None), "missing or unexpected dependency proof block")
-        if case is not None:
-            validate_artifact(expected[name], case)
     root = args.sandbox.absolute()
     require(not root.exists() and not root.is_symlink() and root.parent.exists(), "sandbox must be a new directory")
     require(not args.output.absolute().is_relative_to(root), "output cannot be inside disposable root")
@@ -852,7 +889,9 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
             args.failure_phase = "project:prepare"
             managed.run(args, root / "project-marketing-kit", expected["project_dependencies"], expected["context"])
         if "vscode_user_refusal" in expected:
-            project.run_user_refusal(args, root / "vscode-user-refusal", expected["vscode_user_refusal"], expected["context"])
+            refusal_case = expected["vscode_user_refusal"]
+            project.run_user_refusal(args, root / "vscode-user-refusal", refusal_case,
+                                     refusal_case.get("context", expected["context"]))
         for selection, clients in plan(snapshot):
             case_id = selection.get("_case_id", selection["selector"])
             args.failure_phase = "lifecycle:" + case_id
@@ -896,7 +935,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "managed-binary", "project-binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
+    for name in ("binary", "managed-binary", "project-binary", "refusal-feed", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result
@@ -906,11 +945,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     args.failure_phase = "validate_inputs"
     try:
-        snapshot, identity = load_feed(args.feed, args.trusted_keys)
-        baseline, baseline_identity = load_feed(args.baseline_feed, args.trusted_keys, baseline=True)
-        require(baseline_identity["sequence"] < identity["sequence"], "baseline must precede candidate")
-        ctx = context(args, snapshot, identity)
-        expected = expected_artifact(snapshot, baseline, baseline_identity, ctx)
+        snapshot, expected = canonical_inputs(args)
         if args.mode == "verify":
             require(args.artifact is not None, "--artifact required")
             validate_artifact(read_json(args.artifact, canonical=True), expected)

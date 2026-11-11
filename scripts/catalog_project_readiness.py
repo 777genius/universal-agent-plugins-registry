@@ -19,6 +19,15 @@ require = managed.require
 # Remains unset until the actual release commit and all three authenticated
 # release asset digests have been reviewed. No development or guessed pin.
 RELEASE = None
+# Evidence-source identity only: grants are read from the authenticated feed.
+# The materialized commit has the signed commit as its direct parent, and both
+# contain the same immutable snapshot/envelope bytes.
+REFUSAL_SOURCE = {
+    "signed_ledger_sha": "3f9c30e8b76a51ae3a83f3232cbbb0129fecd468",
+    "materialized_ledger_sha": "3509baaac8e4f7ee3d565440f8c0d0bd1f928fba",
+    "sequence": 45,
+    "snapshot_digest": "sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50",
+}
 CLIENTS = managed.CLIENTS
 SKILL_ROOTS = {"codex": ".agents/skills", "cursor": ".cursor/skills",
                "copilot": ".github/skills", "claude": ".claude/skills",
@@ -50,7 +59,45 @@ def reviewed_release():
     return copy.deepcopy(RELEASE)
 
 
-def expected(snapshot, select):
+def refusal_source_identity():
+    return copy.deepcopy(REFUSAL_SOURCE)
+
+
+def needs_refusal_source(snapshot, select):
+    case = managed.expected(snapshot, select)
+    return case is not None and tuple(target["client"] for target in case["closure"][0]["policy"]["targets"]) == managed.COPILOT_AUTHORIZED_CLIENTS
+
+
+def validate_refusal_context(ctx):
+    import catalog_publication_readiness as gate
+    require(isinstance(ctx, dict) and set(ctx) == set(gate.CONTEXT_FIELDS), "refusal context fields")
+    require(all(ctx.get(key) == value for key, value in REFUSAL_SOURCE.items()), "refusal source identity changed")
+    expected_origin = f"https://raw.githubusercontent.com/{gate.active_registry_repository()}/{REFUSAL_SOURCE['materialized_ledger_sha']}/registry/schemas/1/"
+    require(ctx.get("directory_origin") == expected_origin, "refusal origin changed")
+
+
+def validate_refusal_pair(case, refusal_source, select):
+    """Compare signed source facts without granting or resolving another target."""
+    import argparse
+    import catalog_publication_readiness as gate
+    require(isinstance(refusal_source, tuple) and len(refusal_source) == 2, "fixed refusal source required")
+    snapshot, ctx = refusal_source
+    validate_refusal_context(ctx)
+    identity = {"sequence": snapshot["sequence"], "snapshot_digest": gate.digest(gate.publication.canonical_json(snapshot))}
+    require(identity == {key: REFUSAL_SOURCE[key] for key in ("sequence", "snapshot_digest")}, "refusal snapshot changed")
+    gate.context(argparse.Namespace(**ctx), snapshot, identity)
+    negative = expected(snapshot, select)
+    require(negative is not None and negative["cli"] == case["cli"], "refusal released CLI differs")
+    require(managed.immutable_closure(case) == managed.immutable_closure(negative), "positive/refusal immutable closure differs")
+    for positive, prior in zip(case["closure"], negative["closure"]):
+        policy = copy.deepcopy(positive["policy"])
+        if positive["distribution_id"] == managed.ROOT:
+            policy["targets"] = [target for target in policy["targets"] if target["client"] != "vscode"]
+        require(policy == prior["policy"], "positive/refusal policy delta exceeds prepared VSCode grant")
+    return negative
+
+
+def expected(snapshot, select, *, refusal_source=None):
     """Construct the exact Project contract only for the reviewed six-source root."""
     base = managed.expected(snapshot, select)
     if base is None:
@@ -59,9 +106,10 @@ def expected(snapshot, select):
     source_clients = tuple(target["client"] for target in root["policy"]["targets"])
     if source_clients == managed.LEGACY_CLIENTS:
         return None
-    require(source_clients != managed.COPILOT_AUTHORIZED_CLIENTS,
-            "seven-grant policy requires separate final publication qualification")
-    require(source_clients == CLIENTS, "unqualified Project source targets")
+    paired = source_clients == managed.COPILOT_AUTHORIZED_CLIENTS
+    require(not paired or refusal_source is not None,
+            "seven-grant policy requires separate fixed signed45 refusal source")
+    require(source_clients in (CLIENTS, managed.COPILOT_AUTHORIZED_CLIENTS), "unqualified Project source targets")
     cli = reviewed_release()["cli"]
     closure = [select(snapshot, selector, CLIENTS, cli=cli) for selector in managed.PINS]
     require(all(item["package_version"] == managed.PINS[item["selector"]] for item in closure),
@@ -81,7 +129,7 @@ def expected(snapshot, select):
                  user_native_and_durable_state_unchanged=True,
                  native_client_discovery="not_qualified_by_this_case", client_tools_call="not_tested",
                  native_project_cleanup="passed_exact_absence")
-    return {"cli": copy.deepcopy(cli), "root": managed.ROOT,
+    case = {"cli": copy.deepcopy(cli), "root": managed.ROOT,
             "placement_scope": "project", "signed_source_scope": "user",
             "targets": list(CLIENTS), "native_removal_targets": [],
             "client_tools": {"codex": "pinned_public_cli", "cursor": "version_only_detection_fixture",
@@ -93,19 +141,26 @@ def expected(snapshot, select):
                               "release_sequence": item["release_sequence"], "client": client}
                              for item in closure for client in CLIENTS],
             "proof": proof}
+    if paired:
+        validate_refusal_pair(case, refusal_source, select)
+    return case
 
 
-def expected_user_refusal(case):
+def expected_user_refusal(case, *, context=None):
     """A separate explicit VSCode request cannot borrow Copilot's source grant."""
     if case is None:
         return None
     require(all("vscode" not in {target["client"] for target in item["policy"]["targets"]}
                 for item in case["closure"] if item["distribution_id"] == managed.ROOT), "VSCode refusal source grant changed")
-    return {"cli": copy.deepcopy(case["cli"]), "root": managed.ROOT,
+    result = {"cli": copy.deepcopy(case["cli"]), "root": managed.ROOT,
             "target": "vscode", "placement_scope": "user", "outcome": "refused",
             "reason": "missing_vscode_signed_target_grant",
             "native_and_portable_state_unchanged": True,
             "authenticated_directory_cache": "warmed_unchanged"}
+    if context is not None:
+        validate_refusal_context(context)
+        result["context"] = copy.deepcopy(context)
+    return result
 
 
 def source_coverage(case):
@@ -350,6 +405,10 @@ def validate_operation(value, aliases, clients, *, operation, expected_scope, in
 def run_user_refusal(args, root, case, ctx):
     import catalog_publication_readiness as gate
     require(case["outcome"] == "refused", "VSCode User refusal mislabeled as success")
+    if "context" in case:
+        validate_refusal_context(ctx)
+        require(case["context"] == ctx, "refusal runtime context differs")
+        require(case["cli"] == reviewed_release()["cli"], "wrong refusal corrected CLI authority")
     binary = args.project_binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong Project released binary")
     root.mkdir(mode=0o700)
@@ -360,7 +419,7 @@ def run_user_refusal(args, root, case, ctx):
     readonly = (*gate.tool_paths(args), binary.parent)
     warmed = gate.child([str(binary), "info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"],
                         root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
-    require(warmed.returncode == 0 and not warmed.stderr.strip(), "VSCode refusal Directory warmup failed")
+    require(warmed.returncode == 0 and warmed.stderr == "", "VSCode refusal Directory warmup failed")
     info = gate.publication.parse_json_bytes(warmed.stdout.encode(), "Directory warmup", max_bytes=gate.LIMIT)
     require(isinstance(info, dict) and info.get("command") == "info" and info.get("result") == "success"
             and info.get("data", {}).get("snapshot_sequence") == ctx["sequence"]
@@ -375,7 +434,9 @@ def run_user_refusal(args, root, case, ctx):
     reason = ('Resolving and validating one Agent Plugin package for every selected target...\n'
               'agentplugins: no eligible directory release for "marketing-kit": '
               '777genius/marketing-kit: release does not support complete target set; missing vscode')
-    require(result.returncode == 1 and not result.stdout.strip() and result.stderr.strip() == reason,
+    # The genuine Linux CLI emits these two complete lines and one terminal LF.
+    # Whitespace, padding or another diagnostic must not count as signed refusal.
+    require(result.returncode == 1 and result.stdout == "" and result.stderr == reason + "\n",
             "VSCode User did not receive exact signed-target refusal")
     require(managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
             "VSCode User refusal mutated native, portable or durable state")

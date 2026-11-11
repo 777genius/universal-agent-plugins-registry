@@ -88,11 +88,18 @@ def expected(snapshot, select):
                              for item in closure for client in clients], "proof": proof}
 
 
-def release_expected(snapshot, select):
+def immutable_closure(case):
+    by_id = {item["distribution_id"]: item for item in case["closure"]}
+    require(len(case["closure"]) == len(by_id) == 4 and set(by_id) == set(PINS), "immutable closure cardinality")
+    keys = ("product_id", "distribution_id", "release_sequence", "package_version", "package_source", "tree_digest", "manifest_digest")
+    return [{key: by_id[name][key] for key in keys} for name in PINS]
+
+
+def release_expected(snapshot, select, *, refusal_source=None):
     """Six positive User targets on the one reviewed corrected release."""
     import copy
     import catalog_project_readiness as project
-    project_case = project.expected(snapshot, select)
+    project_case = project.expected(snapshot, select, refusal_source=refusal_source)
     if project_case is None:
         return None
     case = copy.deepcopy(expected(snapshot, select))
@@ -104,7 +111,7 @@ def release_expected(snapshot, select):
         repeat_add="passed_no_change", repair="passed_same_signed_identity",
         locked_restore="passed_same_signed_closure", list="passed_exact_closure",
         foreign_state_unchanged=True, copilot_shared_surfaces=["copilot", "vscode"],
-        vscode_qualification="not_granted")
+        vscode_qualification=("source_grant_prepared_only" if any(target["client"] == "vscode" for target in project_case["closure"][0]["policy"]["targets"]) else "not_granted"))
     return case
 
 

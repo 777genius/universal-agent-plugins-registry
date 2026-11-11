@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from datetime import datetime, timezone
 import sys
 import tempfile
 import unittest
@@ -27,6 +28,33 @@ PROJECT_RELEASE_FIXTURE = {"cli": {"version": "0.1.103", "tag": "agentplugins-v0
 
 
 SIGNED45_FEED = ROOT / "tests/fixtures/catalog-signed45"
+SIGNED46_FEED = ROOT / "tests/fixtures/catalog-signed46"
+
+
+class ProofTime(datetime):
+    """Fixed offline verification time within both original signed lifetimes."""
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 11, 11, 1, 0, tzinfo=timezone.utc)
+
+
+def paired_arguments(root):
+    snapshot = json.loads((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_text())
+    args = arguments(snapshot)
+    args.repository = "777genius/universal-agent-plugins-registry"
+    args.source_sha = snapshot["source_commit"]
+    args.signed_ledger_sha = "a154e1524d41975afb5b02bcac2474a3930f7ebd"
+    # Synthetic materialization/workflow invocation for offline contract tests.
+    args.sequence = 46
+    args.snapshot_digest = gate.digest((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_bytes())
+    args.directory_origin = f"https://raw.githubusercontent.com/{args.repository}/{args.materialized_ledger_sha}/registry/schemas/1/"
+    args.feed, args.baseline_feed, args.refusal_feed = SIGNED46_FEED, SIGNED45_FEED, SIGNED45_FEED
+    args.trusted_keys = ROOT / "registry/publication/trusted-keys.json"
+    for field in ("binary", "managed_binary", "project_binary", "sandbox", "output", "claude", "copilot", "codex", "opencode", "npx"):
+        setattr(args, field, root / field)
+    args.inspector = None
+    return args
+
 
 
 def synthetic_catalog(value):
@@ -1135,7 +1163,8 @@ class CatalogContractTests(unittest.TestCase):
                                       claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
                                       opencode=Path("opencode"))
             args.binary.write_bytes(b"fixture binary")
-            with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+            with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                    patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                     patch.object(gate.managed, "run") as managed_run, \
                     patch.object(gate.project, "run_user_refusal") as user_refusal, \
                     patch.object(gate, "run_lifecycle") as lifecycle, \
@@ -1175,7 +1204,8 @@ class CatalogContractTests(unittest.TestCase):
                 lambda value: value["release_user_dependencies"]["cli"].update(binary_digest="sha256:" + "0" * 64),
                 lambda value: value["vscode_user_refusal"].update(target="copilot"),
             ))
-            with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+            with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                    patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                     patch.object(gate.managed, "run") as managed_run, patch.object(gate.project, "run_user_refusal") as refusal:
                 for mutation in mutations:
                     value = copy.deepcopy(expected)
@@ -1195,7 +1225,8 @@ class CatalogContractTests(unittest.TestCase):
                                           claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
                                           opencode=Path("opencode"))
                 args.binary.write_bytes(b"fixture binary")
-                with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                    patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                         patch.object(gate.managed, "run") as managed_run, \
                         patch.object(gate.project, "run_user_refusal") as user_refusal, \
                         patch.object(gate, "run_lifecycle") as lifecycle, \
@@ -1228,10 +1259,137 @@ class CatalogContractTests(unittest.TestCase):
             binary = root / "binary"
             binary.write_bytes(b"not the release")
             args = argparse.Namespace(binary=binary, sandbox=root / "isolated", output=root / "evidence.json")
-            with self.assertRaisesRegex(ValueError, "wrong released binary"):
+            with patch.object(gate, "canonical_inputs", return_value=(self.snapshot, self.expected())), \
+                    self.assertRaisesRegex(ValueError, "wrong released binary"):
                 gate.produce(args, self.snapshot, self.expected())
             self.assertFalse(args.sandbox.exists())
             self.assertFalse(args.output.exists())
+
+
+class PairedCatalogTests(unittest.TestCase):
+    def setUp(self):
+        for manager in (patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}),
+                        patch.object(gate, "datetime", ProofTime),
+                        patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE)):
+            manager.start()
+            self.addCleanup(manager.stop)
+
+    def test_authentic_signed_pair_binds_distinct_contexts_and_same_four_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = paired_arguments(Path(temporary))
+            snapshot, artifact = gate.canonical_inputs(args)
+            negative = artifact["vscode_user_refusal"]
+            self.assertEqual(artifact["context"]["sequence"], 46)
+            self.assertEqual(negative["context"]["sequence"], 45)
+            self.assertEqual(negative["context"]["signed_ledger_sha"], "3f9c30e8b76a51ae3a83f3232cbbb0129fecd468")
+            self.assertNotEqual(negative["context"]["signed_ledger_sha"], negative["context"]["materialized_ledger_sha"])
+            self.assertNotIn("source_closure", negative)
+            for key in ("repository", "workflow_sha", "run_id", "run_attempt"):
+                self.assertEqual(artifact["context"][key], negative["context"][key])
+            source = gate.load_refusal_source(args, artifact["context"])
+            prior = gate.project.expected(source[0], gate.selected)
+            for key in ("project_dependencies", "release_user_dependencies"):
+                self.assertEqual(artifact[key]["cli"], negative["cli"])
+                self.assertEqual(gate.managed.immutable_closure(artifact[key]), gate.managed.immutable_closure(prior))
+                self.assertEqual(artifact[key]["targets"], list(gate.managed.CLIENTS))
+            self.assertEqual(artifact["release_user_dependencies"]["proof"]["vscode_qualification"], "source_grant_prepared_only")
+            provenance = json.loads((SIGNED46_FEED / "provenance.json").read_text())
+            self.assertEqual(snapshot["source_commit"], provenance["source_commit"])
+            self.assertEqual(args.snapshot_digest, provenance["snapshot_digest"])
+            self.assertEqual(args.signed_ledger_sha, provenance["signed_ledger_commit"])
+            self.assertEqual(provenance["materialized_ledger_commit"], "a4b3ed68c987543e310aead3ebb330672acf7d67")
+            self.assertEqual(provenance["remote_persistence"], "observed protected materialization; not production promotion")
+            self.assertNotEqual(args.materialized_ledger_sha, provenance["materialized_ledger_commit"])
+
+    def test_paired_inputs_require_fixed_unexpired_authenticated_refusal_and_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = paired_arguments(root)
+            for feed in (None, SIGNED46_FEED):
+                args.refusal_feed = feed
+                with self.subTest(feed=feed), self.assertRaises(ValueError):
+                    gate.canonical_inputs(args)
+            args.refusal_feed = SIGNED45_FEED
+            with patch.object(gate.project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
+                gate.canonical_inputs(args)
+            # Expiry remains the ordinary candidate check, even for fixed45.
+            late = datetime(2026, 12, 12, tzinfo=timezone.utc)
+            with patch.object(gate, "datetime") as clock, self.assertRaisesRegex(ValueError, "expired candidate"):
+                clock.now.return_value = late
+                gate.load_refusal_source(args, {key: getattr(args, key) for key in gate.CONTEXT_FIELDS})
+            damaged = root / "damaged"
+            shutil.copytree(SIGNED45_FEED, damaged)
+            path = damaged / "snapshots/00000000000000000045.json"
+            path.write_bytes(path.read_bytes().replace(b'"sequence":45', b'"sequence":44', 1))
+            args.refusal_feed = damaged
+            with self.assertRaises((ValueError, publication.PublicationError)):
+                gate.canonical_inputs(args)
+
+    def test_direct_producer_reauthenticates_entire_supplied_contract_before_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = paired_arguments(Path(temporary))
+            snapshot, expected = gate.canonical_inputs(args)
+            # No binary exists: failure must precede even release-byte loading.
+            mutations = []
+            for field, value in (("run_id", "456"), ("run_attempt", 2), ("workflow_sha", "9" * 40),
+                                 ("source_sha", "8" * 40), ("signed_ledger_sha", "7" * 40)):
+                mutations.append(lambda item, field=field, value=value: item["context"].update({field: value}))
+                mutations.append(lambda item, field=field, value=value: item["vscode_user_refusal"]["context"].update({field: value}))
+            for block in ("managed_dependencies", "release_user_dependencies", "project_dependencies", "vscode_user_refusal"):
+                mutations.append(lambda item, block=block: item.pop(block))
+            mutations.extend((
+                lambda item: item["release_user_dependencies"]["closure"][0]["package_source"].update(revision="6" * 40),
+                lambda item: item["project_dependencies"]["closure"].pop(),
+                lambda item: item["vscode_user_refusal"].update(cli={**item["cli"]}),
+                lambda item: item["vscode_user_refusal"].update(context=copy.deepcopy(item["context"])),
+                lambda item: item["rows"].pop(),
+            ))
+            with patch.object(gate, "child") as child, patch.object(gate.managed, "run") as managed_run, \
+                    patch.object(gate.project, "run_user_refusal") as refusal, patch.object(gate, "run_lifecycle") as lifecycle:
+                for mutate in mutations:
+                    value = copy.deepcopy(expected)
+                    mutate(value)
+                    with self.subTest(mutation=mutate), self.assertRaises(ValueError):
+                        gate.produce(args, snapshot, value)
+                    self.assertFalse(args.sandbox.exists())
+                    self.assertFalse(args.output.exists())
+                changed = copy.deepcopy(snapshot)
+                changed["publication_id"] = "foreign-publication"
+                with self.assertRaisesRegex(ValueError, "snapshot differs"):
+                    gate.produce(args, changed, expected)
+                # Arguments also have to agree with the authentic source.
+                args.source_sha = "f" * 40
+                with self.assertRaisesRegex(ValueError, "source commit mismatch"):
+                    gate.produce(args, snapshot, expected)
+                for function in (child, managed_run, refusal, lifecycle):
+                    function.assert_not_called()
+
+    def test_producer_dispatches_refusal_in_its_own_context_and_verify_reconstructs_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = paired_arguments(root)
+            args.binary.write_bytes(b"offline orchestration binary")
+            with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}):
+                snapshot, expected = gate.canonical_inputs(args)
+                with patch.object(gate.managed, "run") as managed_run, \
+                        patch.object(gate.project, "run_user_refusal") as refusal, \
+                        patch.object(gate, "run_lifecycle"), patch.object(gate, "acquired_package", return_value=root), \
+                        patch.object(gate, "check_static_package"), patch.object(gate, "inspector_check", return_value={"status": "passed"}):
+                    gate.produce(args, snapshot, expected)
+                    self.assertEqual(managed_run.call_count, 3)
+                    self.assertTrue(all(call.args[3] == expected["context"] for call in managed_run.call_args_list))
+                    refusal.assert_called_once()
+                    self.assertEqual(refusal.call_args.args[3], expected["vscode_user_refusal"]["context"])
+                    self.assertNotEqual(refusal.call_args.args[3], expected["context"])
+                    self.assertFalse(args.sandbox.exists())
+                argv = ["verify", "--artifact", str(args.output)]
+                for field in (*gate.CONTEXT_FIELDS, "feed", "baseline_feed", "refusal_feed", "trusted_keys"):
+                    argv += ["--" + field.replace("_", "-"), str(getattr(args, field))]
+                self.assertEqual(gate.main(argv), 0)
+                tampered = copy.deepcopy(expected)
+                tampered["vscode_user_refusal"]["context"]["snapshot_digest"] = expected["context"]["snapshot_digest"]
+                args.output.write_bytes(publication.canonical_json(tampered))
+                self.assertEqual(gate.main(argv), 1)
 
 
 if __name__ == "__main__":
