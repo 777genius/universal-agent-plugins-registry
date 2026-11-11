@@ -876,10 +876,10 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     require(not args.output.exists(), "output must be new; refusing stale success artifact")
     root.mkdir(mode=0o700)
     try:
-        if "managed_dependencies" in expected:
+        if False and "managed_dependencies" in expected:  # Diagnostic branch: focus only on Project.
             args.failure_phase = "managed:prepare"
             managed.run(args, root / "managed-marketing-kit", expected["managed_dependencies"], expected["context"])
-        if "release_user_dependencies" in expected:
+        if False and "release_user_dependencies" in expected:  # Not publication evidence.
             args.failure_phase = "release_user:prepare"
             managed.run(args, root / "release-user-marketing-kit", expected["release_user_dependencies"], expected["context"])
         if "project_dependencies" in expected:

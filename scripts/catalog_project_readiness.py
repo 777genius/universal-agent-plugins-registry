@@ -451,7 +451,9 @@ def validate_user_isolation(before, roots):
             buckets = {name.split("/", 1)[0] if name.split("/", 1)[0] in prefixes else "other"
                        for name in left.keys() | right.keys() if left.get(name) != right.get(name)}
             changed.extend("home:" + bucket for bucket in sorted(buckets))
-            claude_children = {"plugins", "skills", "settings.json", "debug", "cache", "statsig", "todos", "projects", "telemetry", "history.jsonl"}
+            claude_children = {"plugins", "skills", "settings.json", "debug", "cache", "statsig", "todos", "projects", "telemetry", "history.jsonl",
+                               "session-env", "file-history", "shell-snapshots", "paste-cache", "plans", "tasks", "backups", "ide", "downloads",
+                               ".credentials.json", "stats-cache.json", ".claude.json", ".claude.json.backup", ".claude.json.lock", "state", ".cache"}
             claude_changes = set()
             for name in left.keys() | right.keys():
                 if left.get(name) == right.get(name) or not name.startswith(".claude/"):

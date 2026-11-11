@@ -5,6 +5,7 @@ on:
       - .github/workflows/publication47-diagnostic.yml
       - scripts/catalog_managed_readiness.py
       - scripts/catalog_project_readiness.py
+      - scripts/catalog_publication_readiness.py
 
 permissions:
   contents: read
