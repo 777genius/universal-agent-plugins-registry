@@ -400,7 +400,7 @@ class ManagedReadinessTests(unittest.TestCase):
             cases = [
                 ("isolated_child", ValueError(private), None),
                 ("exit", None, response(code=1)),
-                ("decode", None, response(payload={"command": "add", "result": "success", "data": []})),
+                ("decode", None, response(payload=["not-a-dict"])),
                 ("user_isolation", None, response(payload={"command": "add", "result": "success", "data": {}})),
             ]
             with patch.object(gate.project, "RELEASE", release):
