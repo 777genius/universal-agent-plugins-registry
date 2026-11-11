@@ -119,7 +119,11 @@ def require_complete_source_eligibility(counts: dict[str, tuple[int, int]]) -> N
 
 
 def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
-    """Add reviewed Pi targets only to active policies in an in-memory copy."""
+    """Add reviewed Pi targets to a separate, unsigned modern-feed proposal.
+
+    Keep the legacy v1 publisher scope validator strict. Modern-only project
+    grants need a separately routed validator before any protected signing.
+    """
     require(isinstance(reviews, dict) and set(reviews) == {"schema_version", "source_commit", "reviews"}
             and reviews["schema_version"] == 1 and isinstance(reviews["reviews"], list),
             "review document contract is invalid")
@@ -156,7 +160,7 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
             require(key in review_map and not any(t["client"] == "pi" for t in policy["targets"]),
                     "modern candidate overlaps a legacy Pi policy")
             policy["targets"].append({
-                "client": "pi", "scopes": ["user"], "delivery": "managed",
+                "client": "pi", "scopes": ["user", "project"], "delivery": "managed",
                 "authentication": review_map[key]["authentication"],
             })
             version = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
