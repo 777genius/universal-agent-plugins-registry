@@ -211,33 +211,69 @@ def validate_state(state, case, ctx, root, aliases, *, clients=None):
 
 
 def snapshot_paths(paths):
-    """Snapshot owned files/directories without following symlink objects."""
-    result = {}
-    for name, root in sorted(paths.items()):
-        members = [root]
-        if root.is_dir() and not root.is_symlink():
-            members.extend(sorted(root.rglob("*")))
-        entries = []
-        for path in members:
-            relative = "." if path == root else path.relative_to(root).as_posix()
+    """Snapshot owned state without following symlink ancestors during reads."""
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+    def collect(parent_fd, name, relative, entries):
+        try:
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            entries.append((relative, "absent"))
+            return
+        mode = stat.S_IMODE(info.st_mode)
+        if stat.S_ISLNK(info.st_mode):
+            target = os.readlink(name, dir_fd=parent_fd)
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            require((current.st_dev, current.st_ino) == (info.st_dev, info.st_ino),
+                    "managed snapshot symlink changed during read")
+            entries.append((relative, mode, "symlink", target))
+        elif stat.S_ISREG(info.st_mode):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                         | getattr(os, "O_CLOEXEC", 0), dir_fd=parent_fd)
             try:
-                info = path.lstat()
-            except FileNotFoundError:
-                entries.append((relative, "absent"))
-                continue
-            mode = stat.S_IMODE(info.st_mode)
-            if stat.S_ISLNK(info.st_mode):
-                entries.append((relative, mode, "symlink", os.readlink(path)))
-            elif stat.S_ISREG(info.st_mode):
+                opened = os.fstat(fd)
+                require(stat.S_ISREG(opened.st_mode)
+                        and (opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                        "managed snapshot file changed during read")
                 digest = hashlib.sha256()
-                with path.open("rb") as source:
-                    while chunk := source.read(1024 * 1024):
-                        digest.update(chunk)
-                entries.append((relative, mode, "file", digest.hexdigest()))
-            else:
-                require(stat.S_ISDIR(info.st_mode), "unsupported managed snapshot object")
+                while chunk := os.read(fd, 1024 * 1024):
+                    digest.update(chunk)
+            finally:
+                os.close(fd)
+            entries.append((relative, mode, "file", digest.hexdigest()))
+        else:
+            require(stat.S_ISDIR(info.st_mode), "unsupported managed snapshot object")
+            fd = os.open(name, dir_flags, dir_fd=parent_fd)
+            try:
+                opened = os.fstat(fd)
+                require((opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                        "managed snapshot directory changed during read")
                 entries.append((relative, mode, "directory"))
-        result[name] = entries
+                for child in sorted(os.listdir(fd)):
+                    collect(fd, child, child if relative == "." else relative + "/" + child, entries)
+            finally:
+                os.close(fd)
+
+    result = {}
+    for key, root in sorted(paths.items()):
+        require(root.is_absolute() and root.name not in ("", ".", ".."),
+                "managed snapshot requires an absolute named path")
+        entries = []
+        fd = os.open(root.anchor, dir_flags)
+        try:
+            try:
+                for part in root.parts[1:-1]:
+                    next_fd = os.open(part, dir_flags, dir_fd=fd)
+                    os.close(fd)
+                    fd = next_fd
+                collect(fd, root.name, ".", entries)
+            except FileNotFoundError:
+                entries = [(".", "absent")]
+            except OSError as error:
+                raise ValueError("managed snapshot path is not an ordinary directory") from error
+        finally:
+            os.close(fd)
+        result[key] = sorted(entries, key=lambda entry: entry[0])
     return result
 
 

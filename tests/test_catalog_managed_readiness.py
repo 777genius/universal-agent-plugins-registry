@@ -380,24 +380,33 @@ class ManagedReadinessTests(unittest.TestCase):
             body = b"snapshot-byte-identity\n" * 100000
             path.write_bytes(body)
             sizes = []
-            class Reader:
-                def __init__(self, source):
-                    self.source = source
-                def __enter__(self):
-                    return self
-                def __exit__(self, *_args):
-                    return False
-                def read(self, size=-1):
-                    if not 0 < size <= 1024 * 1024:
-                        raise AssertionError("snapshot read must have a fixed memory bound")
-                    sizes.append(size)
-                    return self.source.read(size)
-            with path.open("rb") as source, patch.object(Path, "open", return_value=Reader(source)), \
+            original_read = os.read
+            def bounded_read(fd, size):
+                if not 0 < size <= 1024 * 1024:
+                    raise AssertionError("snapshot read must have a fixed memory bound")
+                sizes.append(size)
+                return original_read(fd, size)
+            with patch.object(managed.os, "read", side_effect=bounded_read), \
                     patch.object(Path, "read_bytes", side_effect=AssertionError("unbounded snapshot read")):
                 actual = managed.snapshot_paths({"file": path})
             self.assertGreater(len(sizes), 1)
             self.assertEqual(actual, {"file": [(".", path.stat().st_mode & 0o7777,
                                                 "file", hashlib.sha256(body).hexdigest())]})
+
+    def test_snapshot_rejects_symlinked_state_ancestor_before_reading_foreign_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "state-v2.json").write_text("foreign protected bytes")
+            home = root / "home"
+            home.mkdir()
+            alias = home / "state"
+            alias.symlink_to(outside, target_is_directory=True)
+            self.assertEqual(managed.snapshot_paths({"alias": alias})["alias"][0][2], "symlink")
+            with patch.object(managed.os, "read", side_effect=AssertionError("foreign read")):
+                with self.assertRaises(ValueError):
+                    managed.snapshot_paths({"protected": alias / "state-v2.json"})
 
     def test_project_add_reports_fixed_failure_checkpoints_without_child_data(self):
         # Only a fixed phase and exception class may reach the persisted

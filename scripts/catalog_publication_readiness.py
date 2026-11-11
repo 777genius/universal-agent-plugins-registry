@@ -870,9 +870,11 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     validate_artifact(expected, canonical_expected)
     snapshot, expected = canonical_snapshot, canonical_expected
     require(digest(args.binary.read_bytes()) == CLI["binary_digest"], "wrong released binary")
-    root = args.sandbox.absolute()
+    # Canonicalize the existing parent; reject final-component aliases.
+    require(not args.sandbox.is_symlink(), "sandbox must be a new directory")
+    root = args.sandbox.parent.resolve(strict=True) / args.sandbox.name
     require(not root.exists() and not root.is_symlink() and root.parent.exists(), "sandbox must be a new directory")
-    require(not args.output.absolute().is_relative_to(root), "output cannot be inside disposable root")
+    require(not args.output.resolve(strict=False).is_relative_to(root), "output cannot be inside disposable root")
     require(not args.output.exists(), "output must be new; refusing stale success artifact")
     root.mkdir(mode=0o700)
     try:
