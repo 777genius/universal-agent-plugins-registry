@@ -505,14 +505,20 @@ def initialize_user_profile(args, root, roots, env, readonly):
             require(len(files) <= 6, "Claude initialization profile or backup count")
         require(profile in files, "Claude initialization profile missing")
         metadata = {"firstStartTime", "firstStartVersion", "machineID"}
+        migrations = {"opusProMigrationComplete": True, "sonnet1m45MigrationComplete": True,
+                      "hasResetAutoModeOptInForDefaultOffer": True, "seenNotifications": {},
+                      "migrationVersion": 13}
         documents = {}
         for path in files:
             value = gate.read_json(path, limit=65536)
-            require(type(value) is dict and set(value) <= metadata
-                    and all(type(item) is str and 0 < len(item) <= 256 for item in value.values()),
+            require(type(value) is dict and set(value) <= metadata | migrations.keys()
+                    and all(type(value[key]) is str and 0 < len(value[key]) <= 256
+                            for key in metadata & value.keys())
+                    and all(type(value[key]) is type(expected) and value[key] == expected
+                            for key, expected in migrations.items() if key in value),
                     "Claude initialization exceeded first-start metadata")
             if path == profile:
-                require(set(value) == metadata, "Claude first-start metadata is incomplete")
+                require(metadata <= value.keys(), "Claude first-start metadata is incomplete")
             documents[path] = value
         require(all(all(documents[profile].get(key) == value for key, value in document.items())
                     for document in documents.values()), "Claude backup metadata differs from initialized profile")

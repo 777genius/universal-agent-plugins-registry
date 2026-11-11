@@ -65,6 +65,36 @@ class ProjectProfileInitializationTests(unittest.TestCase):
     def native_result(argv, *, stdout="[]\n", returncode=0):
         return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
 
+    def test_native_251_first_start_migrations_are_exact_and_bounded(self):
+        migrations = {"opusProMigrationComplete": True, "sonnet1m45MigrationComplete": True,
+                      "hasResetAutoModeOptInForDefaultOffer": True, "seenNotifications": {},
+                      "migrationVersion": 13}
+        for mutation in (None, "wrong_boolean", "wrong_version", "nonempty_notifications", "unknown"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                args, case, roots, env, readonly = self.fixture(temporary)
+                calls = []
+                def native(argv, **kwargs):
+                    calls.append(argv)
+                    if len(calls) == 1:
+                        profile = self.native_profile(roots["home"])
+                        path = profile / ".claude.json"
+                        value = json.loads(path.read_text())
+                        value.update(migrations)
+                        if mutation == "wrong_boolean": value["opusProMigrationComplete"] = 1
+                        if mutation == "wrong_version": value["migrationVersion"] = 14
+                        if mutation == "nonempty_notifications": value["seenNotifications"] = {"x": True}
+                        if mutation == "unknown": value["oauthAccount"] = {}
+                        path.write_text(json.dumps(value))
+                    return self.native_result(argv)
+                with patch.object(gate, "child", side_effect=native):
+                    if mutation is None:
+                        project.initialize_user_profile(args, case, roots, env, readonly)
+                        self.assertEqual(len(calls), 2)
+                    else:
+                        with self.assertRaises(ValueError):
+                            project.initialize_user_profile(args, case, roots, env, readonly)
+                        self.assertEqual(len(calls), 1)
+
     def test_two_native_controls_use_exact_probe_environment_and_return_first_baseline(self):
         with tempfile.TemporaryDirectory() as temporary:
             args, case, roots, env, readonly = self.fixture(temporary)
