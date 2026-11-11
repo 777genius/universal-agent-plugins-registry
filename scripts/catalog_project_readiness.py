@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import base64
 import re
+import sys
 from pathlib import Path
 import tomllib
 
@@ -434,7 +435,24 @@ def user_paths(roots):
 
 
 def validate_user_isolation(before, roots):
-    require(managed.snapshot_paths(user_paths(roots)) == before, "Project operation changed User native or durable state")
+    after = managed.snapshot_paths(user_paths(roots))
+    if after != before:
+        # Diagnostic-only: emit fixed bucket names, never paths, values or file contents.
+        changed = []
+        for key in sorted(before):
+            if before[key] == after[key]:
+                continue
+            if key != "home":
+                changed.append(key)
+                continue
+            left = {entry[0]: entry[1:] for entry in before[key]}
+            right = {entry[0]: entry[1:] for entry in after[key]}
+            prefixes = {".claude", ".codex", ".copilot", ".cursor", ".local", ".kiro", ".grok", ".kimi-code", ".qoder"}
+            buckets = {name.split("/", 1)[0] if name.split("/", 1)[0] in prefixes else "other"
+                       for name in left.keys() | right.keys() if left.get(name) != right.get(name)}
+            changed.extend("home:" + bucket for bucket in sorted(buckets))
+        print("Project isolation changed buckets: " + ",".join(changed), file=sys.stderr, flush=True)
+    require(after == before, "Project operation changed User native or durable state")
 
 
 def refusal_snapshot(roots):
