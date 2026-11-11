@@ -118,7 +118,7 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_release_user_foreign_skills_project_and_native_members_survive(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             roots = {name: root / name for name in ("home", "config", "workspace")}
             for path in roots.values():
                 path.mkdir()
@@ -376,7 +376,7 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_snapshot_hashes_files_in_bounded_chunks_without_changing_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "large-fixture"
+            path = Path(temporary).resolve() / "large-fixture"
             body = b"snapshot-byte-identity\n" * 100000
             path.write_bytes(body)
             sizes = []
@@ -752,7 +752,7 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_snapshot_tracks_files_modes_symlinks_and_absence(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             file = root / "owned-file"
             file.write_text("initial")
             link = root / "owned-link"
