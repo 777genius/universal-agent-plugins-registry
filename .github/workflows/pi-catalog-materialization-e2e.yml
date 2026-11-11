@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
-          python -m unittest discover -s tests -p test_pi_catalog_materialization.py -v
+          python -m unittest tests.test_pi_catalog_materialization -v
           test "$(npm view universal-agent-plugins@0.1.102 version)" = 0.1.102
           npm install --global universal-agent-plugins@0.1.102
           npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.5.0

@@ -1,0 +1,27 @@
+{
+  "signature": "verified Ed25519 using existing trusted public keys",
+  "canonical_and_semantics": "passed",
+  "sequence": 46,
+  "snapshot_digest": "sha256:454df1b9e0426cd2f2a3944797d9d29c016168e2e43cecd666397a5fdb30014f",
+  "publication_id": "42925395643",
+  "source_commit": "87f61c1b8b9bb8426d4717f384a4fca177975994",
+  "signed_ledger_commit": "a154e1524d41975afb5b02bcac2474a3930f7ebd",
+  "parent": "3509baaac8e4f7ee3d565440f8c0d0bd1f928fba",
+  "generated_at": "2026-11-11T00:43:16Z",
+  "expires_at": "2026-12-11T00:43:16Z",
+  "changed_distributions": [
+    "777genius/marketing-kit"
+  ],
+  "added_root_target": {
+    "authentication": "required",
+    "client": "vscode",
+    "delivery": "prepared",
+    "scopes": [
+      "user"
+    ]
+  },
+  "remote_persistence": "observed protected materialization; not production promotion",
+  "production": "not established by signing artifact",
+  "purpose": "Untouched authenticated signing artifact for offline paired-policy regression only; no release or production qualification.",
+  "materialized_ledger_commit": "a4b3ed68c987543e310aead3ebb330672acf7d67"
+}

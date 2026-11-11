@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from datetime import datetime, timezone
 import sys
 import tempfile
 import unittest
@@ -20,9 +21,52 @@ import catalog_publication_readiness as gate
 import directory_publication as publication
 import run_mcp_e2e as mcp
 
+# Synthetic fixed release authority for offline contract tests only.
+PROJECT_RELEASE_FIXTURE = {"cli": {"version": "0.1.103", "tag": "agentplugins-v0.1.103",
+    "commit": "a" * 40, "binary_digest": "sha256:" + "b" * 64},
+    "checksums_digest": "sha256:" + "c" * 64, "manifest_digest": "sha256:" + "d" * 64}
 
-def catalog():
-    value = json.loads((ROOT / "registry/directory.json").read_text())
+
+SIGNED45_FEED = ROOT / "tests/fixtures/catalog-signed45"
+SIGNED46_FEED = ROOT / "tests/fixtures/catalog-signed46"
+
+
+class ProofTime(datetime):
+    """Fixed offline verification time within both original signed lifetimes."""
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 11, 11, 1, 0, tzinfo=timezone.utc)
+
+
+def paired_arguments(root):
+    snapshot = json.loads((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_text())
+    args = arguments(snapshot)
+    args.repository = "777genius/universal-agent-plugins-registry"
+    args.source_sha = snapshot["source_commit"]
+    args.signed_ledger_sha = "a154e1524d41975afb5b02bcac2474a3930f7ebd"
+    # Synthetic materialization/workflow invocation for offline contract tests.
+    args.sequence = 46
+    args.snapshot_digest = gate.digest((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_bytes())
+    args.directory_origin = f"https://raw.githubusercontent.com/{args.repository}/{args.materialized_ledger_sha}/registry/schemas/1/"
+    args.feed, args.baseline_feed = SIGNED46_FEED, SIGNED45_FEED
+    args.trusted_keys = ROOT / "registry/publication/trusted-keys.json"
+    for field in ("binary", "managed_binary", "project_binary", "sandbox", "output", "claude", "copilot", "codex", "opencode", "npx"):
+        setattr(args, field, root / field)
+    args.inspector = None
+    return args
+
+
+
+def load_historical_source(args, ctx):
+    """Point-in-time audit only; no historical flag on current publisher args."""
+    historical = copy.deepcopy(args)
+    historical.refusal_feed = SIGNED45_FEED
+    return gate.load_refusal_source(historical, ctx)
+
+
+def synthetic_catalog(value):
+    """Copy policy/source facts into synthetic offline unit context only."""
+    value = copy.deepcopy(value)
     for distribution in value["distributions"]:
         for release in distribution["releases"]:
             if release["package_source"]["revision"] is None:
@@ -30,6 +74,15 @@ def catalog():
     value.update(sequence=20, publication_id="test-publication", source_commit="a" * 40,
                  snapshot_schema_version=1, generated_at="2026-08-30T00:00:00Z", expires_at="2099-01-01T00:00:00Z")
     return value
+
+
+def catalog():
+    # Keep final signed45 source authority independent of unsigned future policy.
+    return synthetic_catalog(json.loads((SIGNED45_FEED / "snapshots/00000000000000000045.json").read_text()))
+
+
+def unsigned_source_catalog():
+    return synthetic_catalog(json.loads((ROOT / "registry/directory.json").read_text()))
 
 
 def arguments(snapshot):
@@ -43,6 +96,9 @@ def arguments(snapshot):
 
 class CatalogContractTests(unittest.TestCase):
     def setUp(self):
+        release = patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE)
+        release.start()
+        self.addCleanup(release.stop)
         self.snapshot = catalog()
         self.args = arguments(self.snapshot)
         self.identity = {"sequence": 20, "snapshot_digest": self.args.snapshot_digest}
@@ -53,6 +109,23 @@ class CatalogContractTests(unittest.TestCase):
     def expected(self):
         return gate.expected_artifact(self.snapshot, self.baseline, self.baseline_identity,
                                       gate.context(self.args, self.snapshot, self.identity))
+
+    def test_frozen_signed45_feed_authenticates_untouched_bytes_and_provenance(self):
+        # This loads original signed bytes, not catalog()'s synthetic unit
+        # context. Only historical expiry is relaxed by baseline=True.
+        snapshot, identity = gate.load_feed(SIGNED45_FEED, ROOT / "registry/publication/trusted-keys.json", baseline=True)
+        provenance = json.loads((SIGNED45_FEED / "provenance.json").read_text())
+        self.assertEqual(identity, {"sequence": 45, "snapshot_digest": "sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50"})
+        self.assertEqual(snapshot["publication_id"], provenance["publication_id"])
+        self.assertEqual(snapshot["source_commit"], provenance["source_commit"])
+        self.assertEqual(provenance["publication_id"], "42888897655")
+        self.assertEqual(provenance["source_commit"], "8c032ba2169637c1c42f0b8080da7ba3713a48ac")
+        self.assertEqual(provenance["materialized_ledger_sha"], "3509baaac8e4f7ee3d565440f8c0d0bd1f928fba")
+        self.assertEqual(provenance["snapshot_digest"], identity["snapshot_digest"])
+        root = next(item for item in snapshot["distributions"] if item["id"] == gate.managed.ROOT)
+        clients = tuple(target["client"] for target in root["release_policies"][0]["targets"])
+        self.assertEqual(clients, gate.managed.CLIENTS)
+        self.assertNotIn("vscode", clients)
 
     def test_fixed_matrix_fallback_and_honest_claims(self):
         artifact = self.expected()
@@ -1097,15 +1170,23 @@ class CatalogContractTests(unittest.TestCase):
                                       claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
                                       opencode=Path("opencode"))
             args.binary.write_bytes(b"fixture binary")
-            with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+            with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                    patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                     patch.object(gate.managed, "run") as managed_run, \
+                    patch.object(gate.project, "run_user_refusal") as user_refusal, \
                     patch.object(gate, "run_lifecycle") as lifecycle, \
                     patch.object(gate, "acquired_package", return_value=root) as acquire, \
                     patch.object(gate, "check_static_package") as static, \
                     patch.object(gate, "inspector_check", return_value={"status": "passed"}) as probe:
                 expected = self.expected()
                 gate.produce(args, self.snapshot, expected)
-                managed_run.assert_called_once()
+                self.assertEqual(managed_run.call_count, 3)
+                self.assertEqual(managed_run.call_args_list[0].args[2]["targets"], list(gate.managed.LEGACY_CLIENTS))
+                self.assertEqual(managed_run.call_args_list[1].args[2]["placement_scope"], "user")
+                self.assertEqual(managed_run.call_args_list[1].args[2]["targets"], list(gate.managed.CLIENTS))
+                self.assertEqual(managed_run.call_args_list[2].args[2]["placement_scope"], "project")
+                self.assertEqual(managed_run.call_args_list[1].args[2]["cli"], managed_run.call_args_list[2].args[2]["cli"])
+                user_refusal.assert_called_once()
                 self.assertEqual(lifecycle.call_count, 30)
                 default_call = next(call for call in lifecycle.call_args_list
                                     if call.args[2]["selector"] == "github/github")
@@ -1117,16 +1198,44 @@ class CatalogContractTests(unittest.TestCase):
                 self.assertFalse(args.sandbox.exists())
                 gate.validate_artifact(gate.read_json(args.output, canonical=True), expected)
 
+    def test_direct_producer_rejects_omitted_or_substituted_dependency_blocks_before_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json")
+            args.binary.write_bytes(b"fixture binary")
+            expected = self.expected()
+            mutations = [lambda value, name=name: value.pop(name) for name in
+                         ("project_dependencies", "release_user_dependencies", "vscode_user_refusal")]
+            mutations.extend((
+                lambda value: value["release_user_dependencies"]["proof"].update(locked_restore="not_tested"),
+                lambda value: value["release_user_dependencies"]["cli"].update(binary_digest="sha256:" + "0" * 64),
+                lambda value: value["vscode_user_refusal"].update(target="copilot"),
+            ))
+            with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                    patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                    patch.object(gate.managed, "run") as managed_run, patch.object(gate.project, "run_user_refusal") as refusal:
+                for mutation in mutations:
+                    value = copy.deepcopy(expected)
+                    mutation(value)
+                    with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                        gate.produce(args, self.snapshot, value)
+                    self.assertFalse(args.sandbox.exists())
+                    self.assertFalse(args.output.exists())
+                managed_run.assert_not_called()
+                refusal.assert_not_called()
+
     def test_failed_cli_mcp_static_or_cleanup_never_emits_success(self):
-        for failing in ("managed", "run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
+        for failing in ("managed", "release_user", "project", "project_refusal", "run_lifecycle", "inspector_check", "check_static_package", "cleanup"):
             with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = argparse.Namespace(binary=root / "binary", sandbox=root / "isolated", output=root / "evidence.json",
                                           claude=Path("claude"), copilot=Path("copilot"), npx=Path("npx"), inspector=None,
                                           opencode=Path("opencode"))
                 args.binary.write_bytes(b"fixture binary")
-                with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
+                with patch.object(gate, "canonical_inputs", side_effect=lambda _: (self.snapshot, self.expected())), \
+                    patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), \
                         patch.object(gate.managed, "run") as managed_run, \
+                        patch.object(gate.project, "run_user_refusal") as user_refusal, \
                         patch.object(gate, "run_lifecycle") as lifecycle, \
                         patch.object(gate, "acquired_package", return_value=root), \
                         patch.object(gate, "check_static_package") as static, \
@@ -1137,7 +1246,15 @@ class CatalogContractTests(unittest.TestCase):
                             with self.assertRaises(OSError):
                                 gate.produce(args, self.snapshot, expected)
                     else:
-                        {"managed": managed_run, "run_lifecycle": lifecycle, "inspector_check": probe, "check_static_package": static}[failing].side_effect = ValueError("fixture phase failure")
+                        if failing in ("project", "release_user"):
+                            def fail_project(_args, _root, case, _ctx):
+                                if (failing == "project" and case.get("placement_scope") == "project") or (
+                                        failing == "release_user" and case.get("placement_scope") == "user" and tuple(case["targets"]) == gate.managed.CLIENTS):
+                                    raise ValueError("fixture Project failure")
+                            managed_run.side_effect = fail_project
+                        else:
+                            {"managed": managed_run, "project_refusal": user_refusal, "run_lifecycle": lifecycle,
+                             "inspector_check": probe, "check_static_package": static}[failing].side_effect = ValueError("fixture phase failure")
                         with self.assertRaises(ValueError):
                             gate.produce(args, self.snapshot, expected)
                         self.assertFalse(args.sandbox.exists())
@@ -1149,10 +1266,253 @@ class CatalogContractTests(unittest.TestCase):
             binary = root / "binary"
             binary.write_bytes(b"not the release")
             args = argparse.Namespace(binary=binary, sandbox=root / "isolated", output=root / "evidence.json")
-            with self.assertRaisesRegex(ValueError, "wrong released binary"):
+            with patch.object(gate, "canonical_inputs", return_value=(self.snapshot, self.expected())), \
+                    self.assertRaisesRegex(ValueError, "wrong released binary"):
                 gate.produce(args, self.snapshot, self.expected())
             self.assertFalse(args.sandbox.exists())
             self.assertFalse(args.output.exists())
+
+
+class CurrentPolicyTests(unittest.TestCase):
+    def setUp(self):
+        for manager in (patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}),
+                        patch.object(gate, "datetime", ProofTime),
+                        patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE)):
+            manager.start()
+            self.addCleanup(manager.stop)
+
+    def inputs(self, root, six=False):
+        args = paired_arguments(root)
+        if six:
+            snapshot = json.loads((SIGNED45_FEED / "snapshots/00000000000000000045.json").read_text())
+            pins = gate.project.refusal_source_identity()
+            for key, value in pins.items():
+                setattr(args, key, value)
+            args.feed = SIGNED45_FEED
+            args.source_sha, args.publication_id = snapshot["source_commit"], snapshot["publication_id"]
+            args.directory_origin = f"https://raw.githubusercontent.com/{args.repository}/{args.materialized_ledger_sha}/registry/schemas/1/"
+        return args
+
+    def baseline_loader(self, args):
+        original = gate.load_feed
+        def load(root, keys, *, baseline=False):
+            snapshot, identity = original(root, keys, baseline=baseline)
+            if baseline and args.feed == SIGNED45_FEED:
+                # Offline baseline policy facts only. Candidate45 itself is
+                # still authenticated through the ordinary unmodified loader.
+                return {**snapshot, "sequence": 44}, {"sequence": 44, "snapshot_digest": "sha256:" + "f" * 64}
+            return snapshot, identity
+        return patch.object(gate, "load_feed", side_effect=load)
+
+    def test_authentic_current_policies_select_exactly_one_truthful_boundary(self):
+        for six in (False, True):
+            with self.subTest(six=six), tempfile.TemporaryDirectory() as temporary:
+                args = self.inputs(Path(temporary), six)
+                with self.baseline_loader(args):
+                    snapshot, artifact = gate.canonical_inputs(args)
+                boundary = artifact["vscode_user_policy_boundary"]
+                self.assertEqual(boundary["source"], "current_authenticated_feed")
+                self.assertEqual(boundary["kind"], "missing_signed_target" if six else "prepared_target_saved_management")
+                self.assertEqual("vscode_user_refusal" in artifact, six)
+                self.assertEqual("vscode_user_saved_management" in artifact, not six)
+                for key in ("project_dependencies", "release_user_dependencies"):
+                    self.assertEqual(artifact[key]["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+                    self.assertEqual(artifact[key]["targets"], list(gate.managed.CLIENTS))
+                    self.assertEqual(gate.managed.immutable_closure(artifact[key]), gate.project.REVIEWED_SOURCE_CLOSURE)
+                if not six:
+                    saved = artifact["vscode_user_saved_management"]
+                    self.assertEqual(saved["context"], artifact["context"])
+                    self.assertFalse(saved["signed_target_refusal"])
+                    self.assertEqual(saved["prepared_native_absence"], "not_claimed")
+                    self.assertEqual(saved["standalone_editor_lifecycle"], "not_tested")
+                    prior, prior_ctx = load_historical_source(args, artifact["context"])
+                    gate.project.validate_refusal_pair(artifact["project_dependencies"], (prior, prior_ctx), gate.selected)
+                    self.assertNotEqual(prior_ctx["sequence"], artifact["context"]["sequence"])
+                else:
+                    self.assertNotIn("context", artifact["vscode_user_refusal"])
+
+    def test_unknown_current_policy_shape_never_selects_an_oracle(self):
+        snapshot = json.loads((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_text())
+        for change in ("extra_target", "missing_copilot", "managed_vscode", "project_scope", "weaker_authentication"):
+            value = copy.deepcopy(snapshot)
+            targets = next(item for item in value["distributions"] if item["id"] == gate.managed.ROOT)["release_policies"][0]["targets"]
+            if change == "extra_target":
+                targets.append({"client": "kiro", "scopes": ["user"], "delivery": "managed", "authentication": "required"})
+            elif change == "missing_copilot":
+                targets[:] = [item for item in targets if item["client"] != "copilot"]
+            elif change == "managed_vscode":
+                next(item for item in targets if item["client"] == "vscode")["delivery"] = "managed"
+            elif change == "project_scope":
+                targets[0]["scopes"] = ["project"]
+            else:
+                targets[0]["authentication"] = "not_required"
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                gate.dependency_cases(value, {})
+
+    def test_source_anchor_equals_authentic_historical_facts_and_rejects_every_tuple_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.inputs(Path(temporary))
+            _, artifact = gate.canonical_inputs(args)
+            prior, _ = load_historical_source(args, artifact["context"])
+            historical = gate.project.expected(prior, gate.selected)
+            self.assertEqual(gate.project.REVIEWED_SOURCE_CLOSURE, gate.managed.immutable_closure(historical))
+            for index in range(4):
+                for key in ("product_id", "distribution_id", "release_sequence", "package_version", "tree_digest", "manifest_digest"):
+                    changed = copy.deepcopy(artifact["project_dependencies"])
+                    changed["closure"][index][key] = 99 if key == "release_sequence" else "changed"
+                    with self.subTest(index=index, key=key), self.assertRaises(ValueError):
+                        gate.project.validate_source_anchor(changed)
+                for key in ("repository", "path", "revision"):
+                    changed = copy.deepcopy(artifact["project_dependencies"])
+                    changed["closure"][index]["package_source"][key] = "changed"
+                    with self.subTest(index=index, source=key), self.assertRaisesRegex(ValueError, "source anchor"):
+                        gate.project.validate_source_anchor(changed)
+            original = gate.selected
+            def substituted(snapshot, alias, clients, **kwargs):
+                value = original(snapshot, alias, clients, **kwargs)
+                if alias == gate.managed.ROOT:
+                    value["package_source"] = {**value["package_source"], "revision": "f" * 40}
+                return value
+            with patch.object(gate, "selected", side_effect=substituted), self.assertRaisesRegex(ValueError, "source anchor"):
+                gate.canonical_inputs(args)
+
+    def test_current46_remains_valid_after_historical45_expiry_without_runtime_history(self):
+        class AfterHistoricalExpiry(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 12, 10, 20, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temporary, patch.object(gate, "datetime", AfterHistoricalExpiry):
+            args = self.inputs(Path(temporary))
+            with patch.object(gate, "load_refusal_source", side_effect=AssertionError("historical runtime dependency")), \
+                    patch.object(gate.project, "validate_refusal_pair", side_effect=AssertionError("historical authorization dependency")):
+                _, artifact = gate.canonical_inputs(args)
+            self.assertEqual(artifact["context"]["sequence"], 46)
+            self.assertNotIn("vscode_user_refusal", artifact)
+            with self.assertRaisesRegex(ValueError, "expired candidate"):
+                gate.load_feed(SIGNED45_FEED, args.trusted_keys)
+
+    def test_current_expiry_and_historical_expiry_both_still_fail_normally(self):
+        class AfterCurrentExpiry(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 12, 12, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.inputs(Path(temporary))
+            _, artifact = gate.canonical_inputs(args)
+            with patch.object(gate.project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
+                gate.canonical_inputs(args)
+            with patch.object(gate, "datetime", AfterCurrentExpiry):
+                with self.assertRaisesRegex(ValueError, "expired candidate"):
+                    gate.canonical_inputs(args)
+                with self.assertRaisesRegex(ValueError, "expired candidate"):
+                    load_historical_source(args, artifact["context"])
+                historical_args = copy.deepcopy(args)
+                historical_args.refusal_feed = SIGNED45_FEED
+                # No binary exists. Even an explicit historical helper call
+                # must reject expiry before mkdir/child, not trust its context.
+                prior = json.loads((SIGNED45_FEED / "snapshots/00000000000000000045.json").read_text())
+                prior_case = gate.project.expected(prior, gate.selected)
+                pins = gate.project.refusal_source_identity()
+                historical_ctx = {**artifact["context"], **pins, "source_sha": prior["source_commit"],
+                                  "publication_id": prior["publication_id"],
+                                  "directory_origin": f"https://raw.githubusercontent.com/{args.repository}/{pins['materialized_ledger_sha']}/registry/schemas/1/"}
+                refusal = gate.project.expected_user_refusal(prior_case, context=historical_ctx)
+                with patch.object(gate, "child") as child, self.assertRaisesRegex(ValueError, "expired candidate"):
+                    gate.project.run_user_refusal(historical_args, Path(temporary) / "not-created", refusal, historical_ctx)
+                child.assert_not_called()
+                self.assertFalse((Path(temporary) / "not-created").exists())
+            args.refusal_feed = SIGNED45_FEED
+            with self.assertRaisesRegex(ValueError, "not a recurring publication input"):
+                gate.canonical_inputs(args)
+
+    def test_direct_producer_rejects_missing_mixed_wrong_oracle_context_and_source_before_execution(self):
+        for six in (False, True):
+            with self.subTest(six=six), tempfile.TemporaryDirectory() as temporary:
+                args = self.inputs(Path(temporary), six)
+                with self.baseline_loader(args):
+                    snapshot, expected = gate.canonical_inputs(args)
+                    selected = "vscode_user_refusal" if six else "vscode_user_saved_management"
+                    wrong = "vscode_user_saved_management" if six else "vscode_user_refusal"
+                    mutations = [lambda value, name=name: value.pop(name) for name in
+                                 ("managed_dependencies", "release_user_dependencies", "project_dependencies", "vscode_user_policy_boundary", selected)]
+                    for field, value in (("run_id", "456"), ("run_attempt", 2), ("workflow_sha", "9" * 40), ("source_sha", "8" * 40)):
+                        mutations.append(lambda item, field=field, value=value: item["context"].update({field: value}))
+                    mutations.extend((
+                        lambda item: item.update({wrong: copy.deepcopy(item[selected])}),
+                        lambda item: item["vscode_user_policy_boundary"].update(kind="unknown"),
+                        lambda item: item["vscode_user_policy_boundary"].update(kind="prepared_target_saved_management" if six else "missing_signed_target"),
+                        lambda item: item[selected].update(cli=copy.deepcopy(gate.managed.CLI)),
+                        lambda item: item["project_dependencies"]["closure"][0]["package_source"].update(revision="6" * 40),
+                        lambda item: item["rows"].pop(),
+                    ))
+                    if not six:
+                        historical_ctx = load_historical_source(args, expected["context"])[1]
+                        mutations.append(lambda item: item[selected].update(context=historical_ctx))
+                    with patch.object(gate, "child") as child, patch.object(gate.managed, "run") as managed_run, \
+                            patch.object(gate.project, "run_user_refusal") as refusal, \
+                            patch.object(gate.project, "run_user_saved_management") as saved, patch.object(gate, "run_lifecycle") as lifecycle:
+                        for mutate in mutations:
+                            value = copy.deepcopy(expected)
+                            mutate(value)
+                            with self.subTest(mutation=mutate), self.assertRaises(ValueError):
+                                gate.produce(args, snapshot, value)
+                            self.assertFalse(args.sandbox.exists())
+                            self.assertFalse(args.output.exists())
+                        changed = copy.deepcopy(snapshot)
+                        changed["publication_id"] = "foreign-publication"
+                        with self.assertRaisesRegex(ValueError, "snapshot differs"):
+                            gate.produce(args, changed, expected)
+                        for function in (child, managed_run, refusal, saved, lifecycle):
+                            function.assert_not_called()
+
+    def test_producer_dispatches_only_current_oracle_and_verifier_reconstructs_both_branches(self):
+        for six in (False, True):
+            with self.subTest(six=six), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = self.inputs(root, six)
+                args.binary.write_bytes(b"offline orchestration binary")
+                with self.baseline_loader(args), patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}):
+                    snapshot, expected = gate.canonical_inputs(args)
+                    with patch.object(gate.managed, "run") as managed_run, \
+                            patch.object(gate.project, "run_user_refusal") as refusal, \
+                            patch.object(gate.project, "run_user_saved_management") as saved, \
+                            patch.object(gate, "run_lifecycle"), patch.object(gate, "acquired_package", return_value=root), \
+                            patch.object(gate, "check_static_package"), patch.object(gate, "inspector_check", return_value={"status": "passed"}):
+                        gate.produce(args, snapshot, expected)
+                        self.assertEqual(managed_run.call_count, 3)
+                        if six:
+                            refusal.assert_called_once()
+                            saved.assert_not_called()
+                            self.assertEqual(refusal.call_args.args[3], expected["context"])
+                        else:
+                            saved.assert_called_once()
+                            refusal.assert_not_called()
+                            self.assertEqual(saved.call_args.args[3], expected["context"])
+                            self.assertEqual(saved.call_args.args[4], expected["project_dependencies"])
+                        self.assertFalse(args.sandbox.exists())
+                    argv = ["verify", "--artifact", str(args.output)]
+                    for field in (*gate.CONTEXT_FIELDS, "feed", "baseline_feed", "trusted_keys"):
+                        argv += ["--" + field.replace("_", "-"), str(getattr(args, field))]
+                    self.assertEqual(gate.main(argv), 0)
+                    tampered = copy.deepcopy(expected)
+                    tampered["vscode_user_policy_boundary"]["kind"] = "unknown"
+                    args.output.write_bytes(publication.canonical_json(tampered))
+                    self.assertEqual(gate.main(argv), 1)
+
+    def test_failed_mandatory_boundary_never_emits_success(self):
+        for six in (False, True):
+            with self.subTest(six=six), tempfile.TemporaryDirectory() as temporary:
+                args = self.inputs(Path(temporary), six)
+                args.binary.write_bytes(b"offline orchestration binary")
+                with self.baseline_loader(args), patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}):
+                    snapshot, expected = gate.canonical_inputs(args)
+                    selected = "run_user_refusal" if six else "run_user_saved_management"
+                    with patch.object(gate.managed, "run"), patch.object(gate.project, selected, side_effect=ValueError("boundary failure")) as boundary, \
+                            self.assertRaisesRegex(ValueError, "boundary failure"):
+                        gate.produce(args, snapshot, expected)
+                    boundary.assert_called_once()
+                    self.assertFalse(args.sandbox.exists())
+                    self.assertFalse(args.output.exists())
 
 
 if __name__ == "__main__":
