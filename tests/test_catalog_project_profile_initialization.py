@@ -100,6 +100,38 @@ class ProjectProfileInitializationTests(unittest.TestCase):
             self.assertEqual(baseline, first_baseline[0])
             project.validate_user_isolation(baseline, roots)
 
+    def test_home_substitution_is_rejected_before_reading_profile_at_either_control(self):
+        for replace_on in (1, 2):
+            with self.subTest(control=replace_on), tempfile.TemporaryDirectory() as temporary:
+                args, case, roots, env, readonly = self.fixture(temporary)
+                outside_home = Path(temporary).resolve() / "outside-home"
+                outside_home.mkdir()
+                self.native_profile(outside_home)
+                calls, forbidden_reads = [], []
+                ordinary_open = Path.open
+
+                def guarded_open(path, *positional, **keywords):
+                    if path.resolve().is_relative_to(outside_home):
+                        forbidden_reads.append("outside-profile")
+                        raise AssertionError("outside profile bytes were accessed before refusal")
+                    return ordinary_open(path, *positional, **keywords)
+
+                def native(argv, **kwargs):
+                    calls.append(tuple(argv))
+                    self.assertLessEqual(len(calls), replace_on)
+                    if len(calls) == replace_on:
+                        roots["home"].rename(case / "original-home")
+                        roots["home"].symlink_to(outside_home, target_is_directory=True)
+                    elif len(calls) == 1:
+                        self.native_profile(roots["home"])
+                    return self.native_result(argv)
+
+                with patch.object(gate, "child", side_effect=native), \
+                        patch.object(Path, "open", guarded_open), self.assertRaises(ValueError):
+                    project.initialize_user_profile(args, case, roots, env, readonly)
+                self.assertEqual(len(calls), replace_on)
+                self.assertEqual(forbidden_reads, [])
+
     def test_second_control_rejects_profile_changes_without_retry_or_rebaseline(self):
         for mutation in ("profile_bytes", "profile_mode", "new_backup", "new_subdirectory"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
@@ -303,6 +335,34 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                         self.assertEqual(len(calls), 2)
                     else:
                         with self.assertRaises(ValueError):
+                            project.initialize_user_profile(args, case, roots, env, readonly)
+                        self.assertEqual(len(calls), 1)
+
+    def test_backup_metadata_must_match_the_final_profile_when_present(self):
+        for conflicting_key in (None, "firstStartTime", "firstStartVersion", "machineID"):
+            with self.subTest(conflicting_key=conflicting_key), tempfile.TemporaryDirectory() as temporary:
+                args, case, roots, env, readonly = self.fixture(temporary)
+                calls = []
+
+                def native(argv, **kwargs):
+                    calls.append(tuple(argv))
+                    if len(calls) == 1:
+                        profile = self.native_profile(roots["home"])
+                        final = json.loads((profile / ".claude.json").read_text())
+                        previous = {key: final[key] for key in ("firstStartTime", "firstStartVersion")}
+                        if conflicting_key is not None:
+                            previous[conflicting_key] = "different-native-initialization-value"
+                        (profile / "backups/.claude.json.backup.1").write_text(
+                            json.dumps(previous) + "\n", encoding="utf-8")
+                    return self.native_result(argv)
+
+                with patch.object(gate, "child", side_effect=native):
+                    if conflicting_key is None:
+                        baseline = project.initialize_user_profile(args, case, roots, env, readonly)
+                        project.validate_user_isolation(baseline, roots)
+                        self.assertEqual(len(calls), 2)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "backup metadata differs"):
                             project.initialize_user_profile(args, case, roots, env, readonly)
                         self.assertEqual(len(calls), 1)
 

@@ -449,6 +449,12 @@ def initialize_user_profile(args, root, roots, env, readonly):
     profile_root = roots["home"] / ".claude"
     profile = profile_root / ".claude.json"
     backups = profile_root / "backups"
+    def require_profile_anchor():
+        require(not root.is_symlink() and root.is_dir() and root.resolve() == root
+                and roots["home"] == root / "home" and not roots["home"].is_symlink()
+                and roots["home"].is_dir() and roots["home"].resolve() == roots["home"],
+                "Claude initialization substituted the case or HOME anchor")
+    require_profile_anchor()
     require(not profile.exists() and not profile.is_symlink()
             and not backups.exists() and not backups.is_symlink(),
             "Claude profile initialization requires a fresh disposable profile")
@@ -478,6 +484,7 @@ def initialize_user_profile(args, root, roots, env, readonly):
 
     def admitted_profile():
         # Check new native objects before the whole-tree hash reads their bytes.
+        require_profile_anchor()
         require(profile_root.is_dir() and not profile_root.is_symlink(), "Claude profile root substituted")
         files, seen = [], 0
         limit = sum(name == ".claude" or name.startswith(".claude/") for name in old_home) + 11

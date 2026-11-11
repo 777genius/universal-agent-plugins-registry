@@ -44,7 +44,7 @@ Static embedded-source inspection identifies first-start time/version and genera
 
 The fixed preparation protocol is:
 
-1. Preserve every existing User object, the whole Project workspace, shared state/store/cache and other client config. Use the exact bounded native environment and original selected Claude profile.
+1. Preserve every existing User object, the whole Project workspace, shared state/store/cache and other client config. Use the exact bounded native environment and original selected Claude profile. Before every profile read, require ordinary canonical case/HOME anchors; a substituted HOME symlink must fail before any outside file can be opened.
 2. Run one genuine `plugin list --json` through the unchanged process-confinement boundary. Require exact successful exit, no stderr and a unique whole empty JSON array. Admit only new ordinary profile metadata and at most five timestamped backup JSON files; each is bounded before hashing/reading, contains only the three first-start fields, and backup values agree with the resulting profile. No auth, trust, settings, plugin or skill entries may appear.
 3. Capture the complete User baseline once. Run one fixed second empty-list control and require the entire initialized profile and all protected state to remain byte/type/mode exact. Any instability fails; there is no retry loop.
 4. Return that same baseline to the existing managed Project runner. Every subsequent public UAP operation retains the original whole-User guard without exclusions or restamping.
