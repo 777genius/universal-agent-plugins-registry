@@ -964,11 +964,23 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:
         # Never persist raw command responses, paths, credentials or native logs.
         if args.mode == "produce" and args.output is not None:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            (args.output.parent / "catalog-readiness-failure.json").write_bytes(publication.canonical_json({
-                "kind": "catalog-readiness-failure-v1", "outcome": "failed",
-                "phase": args.failure_phase, "error_class": type(error).__name__,
-            }))
+            # Input validation can fail before produce canonicalizes the output.
+            # Never create the rejected case just to report its own refusal.
+            try:
+                if args.output.name not in ("", ".", ".."):
+                    failure_parent = args.output.parent.resolve(strict=False)
+                    if args.sandbox is None or not failure_parent.is_relative_to(args.sandbox.resolve(strict=False)):
+                        failure_path = failure_parent / "catalog-readiness-failure.json"
+                        if not failure_path.is_symlink():
+                            failure_parent.mkdir(parents=True, exist_ok=True)
+                            failure_path.write_bytes(publication.canonical_json({
+                                "kind": "catalog-readiness-failure-v1", "outcome": "failed",
+                                "phase": args.failure_phase, "error_class": type(error).__name__,
+                            }))
+            except (OSError, ValueError, RuntimeError):
+                # An invalid/unwritable diagnostic destination is still a
+                # failed invocation; retain the bounded stderr below.
+                pass
         print(f"catalog readiness failed: {args.failure_phase}: {type(error).__name__}", file=sys.stderr)
         return 1
 

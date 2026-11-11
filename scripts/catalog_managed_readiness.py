@@ -266,11 +266,12 @@ def snapshot_paths(paths):
                     next_fd = os.open(part, dir_flags, dir_fd=fd)
                     os.close(fd)
                     fd = next_fd
-                collect(fd, root.name, ".", entries)
             except FileNotFoundError:
                 entries = [(".", "absent")]
-            except OSError as error:
-                raise ValueError("managed snapshot path is not an ordinary directory") from error
+            else:
+                collect(fd, root.name, ".", entries)
+        except OSError as error:
+            raise ValueError("managed snapshot path is not an ordinary directory") from error
         finally:
             os.close(fd)
         result[key] = sorted(entries, key=lambda entry: entry[0])

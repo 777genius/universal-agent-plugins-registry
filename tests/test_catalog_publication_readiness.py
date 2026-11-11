@@ -1326,6 +1326,82 @@ class CatalogContractTests(unittest.TestCase):
                 self.assertEqual(failure["phase"], "managed:prepare" if failing == "managed" else "validate_inputs")
                 self.assertEqual(failure["outcome"], "failed")
 
+    def test_main_failure_artifact_rejects_unsafe_locations_without_creating_case(self):
+        for invalid in ("inside", "aliased_inside", "missing_prefix_inside", "dotdot",
+                        "failure_leaf_symlink", "unresolvable_parent", "unwritable_parent"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                sandbox, output = root / "case", root / "report.json"
+                failure = root / "catalog-readiness-failure.json"
+                if invalid == "inside":
+                    output = sandbox / "report.json"
+                elif invalid == "aliased_inside":
+                    alias = root / "case-alias"
+                    alias.symlink_to(sandbox, target_is_directory=True)
+                    output = alias / "report.json"
+                elif invalid == "missing_prefix_inside":
+                    output = sandbox / "missing" / "report.json"
+                elif invalid == "dotdot":
+                    output = sandbox / "child" / ".."
+                elif invalid == "failure_leaf_symlink":
+                    failure.symlink_to(sandbox / "captured.json")
+                args = argparse.Namespace(mode="produce", binary=root / "binary", sandbox=sandbox,
+                                          output=output, claude=Path("claude"), copilot=Path("copilot"),
+                                          opencode=Path("opencode"), project_binary=root / "project-binary")
+                with self._producer_path_calls(args) as calls, patch.object(gate, "parser") as parser, \
+                        patch.object(gate, "print", create=True) as diagnostic:
+                    parser.return_value.parse_args.return_value = args
+                    if invalid in ("failure_leaf_symlink", "unresolvable_parent", "unwritable_parent"):
+                        with patch.object(gate, "canonical_inputs", side_effect=ValueError("private input detail")):
+                            if invalid == "unresolvable_parent":
+                                with patch.object(gate.Path, "resolve", side_effect=OSError("private path detail")):
+                                    self.assertEqual(gate.main([]), 1)
+                            elif invalid == "unwritable_parent":
+                                with patch.object(gate.Path, "mkdir", side_effect=OSError("private write detail")):
+                                    self.assertEqual(gate.main([]), 1)
+                            else:
+                                self.assertEqual(gate.main([]), 1)
+                    else:
+                        self.assertEqual(gate.main([]), 1)
+                    for call in calls:
+                        call.assert_not_called()
+                    diagnostic.assert_called_once_with(
+                        "catalog readiness failed: validate_inputs: ValueError", file=gate.sys.stderr)
+                self.assertFalse(sandbox.exists())
+                self.assertFalse(output.exists())
+                self.assertFalse(failure.exists())
+                if invalid == "failure_leaf_symlink":
+                    self.assertTrue(failure.is_symlink())
+                else:
+                    self.assertFalse(failure.is_symlink())
+                self.assertFalse((sandbox / "catalog-readiness-failure.json").exists())
+
+    def test_main_external_input_failure_preserves_canonical_diagnostics(self):
+        for through_missing_case in (False, True):
+            for error_type in (ValueError, publication.PublicationError):
+                with self.subTest(through_missing_case=through_missing_case, error=error_type.__name__), \
+                        tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary).resolve()
+                    sandbox = root / "case"
+                    output = sandbox / ".." / "report.json" if through_missing_case else root / "reports" / "report.json"
+                    args = argparse.Namespace(mode="produce", sandbox=sandbox, output=output)
+                    with patch.object(gate, "parser") as parser, \
+                            patch.object(gate, "canonical_inputs", side_effect=error_type("private signature/input detail")), \
+                            patch.object(gate, "produce") as produce, patch.object(gate, "print", create=True) as diagnostic:
+                        parser.return_value.parse_args.return_value = args
+                        self.assertEqual(gate.main([]), 1)
+                        produce.assert_not_called()
+                        diagnostic.assert_called_once_with(
+                            "catalog readiness failed: validate_inputs: " + error_type.__name__, file=gate.sys.stderr)
+                    self.assertFalse(sandbox.exists())
+                    self.assertFalse(output.exists())
+                    parent = root if through_missing_case else root / "reports"
+                    failure = gate.read_json(parent / "catalog-readiness-failure.json", canonical=True)
+                    self.assertEqual(failure, {
+                        "kind": "catalog-readiness-failure-v1", "outcome": "failed",
+                        "phase": "validate_inputs", "error_class": error_type.__name__,
+                    })
+
     def test_direct_producer_rejects_omitted_or_substituted_dependency_blocks_before_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

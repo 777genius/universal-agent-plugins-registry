@@ -408,6 +408,74 @@ class ManagedReadinessTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     managed.snapshot_paths({"protected": alias / "state-v2.json"})
 
+    def test_disappearing_descendant_cannot_match_absent_user_root(self):
+        for failure in ("file_open", "directory_open", "readlink", "file_read"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                roots = {name: root / name for name in ("home", "config", "state")}
+                roots["home"].mkdir()
+                roots["state"].mkdir()
+                before = managed.snapshot_paths(gate.project.user_paths(roots))
+                self.assertEqual(before["config"], [(".", "absent")])
+                roots["config"].mkdir()
+                leaf = roots["config"] / "child"
+                if failure == "directory_open":
+                    leaf.mkdir()
+                elif failure == "readlink":
+                    leaf.symlink_to("missing-target")
+                else:
+                    leaf.write_bytes(b"new protected state")
+                info = leaf.lstat()
+                identity = (info.st_dev, info.st_ino)
+                triggered = []
+                original_open, original_read, original_readlink = os.open, os.read, os.readlink
+
+                def disappearing_open(path, flags, *args, **kwargs):
+                    if failure in ("file_open", "directory_open") and path == "child" and "dir_fd" in kwargs:
+                        triggered.append(failure)
+                        if failure == "directory_open":
+                            leaf.rmdir()
+                        else:
+                            leaf.unlink()
+                    return original_open(path, flags, *args, **kwargs)
+
+                def disappearing_readlink(path, *args, **kwargs):
+                    if failure == "readlink" and path == "child" and "dir_fd" in kwargs:
+                        triggered.append(failure)
+                        leaf.unlink()
+                    return original_readlink(path, *args, **kwargs)
+
+                def failing_read(fd, size):
+                    opened = os.fstat(fd)
+                    if failure == "file_read" and (opened.st_dev, opened.st_ino) == identity:
+                        triggered.append(failure)
+                        raise FileNotFoundError("controlled snapshot read failure")
+                    return original_read(fd, size)
+
+                with patch.object(managed.os, "open", side_effect=disappearing_open), \
+                        patch.object(managed.os, "readlink", side_effect=disappearing_readlink), \
+                        patch.object(managed.os, "read", side_effect=failing_read):
+                    with self.assertRaisesRegex(ValueError, "managed snapshot path") as caught:
+                        gate.project.validate_user_isolation(before, roots)
+                self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
+                self.assertEqual(triggered, [failure])
+                self.assertTrue(roots["config"].is_dir())
+
+    def test_snapshot_preserves_missing_ancestors_leaves_and_dangling_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            present = root / "present"
+            present.mkdir()
+            link = present / "link"
+            link.symlink_to("missing-target")
+            paths = {"ancestor": root / "missing" / "leaf", "leaf": present / "missing", "link": link}
+            expected = {
+                "ancestor": [(".", "absent")],
+                "leaf": [(".", "absent")],
+                "link": [(".", link.lstat().st_mode & 0o7777, "symlink", "missing-target")],
+            }
+            self.assertEqual(managed.snapshot_paths(paths), expected)
+
     def test_project_add_reports_fixed_failure_checkpoints_without_child_data(self):
         # Only a fixed phase and exception class may reach the persisted
         # catalog failure artifact, even if the child returns private text.
