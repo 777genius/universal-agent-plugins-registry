@@ -697,7 +697,7 @@ def run(args, root, case, ctx):
                 native("copilot", True)
 
             def codex_command(*argv, allow_absent=False):
-                args.failure_phase = "managed:codex_external_remove"
+                args.failure_phase = prefix + ":codex_external_remove"
                 result = gate.child([str(codex), *argv], root=root, readonly=readonly,
                                     env={**env, "CODEX_HOME": str(roots["home"] / ".codex")},
                                     cwd=roots["workspace"], timeout=60)
