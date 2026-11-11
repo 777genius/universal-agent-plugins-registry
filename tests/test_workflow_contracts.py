@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -377,6 +378,69 @@ sys.modules['catalog_process_isolation']=module
             cleanups.append(cleanup["run"])
         self.assertEqual(profiles, [profiles[0]] * 3)
         self.assertEqual(cleanups, [cleanups[0]] * 3)
+
+    def test_current_policy_proof_jobs_have_no_historical_runtime_dependency(self) -> None:
+        workflow = load(CATALOG_READINESS)
+        for name in ("produce", "attest", "verify"):
+            job = workflow["jobs"][name]
+            body = commands(job)
+            for forbidden in ("refusal-staged", "REFUSAL_LEDGER_SHA", "refusal_source_identity", "--refusal-feed"):
+                self.assertNotIn(forbidden, json.dumps(job))
+            self.assertIn("scripts/catalog_publication_readiness.py", body)
+            self.assertIn("--feed staged/registry/schemas/1", body)
+            self.assertIn("--baseline-feed baseline/registry/schemas/1", body)
+        self.assertNotIn("refusal", " ".join(workflow["on"]["workflow_call"].get("inputs", {})))
+
+    def test_project_release_is_one_fixed_authority_for_download_and_canonical_proof(self) -> None:
+        workflow = load(CATALOG_READINESS)
+        steps = workflow["jobs"]["produce"]["steps"]
+        preflight = next(step for step in steps if step.get("name") == "Require the reviewed six User and six Project CLI release identity")
+        download = next(step for step in steps if step.get("name") == "Download and authenticate the reviewed User/Project CLI before execution")
+        managed = next(step for step in steps if step.get("name") == "Download and authenticate the managed dependency CLI 0.1.91 before execution")
+        for step in (preflight, download):
+            self.assertNotIn("if", step)
+            self.assertNotIn("continue-on-error", step)
+        self.assertLess(steps.index(preflight), min(index for index, step in enumerate(steps)
+                                                  if step.get("name", "").startswith("Download and authenticate")))
+        self.assertNotIn("inputs.", preflight["run"] + download["run"])
+        self.assertEqual(download["env"], {"GH_TOKEN": "${{ github.token }}"})
+        # The Project transport is exactly the existing authenticated path,
+        # with its release identity sourced from the one reviewed constant.
+        normalized = download["run"].replace("release-project", "release-managed")
+        normalized = normalized.replace("$PROJECT_CLI_TAG", "agentplugins-v${AGENTPLUGINS_VERSION}")
+        normalized = normalized.replace("PROJECT_CLI_VERSION", "AGENTPLUGINS_VERSION").replace("PROJECT_CLI_COMMIT", "AGENTPLUGINS_COMMIT")
+        for variable, digest in (
+            ("PROJECT_BINARY_SHA256", "7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"),
+            ("PROJECT_CHECKSUMS_SHA256", "7988df7f3d87c2c7485f2ce84bb434fbefe1f0cf24ef60e99ae626245685ebad"),
+            ("PROJECT_MANIFEST_SHA256", "de7c6ea83db79f091b722a589cc415b805a5b0819a84f9ed327476fb0cb4b937"),
+        ):
+            normalized = normalized.replace('"$' + variable + '"', digest)
+        self.assertEqual(normalized, managed["run"])
+        producer = commands(workflow["jobs"]["produce"])
+        self.assertIn('--project-binary "$RUNNER_TEMP/release-project/agentplugins_${PROJECT_CLI_VERSION}_linux_amd64"', producer)
+        self.assertIn('--managed-binary "$RUNNER_TEMP/release-managed/agentplugins_0.1.91_linux_amd64"', producer)
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.89")
+        self.assertIn("scripts/catalog_project_readiness.py", load(DIRECTORY_PUBLICATION)["on"]["push"]["paths"])
+        with mock.patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
+            import catalog_project_readiness as project
+        # Execute the actual workflow's export code with an offline synthetic
+        # fixed authority, then prove an unset identity exports nothing.
+        fixture = {"cli": {"version": "0.1.103", "tag": "agentplugins-v0.1.103", "commit": "a" * 40,
+                           "binary_digest": "sha256:" + "b" * 64},
+                   "checksums_digest": "sha256:" + "c" * 64, "manifest_digest": "sha256:" + "d" * 64}
+        code = "\n".join(preflight["run"].splitlines()[1:-1])
+        with tempfile.TemporaryDirectory() as temporary:
+            exported = Path(temporary) / "environment"
+            with mock.patch.dict(os.environ, {"GITHUB_ENV": str(exported)}), mock.patch.object(project, "RELEASE", fixture):
+                exec(compile(code, "Project release preflight", "exec"), {})
+            self.assertEqual(dict(line.split("=", 1) for line in exported.read_text().splitlines()), {
+                "PROJECT_CLI_VERSION": "0.1.103", "PROJECT_CLI_TAG": "agentplugins-v0.1.103", "PROJECT_CLI_COMMIT": "a" * 40,
+                "PROJECT_BINARY_SHA256": "b" * 64, "PROJECT_CHECKSUMS_SHA256": "c" * 64, "PROJECT_MANIFEST_SHA256": "d" * 64})
+            exported.unlink()
+            with mock.patch.dict(os.environ, {"GITHUB_ENV": str(exported)}), mock.patch.object(project, "RELEASE", None), \
+                    self.assertRaisesRegex(ValueError, "identity is unset"):
+                exec(compile(code, "Project release preflight", "exec"), {})
+            self.assertFalse(exported.exists())
 
     def test_catalog_gate_attests_both_canonical_subjects_and_exact_oidc_invocation(self) -> None:
         workflow = load(CATALOG_READINESS)

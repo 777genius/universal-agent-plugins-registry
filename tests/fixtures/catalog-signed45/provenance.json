@@ -1,0 +1,10 @@
+{
+  "materialized_ledger_sha": "3509baaac8e4f7ee3d565440f8c0d0bd1f928fba",
+  "origin": "https://raw.githubusercontent.com/777genius/universal-agent-plugins-registry/3509baaac8e4f7ee3d565440f8c0d0bd1f928fba/registry/schemas/1/",
+  "publication_id": "42888897655",
+  "purpose": "Untouched historical signed feed for offline final-contract regression. Synthetic unit metadata copies are not signed publications. This fixture does not qualify a CLI release or production readiness.",
+  "repository": "777genius/universal-agent-plugins-registry",
+  "sequence": 45,
+  "snapshot_digest": "sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50",
+  "source_commit": "8c032ba2169637c1c42f0b8080da7ba3713a48ac"
+}
