@@ -587,18 +587,22 @@ def run(args, root, case, ctx):
                 args.on_failure(result)
             print("managed CLI failure: " + failure_diagnostics(argv[0], result), file=sys.stderr, flush=True)
             raise ValueError("managed CLI command failed")
+        args.failure_phase = prefix + ":" + argv[0] + ":json"
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)
         require(isinstance(value, dict), "managed CLI JSON shape")
         if release_user:
             validate_foreign_state(foreign_paths, foreign_before, foreign_configs)
         if scope == "project":
+            args.failure_phase = prefix + ":" + argv[0] + ":user-isolation"
             project.validate_user_isolation(protected_user, roots)
         if argv[0] in ("add", "info", "list", "doctor"):
+            args.failure_phase = prefix + ":" + argv[0] + ":envelope"
             require(value.get("command") == argv[0] and value.get("result") == "success" and isinstance(value.get("data"), dict), "managed CLI envelope")
             return value["data"]
         return value
 
     added = command("add", "marketing-kit", "--target", ",".join(clients))
+    args.failure_phase = prefix + ":add:saved-outcome"
     require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(clients), "managed saved add incomplete")
     require(scope != "project" or added.get("scope") == "project", "managed placement scope")
     state_file = state_root / "state-v2.json"
@@ -606,9 +610,11 @@ def run(args, root, case, ctx):
     # Dependency file location is a released output, but must remain confined to
     # the new state root rather than trusting arbitrary JSON paths.
     environment = added["environment"]
+    args.failure_phase = prefix + ":add:environment-paths"
     require(Path(environment["manifest_path"]).resolve() == manifest.resolve() and
             Path(environment["lock_path"]).resolve() == lock_path.resolve(), "managed environment paths")
     lock = gate.read_json(lock_path)
+    args.failure_phase = prefix + ":add:lock"
     aliases = validate_lock(lock, case)
     if scope == "project" or release_user:
         import catalog_project_readiness as project
