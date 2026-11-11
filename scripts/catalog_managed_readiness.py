@@ -579,26 +579,37 @@ def run(args, root, case, ctx):
         protected_user = snapshot_paths(project.user_paths(roots))
 
     def command(*argv):
-        args.failure_phase = prefix + ":" + argv[0]
+        # Fixed, non-sensitive checkpoints distinguish a sandbox setup failure,
+        # released CLI refusal, malformed response, and cross-scope mutation.
+        # The producer still publishes only phase + exception class; no raw
+        # response, filesystem path, token, or diagnostic payload is persisted.
+        phase = prefix + ":" + argv[0]
+        args.failure_phase = phase + ":isolated_child"
         result = gate.child([str(binary), *argv, *scope_args, "--format", "json"], root=root, readonly=readonly,
                             env=env, cwd=roots["workspace"], timeout=600)
+        args.failure_phase = phase + ":exit"
         if result.returncode != 0:
             if callable(getattr(args, "on_failure", None)):
                 args.on_failure(result)
             print("managed CLI failure: " + failure_diagnostics(argv[0], result), file=sys.stderr, flush=True)
             raise ValueError("managed CLI command failed")
+        args.failure_phase = phase + ":decode"
         value = gate.publication.parse_json_bytes(result.stdout.encode(), "managed CLI", max_bytes=gate.LIMIT)
         require(isinstance(value, dict), "managed CLI JSON shape")
         if release_user:
+            args.failure_phase = phase + ":foreign_state"
             validate_foreign_state(foreign_paths, foreign_before, foreign_configs)
         if scope == "project":
+            args.failure_phase = phase + ":user_isolation"
             project.validate_user_isolation(protected_user, roots)
+        args.failure_phase = phase + ":envelope"
         if argv[0] in ("add", "info", "list", "doctor"):
             require(value.get("command") == argv[0] and value.get("result") == "success" and isinstance(value.get("data"), dict), "managed CLI envelope")
             return value["data"]
         return value
 
     added = command("add", "marketing-kit", "--target", ",".join(clients))
+    args.failure_phase = prefix + ":validate_add"
     require(added.get("environment", {}).get("saved") is True and added.get("outcome") == "completed" and len(added.get("actions", [])) == len(PINS) * len(clients), "managed saved add incomplete")
     require(scope != "project" or added.get("scope") == "project", "managed placement scope")
     state_file = state_root / "state-v2.json"
