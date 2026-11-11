@@ -374,6 +374,31 @@ class ManagedReadinessTests(unittest.TestCase):
                         child.assert_called_once()
                         self.assertTrue(all(call.kwargs["expected_scope"] == "user" for call in validate.call_args_list))
 
+    def test_snapshot_hashes_files_in_bounded_chunks_without_changing_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "large-fixture"
+            body = b"snapshot-byte-identity\n" * 100000
+            path.write_bytes(body)
+            sizes = []
+            class Reader:
+                def __init__(self, source):
+                    self.source = source
+                def __enter__(self):
+                    return self
+                def __exit__(self, *_args):
+                    return False
+                def read(self, size=-1):
+                    if not 0 < size <= 1024 * 1024:
+                        raise AssertionError("snapshot read must have a fixed memory bound")
+                    sizes.append(size)
+                    return self.source.read(size)
+            with path.open("rb") as source, patch.object(Path, "open", return_value=Reader(source)), \
+                    patch.object(Path, "read_bytes", side_effect=AssertionError("unbounded snapshot read")):
+                actual = managed.snapshot_paths({"file": path})
+            self.assertGreater(len(sizes), 1)
+            self.assertEqual(actual, {"file": [(".", path.stat().st_mode & 0o7777,
+                                                "file", hashlib.sha256(body).hexdigest())]})
+
     def test_project_add_reports_fixed_failure_checkpoints_without_child_data(self):
         # Only a fixed phase and exception class may reach the persisted
         # catalog failure artifact, even if the child returns private text.

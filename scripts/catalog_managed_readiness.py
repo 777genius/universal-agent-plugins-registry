@@ -229,7 +229,11 @@ def snapshot_paths(paths):
             if stat.S_ISLNK(info.st_mode):
                 entries.append((relative, mode, "symlink", os.readlink(path)))
             elif stat.S_ISREG(info.st_mode):
-                entries.append((relative, mode, "file", hashlib.sha256(path.read_bytes()).hexdigest()))
+                digest = hashlib.sha256()
+                with path.open("rb") as source:
+                    while chunk := source.read(1024 * 1024):
+                        digest.update(chunk)
+                entries.append((relative, mode, "file", digest.hexdigest()))
             else:
                 require(stat.S_ISDIR(info.st_mode), "unsupported managed snapshot object")
                 entries.append((relative, mode, "directory"))
