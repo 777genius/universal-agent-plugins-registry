@@ -8,6 +8,8 @@
 - The publisher pins native Claude Code **2.1.251**, whereas UAP's independently successful postmerge six-client E2E used **2.1.263**. This version difference is a testable hypothesis, **not a license to skip the isolation test**.
 - The error format deliberately excludes raw child output, secrets, paths, and native logs; the new fixed phase labels remain useful for a follow-up true run but are **not** a fix for the observed mutation.
 
+- PR #464 runs an **unprivileged-read-only publication47 diagnostic** with native Claude Code `2.1.263` (validated against the same sha512 pin already used by this repo's Context7 upstream workflow) while preserving the exact signed47 ledger and public UAP `0.1.104` binary. Historical [2.1.251 diagnostic](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/43076789347) proves User-profile mutation; the new [2.1.263 diagnostic](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/43080561454) must separately prove or disprove that mutation. **Do not interpret a later legacy `validate_native_version` failure as evidence that Project add failed:** the old matrix still expects 2.1.251 and will require a coordinated reviewed pin change if upgraded. No normal production publisher is changed yet.
+
 ## Scope and implementation
 
 1. Add only fixed, predeclared, non-sensitive phases around the existing managed `command()` boundary: isolated child, exit status, JSON decode, foreign-state verification, cross-scope User isolation, response contract. Add `validate_add` for subsequent contract failures.
