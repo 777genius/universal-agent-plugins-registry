@@ -95,11 +95,11 @@ def immutable_closure(case):
     return [{key: by_id[name][key] for key in keys} for name in PINS]
 
 
-def release_expected(snapshot, select, *, refusal_source=None):
+def release_expected(snapshot, select):
     """Six positive User targets on the one reviewed corrected release."""
     import copy
     import catalog_project_readiness as project
-    project_case = project.expected(snapshot, select, refusal_source=refusal_source)
+    project_case = project.expected(snapshot, select)
     if project_case is None:
         return None
     case = copy.deepcopy(expected(snapshot, select))

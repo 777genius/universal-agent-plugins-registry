@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime, SIGNED46_FEED, SIGNED45_FEED
+from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime, load_historical_source, SIGNED46_FEED, SIGNED45_FEED
 from tests import test_catalog_managed_readiness as managed_tests
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
@@ -39,7 +39,7 @@ class ProjectReadinessTests(unittest.TestCase):
             args = paired_arguments(Path(temporary))
             snapshot, artifact = gate.canonical_inputs(args)
             case = artifact["project_dependencies"]
-            negative = gate.load_refusal_source(args, artifact["context"])
+            negative = load_historical_source(args, artifact["context"])
             project.validate_refusal_pair(case, negative, gate.selected)
             for field in ("product_id", "distribution_id", "release_sequence", "package_version", "package_source", "tree_digest", "manifest_digest"):
                 changed = copy.deepcopy(case)
@@ -51,11 +51,6 @@ class ProjectReadinessTests(unittest.TestCase):
                 changed[1][field] = 46 if field == "sequence" else "changed"
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     project.validate_refusal_pair(case, changed, gate.selected)
-            for field in ("run_id", "run_attempt", "workflow_sha"):
-                changed = copy.deepcopy(negative)
-                changed[1][field] = 2 if field == "run_attempt" else "456" if field == "run_id" else "f" * 40
-                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "another workflow invocation"):
-                    gate.dependency_cases(snapshot, artifact["context"], refusal_source=changed)
             for mutation in ("authentication", "scopes", "floor", "dependency", "grant_mask"):
                 changed = copy.deepcopy(case)
                 root = changed["closure"][0]["policy"]
@@ -114,23 +109,18 @@ class ProjectReadinessTests(unittest.TestCase):
         with patch.object(project, "RELEASE", None):
             self.assertIsNone(project.expected(prior, gate.selected))
 
-    def test_seven_grant_future_policy_cannot_emit_final_publication_contract(self):
-        future = unsigned_source_catalog()
-        for release in (None, PROJECT_RELEASE_FIXTURE):
-            with self.subTest(release_set=release is not None), patch.object(project, "RELEASE", release):
-                for construct in (project.expected, managed.release_expected):
-                    with self.assertRaisesRegex(ValueError, "seven-grant policy requires separate"):
-                        construct(future, gate.selected)
-                with self.assertRaisesRegex(ValueError, "seven-grant policy requires separate"):
-                    gate.expected_artifact(future, future, {"sequence": 19}, {"sequence": 20})
-                for mode in ("produce", "verify"):
-                    with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
-                        root = Path(temporary)
-                        with patch.object(gate, "load_feed", side_effect=((future, {"sequence": 20}), ({**future, "sequence": 19}, {"sequence": 19}))), \
-                                patch.object(gate, "context", return_value={"sequence": 20}), \
-                                patch.object(gate, "produce") as producer, redirect_stderr(io.StringIO()):
-                            self.assertEqual(gate.main(self.entrypoint_argv(root, mode)), 1)
-                            producer.assert_not_called()
+    def test_seven_grant_current_policy_requires_fixed_release_and_saved_boundary(self):
+        future = json.loads((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_text())
+        with patch.object(project, "RELEASE", None):
+            for construct in (project.expected, managed.release_expected):
+                with self.assertRaisesRegex(ValueError, "identity is unset"):
+                    construct(future, gate.selected)
+        artifact = gate.expected_artifact(future, future, {"sequence": 19}, {"sequence": 20})
+        self.assertEqual(artifact["vscode_user_policy_boundary"]["kind"], "prepared_target_saved_management")
+        self.assertIn("vscode_user_saved_management", artifact)
+        self.assertNotIn("vscode_user_refusal", artifact)
+        with self.assertRaises(TypeError):
+            project.expected(future, gate.selected, refusal_source=(self.snapshot, {}))
 
     def test_release_authority_is_explicit_unset_and_has_exact_authenticated_assets(self):
         with patch.object(project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
@@ -526,7 +516,8 @@ class ProjectReadinessTests(unittest.TestCase):
                               "extra_lf": stderr + "\n", "missing_lf": stderr[:-1]}.get(behavior, stderr)
                     return SimpleNamespace(returncode=0 if behavior == "success" else 1,
                                            stdout=" " if behavior == "stdout_space" else "\n" if behavior == "stdout_lf" else "", stderr=stderr)
-                with patch.object(gate, "child", side_effect=invoke):
+                with patch.object(gate, "canonical_inputs", return_value=(None, {"vscode_user_refusal": case, "context": ctx})), \
+                        patch.object(gate, "child", side_effect=invoke):
                     if behavior in ("refused", "directory_cache"):
                         project.run_user_refusal(args, root / "case", case, ctx)
                     else:
@@ -661,9 +652,10 @@ class SavedManagementBoundaryTests(unittest.TestCase):
             with patch.object(project, "RELEASE", release):
                 _, artifact = gate.canonical_inputs(args)
                 case, ctx, source = artifact["vscode_user_saved_management"], artifact["context"], artifact["project_dependencies"]
+                historical_ctx = load_historical_source(args, ctx)[1]
                 mutations = (
-                    (case, artifact["vscode_user_refusal"]["context"], source),
-                    ({**case, "context": artifact["vscode_user_refusal"]["context"]}, ctx, source),
+                    (case, historical_ctx, source),
+                    ({**case, "context": historical_ctx}, ctx, source),
                     ({**case, "cli": managed.CLI}, ctx, source),
                     ({**case, "reason": "missing_vscode_signed_target_grant"}, ctx, source),
                     ({**case, "prepared_native_absence": "passed"}, ctx, source),
@@ -675,8 +667,8 @@ class SavedManagementBoundaryTests(unittest.TestCase):
                             project.run_user_saved_management(args, root / "not-created", changed_case, changed_ctx, changed_source)
                         self.assertFalse((root / "not-created").exists())
                     child.assert_not_called()
-                prior, _ = gate.load_refusal_source(args, ctx)
-                self.assertIsNone(project.expected_user_saved_management(project.expected(prior, gate.selected), artifact["vscode_user_refusal"]["context"]))
+                prior, _ = load_historical_source(args, ctx)
+                self.assertIsNone(project.expected_user_saved_management(project.expected(prior, gate.selected), historical_ctx))
 
 
 if __name__ == "__main__":

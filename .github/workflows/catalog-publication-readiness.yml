@@ -86,20 +86,6 @@ jobs:
               for name, value in values.items():
                   output.write(f"{name}={value}\n")
           PYPROJECT
-      - name: Bind the fixed authenticated signed45 refusal source
-        run: |
-          python3 - <<'PYREFUSAL'
-          import os, sys
-          sys.path.insert(0, "scripts")
-          from catalog_project_readiness import refusal_source_identity
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write("REFUSAL_LEDGER_SHA=" + refusal_source_identity()["materialized_ledger_sha"] + "\n")
-          PYREFUSAL
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.REFUSAL_LEDGER_SHA }}
-          path: refusal-staged
-          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.materialized_ledger_sha }}
@@ -372,11 +358,9 @@ jobs:
       - name: Prove the exact catalog matrix in fresh credential-free roots
         run: |
           test "$(git -C staged rev-parse HEAD)" = "$MATERIALIZED_LEDGER_SHA"
-          test "$(git -C refusal-staged rev-parse HEAD)" = "$REFUSAL_LEDGER_SHA"
           test "$(git -C baseline rev-parse HEAD)" = "$BASELINE_LEDGER_SHA"
           python3 scripts/catalog_publication_readiness.py produce \
             --feed staged/registry/schemas/1 --trusted-keys registry/publication/trusted-keys.json \
-            --refusal-feed refusal-staged/registry/schemas/1 \
             --baseline-feed baseline/registry/schemas/1 \
             --directory-origin "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${MATERIALIZED_LEDGER_SHA}/registry/schemas/1/" \
             --binary "$RUNNER_TEMP/release/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
@@ -438,20 +422,6 @@ jobs:
         with:
           ref: ${{ inputs.workflow_sha }}
           persist-credentials: false
-      - name: Bind the fixed authenticated signed45 refusal source
-        run: |
-          python3 - <<'PYREFUSAL'
-          import os, sys
-          sys.path.insert(0, "scripts")
-          from catalog_project_readiness import refusal_source_identity
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write("REFUSAL_LEDGER_SHA=" + refusal_source_identity()["materialized_ledger_sha"] + "\n")
-          PYREFUSAL
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.REFUSAL_LEDGER_SHA }}
-          path: refusal-staged
-          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.materialized_ledger_sha }}
@@ -473,10 +443,8 @@ jobs:
         run: |
           test "$WORKFLOW_SHA" = "$GITHUB_SHA"
           test "$GITHUB_REF" = refs/heads/main
-          test "$(git -C refusal-staged rev-parse HEAD)" = "$REFUSAL_LEDGER_SHA"
           python3 scripts/catalog_publication_readiness.py verify \
             --feed staged/registry/schemas/1 --trusted-keys registry/publication/trusted-keys.json \
-            --refusal-feed refusal-staged/registry/schemas/1 \
             --baseline-feed baseline/registry/schemas/1 \
             --directory-origin "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${MATERIALIZED_LEDGER_SHA}/registry/schemas/1/" \
             --publication-id "$PUBLICATION_ID" --sequence "$PUBLICATION_SEQUENCE" \
@@ -541,20 +509,6 @@ jobs:
         with:
           ref: ${{ inputs.workflow_sha }}
           persist-credentials: false
-      - name: Bind the fixed authenticated signed45 refusal source
-        run: |
-          python3 - <<'PYREFUSAL'
-          import os, sys
-          sys.path.insert(0, "scripts")
-          from catalog_project_readiness import refusal_source_identity
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write("REFUSAL_LEDGER_SHA=" + refusal_source_identity()["materialized_ledger_sha"] + "\n")
-          PYREFUSAL
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.REFUSAL_LEDGER_SHA }}
-          path: refusal-staged
-          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.materialized_ledger_sha }}
@@ -583,10 +537,8 @@ jobs:
         run: |
           test "$WORKFLOW_SHA" = "$GITHUB_SHA"
           test "$GITHUB_REF" = refs/heads/main
-          test "$(git -C refusal-staged rev-parse HEAD)" = "$REFUSAL_LEDGER_SHA"
           python3 scripts/catalog_publication_readiness.py verify \
             --feed staged/registry/schemas/1 --trusted-keys registry/publication/trusted-keys.json \
-            --refusal-feed refusal-staged/registry/schemas/1 \
             --baseline-feed baseline/registry/schemas/1 \
             --directory-origin "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${MATERIALIZED_LEDGER_SHA}/registry/schemas/1/" \
             --publication-id "$PUBLICATION_ID" --sequence "$PUBLICATION_SEQUENCE" \

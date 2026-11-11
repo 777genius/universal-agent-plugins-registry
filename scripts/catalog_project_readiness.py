@@ -19,7 +19,8 @@ require = managed.require
 # Remains unset until the actual release commit and all three authenticated
 # release asset digests have been reviewed. No development or guessed pin.
 RELEASE = None
-# Evidence-source identity only: grants are read from the authenticated feed.
+# Historical point-in-time evidence identity; never a recurring runtime feed.
+# Grants are read only from authenticated feed data.
 # The materialized commit has the signed commit as its direct parent, and both
 # contain the same immutable snapshot/envelope bytes.
 REFUSAL_SOURCE = {
@@ -28,6 +29,63 @@ REFUSAL_SOURCE = {
     "sequence": 45,
     "snapshot_digest": "sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50",
 }
+# Reviewed nonexpiring package facts from the independently authenticated signed45
+# closure (also unchanged in signed46). These are not target grants or a feed:
+# every runtime authorization, signature, expiry and floor remains current.
+REVIEWED_SOURCE_CLOSURE = [
+    {
+        "product_id": "marketing-kit",
+        "distribution_id": "777genius/marketing-kit",
+        "release_sequence": 1,
+        "package_version": "0.1.0",
+        "package_source": {
+            "path": "plugins/marketing-kit",
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "c5bcedd4ecf12585a8a50401852e57a44891ebec"
+        },
+        "tree_digest": "sha256:8918c0f0222bd735fd0eef3cacf90b5a9351fb213483d1558a65b9911624e68a",
+        "manifest_digest": "sha256:40b18a6b33c6392134aff7beafb9a91eaeecf46ce765e0e888cdc743dd284ea2"
+    },
+    {
+        "product_id": "hubspot-crm",
+        "distribution_id": "777genius/hubspot-crm",
+        "release_sequence": 1,
+        "package_version": "0.1.0",
+        "package_source": {
+            "path": "plugins/hubspot-crm",
+            "repository": "777genius/universal-agent-plugins",
+            "revision": "2ddbb99dd190c1792b79904f9875e6322bccd243"
+        },
+        "tree_digest": "sha256:09a0b151c384235c3d7b3929398695d24cd7b07c75993a0a73f1a218198ededd",
+        "manifest_digest": "sha256:20334e86a1b599d2759e04bfaef37dc2ddb7f6b0f3994b5d66d4eca12fbec941"
+    },
+    {
+        "product_id": "notion",
+        "distribution_id": "777genius/notion",
+        "release_sequence": 1,
+        "package_version": "0.1.0",
+        "package_source": {
+            "path": "plugins/notion",
+            "repository": "777genius/universal-agent-plugins",
+            "revision": "2ddbb99dd190c1792b79904f9875e6322bccd243"
+        },
+        "tree_digest": "sha256:860fa6dd1830d0da2b8fed38195fa6ad6307082ac12d708118e5eb1c5d10f9b7",
+        "manifest_digest": "sha256:bbab30a4f062218d7a5fce2f6c818680d3c7adfaebdbaa3e523e15942a2f57e5"
+    },
+    {
+        "product_id": "playwright",
+        "distribution_id": "777genius/playwright-bridge",
+        "release_sequence": 2,
+        "package_version": "0.0.80",
+        "package_source": {
+            "path": "plugins/playwright",
+            "repository": "777genius/universal-agent-plugins-registry",
+            "revision": "d9c8d778200d51ae941d86bb69af23534cd1c8f7"
+        },
+        "tree_digest": "sha256:ff3c74bb5760fea47003130f3984d48234892330325a7cad35a7bc973acc9cf6",
+        "manifest_digest": "sha256:8419b5c9e67894c2312048c4fe30e3ea920d00101d02641230183dd7ab4d3b31"
+    }
+]
 CLIENTS = managed.CLIENTS
 SKILL_ROOTS = {"codex": ".agents/skills", "cursor": ".cursor/skills",
                "copilot": ".github/skills", "claude": ".claude/skills",
@@ -63,9 +121,19 @@ def refusal_source_identity():
     return copy.deepcopy(REFUSAL_SOURCE)
 
 
-def needs_refusal_source(snapshot, select):
-    case = managed.expected(snapshot, select)
-    return case is not None and tuple(target["client"] for target in case["closure"][0]["policy"]["targets"]) == managed.COPILOT_AUTHORIZED_CLIENTS
+def validate_source_anchor(case):
+    import catalog_publication_readiness as gate
+    require(gate.publication.canonical_json(managed.immutable_closure(case)) ==
+            gate.publication.canonical_json(REVIEWED_SOURCE_CLOSURE), "reviewed immutable source anchor differs")
+
+
+def current_boundary(case):
+    """A closed oracle choice from the authenticated, already validated policy."""
+    root = next(item for item in case["closure"] if item["distribution_id"] == managed.ROOT)
+    clients = tuple(target["client"] for target in root["policy"]["targets"])
+    require(clients in (CLIENTS, managed.COPILOT_AUTHORIZED_CLIENTS), "unqualified current VSCode boundary")
+    return {"source": "current_authenticated_feed", "target": "vscode", "placement_scope": "user",
+            "kind": "missing_signed_target" if clients == CLIENTS else "prepared_target_saved_management"}
 
 
 def validate_refusal_context(ctx):
@@ -77,7 +145,7 @@ def validate_refusal_context(ctx):
 
 
 def validate_refusal_pair(case, refusal_source, select):
-    """Compare signed source facts without granting or resolving another target."""
+    """Historical point-in-time comparison; never a recurring authorization input."""
     import argparse
     import catalog_publication_readiness as gate
     require(isinstance(refusal_source, tuple) and len(refusal_source) == 2, "fixed refusal source required")
@@ -97,7 +165,7 @@ def validate_refusal_pair(case, refusal_source, select):
     return negative
 
 
-def expected(snapshot, select, *, refusal_source=None):
+def expected(snapshot, select):
     """Construct the exact Project contract only for the reviewed six-source root."""
     base = managed.expected(snapshot, select)
     if base is None:
@@ -106,9 +174,6 @@ def expected(snapshot, select, *, refusal_source=None):
     source_clients = tuple(target["client"] for target in root["policy"]["targets"])
     if source_clients == managed.LEGACY_CLIENTS:
         return None
-    paired = source_clients == managed.COPILOT_AUTHORIZED_CLIENTS
-    require(not paired or refusal_source is not None,
-            "seven-grant policy requires separate fixed signed45 refusal source")
     require(source_clients in (CLIENTS, managed.COPILOT_AUTHORIZED_CLIENTS), "unqualified Project source targets")
     cli = reviewed_release()["cli"]
     closure = [select(snapshot, selector, CLIENTS, cli=cli) for selector in managed.PINS]
@@ -141,8 +206,7 @@ def expected(snapshot, select, *, refusal_source=None):
                               "release_sequence": item["release_sequence"], "client": client}
                              for item in closure for client in CLIENTS],
             "proof": proof}
-    if paired:
-        validate_refusal_pair(case, refusal_source, select)
+    validate_source_anchor(case)
     return case
 
 
@@ -426,42 +490,56 @@ def validate_operation(value, aliases, clients, *, operation, expected_scope, in
 def run_user_refusal(args, root, case, ctx):
     import catalog_publication_readiness as gate
     require(case["outcome"] == "refused", "VSCode User refusal mislabeled as success")
-    if "context" in case:
-        validate_refusal_context(ctx)
-        require(case["context"] == ctx, "refusal runtime context differs")
-        require(case["cli"] == reviewed_release()["cli"], "wrong refusal corrected CLI authority")
+    if "context" not in case:
+        _, canonical = gate.canonical_inputs(args)
+        require("vscode_user_refusal" in canonical, "current signed-refusal contract missing")
+        gate.validate_artifact(case, canonical["vscode_user_refusal"])
+        gate.validate_artifact(ctx, canonical["context"])
+    else:
+        # Explicit historical audit calls still authenticate the original feed
+        # with normal expiry. An archived context is not runtime permission.
+        historical, historical_ctx = gate.load_refusal_source(args, ctx)
+        gate.validate_artifact(ctx, historical_ctx)
+        historical_case = expected(historical, gate.selected)
+        gate.validate_artifact(case, expected_user_refusal(historical_case, context=historical_ctx))
     binary = args.project_binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong Project released binary")
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.codex, args.claude, args.copilot, args.opencode))
     managed.seed_runtime(root / "bin", env, args.codex)
-    args.failure_phase = "vscode:warm_directory"
     initial = refusal_snapshot(roots)
     readonly = (*gate.tool_paths(args), binary.parent)
-    warmed = gate.child([str(binary), "info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"],
-                        root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
-    require(warmed.returncode == 0 and warmed.stderr == "", "VSCode refusal Directory warmup failed")
-    info = gate.publication.parse_json_bytes(warmed.stdout.encode(), "Directory warmup", max_bytes=gate.LIMIT)
-    require(isinstance(info, dict) and info.get("command") == "info" and info.get("result") == "success"
-            and info.get("data", {}).get("snapshot_sequence") == ctx["sequence"]
-            and info["data"].get("snapshot_digest") == ctx["snapshot_digest"], "VSCode refusal warmed wrong signed publication")
-    validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
-    require(refusal_snapshot(roots) == initial, "Directory warmup changed non-cache state")
-    before = managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")})
-    args.failure_phase = "vscode:user_refusal"
-    result = gate.child([str(binary), "add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"],
-                        root=root, readonly=(*gate.tool_paths(args), binary.parent), env=env,
-                        cwd=roots["workspace"], timeout=600)
-    reason = ('Resolving and validating one Agent Plugin package for every selected target...\n'
-              'agentplugins: no eligible directory release for "marketing-kit": '
-              '777genius/marketing-kit: release does not support complete target set; missing vscode')
-    # The genuine Linux CLI emits these two complete lines and one terminal LF.
-    # Whitespace, padding or another diagnostic must not count as signed refusal.
-    require(result.returncode == 1 and result.stdout == "" and result.stderr == reason + "\n",
-            "VSCode User did not receive exact signed-target refusal")
-    require(managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
-            "VSCode User refusal mutated native, portable or durable state")
-    validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
+    before = None
+    try:
+        args.failure_phase = "vscode:warm_directory"
+        warmed = gate.child([str(binary), "info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"],
+                            root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
+        require(type(warmed.returncode) is int and warmed.returncode == 0 and warmed.stderr == "", "VSCode refusal Directory warmup failed")
+        info = gate.publication.parse_json_bytes(warmed.stdout.encode(), "Directory warmup", max_bytes=gate.LIMIT)
+        require(isinstance(info, dict) and info.get("command") == "info" and info.get("result") == "success"
+                and info.get("data", {}).get("snapshot_sequence") == ctx["sequence"]
+                and info["data"].get("snapshot_digest") == ctx["snapshot_digest"], "VSCode refusal warmed wrong signed publication")
+        validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
+        require(refusal_snapshot(roots) == initial, "Directory warmup changed non-cache state")
+        before = managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")})
+        args.failure_phase = "vscode:user_refusal"
+        result = gate.child([str(binary), "add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"],
+                            root=root, readonly=(*gate.tool_paths(args), binary.parent), env=env,
+                            cwd=roots["workspace"], timeout=600)
+        reason = ('Resolving and validating one Agent Plugin package for every selected target...\n'
+                  'agentplugins: no eligible directory release for "marketing-kit": '
+                  '777genius/marketing-kit: release does not support complete target set; missing vscode')
+        # The genuine Linux CLI emits these two complete lines and one terminal LF.
+        # Whitespace, padding or another diagnostic must not count as signed refusal.
+        require(type(result.returncode) is int and result.returncode == 1 and result.stdout == "" and result.stderr == reason + "\n",
+                "VSCode User did not receive exact signed-target refusal")
+    finally:
+        try:
+            require((refusal_snapshot(roots) == initial) if before is None else
+                    managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
+                    "VSCode User refusal mutated native, portable or durable state")
+        finally:
+            validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=before is not None)
 
 
 def run_user_saved_management(args, root, case, ctx, source_case):

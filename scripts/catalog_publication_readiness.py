@@ -287,8 +287,8 @@ def credential_free_probe(selection: dict) -> bool:
 
 
 def load_refusal_source(args: argparse.Namespace, positive_context: dict) -> tuple[dict, dict]:
-    """Authenticate the fixed evidence source with normal expiry, never baseline rules."""
-    require(getattr(args, "refusal_feed", None) is not None, "--refusal-feed required for seven-grant proof")
+    """Historical point-in-time audit helper; normal expiry, no publisher use."""
+    require(getattr(args, "refusal_feed", None) is not None, "historical audit feed required")
     snapshot, identity = load_feed(args.refusal_feed, args.trusted_keys)
     pins = project.refusal_source_identity()
     require(identity == {key: pins[key] for key in ("sequence", "snapshot_digest")}, "wrong fixed refusal feed")
@@ -300,30 +300,24 @@ def load_refusal_source(args: argparse.Namespace, positive_context: dict) -> tup
     return snapshot, ctx
 
 
-def dependency_cases(snapshot: dict, ctx: dict, *, refusal_source=None) -> dict:
-    paired = project.needs_refusal_source(snapshot, selected)
-    require(paired or refusal_source is None, "unexpected separate refusal source")
-    project_case = project.expected(snapshot, selected, refusal_source=refusal_source)
-    release_user_case = managed.release_expected(snapshot, selected, refusal_source=refusal_source)
-    if paired:
-        negative_case = project.validate_refusal_pair(project_case, refusal_source, selected)
-        negative_ctx = refusal_source[1]
-        require(all(ctx.get(key) == negative_ctx[key] for key in ("repository", "workflow_sha", "run_id", "run_attempt")),
-                "refusal context belongs to another workflow invocation")
-        refusal_case = project.expected_user_refusal(negative_case, context=negative_ctx)
-        require(refusal_case["cli"] == project_case["cli"] == release_user_case["cli"], "paired released CLI differs")
-    else:
-        refusal_case = project.expected_user_refusal(project_case)
-    cases = {"project_dependencies": project_case, "release_user_dependencies": release_user_case,
-             "vscode_user_refusal": refusal_case}
-    if paired:
-        cases["vscode_user_saved_management"] = project.expected_user_saved_management(project_case, ctx)
+def dependency_cases(snapshot: dict, ctx: dict) -> dict:
+    project_case = project.expected(snapshot, selected)
+    release_user_case = managed.release_expected(snapshot, selected)
+    cases = {"project_dependencies": project_case, "release_user_dependencies": release_user_case}
+    if project_case is not None:
+        boundary = project.current_boundary(project_case)
+        cases["vscode_user_policy_boundary"] = boundary
+        if boundary["kind"] == "missing_signed_target":
+            cases["vscode_user_refusal"] = project.expected_user_refusal(project_case)
+        else:
+            cases["vscode_user_saved_management"] = project.expected_user_saved_management(project_case, ctx)
+        require(project_case["cli"] == release_user_case["cli"], "current boundary released CLI differs")
     return cases
 
 
-def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict, *, refusal_source=None) -> dict:
+def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict) -> dict:
     selections = plan(snapshot)
-    dependencies = dependency_cases(snapshot, ctx, refusal_source=refusal_source)
+    dependencies = dependency_cases(snapshot, ctx)
     project_case, release_user_case = dependencies["project_dependencies"], dependencies["release_user_dependencies"]
     policy_scope(baseline, snapshot, selections, project_case=project_case, release_user_case=release_user_case)
     rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
@@ -862,8 +856,8 @@ def canonical_inputs(args: argparse.Namespace) -> tuple[dict, dict]:
     baseline, baseline_identity = load_feed(args.baseline_feed, args.trusted_keys, baseline=True)
     require(baseline_identity["sequence"] < identity["sequence"], "baseline must precede candidate")
     ctx = context(args, snapshot, identity)
-    refusal_source = load_refusal_source(args, ctx) if project.needs_refusal_source(snapshot, selected) else None
-    expected = expected_artifact(snapshot, baseline, baseline_identity, ctx, refusal_source=refusal_source)
+    require(getattr(args, "refusal_feed", None) is None, "historical refusal input is not a recurring publication input")
+    expected = expected_artifact(snapshot, baseline, baseline_identity, ctx)
     return snapshot, expected
 
 
@@ -942,7 +936,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "managed-binary", "project-binary", "refusal-feed", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
+    for name in ("binary", "managed-binary", "project-binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result

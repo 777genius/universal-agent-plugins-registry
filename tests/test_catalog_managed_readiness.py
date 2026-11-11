@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime
+from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime, load_historical_source
 import catalog_publication_readiness as gate
 import catalog_managed_readiness as managed
 
@@ -31,7 +31,7 @@ class ManagedReadinessTests(unittest.TestCase):
             snapshot, artifact = gate.canonical_inputs(args)
             historical = artifact["managed_dependencies"]
             user, project = artifact["release_user_dependencies"], artifact["project_dependencies"]
-            prior_snapshot, _ = gate.load_refusal_source(args, artifact["context"])
+            prior_snapshot, _ = load_historical_source(args, artifact["context"])
             prior = gate.project.expected(prior_snapshot, gate.selected)
             self.assertEqual(historical["cli"]["version"], "0.1.91")
             self.assertEqual(user["cli"], PROJECT_RELEASE_FIXTURE["cli"])
