@@ -451,6 +451,14 @@ def validate_user_isolation(before, roots):
             buckets = {name.split("/", 1)[0] if name.split("/", 1)[0] in prefixes else "other"
                        for name in left.keys() | right.keys() if left.get(name) != right.get(name)}
             changed.extend("home:" + bucket for bucket in sorted(buckets))
+            claude_children = {"plugins", "skills", "settings.json", "debug", "cache", "statsig", "todos", "projects", "telemetry", "history.jsonl"}
+            claude_changes = set()
+            for name in left.keys() | right.keys():
+                if left.get(name) == right.get(name) or not name.startswith(".claude/"):
+                    continue
+                child = name.removeprefix(".claude/").split("/", 1)[0]
+                claude_changes.add(child if child in claude_children else "other")
+            changed.extend("home:claude:" + bucket for bucket in sorted(claude_changes))
         print("Project isolation changed buckets: " + ",".join(changed), file=sys.stderr, flush=True)
     require(after == before, "Project operation changed User native or durable state")
 
