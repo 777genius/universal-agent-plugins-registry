@@ -314,8 +314,11 @@ def dependency_cases(snapshot: dict, ctx: dict, *, refusal_source=None) -> dict:
         require(refusal_case["cli"] == project_case["cli"] == release_user_case["cli"], "paired released CLI differs")
     else:
         refusal_case = project.expected_user_refusal(project_case)
-    return {"project_dependencies": project_case, "release_user_dependencies": release_user_case,
-            "vscode_user_refusal": refusal_case}
+    cases = {"project_dependencies": project_case, "release_user_dependencies": release_user_case,
+             "vscode_user_refusal": refusal_case}
+    if paired:
+        cases["vscode_user_saved_management"] = project.expected_user_saved_management(project_case, ctx)
+    return cases
 
 
 def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict, *, refusal_source=None) -> dict:
@@ -888,6 +891,10 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
         if "project_dependencies" in expected:
             args.failure_phase = "project:prepare"
             managed.run(args, root / "project-marketing-kit", expected["project_dependencies"], expected["context"])
+        if "vscode_user_saved_management" in expected:
+            project.run_user_saved_management(args, root / "vscode-user-saved-management",
+                                              expected["vscode_user_saved_management"], expected["context"],
+                                              expected["project_dependencies"])
         if "vscode_user_refusal" in expected:
             refusal_case = expected["vscode_user_refusal"]
             project.run_user_refusal(args, root / "vscode-user-refusal", refusal_case,

@@ -163,6 +163,27 @@ def expected_user_refusal(case, *, context=None):
     return result
 
 
+
+def expected_user_saved_management(case, ctx):
+    """Current signed preparation grant does not grant saved-target capability."""
+    if case is None:
+        return None
+    root = next(item for item in case["closure"] if item["distribution_id"] == managed.ROOT)
+    if tuple(target["client"] for target in root["policy"]["targets"]) != managed.COPILOT_AUTHORIZED_CLIENTS:
+        return None
+    require(case["cli"] == reviewed_release()["cli"], "saved-management corrected CLI differs")
+    return {"cli": copy.deepcopy(case["cli"]), "context": copy.deepcopy(ctx),
+            "root": managed.ROOT, "target": "vscode", "placement_scope": "user",
+            "signed_delivery": "prepared", "outcome": "refused",
+            "reason": "unsupported_saved_management", "request_route": "saved_add_without_no_save",
+            "dependency_intent": "unchanged",
+            "source_binding": "same_four_immutable_packages_as_project_dependencies",
+            "authenticated_directory_cache": "warmed_unchanged",
+            "native_portable_durable_and_foreign_state_unchanged": True,
+            "signed_target_refusal": False, "prepared_native_absence": "not_claimed",
+            "standalone_editor_lifecycle": "not_tested"}
+
+
 def source_coverage(case):
     """Signed source qualification; this must never be counted as positive User placement."""
     return set() if case is None else {
@@ -441,3 +462,77 @@ def run_user_refusal(args, root, case, ctx):
     require(managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
             "VSCode User refusal mutated native, portable or durable state")
     validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
+
+
+def run_user_saved_management(args, root, case, ctx, source_case):
+    """Probe only the explicit saved route; no standalone Editor lifecycle claim."""
+    import catalog_publication_readiness as gate
+    # A direct helper call has the same authenticated whole-input boundary as
+    # the producer. Caller-supplied contexts/cases cannot select another feed.
+    _, canonical = gate.canonical_inputs(args)
+    require("vscode_user_saved_management" in canonical, "saved-management source contract missing")
+    gate.validate_artifact(case, canonical["vscode_user_saved_management"])
+    gate.validate_artifact(ctx, canonical["context"])
+    gate.validate_artifact(source_case, canonical["project_dependencies"])
+    binary = args.project_binary.resolve(strict=True)
+    require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong saved-management released binary")
+    root.mkdir(mode=0o700)
+    roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.codex, args.claude, args.copilot, args.opencode))
+    managed.seed_runtime(root / "bin", env, args.codex)
+    foreign_paths, foreign_configs = managed.seed_foreign_state(roots)
+    foreign_before = managed.snapshot_paths(foreign_paths)
+    initial = refusal_snapshot(roots)
+    readonly = (*gate.tool_paths(args), binary.parent)
+    before = None
+    try:
+        args.failure_phase = "vscode:saved_management_warm_directory"
+        for selection in source_case["closure"]:
+            warmed = gate.child([str(binary), "info", selection["distribution_id"], "--target", "vscode", "--scope", "user", "--format", "json"],
+                                root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
+            require(type(warmed.returncode) is int and warmed.returncode == 0 and warmed.stderr == "", "saved-management Directory warmup failed")
+            info = gate.publication.parse_json_bytes(warmed.stdout.encode(), "Directory warmup", max_bytes=gate.LIMIT)
+            require(isinstance(info, dict) and info.get("command") == "info" and info.get("result") == "success"
+                    and isinstance(info.get("data"), dict), "saved-management warmup envelope")
+            data = info["data"]
+            require(type(data.get("snapshot_sequence")) is int and data["snapshot_sequence"] == ctx["sequence"] and data.get("snapshot_digest") == ctx["snapshot_digest"],
+                    "saved-management warmed wrong signed publication")
+            release = data.get("selected_release", {})
+            require(isinstance(release, dict) and type(release.get("release_sequence")) is int
+                    and release.get("release_status") == "active", "saved-management release shape or status")
+            require(data.get("product_id") == selection["product_id"] and data.get("selected_distribution") == selection["distribution_id"]
+                    and all(release.get(key) == value for key, value in {
+                        "id": selection["distribution_id"], "release_sequence": selection["release_sequence"],
+                        "package_version": selection["package_version"], "resolved_revision": selection["package_source"]["revision"],
+                        "repository": selection["package_source"]["repository"], "package_path": selection["package_source"]["path"],
+                        "tree_digest": selection["tree_digest"], "manifest_digest": selection["manifest_digest"]}.items()),
+                    "saved-management warmup immutable source differs")
+            for targets in (data.get("target_compatibility", []), release.get("target_compatibility", [])):
+                require(isinstance(targets, list) and all(isinstance(target, dict) for target in targets)
+                        and [target for target in targets if target.get("client") == "vscode"] ==
+                        [{"client": "vscode", "scopes": ["user"], "delivery": "prepared"}], "saved-management signed preparation differs")
+            validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
+            require(refusal_snapshot(roots) == initial, "saved-management warmup changed non-cache state")
+        before = managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")})
+        args.failure_phase = "vscode:user_saved_management"
+        # Deliberately omit --no-save: this is the unsupported dependency-intent
+        # route, not a signed-target refusal or a claim about native preparation.
+        result = gate.child([str(binary), "add", "marketing-kit", "--target", "vscode", "--scope", "user", "--yes", "--format", "json"],
+                            root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
+        reason = ('agentplugins: target vscode cannot be saved; retry '
+                  'agentplugins add marketing-kit --target vscode --no-save\n')
+        require(type(result.returncode) is int and result.returncode == 1 and result.stdout == "" and result.stderr == reason,
+                "VSCode User did not receive exact unsupported-saved-management refusal")
+    finally:
+        # These guards also run for malformed output, rejected diagnostics and
+        # child failures. Freeze the full profile only after all four warmups.
+        try:
+            if before is None:
+                require(refusal_snapshot(roots) == initial, "saved-management warmup changed non-cache state")
+            else:
+                require(managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
+                        "saved-management refusal mutated native, portable or durable state")
+        finally:
+            try:
+                managed.validate_foreign_state(foreign_paths, foreign_before, foreign_configs)
+            finally:
+                validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=before is not None)

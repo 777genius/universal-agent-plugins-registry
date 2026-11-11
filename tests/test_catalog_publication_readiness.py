@@ -1279,6 +1279,13 @@ class PairedCatalogTests(unittest.TestCase):
             args = paired_arguments(Path(temporary))
             snapshot, artifact = gate.canonical_inputs(args)
             negative = artifact["vscode_user_refusal"]
+            saved = artifact["vscode_user_saved_management"]
+            self.assertEqual(saved["context"], artifact["context"])
+            self.assertEqual(saved["cli"], artifact["project_dependencies"]["cli"])
+            self.assertEqual(saved["reason"], "unsupported_saved_management")
+            self.assertFalse(saved["signed_target_refusal"])
+            self.assertEqual(saved["prepared_native_absence"], "not_claimed")
+            self.assertEqual(saved["standalone_editor_lifecycle"], "not_tested")
             self.assertEqual(artifact["context"]["sequence"], 46)
             self.assertEqual(negative["context"]["sequence"], 45)
             self.assertEqual(negative["context"]["signed_ledger_sha"], "3f9c30e8b76a51ae3a83f3232cbbb0129fecd468")
@@ -1335,13 +1342,17 @@ class PairedCatalogTests(unittest.TestCase):
                                  ("source_sha", "8" * 40), ("signed_ledger_sha", "7" * 40)):
                 mutations.append(lambda item, field=field, value=value: item["context"].update({field: value}))
                 mutations.append(lambda item, field=field, value=value: item["vscode_user_refusal"]["context"].update({field: value}))
-            for block in ("managed_dependencies", "release_user_dependencies", "project_dependencies", "vscode_user_refusal"):
+            for block in ("managed_dependencies", "release_user_dependencies", "project_dependencies", "vscode_user_refusal", "vscode_user_saved_management"):
                 mutations.append(lambda item, block=block: item.pop(block))
             mutations.extend((
                 lambda item: item["release_user_dependencies"]["closure"][0]["package_source"].update(revision="6" * 40),
                 lambda item: item["project_dependencies"]["closure"].pop(),
                 lambda item: item["vscode_user_refusal"].update(cli={**item["cli"]}),
                 lambda item: item["vscode_user_refusal"].update(context=copy.deepcopy(item["context"])),
+                lambda item: item["vscode_user_saved_management"].update(context=copy.deepcopy(item["vscode_user_refusal"]["context"])),
+                lambda item: item["vscode_user_saved_management"].update(cli=copy.deepcopy(gate.managed.CLI)),
+                lambda item: item["vscode_user_saved_management"].update(reason="missing_vscode_signed_target_grant"),
+                lambda item: item["vscode_user_saved_management"].update(prepared_native_absence="passed"),
                 lambda item: item["rows"].pop(),
             ))
             with patch.object(gate, "child") as child, patch.object(gate.managed, "run") as managed_run, \
@@ -1364,6 +1375,24 @@ class PairedCatalogTests(unittest.TestCase):
                 for function in (child, managed_run, refusal, lifecycle):
                     function.assert_not_called()
 
+    def test_failed_current_saved_management_boundary_cannot_emit_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = paired_arguments(root)
+            args.binary.write_bytes(b"offline orchestration binary")
+            with patch.dict(gate.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}):
+                snapshot, expected = gate.canonical_inputs(args)
+                with patch.object(gate.managed, "run"), \
+                        patch.object(gate.project, "run_user_saved_management", side_effect=ValueError("boundary failure")) as saved, \
+                        patch.object(gate.project, "run_user_refusal") as refusal, patch.object(gate, "child") as child, \
+                        self.assertRaisesRegex(ValueError, "boundary failure"):
+                    gate.produce(args, snapshot, expected)
+                saved.assert_called_once()
+                refusal.assert_not_called()
+                child.assert_not_called()
+                self.assertFalse(args.sandbox.exists())
+                self.assertFalse(args.output.exists())
+
     def test_producer_dispatches_refusal_in_its_own_context_and_verify_reconstructs_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1373,11 +1402,16 @@ class PairedCatalogTests(unittest.TestCase):
                 snapshot, expected = gate.canonical_inputs(args)
                 with patch.object(gate.managed, "run") as managed_run, \
                         patch.object(gate.project, "run_user_refusal") as refusal, \
+                        patch.object(gate.project, "run_user_saved_management") as saved, \
                         patch.object(gate, "run_lifecycle"), patch.object(gate, "acquired_package", return_value=root), \
                         patch.object(gate, "check_static_package"), patch.object(gate, "inspector_check", return_value={"status": "passed"}):
                     gate.produce(args, snapshot, expected)
                     self.assertEqual(managed_run.call_count, 3)
                     self.assertTrue(all(call.args[3] == expected["context"] for call in managed_run.call_args_list))
+                    saved.assert_called_once()
+                    self.assertEqual(saved.call_args.args[2], expected["vscode_user_saved_management"])
+                    self.assertEqual(saved.call_args.args[3], expected["context"])
+                    self.assertEqual(saved.call_args.args[4], expected["project_dependencies"])
                     refusal.assert_called_once()
                     self.assertEqual(refusal.call_args.args[3], expected["vscode_user_refusal"]["context"])
                     self.assertNotEqual(refusal.call_args.args[3], expected["context"])

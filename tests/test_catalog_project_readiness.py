@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime
+from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime, SIGNED46_FEED, SIGNED45_FEED
 from tests import test_catalog_managed_readiness as managed_tests
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
@@ -532,6 +532,151 @@ class ProjectReadinessTests(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError):
                             project.run_user_refusal(args, root / "case", case, ctx)
+
+
+class SavedManagementBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        for manager in (patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}),
+                        patch.object(gate, "datetime", ProofTime)):
+            manager.start()
+            self.addCleanup(manager.stop)
+
+    def fixture(self, root):
+        args = paired_arguments(root)
+        for name in ("binary", "project_binary", "claude", "copilot", "codex", "opencode", "npx"):
+            path = getattr(args, name)
+            path.write_text("#!/bin/sh\nexit 1\n")
+            path.chmod(0o700)
+        release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
+        release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
+        return args, release
+
+    def invoke_fixture(self, args, artifact, behavior, calls):
+        case = artifact["vscode_user_saved_management"]
+        ctx = artifact["context"]
+        selections = {item["distribution_id"]: item for item in artifact["project_dependencies"]["closure"]}
+        reason = 'agentplugins: target vscode cannot be saved; retry agentplugins add marketing-kit --target vscode --no-save\n'
+        def invoke(argv, **kwargs):
+            calls.append(argv[1:])
+            state = Path(kwargs["env"]["AGENTPLUGINS_HOME"])
+            home = Path(kwargs["env"]["HOME"])
+            if argv[1] == "info":
+                self.assertEqual(argv[3:], ["--target", "vscode", "--scope", "user", "--format", "json"])
+                selected = selections[argv[2]]
+                feed, sequence = (SIGNED45_FEED, 45) if behavior == "cache45" else (SIGNED46_FEED, 46)
+                body = (feed / f"snapshots/{sequence:020d}.json").read_bytes()
+                envelope = (feed / f"snapshots/{sequence:020d}.envelope.json").read_bytes()
+                if behavior != "no_cache":
+                    cache = state / "directory-v1-cache.json"
+                    cache.write_text(json.dumps({"schema_version": 1, "sequence": sequence,
+                        "snapshot": base64.b64encode(body).decode(), "envelope": base64.b64encode(envelope).decode()}))
+                    cache.chmod(0o600)
+                targets = [{"client": "vscode", "scopes": ["user"], "delivery": "managed" if behavior == "managed_policy" else "prepared"}]
+                data = {"product_id": selected["product_id"], "selected_distribution": selected["distribution_id"],
+                        "snapshot_sequence": 45 if behavior == "warm45" else ctx["sequence"],
+                        "snapshot_digest": "wrong" if behavior == "wrong_digest" else ctx["snapshot_digest"],
+                        "target_compatibility": targets,
+                        "selected_release": {"id": selected["distribution_id"], "release_sequence": selected["release_sequence"],
+                            "package_version": selected["package_version"], "resolved_revision": selected["package_source"]["revision"],
+                            "release_status": "active", "repository": selected["package_source"]["repository"], "package_path": selected["package_source"]["path"],
+                            "tree_digest": selected["tree_digest"], "manifest_digest": selected["manifest_digest"],
+                            "target_compatibility": targets}}
+                if behavior == "bool_sequence":
+                    data["snapshot_sequence"] = True
+                if behavior == "bool_release":
+                    data["selected_release"]["release_sequence"] = True
+                if behavior == "inactive_release":
+                    data["selected_release"]["release_status"] = "withdrawn"
+                if behavior == "warm_raise":
+                    raise ValueError("fixture warm child failure")
+                if behavior == "wrong_source":
+                    data["selected_release"]["resolved_revision"] = "f" * 40
+                if behavior == "wrong_product":
+                    data["product_id"] = "foreign-product"
+                if behavior == "wrong_distribution":
+                    data["selected_distribution"] = "unqualified/package"
+                if behavior == "wrong_release":
+                    data["selected_release"]["release_sequence"] += 1
+                if behavior == "malformed_targets":
+                    data["target_compatibility"] = ["vscode"]
+                if behavior in ("warm_mutation", "bad_warm_and_mutation"):
+                    (kwargs["cwd"] / "foreign.txt").write_text("changed")
+                return SimpleNamespace(returncode=False if behavior == "warm_bool_return" else 0, stdout=json.dumps({"command": "info", "result": "success", "data": data}),
+                                       stderr=" " if behavior in ("warm_stderr", "bad_warm_and_mutation") else "")
+            self.assertEqual(argv[1:], ["add", "marketing-kit", "--target", "vscode", "--scope", "user", "--yes", "--format", "json"])
+            if behavior in ("native_mutation", "bad_raw_and_mutation"):
+                (home / ".copilot/mcp-config.json").write_text("{}")
+            elif behavior == "intent_mutation":
+                (state / "uap.toml").write_text("[dependencies]\n")
+            elif behavior == "durable_mutation":
+                (state / "state-v2.json").write_text("{}")
+            elif behavior == "foreign_mutation":
+                (kwargs["cwd"] / "foreign.txt").write_text("changed")
+            elif behavior == "journal_mutation":
+                (state / "operations-v2").mkdir()
+            elif behavior == "cache_mutation":
+                cache = state / "directory-v1-cache.json"
+                cache.write_text(cache.read_text() + "\n")
+            if behavior == "probe_raise":
+                raise ValueError("fixture saved child failure")
+            stderr = {"bad_raw_and_mutation": "wrong diagnostic", "padded_prefix": " " + reason, "padded_suffix": reason + " ", "missing_lf": reason[:-1],
+                      "extra_lf": reason + "\n", "signed_refusal": 'agentplugins: no eligible directory release; missing vscode\n',
+                      "resolving_prefix": 'Resolving and validating one Agent Plugin package for every selected target...\n' + reason}.get(behavior, reason)
+            return SimpleNamespace(returncode=True if behavior == "bool_return" else 0 if behavior == "success" else 1,
+                                   stdout=" " if behavior == "stdout_space" else "\n" if behavior == "stdout_lf" else "", stderr=stderr)
+        return invoke
+
+    def test_current_policy_capability_boundary_is_raw_exact_and_read_only(self):
+        warm_failures = ("warm45", "wrong_digest", "cache45", "no_cache", "managed_policy", "wrong_source", "wrong_product",
+                         "wrong_distribution", "wrong_release", "malformed_targets", "warm_mutation", "warm_stderr",
+                         "bool_sequence", "bool_release", "inactive_release", "warm_raise", "bad_warm_and_mutation", "warm_bool_return")
+        failures = (*warm_failures, "success", "stdout_space", "stdout_lf", "padded_prefix", "padded_suffix", "missing_lf", "extra_lf",
+                    "signed_refusal", "resolving_prefix", "native_mutation", "intent_mutation", "durable_mutation", "foreign_mutation", "journal_mutation", "cache_mutation", "probe_raise", "bad_raw_and_mutation", "bool_return")
+        for behavior in ("refused", *failures):
+            with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args, release = self.fixture(root)
+                with patch.object(project, "RELEASE", release):
+                    _, artifact = gate.canonical_inputs(args)
+                    calls = []
+                    with patch.object(gate, "child", side_effect=self.invoke_fixture(args, artifact, behavior, calls)), \
+                            patch.object(managed, "validate_foreign_state", wraps=managed.validate_foreign_state) as foreign_guard:
+                        if behavior == "refused":
+                            project.run_user_saved_management(args, root / "case", artifact["vscode_user_saved_management"],
+                                                              artifact["context"], artifact["project_dependencies"])
+                            self.assertEqual([call[1] for call in calls[:-1]], list(managed.PINS))
+                            self.assertEqual(len(calls), 5)
+                        else:
+                            with self.assertRaises(ValueError):
+                                project.run_user_saved_management(args, root / "case", artifact["vscode_user_saved_management"],
+                                                                  artifact["context"], artifact["project_dependencies"])
+                            if behavior in warm_failures:
+                                self.assertTrue(all(call[0] == "info" for call in calls))
+                        foreign_guard.assert_called_once()
+
+    def test_direct_saved_management_rejects_foreign_context_case_and_cli_before_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args, release = self.fixture(root)
+            with patch.object(project, "RELEASE", release):
+                _, artifact = gate.canonical_inputs(args)
+                case, ctx, source = artifact["vscode_user_saved_management"], artifact["context"], artifact["project_dependencies"]
+                mutations = (
+                    (case, artifact["vscode_user_refusal"]["context"], source),
+                    ({**case, "context": artifact["vscode_user_refusal"]["context"]}, ctx, source),
+                    ({**case, "cli": managed.CLI}, ctx, source),
+                    ({**case, "reason": "missing_vscode_signed_target_grant"}, ctx, source),
+                    ({**case, "prepared_native_absence": "passed"}, ctx, source),
+                    (case, ctx, {**source, "closure": source["closure"][:-1]}),
+                )
+                with patch.object(gate, "child") as child:
+                    for changed_case, changed_ctx, changed_source in mutations:
+                        with self.subTest(case=changed_case), self.assertRaises(ValueError):
+                            project.run_user_saved_management(args, root / "not-created", changed_case, changed_ctx, changed_source)
+                        self.assertFalse((root / "not-created").exists())
+                    child.assert_not_called()
+                prior, _ = gate.load_refusal_source(args, ctx)
+                self.assertIsNone(project.expected_user_saved_management(project.expected(prior, gate.selected), artifact["vscode_user_refusal"]["context"]))
 
 
 if __name__ == "__main__":
