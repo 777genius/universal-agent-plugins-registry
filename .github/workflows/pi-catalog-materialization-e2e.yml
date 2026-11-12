@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'registry/directory.json'
+      - 'plugins/**'
       - 'scripts/pi_catalog_materialization_e2e.py'
       - 'scripts/pi_direct_source_e2e.py'
       - 'scripts/pi_catalog_inventory_e2e.py'
