@@ -125,38 +125,50 @@ def expected_package_native_names(root: Path, installation: dict,
     require(isinstance(manifest_digest, str)
             and re.fullmatch(r"sha256:[0-9a-f]{64}", manifest_digest) is not None,
             "pinned Pi client has no verified manifest digest")
-    candidates = []
-    for path in root.rglob("plugin.json"):
-        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
-            continue
-        if "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() != manifest_digest:
-            continue
-        manifest = strict_json(path.read_text(encoding="utf-8"))
-        require(manifest.get("name") == declared_name,
-                "verified package manifest differs from requested package")
-        package = path.parent
-        skill_root = package / "skills"
-        skills = native_skill_markers(skill_root)
-        mcp = package / "mcp.json"
-        servers = {}
-        if mcp.exists():
-            require(mcp.is_file() and not mcp.is_symlink(),
-                    "verified package MCP declaration is not regular")
-            raw = strict_json(mcp.read_text(encoding="utf-8")).get("mcpServers")
-            require(isinstance(raw, dict), "verified package MCP declaration invalid")
-            require(all(isinstance(name, str) and name and isinstance(value, dict)
-                        for name, value in raw.items()),
-                    "verified package MCP server definitions invalid")
-            servers = raw
-        candidates.append((skills, servers, package))
-    require(bool(candidates) and all(item[:2] == candidates[0][:2] for item in candidates),
-            "verified pinned package native source unavailable or inconsistent")
-    skills, servers, _ = candidates[0]
+    # Anchor verified component discovery to the selected Pi binding. A
+    # duplicate plugin.json and MCP declaration elsewhere in the disposable
+    # checkout cannot establish ownership of that other directory.
+    binding = clients[0]
+    locator = binding.get("target_locator")
+    artifact = binding.get("physical_artifact_id")
+    require(isinstance(locator, str) and Path(locator).is_absolute()
+            and isinstance(artifact, str) and artifact not in ("", ".", "..")
+            and Path(artifact).name == artifact,
+            "pinned Pi client has no physical extension binding")
+    extensions = root / "extensions"
+    package = extensions / artifact
+    require(isinstance(binding.get("native_profile_root"), str)
+            and Path(binding["native_profile_root"]).resolve(strict=True)
+            == root.resolve(strict=True)
+            and not extensions.is_symlink()
+            and not package.is_symlink() and package.is_dir()
+            and Path(locator).resolve(strict=True) == package.resolve(strict=True)
+            and package.resolve(strict=True).parent == extensions.resolve(strict=True),
+            "pinned Pi extension binding differs from selected native scope")
+    manifest_path = package / "plugin.json"
+    require(manifest_path.is_file() and not manifest_path.is_symlink()
+            and "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            == manifest_digest,
+            "verified pinned package native source unavailable")
+    manifest = strict_json(manifest_path.read_text(encoding="utf-8"))
+    require(manifest.get("name") == declared_name,
+            "verified package manifest differs from requested package")
+    skills = native_skill_markers(package / "skills")
+    mcp = package / "mcp.json"
+    servers = {}
+    if mcp.exists():
+        require(mcp.is_file() and not mcp.is_symlink(),
+                "verified package MCP declaration is not regular")
+        raw = strict_json(mcp.read_text(encoding="utf-8")).get("mcpServers")
+        require(isinstance(raw, dict), "verified package MCP declaration invalid")
+        require(all(isinstance(name, str) and name and isinstance(value, dict)
+                    for name, value in raw.items()),
+                "verified package MCP server definitions invalid")
+        servers = raw
     require((kind not in {"skill", "mixed"} or bool(skills))
             and (kind not in {"mcp", "mixed"} or bool(servers)),
             "verified package omitted its expected native components")
-    return skills, servers, tuple(item[2] for item in candidates)
-
+    return skills, servers, (package,)
 
 def require_removed_native_payload(native_root: Path, kind: str, *,
                                    surviving_skills: list[tuple[str, str, str]] | None = None,
@@ -323,7 +335,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         listed = call("list")
         first = plugin_record(listed, name, revision)
         expected_skills, expected_servers, verified_package_roots = expected_package_native_names(
-            case_root, first, name, kind)
+            native_root, first, name, kind)
 
         def require_expected_identity() -> None:
             if kind in {"skill", "mixed"}:
