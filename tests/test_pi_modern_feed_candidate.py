@@ -181,6 +181,29 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "ancestry must not contain"):
                     require_plain_windows_ancestry(parent)
 
+    @unittest.skipUnless(os.name == "nt", "native Windows junction cwd")
+    def test_windows_relative_output_below_junction_fails_before_creation(self) -> None:
+        # Lexical Path.parents for a relative path cannot see the cwd junction.
+        # No candidate is permitted until the caller supplies an absolute path.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            actual = root / "actual"
+            actual.mkdir()
+            junction = root / "alias"
+            subprocess.run(
+                ["cmd.exe", "/c", "mklink", "/J", str(junction), str(actual)],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertTrue(junction.is_junction())
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(junction)
+                with self.assertRaisesRegex(RuntimeError, "absolute output path"):
+                    write_unsigned_candidate(Path("candidate.json"), {"schema_version": 1})
+            finally:
+                os.chdir(original_cwd)
+            self.assertFalse((actual / "candidate.json").exists())
+
     @unittest.skipUnless(os.name == "nt", "native Windows ancestor junction")
     def test_native_windows_nested_junction_cannot_redirect_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

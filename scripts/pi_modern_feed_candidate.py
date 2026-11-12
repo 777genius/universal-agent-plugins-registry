@@ -280,6 +280,11 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     Windows is restricted to the current user's home/temporary output roots.
     This is local preproduction staging, never a signed publication path.
     """
+    # A relative Windows path can inherit a junction from cwd while the
+    # lexical Path.parents walk sees only ".". Refuse it before any I/O.
+    if os.name == "nt":
+        require(path.is_absolute(),
+                "Windows unsigned staging requires an absolute output path")
     content = json.dumps(candidate, ensure_ascii=False, indent=2) + "\n"
     root = ROOT.resolve()
     require(not path.resolve().is_relative_to(root),
