@@ -156,6 +156,34 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 write_unsigned_candidate(path, {"schema_version": 1})
             self.assertFalse((private / "missing.json").exists())
 
+    def test_junction_classification_rejects_parent_without_creating_output(self) -> None:
+        # Simulate Path.is_junction on all platforms, including older Python.
+        # A junction may not be reported by Path.is_symlink on Windows.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private" / "candidate.json"
+            path.parent.mkdir(mode=0o700)
+            with mock.patch.object(Path, "is_junction", return_value=True, create=True):
+                with self.assertRaisesRegex(RuntimeError, "symlink or junction"):
+                    write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertFalse(path.exists())
+
+    @unittest.skipUnless(os.name == "nt", "native Windows NTFS junction")
+    def test_native_windows_parent_junction_cannot_redirect_output(self) -> None:
+        # This is a genuine NTFS junction, not a mocked final-file symlink.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_parent = root / "private-real"
+            real_parent.mkdir()
+            junction = root / "private-junction"
+            subprocess.run(
+                ["cmd.exe", "/c", "mklink", "/J", str(junction), str(real_parent)],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertTrue(junction.is_junction())
+            with self.assertRaisesRegex(RuntimeError, "symlink or junction"):
+                write_unsigned_candidate(junction / "candidate.json", {"schema_version": 1})
+            self.assertFalse((real_parent / "candidate.json").exists())
+
     @unittest.skipUnless(os.name == "posix", "POSIX directory-descriptor protection")
     def test_parent_symlink_swap_cannot_redirect_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

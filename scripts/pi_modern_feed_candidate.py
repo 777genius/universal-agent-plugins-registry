@@ -270,8 +270,11 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     require(not path.resolve().is_relative_to(root),
             "unsigned candidate must stay outside the repository")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    require(not path.parent.is_symlink(),
-            "unsigned candidate output parent must not be a symlink")
+    # Windows directory junctions are reparse points, but are not reported
+    # by Path.is_symlink(); they must not redirect unsigned staging either.
+    is_junction = getattr(path.parent, "is_junction", lambda: False)
+    require(not path.parent.is_symlink() and not is_junction(),
+            "unsigned candidate output parent must not be a symlink or junction")
     parent = path.parent.resolve(strict=True)
     require(not parent.is_relative_to(root),
             "unsigned candidate output parent must stay outside the repository")
