@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,7 @@ from pi_modern_feed_candidate import (main, proposed_source, read_evidence_objec
                                       require_committed_directory_source,
                                       require_complete_source_eligibility,
                                       require_unsigned_preproduction_eligibility,
-                                      validate_platform_report)
+                                      validate_platform_report, write_unsigned_candidate)
 
 HEAD = "a" * 40
 DIGEST = "sha256:" + "b" * 64
@@ -81,6 +82,26 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "--preproduction-only"):
                     main()
                 checkout.assert_not_called()
+
+    def test_unsigned_candidate_output_is_exclusive_and_cannot_clobber(self) -> None:
+        # A path must be created once, never overwritten by a later candidate.
+        # This also covers the path appearing just before the write, unlike
+        # an exists() check followed by write_text().
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "review" / "candidate.json"
+            candidate = {"schema_version": 1, "kind": "unsigned-review-only"}
+            write_unsigned_candidate(path, candidate)
+            first_bytes = path.read_bytes()
+            self.assertEqual(json.loads(first_bytes), candidate)
+            with self.assertRaises(FileExistsError):
+                write_unsigned_candidate(path, {"schema_version": 2})
+            self.assertEqual(path.read_bytes(), first_bytes)
+
+            path.unlink()
+            path.write_bytes(b"do not overwrite this unrelated artifact")
+            with self.assertRaises(FileExistsError):
+                write_unsigned_candidate(path, candidate)
+            self.assertEqual(path.read_bytes(), b"do not overwrite this unrelated artifact")
 
     def test_candidate_source_must_equal_committed_directory_bytes(self) -> None:
         with mock.patch("pi_modern_feed_candidate.subprocess.run",
