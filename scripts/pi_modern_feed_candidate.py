@@ -272,6 +272,39 @@ def require_plain_windows_ancestry(parent: Path) -> None:
                 "unsigned candidate output ancestry must not contain a symlink or junction")
 
 
+def open_posix_candidate_parent(parent: Path, repo_root: Path) -> int:
+    """Acquire every path component via a pinned O_NOFOLLOW directory handle.
+
+    No path re-resolution can promote a concurrently swapped ancestor into the
+    write authority. Missing output directories are made via trusted dir_fd.
+    The caller owns the returned descriptor and must close it.
+    """
+    require(".." not in parent.parts, "unsigned candidate path may not traverse upward")
+    absolute = parent.absolute()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    repository = os.stat(repo_root)
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for component in absolute.parts[1:]:
+            require(component not in ("", ".", ".."),
+                    "unsigned candidate contains unsafe ancestor component")
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            info = os.fstat(descriptor)
+            require((info.st_dev, info.st_ino) !=
+                    (repository.st_dev, repository.st_ino),
+                    "unsigned candidate output ancestry reached repository")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     """Create an unsigned review file exclusively in an isolated output directory.
 
@@ -289,33 +322,17 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     root = ROOT.resolve()
     require(not path.resolve().is_relative_to(root),
             "unsigned candidate must stay outside the repository")
-    if os.name == "nt":
-        require_plain_windows_ancestry(path.parent)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if os.name == "nt":
-        require_plain_windows_ancestry(path.parent)
-    else:
-        # Preserve the portable parent reparse-point refusal as well as the
-        # POSIX O_NOFOLLOW/dir_fd protection and its existing regression.
+    if os.name == "posix":
         is_junction = getattr(path.parent, "is_junction", None)
         require(not path.parent.is_symlink()
                 and not (callable(is_junction) and is_junction()),
                 "unsigned candidate output parent must not be a symlink or junction")
-    parent = path.parent.resolve(strict=True)
-    require(not parent.is_relative_to(root),
-            "unsigned candidate output parent must stay outside the repository")
-
-    if os.name == "posix":
-        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parent_fd = open_posix_candidate_parent(path.parent, root)
         try:
             info = os.fstat(parent_fd)
             require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
                     and (stat.S_IMODE(info.st_mode) & 0o077) == 0,
                     "unsigned candidate requires an owner-private output directory")
-            current = os.stat(path.parent, follow_symlinks=False)
-            require((info.st_dev, info.st_ino) == (current.st_dev, current.st_ino)
-                    and not path.parent.resolve(strict=True).is_relative_to(root),
-                    "unsigned candidate output parent changed during verification")
             fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=parent_fd)
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
@@ -323,6 +340,12 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
         finally:
             os.close(parent_fd)
     else:
+        require_plain_windows_ancestry(path.parent)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        require_plain_windows_ancestry(path.parent)
+        parent = path.parent.resolve(strict=True)
+        require(not parent.is_relative_to(root),
+                "unsigned candidate output parent must stay outside the repository")
         # Windows has no portable Python dir_fd. Stay within the user's
         # private profile/temp tree, not an arbitrary shared or repo path.
         trusted = (Path.home().resolve(), Path(tempfile.gettempdir()).resolve())
