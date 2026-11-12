@@ -122,7 +122,7 @@ def scan_portable_path(value, field):
     _require(isinstance(value, str) and value and "\\" not in value and "%" not in value,
              f"{field}: empty or ambiguous path")
     path = PurePosixPath(value)
-    _require(not path.is_absolute() and path.as_posix() == value and len(path.parts) <= MAX_DEPTH,
+    _require(bool(path.parts) and not path.is_absolute() and path.as_posix() == value and len(path.parts) <= MAX_DEPTH,
              f"{field}: path must be normalized, relative and bounded")
     _require(not any(segment.casefold() == ".git" for segment in path.parts) and
              value.casefold() != ".plugin-kit-ai.lock", f"{field}: reserved path")
