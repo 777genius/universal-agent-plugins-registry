@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from pi_catalog_inventory_e2e import active_sources
+from pi_catalog_inventory_e2e import active_sources, native_files
+from pi_direct_source_e2e import require_removed_native_payload
 from pi_catalog_materialization_e2e import (
     KIND, MANAGED_ROOT, MANAGED_NO_SAVE_DIAGNOSTIC, PLATFORMS, SCOPES, SHARDS,
     case_tuple, selected_sources, source_identity, verify_report, verify_all,
@@ -94,6 +96,26 @@ class PiRealMaterializationContracts(unittest.TestCase):
                         verify_report(report, self.sources, HEAD, platform, shard, SHARDS),
                         expected,
                     )
+
+    def test_remove_rejects_leftover_native_skill_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            native = Path(directory)
+            foreign = native / "skills" / "foreign"
+            foreign.mkdir(parents=True)
+            (foreign / "SKILL.md").write_text("keep", encoding="utf-8")
+            original = native_files(native / "skills")
+            require_removed_native_payload(native, "skill", surviving_skills=original)
+            residual = native / "skills" / "removed" / "scripts"
+            residual.mkdir(parents=True)
+            (residual / "run.py").write_text("leftover", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "skill payload remains"):
+                require_removed_native_payload(native, "skill", surviving_skills=original)
+            (residual / "run.py").unlink()
+            residual.rmdir()
+            residual.parent.rmdir()
+            (foreign / "SKILL.md").write_text("modified", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "foreign skill tree changed"):
+                require_removed_native_payload(native, "skill", surviving_skills=original)
 
     def test_boolean_report_schema_is_not_v1(self) -> None:
         report = fixture(self.sources, "ubuntu-24.04", 0)
