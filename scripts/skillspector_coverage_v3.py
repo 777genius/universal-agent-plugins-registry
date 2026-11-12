@@ -1054,13 +1054,23 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # A recovered Complete may come from a checkpoint rejected in assembly.
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
-    novel = finding_identities(new) - represented_finding_identities(old) if degraded_complete else Counter()
+    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
+    # Two genuine Partial (or independent fork) scans can each contain an
+    # adverse group missing from the other. Quarantining just the "stronger"
+    # representative would hide the second authenticated security finding.
+    disjoint = (old["status"] in {"complete", "partial"} and
+        new["status"] in {"complete", "partial"} and
+        old["source"] == new["source"] and old["scanner"] == new["scanner"] and
+        bool(old_groups - new_groups) and bool(new_groups - old_groups))
+    novel = new_groups - old_groups if degraded_complete or disjoint else Counter()
     if novel and witness_origin is None:
         # Never substitute a truncated representative for two distinct reports.
         # The recovery caller supplies origin only after authenticating the
         # producing main run and complete immutable checkpoint payload.
-        require_represented_degraded_findings(item, old, new, outcome["attempt"])
-    chosen = old if prefer_existing or degraded_complete or old.get("recovery_witnesses") else max((old, new), key=rank)
+        if degraded_complete:
+            require_represented_degraded_findings(item, old, new, outcome["attempt"])
+        raise PublicationError("disjoint security findings require authenticated recovery origin")
+    chosen = old if prefer_existing or degraded_complete or disjoint or old.get("recovery_witnesses") else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
     if novel:
         require(old["source"] == new["source"] and
