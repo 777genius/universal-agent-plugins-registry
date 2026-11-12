@@ -120,6 +120,14 @@ class ColdAcquisitionTests(unittest.TestCase):
             sizes.assert_not_called()
             fetch.assert_not_called()
 
+    def test_dot_only_and_escaping_scanner_staging_paths_cannot_be_materialized(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative in (".", "../secret", "dir//file", "dir/./file", "dir/../file"):
+                with self.subTest(relative=relative), self.assertRaises(DiscoveryError):
+                    acquisition.materialize_scanned_files([(relative, 0o644, b"payload")], root)
+            self.assertEqual(list(root.rglob("*")), [])
+
     def test_unicode_casefold_collision_and_symlink_cannot_be_silently_ignored(self):
         with tempfile.TemporaryDirectory() as temporary:
             pinned, _ = self.fixture(Path(temporary), {
