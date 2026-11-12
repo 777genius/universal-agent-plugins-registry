@@ -332,6 +332,22 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], merged["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
+            # A subsequent single-witness Complete is still missing the other
+            # verified findings: it cannot erase the authenticated alternative
+            # or silently change this source into Complete.
+            later = copy.deepcopy(outcome["record"])
+            later_outcome = {"record": later, "attempt": coverage.make_attempt(
+                subject, later, merged["attempts"][subject["id"]], kept)}
+            later_records = {subject["id"]: copy.deepcopy(kept)}
+            later_attempts = copy.deepcopy(merged["attempts"])
+            self.assertTrue(coverage.degraded_rescan(kept, later))
+            self.assertTrue(coverage.apply_outcome(later_records, later_attempts,
+                subject, later_outcome, authenticated_current_worker=True))
+            self.assertEqual(later_records[subject["id"]]["status"], "partial")
+            self.assertEqual(later_records[subject["id"]]["findings"], old["findings"])
+            self.assertEqual(later_records[subject["id"]]["recovery_witnesses"],
+                             kept["recovery_witnesses"])
+
             # Unauthenticated or oversized evidence cannot enter the signed
             # report. Neither adversarial input may modify a prior bundle.
             untrusted = {key: copy.deepcopy(value) for key, value in novel.items()
