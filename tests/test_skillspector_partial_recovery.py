@@ -315,6 +315,9 @@ class RecoveryTests(unittest.TestCase):
             self.assertIn(coverage.source_digest(subject), message)
             self.assertIn('"attempt_count":2', message)
             self.assertIn('"novel_group_instances":1', message)
+            self.assertIn('"old_only_group_instances":1', message)
+            self.assertIn('"old_partially_inspected_files":', message)
+            self.assertIn('"new_partially_inspected_files":', message)
             self.assertNotIn("New HIGH risk.", message)
             self.assertFalse((root / "rejected-later" / "manifest.json").exists())
 
