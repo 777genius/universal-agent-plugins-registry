@@ -227,6 +227,36 @@ def require_committed_directory_source(source_head: str, actual: bytes) -> None:
             "working Directory source differs from requested source HEAD")
 
 
+def open_windows_exclusive_nofollow(path: Path):
+    """Atomically create a Windows file without following a final symlink.
+
+    Python's regular open("x") can follow a dangling NTFS symlink. CREATE_NEW
+    plus FILE_FLAG_OPEN_REPARSE_POINT instead refuses the existing link itself.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    )
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel32.CreateFileW(
+        str(path), 0x40000000, 0, None, 1, 0x80 | 0x00200000, None,
+    )  # GENERIC_WRITE, no sharing, CREATE_NEW, NORMAL | OPEN_REPARSE_POINT
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_BINARY)
+    except BaseException:
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle(handle)
+        raise
+    return os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+
+
 def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     """Create an unsigned review file exclusively in an isolated output directory.
 
@@ -269,7 +299,7 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
         trusted = (Path.home().resolve(), Path(tempfile.gettempdir()).resolve())
         require(any(parent.is_relative_to(base) for base in trusted),
                 "Windows unsigned candidate output must be in the user home/temp directory")
-        with path.open("x", encoding="utf-8", newline="\n") as output:
+        with open_windows_exclusive_nofollow(path) as output:
             output.write(content)
 
 
