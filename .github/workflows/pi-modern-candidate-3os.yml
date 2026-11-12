@@ -1,0 +1,44 @@
+name: Pi unsigned modern-v1 candidate writer (3 OS)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/pi_modern_feed_candidate.py'
+      - 'tests/test_pi_modern_feed_candidate.py'
+      - '.github/workflows/pi-modern-candidate-3os.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/pi_modern_feed_candidate.py'
+      - 'tests/test_pi_modern_feed_candidate.py'
+      - '.github/workflows/pi-modern-candidate-3os.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-writer:
+    name: Private unsigned output / ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Verify exact head and negative unsigned output boundary
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python -m unittest tests.test_pi_modern_feed_candidate -v
