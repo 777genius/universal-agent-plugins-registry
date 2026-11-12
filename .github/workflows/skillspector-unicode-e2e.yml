@@ -67,9 +67,9 @@ jobs:
           sources = (
               ("alchaincyf/elon-musk-skill", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f", "", 12, 5438866, 3),
               ("gogf/skills", "c22b6e4115e1a3747676419bba98fee99af6beff", "skills/goframe-v2", 962, 4418429, 400),
-              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama", 31, 621272, 6),
-              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama-develop", 36, 235483, 15),
-              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama-edit", 29, 231997, 1),
+              ("zenstory-ai/drama-skills", "8cf7404981b7095b498e061832bb3c9ffd6a42be", "skills/short-drama", 31, 621272, 6),
+              ("zenstory-ai/drama-skills", "8cf7404981b7095b498e061832bb3c9ffd6a42be", "skills/short-drama-develop", 36, 235483, 15),
+              ("zenstory-ai/drama-skills", "8cf7404981b7095b498e061832bb3c9ffd6a42be", "skills/short-drama-edit", 29, 232288, 1),
           )
           evidence = []
           receipt = Path("/tmp/skillspector-unicode-acceptance.json")
@@ -87,7 +87,8 @@ jobs:
                   try:
                       files = bounded_package_files(pinned, selected_root, max_files=2048,
                           max_file_bytes=16 << 20, max_tree_bytes=16 << 20)
-                      # Independent GitHub immutable-tree metadata, not scanner-generated counts.
+                      # Independently verified immutable Git tree at the latest signed v3 Error source pin; not scanner-generated counts.
+                      # Never assume a prior revision's E2E proves a newer SHA.
                       assert len(files) == count, f"{repository}: dropped file(s)"
                       assert sum(len(body) for _, _, body in files) == total_bytes, f"{repository}: changed bytes"
                       assert sum(not path.isascii() for path, _, _ in files) == unicode_count
