@@ -46,6 +46,7 @@ from publication_trust_policy import (
     validate_publication_eligibility_trust,
 )
 from sequence_boundaries import next_public_sequence, parse_public_sequence
+from legacy_directory_client_boundary import require_pi_free_legacy_distributions
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +131,9 @@ def validate_bound_candidate(candidate: dict[str, object]) -> None:
     require(type(lifetime_days) is int and 1 <= lifetime_days <= 30, "candidate lifetime is invalid")
     for field in ("products", "distributions", "evidence", "revocations"):
         require(isinstance(candidate[field], list), f"candidate {field} must be an array")
+    # A prepared artifact cannot bypass this boundary by skipping the
+    # no-secret preparation step. Check even revoked/suspended policies.
+    require_pi_free_legacy_distributions(candidate["distributions"])
     validate_directory_records(candidate, snapshot=False)
 
 

@@ -43,6 +43,7 @@ from directory_publication import (
 )
 from directory_publication_cas import CasError, validate_marker
 from sequence_boundaries import parse_public_sequence
+from legacy_directory_client_boundary import require_pi_free_legacy_distributions
 from repository_identity import is_checkout_owned_repository
 from publication_trust_policy import (
     load_publication_trust_config,
@@ -727,6 +728,11 @@ def build_candidate(
     external_overrides: dict[str, Path] | None = None,
     historical_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    # This path is permanently the *legacy* schema-1 signer. Refuse Pi
+    # independently of schema support, including before a future schema
+    # update could make the otherwise valid target parse successfully.
+    if isinstance(source, dict) and isinstance(source.get("distributions"), list):
+        require_pi_free_legacy_distributions(source["distributions"])
     validate_with_schema(source, SOURCE_SCHEMA)
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be a full lowercase SHA")
     try:
