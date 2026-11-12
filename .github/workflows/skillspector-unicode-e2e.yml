@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pinned-three-root-acquisition:
+  pinned-five-root-acquisition:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout exact PR HEAD (no stored credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -35,8 +35,8 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
       - name: Run integration acquisition and negative safety tests
         run: python3 -m unittest tests.test_skillspector_acquisition.ColdAcquisitionTests -v
-      - name: Acquire and fully materialize three real immutable Error roots
-        timeout-minutes: 15
+      - name: Acquire and fully materialize five real immutable Error roots
+        timeout-minutes: 22
         run: |
           python3 - <<'PY'
           import json
@@ -52,6 +52,8 @@ jobs:
               ("alchaincyf/elon-musk-skill", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f", "", 12, 5438866, 3),
               ("gogf/skills", "c22b6e4115e1a3747676419bba98fee99af6beff", "skills/goframe-v2", 962, 4418429, 400),
               ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama", 31, 621272, 6),
+              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama-develop", 36, 235483, 15),
+              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama-edit", 29, 231997, 1),
           )
           evidence = []
           receipt = Path("/tmp/skillspector-unicode-acceptance.json")
@@ -97,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: skillspector-three-unicode-root-acceptance
+          name: skillspector-five-unicode-root-acceptance
           path: /tmp/skillspector-unicode-acceptance.json
           if-no-files-found: warn
           retention-days: 7
