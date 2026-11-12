@@ -148,7 +148,7 @@ class ColdAcquisitionTests(unittest.TestCase):
         with self.assertRaises(DiscoveryError):
             acquisition.scan_portable_path(relative + "/too-deep", "scan file")
         full_path = "skills/demo/" + relative
-        row = f"100644 blob {'a' * 40}\\t{full_path}\\0".encode("utf-8")
+        row = f"100644 blob {'a' * 40}\t{full_path}\0".encode("utf-8")
         with mock.patch.object(acquisition, "_run_git", return_value=row):
             records = acquisition._tree_records(mock.Mock(), "skills/demo", 512, WorkBudget(5))
         self.assertEqual(records[0][0], relative)
