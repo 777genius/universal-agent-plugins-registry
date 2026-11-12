@@ -327,7 +327,7 @@ class RecoveryTests(unittest.TestCase):
             empty = copy.deepcopy(kept)
             empty["recovery_witnesses"] = []
             with self.assertRaisesRegex(PublicationError, "empty or excessive recovery witness list"):
-                coverage.contract.validate_record(empty, subject, coverage.scanner.now(),
+                coverage.contract.validate_record(empty, subject, coverage.v2.timestamp(coverage.scanner.now(), "generated"),
                     scheduled=True, allowed_profiles=merged["manifest"]["profiles"],
                     scanner_identity=merged["manifest"]["scanner"],
                     repository_aliases=merged["manifest"]["repository_aliases"])
