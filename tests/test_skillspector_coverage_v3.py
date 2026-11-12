@@ -1055,7 +1055,7 @@ class WorkerBudgetTests(unittest.TestCase):
         """Exercise real admission, materialization, normalization and history with a fake clock."""
         elapsed, calls = [0.0], []
         pinned = mock.Mock()
-        materialize = coverage.materialize_package
+        materialize = coverage.materialize_scanned_files
 
         def prepare(seconds, budget):
             elapsed[0] += min(seconds, budget.remaining())
@@ -1089,7 +1089,7 @@ class WorkerBudgetTests(unittest.TestCase):
              mock.patch.object(scanner, "verify_scanner"), \
              mock.patch.object(coverage, "PinnedRepository", side_effect=acquire) as acquisition, \
              mock.patch.object(coverage, "bounded_package_files", side_effect=package), \
-             mock.patch.object(coverage, "materialize_package", side_effect=materialize_with_elapsed_time), \
+             mock.patch.object(coverage, "materialize_scanned_files", side_effect=materialize_with_elapsed_time), \
              mock.patch.object(scanner, "run_scanner_v3", side_effect=analyze):
             result = coverage.scan_partition(selection, Path("/unused-scanner"), previous,
                 source_commit=COMMIT, partition_count=1, budget_seconds=budget_seconds)
