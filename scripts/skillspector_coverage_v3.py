@@ -1015,7 +1015,7 @@ def mark_missing_predecessor(record, attempt):
         "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
 
 
-def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False):
+def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False, witness_origin=None):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
     Attempt numbers belong to the originating queue lineage. A conflicting fork
@@ -1046,10 +1046,33 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # A recovered Complete may come from a checkpoint rejected in assembly.
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
-    if degraded_complete:
+    novel = finding_identities(new) - finding_identities(old) if degraded_complete else Counter()
+    if novel and witness_origin is None:
+        # Never substitute a truncated representative for two distinct reports.
+        # The recovery caller supplies origin only after authenticating the
+        # producing main run and complete immutable checkpoint payload.
         require_represented_degraded_findings(item, old, new, outcome["attempt"])
-    chosen = old if prefer_existing or degraded_complete else max((old, new), key=rank)
+    chosen = old if prefer_existing or degraded_complete or old.get("recovery_witnesses") else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
+    if novel:
+        require(old["source"] == new["source"] and
+                old["scanner"] == new["scanner"] and
+                new["report_digest"] != old["report_digest"] and
+                isinstance(witness_origin, dict) and
+                set(witness_origin) == {"run_id", "run_attempt"} and
+                all(type(value) is int and value > 0 for value in witness_origin.values()) and
+                "recovery_witnesses" not in new,
+                "unverifiable recovery witness cannot be published")
+        witness = {"origin": copy.deepcopy(witness_origin), "record": copy.deepcopy(new)}
+        require(len(report_json(witness)) <= 256 << 10, "immutable recovery witness exceeds bound")
+        witnesses = retained.setdefault("recovery_witnesses", [])
+        require(not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses),
+                "authenticated recovery origin has conflicting witness")
+        if witness not in witnesses:
+            require(len(witnesses) < 2, "independent recovery witness limit exceeded")
+            witnesses.append(witness)
+            witnesses.sort(key=lambda value: (value["origin"]["run_id"],
+                value["origin"]["run_attempt"], value["record"]["report_digest"]))
     if chosen is new:
         # Worker evidence is not a scheduled report and has no queue controls.
         # It is already authenticated and validated against this exact selected
@@ -1181,7 +1204,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
             if old_record is not None and outcome["record"]["status"] == "complete" and \
                     degraded_rescan(old_record, outcome["record"]):
-                quarantine_recovery(records, attempts, item, outcome)
+                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
             elif old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
                 records[item["id"]] = copy.deepcopy(outcome["record"])
                 records[item["id"]]["freshness"] = "current"
@@ -1198,7 +1221,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 records[identifier] = copy.deepcopy(outcome["record"])
                 records[identifier]["freshness"] = "current"
             elif outcome["record"]["status"] != "error":
-                quarantine_recovery(records, attempts, item, outcome)
+                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
             mark_missing_predecessor(records[identifier], attempts[identifier])
             diagnostics["missing_predecessor_executions"] += 1
             if len(diagnostics["examples"]) < 32:
@@ -1241,7 +1264,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 require(attempt == make_attempt(item, outcome["record"], old_attempt, old_record,
                     at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                 attempts[item["id"]] = copy.deepcopy(attempt)
-                quarantine_recovery(records, attempts, item, outcome)
+                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
                 if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                     mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                 applied += 1
@@ -1256,7 +1279,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     diagnostics["equivalent_executions"] += 1
                 else:
                     before = copy.deepcopy((old_record, old_attempt))
-                    quarantine_recovery(records, attempts, item, outcome)
+                    quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
                     if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                         mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                     if (records[item["id"]], attempts[item["id"]]) != before:
