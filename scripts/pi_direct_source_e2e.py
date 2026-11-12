@@ -173,7 +173,21 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     def require_native_payload_present() -> None:
         # Require materialization immediately after add. A later repair must
         # not mask a missing native file or MCP entry at initial install.
-        require_native_payload_present()
+        if kind in {"skill", "mixed"}:
+            skills = native_root / "skills"
+            installed = {path.relative_to(skills).as_posix()
+                         for path in skills.rglob("SKILL.md")}
+            require("foreign-neighbor/SKILL.md" in installed and len(installed) > 1
+                    and foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
+                    "Pi native skill absent or pre-existing Pi skill was changed")
+        if kind in {"mcp", "mixed"}:
+            config = native_root / "mcp.json"
+            require(config.is_file(), "Pi native MCP configuration absent")
+            server_entries = strict_json(config.read_text(encoding="utf-8")).get("mcpServers")
+            require(isinstance(server_entries, dict)
+                    and server_entries.get("foreign-neighbor") == foreign_server
+                    and any(name != "foreign-neighbor" for name in server_entries),
+                    "Pi native MCP registration absent or foreign server was changed")
 
     args = ["--target", "pi", "--scope", scope, "--format", "json"]
     if scope == "project":
@@ -223,21 +237,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         maintained = plugin_record(call("list"), name, revision)
         require(maintained["installation_id"] == first["installation_id"],
                 "maintenance switched or duplicated the pinned Pi installation")
-        if kind in {"skill", "mixed"}:
-            skills = native_root / "skills"
-            installed = {path.relative_to(skills).as_posix()
-                         for path in skills.rglob("SKILL.md")}
-            require("foreign-neighbor/SKILL.md" in installed and len(installed) > 1
-                    and foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
-                    "Pi native skill absent or pre-existing Pi skill was changed")
-        if kind in {"mcp", "mixed"}:
-            config = native_root / "mcp.json"
-            require(config.is_file(), "Pi native MCP configuration absent")
-            server_entries = strict_json(config.read_text(encoding="utf-8")).get("mcpServers")
-            require(isinstance(server_entries, dict)
-                    and server_entries.get("foreign-neighbor") == foreign_server
-                    and any(name != "foreign-neighbor" for name in server_entries),
-                    "Pi native MCP registration absent or foreign server was changed")
+        require_native_payload_present()
         call("remove", first["installation_id"], timeout=120)
         if kind in {"skill", "mixed"}:
             require_removed_native_payload(
