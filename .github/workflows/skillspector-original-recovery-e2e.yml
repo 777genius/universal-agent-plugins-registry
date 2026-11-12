@@ -107,7 +107,16 @@ jobs:
               witness = kept["recovery_witnesses"][0]
               assert witness["origin"] == {"run_id": 42854039402, "run_attempt": 1}
               assert witness["record"] == original
-              assert first["attempts"][item["id"]] == previous["attempts"][item["id"]]
+              # Retry scheduling *must* change to recovery_conflict, while the
+              # authenticated execution history, count and source remain exact.
+              prior_attempt = previous["attempts"][item["id"]]
+              reconciled_attempt = first["attempts"][item["id"]]
+              for key in ("history", "attempt_count", "fingerprint", "scanner", "source_digest", "profile"):
+                  assert reconciled_attempt[key] == prior_attempt[key], key
+              assert reconciled_attempt["reason"] in {
+                  "recovery_conflict", "recovery_conflict_attempt_limit"}
+              assert reconciled_attempt["disposition"] in {"scheduled", "exhausted"}
+              assert reconciled_attempt["attempt_count"] > 0
               second = recover(first, base / "replay")
               assert second["records"][item["id"]] == kept
               assert second["attempts"][item["id"]] == first["attempts"][item["id"]]
