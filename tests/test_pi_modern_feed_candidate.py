@@ -92,12 +92,12 @@ class ModernPiEvidenceTests(unittest.TestCase):
         # still refuses Marketing Kit's signed HubSpot dependency closure.
         counts = {"linux": (2, 2), "macos": (2, 2), "windows": (2, 2)}
         with self.assertRaisesRegex(RuntimeError, "zero refused saved dependency plans"):
-            require_complete_source_eligibility(counts)
+            require_complete_source_eligibility(counts, expected_eligible=4)
 
     def test_all_os_source_plans_can_reach_review_stage(self) -> None:
         # This helper is only a source-planning gate, NOT signed entitlement.
         require_complete_source_eligibility(
-            {"linux": (4, 0), "macos": (4, 0), "windows": (4, 0)}
+            {"linux": (4, 0), "macos": (4, 0), "windows": (4, 0)}, expected_eligible=4
         )
 
     def test_unsigned_review_gate_cannot_accept_partial_or_spoofed_os_counts(self) -> None:
@@ -112,7 +112,7 @@ class ModernPiEvidenceTests(unittest.TestCase):
             with self.subTest(counts=counts), self.assertRaisesRegex(
                 RuntimeError, "complete identical 3-OS"
             ):
-                require_complete_source_eligibility(counts)
+                require_complete_source_eligibility(counts, expected_eligible=4)
 
     def test_preproduction_gate_rejects_boolean_or_negative_case_totals(self) -> None:
         for counts in (
@@ -123,13 +123,13 @@ class ModernPiEvidenceTests(unittest.TestCase):
             with self.subTest(counts=counts), self.assertRaisesRegex(
                 RuntimeError, "complete consistent 3-OS"
             ):
-                require_unsigned_preproduction_eligibility(counts)
+                require_unsigned_preproduction_eligibility(counts, expected_eligible=4)
 
     def test_known_legacy_refusal_allows_only_unsigned_preproduction_review(self) -> None:
         counts = {"linux": (2, 2), "macos": (2, 2), "windows": (2, 2)}
-        require_unsigned_preproduction_eligibility(counts)
+        require_unsigned_preproduction_eligibility(counts, expected_eligible=4)
         with self.assertRaisesRegex(RuntimeError, "zero refused saved dependency plans"):
-            require_complete_source_eligibility(counts)
+            require_complete_source_eligibility(counts, expected_eligible=4)
 
     def test_unsigned_preproduction_rejects_missing_or_divergent_os(self) -> None:
         for counts in (
@@ -141,7 +141,30 @@ class ModernPiEvidenceTests(unittest.TestCase):
             with self.subTest(counts=counts), self.assertRaisesRegex(
                 RuntimeError, "complete consistent 3-OS"
             ):
-                require_unsigned_preproduction_eligibility(counts)
+                require_unsigned_preproduction_eligibility(counts, expected_eligible=4)
+
+
+    def test_complete_72_gate_rejects_consistently_missing_scopes(self) -> None:
+        # Three matching OS summaries cannot hide two unexecuted saved cases.
+        counts = {platform: (70, 0) for platform in ("linux", "macos", "windows")}
+        with self.assertRaisesRegex(RuntimeError, "complete identical 3-OS"):
+            require_complete_source_eligibility(counts, expected_eligible=72)
+        require_complete_source_eligibility(
+            {platform: (72, 0) for platform in counts}, expected_eligible=72
+        )
+
+    def test_preproduction_gate_requires_all_72_classified_scopes(self) -> None:
+        counts = {platform: (68, 2) for platform in ("linux", "macos", "windows")}
+        with self.assertRaisesRegex(RuntimeError, "complete consistent 3-OS"):
+            require_unsigned_preproduction_eligibility(counts, expected_eligible=72)
+        require_unsigned_preproduction_eligibility(
+            {platform: (70, 2) for platform in counts}, expected_eligible=72
+        )
+
+    def test_expected_count_cannot_be_spoofed_by_bool(self) -> None:
+        counts = {platform: (4, 0) for platform in ("linux", "macos", "windows")}
+        with self.assertRaisesRegex(RuntimeError, "complete identical 3-OS"):
+            require_complete_source_eligibility(counts, expected_eligible=True)
 
     def test_unknown_refusal_cannot_be_counted_as_reviewed(self) -> None:
         report = copy.deepcopy(self.report)

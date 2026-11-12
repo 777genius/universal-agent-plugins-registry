@@ -120,28 +120,34 @@ def validate_platform_report(report: dict, platform: str, head: str,
     return planned, refused
 
 
-def require_complete_source_eligibility(counts: dict[str, tuple[int, int]]) -> None:
+def require_complete_source_eligibility(counts: dict[str, tuple[int, int]], expected_eligible: int) -> None:
     """Block staging when any OS still refuses a real saved dependency plan."""
     # This helper is also callable outside main(), so independently require
     # all three OS with identical positive counts; an empty/partial report or
     # bool masquerading as an integer must never qualify a candidate.
-    require(set(counts) == PLATFORMS and len(set(counts.values())) == 1
+    require(type(expected_eligible) is int and expected_eligible > 0
+            and expected_eligible % len(SCOPES) == 0
+            and set(counts) == PLATFORMS and len(set(counts.values())) == 1
             and all(type(planned) is int and planned > 0
                     and type(refused) is int and refused == 0
+                    and planned + refused == expected_eligible
                     for planned, refused in counts.values()),
             "modern Pi candidate requires complete identical 3-OS source plans "
             "with zero refused saved dependency plans")
 
 
-def require_unsigned_preproduction_eligibility(counts: dict[str, tuple[int, int]]) -> None:
+def require_unsigned_preproduction_eligibility(counts: dict[str, tuple[int, int]], expected_eligible: int) -> None:
     """Only permit a REVIEW candidate from complete, consistently classified 3-OS plans.
 
     A historically Pi-free signed feed may refuse Marketing Kit's HubSpot child.
     That genuine refusal is never a successful install or permission to sign.
     """
-    require(set(counts) == PLATFORMS and len(set(counts.values())) == 1
+    require(type(expected_eligible) is int and expected_eligible > 0
+            and expected_eligible % len(SCOPES) == 0
+            and set(counts) == PLATFORMS and len(set(counts.values())) == 1
             and all(type(planned) is int and planned > 0
                     and type(refused) is int and refused in {0, 2}
+                    and planned + refused == expected_eligible
                     for planned, refused in counts.values()),
             "preproduction requires complete consistent 3-OS source plans with only known refusals")
 
@@ -231,11 +237,12 @@ def main() -> int:
     require(set(reports) == PLATFORMS, "all three independent OS reports required")
     counts = {platform: validate_platform_report(data, platform, args.source_head, sources)
               for platform, data in reports.items()}
+    expected_eligible = sum(source["distribution_status"] == "active" for source in sources) * len(SCOPES)
     require(len(set(counts.values())) == 1, "cross-OS outcomes differ")
     if args.preproduction_only:
-        require_unsigned_preproduction_eligibility(counts)
+        require_unsigned_preproduction_eligibility(counts, expected_eligible)
     else:
-        require_complete_source_eligibility(counts)
+        require_complete_source_eligibility(counts, expected_eligible)
 
     reviews = read_evidence_object(args.review)
     require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
