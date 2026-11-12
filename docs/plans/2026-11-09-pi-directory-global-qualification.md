@@ -44,7 +44,7 @@ Exact-head [CI #42732521352](https://github.com/777genius/universal-agent-plugin
 ## Acceptance gates
 
 - Direct-source Pi representative lifecycle across three OS plus all source-policy user/project planning on each OS. Record each refusal (not a PASS), exact source pins and receipts, and deliberate suspended-distribution exclusion.
-- Registry generator and 1.0.89/1.0.102 readers handle candidate per documented migration decision; all 37 active policy changes have real validated coverage.
+- Registry generator can prepare only an **unsigned preproduction** modern-v1 Pi candidate. Legacy CLI **0.1.89 must continue to read the unchanged historical signed feed**; an independently trusted modern CLI **0.1.102+ cohort must validate only its isolated Pi test candidate**. Neither reader is required or permitted to accept the other's feed. Protected publication requires separately approved 72/72 real managed saved receipts and a released modern trusted routing contract; source planning is insufficient.
 - Exact head CI, independent review, protected candidate/signing/promotion workflow, signed sequence + Pages feed, UI and post-merge E2E successful. Merely passing schema tests is insufficient.
 
 ## Estimates and risk
