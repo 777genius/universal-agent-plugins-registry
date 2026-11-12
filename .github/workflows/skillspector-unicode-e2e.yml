@@ -1,0 +1,137 @@
+name: SkillSpector Unicode immutable sources read-only E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-unicode-e2e.yml"
+      - "scripts/skillspector_acquisition.py"
+      - "scripts/skillspector_coverage_v3.py"
+      - "scripts/portable_paths.py"
+      - "tests/test_skillspector_acquisition.py"
+      - "tests/test_portable_paths.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skillspector-unicode-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pinned-five-root-acquisition:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact PR HEAD (no stored credentials)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Checkout exact production-pinned SkillSpector 2.13.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035
+          path: scanner
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install pinned validation dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Install exact locked no-LLM scanner (no provider keys)
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+          python3 scripts/patch_skillspector_directory_references.py scanner --verify
+      - name: Run integration acquisition and negative safety tests
+        run: python3 -m unittest tests.test_skillspector_acquisition.ColdAcquisitionTests -v
+      - name: Acquire and statically scan five real immutable Error roots
+        timeout-minutes: 27
+        run: |
+          python3 - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+
+          from scripts.build_bridges import PinnedRepository
+          from scripts.build_registry import directory_tree_digest
+          from scripts.discovery_checkpoint import WorkBudget
+          from scripts.skillspector_acquisition import bounded_package_files, materialize_scanned_files
+          from scripts import skillspector_reports as static
+
+          executable = Path("scanner/.venv/bin/skillspector").resolve()
+          static.verify_scanner(executable)
+
+          sources = (
+              ("alchaincyf/elon-musk-skill", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f", "", 12, 5438866, 3),
+              ("gogf/skills", "c22b6e4115e1a3747676419bba98fee99af6beff", "skills/goframe-v2", 962, 4418429, 400),
+              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama", 31, 621272, 6),
+              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama-develop", 36, 235483, 15),
+              ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama-edit", 29, 231997, 1),
+          )
+          evidence = []
+          receipt = Path("/tmp/skillspector-unicode-acceptance.json")
+          def persist():
+              status = ("failed" if any(item["status"] == "failed" for item in evidence)
+                        else "passed" if len(evidence) == len(sources) else "in_progress")
+              receipt.write_text(json.dumps(
+                  {"schema_version": 1, "status": status, "sources": evidence}, sort_keys=True, indent=2))
+          persist()
+          for repository, revision, selected_root, count, total_bytes, unicode_count in sources:
+              entry = {"repository": repository, "revision": revision, "selected_root": selected_root,
+                       "status": "in_progress"}
+              try:
+                  pinned = PinnedRepository(repository, revision, None, work_budget=WorkBudget(120))
+                  try:
+                      files = bounded_package_files(pinned, selected_root, max_files=2048,
+                          max_file_bytes=16 << 20, max_tree_bytes=16 << 20)
+                      # Independent GitHub immutable-tree metadata, not scanner-generated counts.
+                      assert len(files) == count, f"{repository}: dropped file(s)"
+                      assert sum(len(body) for _, _, body in files) == total_bytes, f"{repository}: changed bytes"
+                      assert sum(not path.isascii() for path, _, _ in files) == unicode_count
+                      assert all(mode in (0o644, 0o755) for _, mode, _ in files)
+                      assert any(path == "SKILL.md" for path, _, _ in files)
+                      with tempfile.TemporaryDirectory(prefix="skillspector-unicode-proof-") as directory:
+                          root = Path(directory)
+                          materialize_scanned_files(files, root, pinned.work_budget)
+                          assert sum(path.is_file() for path in root.rglob("*")) == count
+                          digest = directory_tree_digest(root)
+                          with tempfile.TemporaryDirectory(prefix="isolated-skillspector-home-") as home_dir:
+                              code, body = static.run_scanner_v3(
+                                  executable, ["scan", str(root), "--no-llm", "--format", "json",
+                                              "--fail-on-incomplete"], Path(home_dir), 180, "static-extended-v3")
+                          report = static.parse_scanner_json(body, "real Unicode source scan")
+                          completeness = report["analysis_completeness"]
+                          assert code in (0, 1), f"{repository}: unexpected CLI exit {code}"
+                          assert report["metadata"]["skillspector_version"] == "2.13.1"
+                          assert report["metadata"]["llm_requested"] is False
+                          assert report["metadata"]["inference_usage"] == []
+                          assert report["execution_successful"] is True
+                          assert completeness["execution_successful"] is True
+                          assert isinstance(report["issues"], list)
+                          assert directory_tree_digest(root) == digest, f"{repository}: source modified during analysis"
+                          entry.update(status="complete_acquisition", file_count=count,
+                              unicode_files=unicode_count, total_bytes=total_bytes, tree_digest=digest,
+                              scan_status="complete" if completeness["is_complete"] else "partial",
+                              scan_issue_count=len(report["issues"]))
+                  finally:
+                      pinned.close()
+              except Exception as error:
+                  entry.update(status="failed", failure_type=type(error).__name__,
+                               reason=str(error)[:160])
+                  raise
+              finally:
+                  evidence.append(entry)
+                  persist()
+          print(json.dumps(evidence, sort_keys=True))
+          PY
+      - name: Retain original independent E2E evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: skillspector-five-unicode-root-static-acceptance
+          path: /tmp/skillspector-unicode-acceptance.json
+          if-no-files-found: warn
+          retention-days: 7

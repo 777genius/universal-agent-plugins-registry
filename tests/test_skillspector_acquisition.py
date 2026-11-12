@@ -74,6 +74,97 @@ class ColdAcquisitionTests(unittest.TestCase):
             materialize_package(files, output, pinned.work_budget)
             self.assertEqual(directory_tree_digest(output), directory_tree_digest(root / "source/skills/demo"))
 
+    def test_pinned_nfc_unicode_tree_is_fully_acquired_and_staged_without_dropping_files(self):
+        """Three real Error cohorts use ordinary Unicode names, not broken Git transport."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            additions = {
+                "skills/demo/references/WEB服务开发/HTTPClient-代理Proxy设置.md": b"proxy reference\n",
+                "skills/demo/references/马斯克决策模式与行为分析.md": b"analysis reference\n",
+            }
+            pinned, _ = self.fixture(root, additions)
+            files = self.read(pinned)
+            self.assertEqual(len([path for path, _, _ in files if not path.isascii()]), 2)
+            output = root / "scanned"
+            output.mkdir()
+            acquisition.materialize_scanned_files(files, output, pinned.work_budget)
+            self.assertEqual(directory_tree_digest(output), directory_tree_digest(root / "source/skills/demo"))
+            self.assertEqual((output / "references/WEB服务开发/HTTPClient-代理Proxy设置.md").read_bytes(),
+                             b"proxy reference\n")
+            # Directory installation remains intentionally ASCII-only.
+            legacy = root / "legacy-package"
+            legacy.mkdir()
+            with self.assertRaisesRegex(DiscoveryError, "ASCII"):
+                materialize_package(files, legacy, pinned.work_budget)
+
+    def test_unsafe_unicode_or_nonportable_git_tree_paths_fail_before_hydration(self):
+        paths = (
+            "skills/demo/references/a\u0301.md",  # NFD ambiguity
+            "skills/demo/references/bad?.md",
+            "skills/demo/references/bad%20.md",
+            "skills/demo/references/../escape.md",
+            "skills/demo/references/.GIT/config",
+            "skills/demo/references/CON.md",
+            "skills/demo/references/COM¹.md",
+            "skills/demo/.plugin-kit-ai.lock",
+            "skills/demo/references/trailing .",
+            "skills/demo/references/back\\slash.md",
+            "skills/demo/" + ("a" * 256) + ".md",
+        )
+        for path in paths:
+            row = f"100644 blob {'a' * 40}\t{path}\0".encode("utf-8")
+            with self.subTest(path=path), \
+                 mock.patch.object(acquisition, "_run_git", return_value=row), \
+                 mock.patch.object(acquisition, "_object_sizes") as sizes, \
+                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \
+                 self.assertRaises(DiscoveryError):
+                self.read(mock.Mock(work_budget=WorkBudget(5)))
+            sizes.assert_not_called()
+            fetch.assert_not_called()
+
+    def test_dot_only_and_escaping_scanner_staging_paths_cannot_be_materialized(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative in (".", "../secret", "dir//file", "dir/./file", "dir/../file"):
+                with self.subTest(relative=relative), self.assertRaises(DiscoveryError):
+                    acquisition.materialize_scanned_files([(relative, 0o644, b"payload")], root)
+            self.assertEqual(list(root.rglob("*")), [])
+
+    def test_casefold_parent_directories_are_rejected_before_blob_hydration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pinned, _ = self.fixture(Path(temporary), {
+                "skills/demo/Ω/a.md": b"one", "skills/demo/ω/b.md": b"two",
+            })
+            with mock.patch.object(acquisition, "_object_sizes") as sizes, \
+                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \
+                 self.assertRaisesRegex(DiscoveryError, "case-colliding"):
+                self.read(pinned)
+            sizes.assert_not_called()
+            fetch.assert_not_called()
+
+    def test_selected_root_depth_is_counted_relative_to_the_source_root(self):
+        relative = "/".join(["d"] * 64)
+        self.assertEqual(acquisition.scan_portable_path(relative, "scan file").as_posix(), relative)
+        with self.assertRaises(DiscoveryError):
+            acquisition.scan_portable_path(relative + "/too-deep", "scan file")
+        full_path = "skills/demo/" + relative
+        row = f"100644 blob {'a' * 40}\t{full_path}\0".encode("utf-8")
+        with mock.patch.object(acquisition, "_run_git", return_value=row):
+            records = acquisition._tree_records(mock.Mock(), "skills/demo", 512, WorkBudget(5))
+        self.assertEqual(records[0][0], relative)
+
+    def test_unicode_casefold_collision_and_symlink_cannot_be_silently_ignored(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pinned, _ = self.fixture(Path(temporary), {
+                "skills/demo/Ω.md": b"one", "skills/demo/ω.md": b"two",
+            })
+            with mock.patch.object(acquisition, "_object_sizes") as sizes, \
+                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \
+                 self.assertRaisesRegex(DiscoveryError, "case-colliding"):
+                self.read(pinned)
+            sizes.assert_not_called()
+            fetch.assert_not_called()
+
     def test_count_symlink_case_collision_and_invalid_oid_refuse_before_any_hydration(self):
         cases = ({"symlink": True}, {"additions": {"skills/demo/FILE": b"1", "skills/demo/file": b"2"}}, {})
         for options in cases:
