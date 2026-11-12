@@ -43,6 +43,7 @@ from directory_publication import (
 )
 from directory_publication_cas import CasError, validate_marker
 from sequence_boundaries import parse_public_sequence
+from legacy_directory_client_boundary import require_pi_free_legacy_distributions
 from repository_identity import is_checkout_owned_repository
 from publication_trust_policy import (
     load_publication_trust_config,
@@ -728,6 +729,9 @@ def build_candidate(
     historical_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     validate_with_schema(source, SOURCE_SCHEMA)
+    # This path is permanently the *legacy* schema-1 signer. Do not rely on
+    # PR tests to protect older readers if a future reviewed policy adds Pi.
+    require_pi_free_legacy_distributions(source["distributions"])
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be a full lowercase SHA")
     try:
         # Establish recipe/source binding before package validation so a
