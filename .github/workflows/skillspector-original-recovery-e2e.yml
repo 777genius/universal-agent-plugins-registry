@@ -5,7 +5,12 @@ on:
       - ".github/workflows/skillspector-original-recovery-e2e.yml"
       - "scripts/skillspector_coverage_v3.py"
       - "scripts/skillspector_contract.py"
+      - "scripts/skillspector_recovery.py"
+      - "scripts/skillspector_reports.py"
+      - "scripts/skillspector_coverage.py"
+      - "scripts/directory_publication.py"
       - "schemas/skillspector-record-v3.schema.json"
+      - "schemas/skillspector-manifest-v3.schema.json"
       - "schemas/skillspector-shard-v3.schema.json"
       - "tests/test_skillspector_partial_recovery.py"
 permissions:
