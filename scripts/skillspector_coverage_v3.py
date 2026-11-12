@@ -737,12 +737,21 @@ def finding_identities(record):
 
 def require_represented_degraded_findings(item, old, new, attempt):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
-    novel = finding_identities(new) - finding_identities(old)
+    old_groups, new_groups = finding_identities(old), finding_identities(new)
+    novel = new_groups - old_groups
     if novel:
+        # Purely numeric diagnostics: old/new group counts can be equal while
+        # the findings differ (e.g. a network fallback versus a real advisory).
+        # Keep the original failure and never serialize untrusted finding text.
         context = {"subject_digest": source_digest(item),
             "old_report_digest": old["report_digest"], "new_report_digest": new["report_digest"],
             "old_groups": len(old["findings"]), "new_groups": len(new["findings"]),
-            "novel_group_instances": sum(novel.values()), "attempt_count": attempt["attempt_count"]}
+            "old_only_group_instances": sum((old_groups - new_groups).values()),
+            "novel_group_instances": sum(novel.values()), "attempt_count": attempt["attempt_count"],
+            "old_fully_inspected_files": old["coverage"]["fully_inspected_files"],
+            "new_fully_inspected_files": new["coverage"]["fully_inspected_files"],
+            "old_partially_inspected_files": old["coverage"]["partially_inspected_files"],
+            "new_partially_inspected_files": new["coverage"]["partially_inspected_files"]}
         raise PublicationError("degraded complete introduces unrepresented new findings: " +
             json.dumps(context, sort_keys=True, separators=(",", ":")))
 
