@@ -264,7 +264,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
-    def test_rejected_complete_checkpoint_cannot_erase_prior_risk_on_recovery(self):
+    def test_authenticated_complete_conflict_preserves_both_original_witnesses(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
         first = self.authentic_batch(
@@ -297,8 +297,8 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(legacy["records"][subject["id"]]["status"], "partial")
             self.assertEqual(legacy["records"][subject["id"]]["findings"], old["findings"])
 
-            # The exact checkpoint that current assembly rejects must also
-            # fail closed in later recovery if it has a distinct new warning.
+            # The direct merge of two conflicting scanner reports remains
+            # fail-closed, even when the caller claims a trusted worker.
             novel = self.authentic_batch(
                 selection, 5704, 3, warning="New HIGH risk.", pattern="new-risk",
                 status="complete", previous=baseline,
@@ -309,17 +309,237 @@ class RecoveryTests(unittest.TestCase):
                 coverage.apply_outcome(records, attempts, subject, outcome, authenticated_current_worker=True)
             self.assertEqual(records[subject["id"]], old)
             self.assertEqual(attempts, baseline["attempts"])
-            with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings") as failure:
-                self.recover(root / "rejected-later", selection, [novel], baseline)
-            message = str(failure.exception)
-            self.assertIn(coverage.source_digest(subject), message)
-            self.assertIn('"attempt_count":2', message)
-            self.assertIn('"novel_group_instances":1', message)
-            self.assertIn('"old_only_group_instances":1', message)
-            self.assertIn('"old_partially_inspected_files":', message)
-            self.assertIn('"new_partially_inspected_files":', message)
-            self.assertNotIn("New HIGH risk.", message)
-            self.assertFalse((root / "rejected-later" / "manifest.json").exists())
+
+            # The *authenticated main checkpoint* may retain both original
+            # reports, without fabricating a scanner union or claiming Complete.
+            merged = self.recover(root / "witness", selection, [novel], baseline)
+            kept = merged["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertTrue(kept["findings_truncated"])
+            self.assertIn("recovery_conflict", coverage.reason_codes(kept))
+            self.assertEqual(len(kept["recovery_witnesses"]), 1)
+            witness = kept["recovery_witnesses"][0]
+            self.assertEqual(witness["origin"], {"run_id": 5704, "run_attempt": 1})
+            self.assertEqual(witness["record"], outcome["record"])
+            self.assertNotEqual(witness["record"]["report_digest"], kept["report_digest"])
+            self.assertEqual(witness["record"]["source"], kept["source"])
+            empty = copy.deepcopy(kept)
+            empty["recovery_witnesses"] = []
+            with self.assertRaisesRegex(PublicationError, "empty or excessive recovery witness list"):
+                coverage.contract.validate_record(empty, subject, coverage.v2.timestamp(coverage.scanner.now(), "generated"),
+                    scheduled=True, allowed_profiles=merged["manifest"]["profiles"],
+                    scanner_identity=merged["manifest"]["scanner"],
+                    repository_aliases=merged["manifest"]["repository_aliases"])
+            self.assertEqual(merged["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(merged["attempts"][subject["id"]]["history"],
+                             outcome["attempt"]["history"])
+            # A record can have almost no remaining shard capacity even though
+            # its separate witness passes the 256-KiB cap. The actual public
+            # shard wrapper must fit, including recovery reasons, or the
+            # freshly added alternate is disclosed but not published.
+            no_witness = copy.deepcopy(kept)
+            del no_witness["recovery_witnesses"]
+            basic_size = len(coverage.report_json(coverage.shard_document(
+                subject["repository"], [coverage.scanner.redact_public_record(no_witness)])))
+            full_size = len(coverage.report_json(coverage.shard_document(
+                subject["repository"], [coverage.scanner.redact_public_record(kept)])))
+            self.assertGreater(full_size, basic_size + 128)
+            with mock.patch.object(coverage, "MAX_SHARD_BYTES", basic_size + 128):
+                capped = self.recover(root / "shard-witness-budget", selection, [novel], baseline)
+            safely_kept = capped["records"][subject["id"]]
+            self.assertNotIn("recovery_witnesses", safely_kept)
+            self.assertEqual(safely_kept["report_digest"], old["report_digest"])
+            self.assertEqual(safely_kept["findings"], old["findings"])
+            self.assertEqual(safely_kept["status"], "partial")
+            self.assertIn("recovery_conflict", coverage.reason_codes(safely_kept))
+            self.assertEqual(capped["attempts"][subject["id"]]["attempt_count"], 2)
+            replay = self.recover(root / "witness-replay", selection, [novel], merged)
+            self.assertEqual(replay["records"], merged["records"])
+            self.assertEqual(replay["attempts"], merged["attempts"])
+            self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+
+            # A subsequent single-witness Complete is still missing the other
+            # verified findings: it cannot erase the authenticated alternative
+            # or silently change this source into Complete.
+            later = copy.deepcopy(outcome["record"])
+            later_outcome = {"record": later, "attempt": coverage.make_attempt(
+                subject, later, merged["attempts"][subject["id"]], kept)}
+            later_records = {subject["id"]: copy.deepcopy(kept)}
+            later_attempts = copy.deepcopy(merged["attempts"])
+            self.assertTrue(coverage.degraded_rescan(kept, later))
+            self.assertTrue(coverage.apply_outcome(later_records, later_attempts,
+                subject, later_outcome, authenticated_current_worker=True))
+            self.assertEqual(later_records[subject["id"]]["status"], "partial")
+            self.assertEqual(later_records[subject["id"]]["findings"], old["findings"])
+            self.assertEqual(later_records[subject["id"]]["recovery_witnesses"],
+                             kept["recovery_witnesses"])
+
+            # Unauthenticated or oversized evidence cannot enter the signed
+            # report. Neither adversarial input may modify a prior bundle.
+            untrusted = {key: copy.deepcopy(value) for key, value in novel.items()
+                         if key != "execution_origin"}
+            with self.assertRaises(PublicationError):
+                self.recover(root / "untrusted-novel", selection, [untrusted], baseline)
+            oversized = copy.deepcopy(novel)
+            oversized["workers"][0]["attempts"][0]["record"]["findings"][0]["message"] = "x" * (260 << 10)
+            # Its authenticated origin is valid, but the immutable witness
+            # exceeds the bounded signed representation. Keep only the prior
+            # original risk with an explicit incomplete-conflict disclosure;
+            # other sources must remain recoverable instead of aborting.
+            oversized_result = self.recover(root / "oversized-witness", selection, [oversized], baseline)
+            retained = oversized_result["records"][subject["id"]]
+            self.assertTrue((root / "oversized-witness" / "index.json").is_file())
+            self.assertEqual(retained["status"], "partial")
+            self.assertEqual(retained["report_digest"], old["report_digest"])
+            self.assertEqual(retained["findings"], old["findings"])
+            self.assertNotIn("recovery_witnesses", retained)
+            self.assertIn("recovery_conflict", coverage.reason_codes(retained))
+            self.assertIn("normalization_truncated", coverage.reason_codes(retained))
+            self.assertEqual(oversized_result["attempts"][subject["id"]]["attempt_count"], 2)
+
+    def test_witness_admission_reserves_worst_case_reidentified_source_id(self):
+        # 200 JSON control characters are 1,200 bytes (6 escaped bytes each),
+        # a stricter upper bound than 200 astral Unicode scalars (800 bytes).
+        witness = {"origin": {"run_id": 9912, "run_attempt": 1},
+                   "record": {"id": "short", "payload": ""}}
+        rebound = copy.deepcopy(witness)
+        rebound["record"]["id"] = "\x00" * 200
+        max_bytes = 256 << 10
+        padding = max_bytes - len(coverage.scanner.report_json(rebound))
+        self.assertGreater(padding, 0)
+        witness["record"]["payload"] = "x" * padding
+        self.assertTrue(coverage.witness_fits_max_rebound_id(witness))
+        for candidate in ("\x00" * 200, "\U0001f984" * 200, "x" * 200):
+            rebound = copy.deepcopy(witness)
+            rebound["record"]["id"] = candidate
+            self.assertLessEqual(len(coverage.scanner.report_json(rebound)), max_bytes)
+        witness["record"]["payload"] += "x"
+        self.assertFalse(coverage.witness_fits_max_rebound_id(witness))
+        # A short original ID fits, but the longer target must fail admission.
+        self.assertLessEqual(len(coverage.scanner.report_json(witness)), max_bytes)
+
+    def test_witness_reidentification_and_historical_scanner_drift(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(selection, 9101, 0, warning="Original risk.",
+                                     pattern="reidentify-old", status="partial", reason="static_parse_limit")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = self.recover(root / "primary", selection, [first])
+            second = self.authentic_batch(selection, 9102, 1, warning="Independent risk.",
+                                          pattern="reidentify-new", status="complete", previous=before)
+            conflicted = self.recover(root / "conflict", selection, [second], before)
+            original = conflicted["records"][subject["id"]]
+            self.assertEqual(len(original["recovery_witnesses"]), 1)
+            renamed = {**subject, "id": "fixture/reidentified", "revision": "b" * 40}
+            updated = {"schema_version": 1, "sources": [renamed]}
+            coverage.merge_reports(updated, conflicted, [worker(updated)],
+                source_commit=COMMIT, output_dir=root / "renamed")
+            retained = coverage.read_bundle(root / "renamed")["records"][renamed["id"]]
+            self.assertEqual(retained["freshness"], "historical")
+            self.assertEqual(retained["id"], renamed["id"])
+            self.assertEqual(retained["report_digest"], original["report_digest"])
+            self.assertEqual(retained["recovery_witnesses"][0]["record"]["id"], renamed["id"])
+            self.assertEqual(retained["recovery_witnesses"][0]["record"]["report_digest"],
+                             original["recovery_witnesses"][0]["record"]["report_digest"])
+            # A later scanner/profile policy change must not make authenticated
+            # historical evidence unreadable; current evidence still uses the
+            # strict current-manifest admission checks.
+            coverage.contract.validate_record(retained, renamed,
+                coverage.v2.timestamp(coverage.scanner.now(), "generated"),
+                allowed_profiles=[], scanner_identity={"id": "future-policy"}, scheduled=True)
+            # Genuine original checkpoint records have none of these four
+            # publication-only fields. Even a perfectly valid outer value
+            # must not be accepted in, then silently replaced for, a witness.
+            for key in ("freshness", "target_revision", "retry", "attempt_history"):
+                with self.subTest(witness_injected_publication_field=key):
+                    forged = copy.deepcopy(retained)
+                    forged["recovery_witnesses"][0]["record"][key] = copy.deepcopy(retained[key])
+                    with self.assertRaises(PublicationError):
+                        coverage.contract.validate_record(forged, renamed,
+                            coverage.v2.timestamp(coverage.scanner.now(), "generated"),
+                            allowed_profiles=[], scanner_identity={"id": "future-policy"}, scheduled=True)
+
+    def test_authenticated_superset_fork_then_witness_cap_discloses_per_source(self):
+        primary = item()
+        another = item(id="fixture/other", repository="owner/other", path="skills/other")
+        selection = {"schema_version": 1, "sources": [primary, another]}
+        original = self.authentic_batch(selection, 9201, 0, warning="Risk A.", pattern="risk-a",
+                                        status="partial", reason="static_parse_limit")
+        alternate = self.authentic_batch(selection, 9202, 1, warning="Risk B.", pattern="risk-b",
+                                         status="partial", reason="static_parse_limit")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = self.recover(root / "primary", selection, [original])
+            witnessed = self.recover(root / "witnessed", selection, [alternate], first)
+            self.assertEqual(len(witnessed["records"][primary["id"]]["recovery_witnesses"]), 1)
+            raw = upstream_report()
+            raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": message,
+                              "location": {"file": "SKILL.md", "start_line": 1}, "pattern": pattern}
+                             for message, pattern in (("Risk A.", "risk-a"), ("Risk B.", "risk-b"),
+                                                      ("Risk C.", "risk-c"))]
+            raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Bounded fixture limitation."}]
+            with mock.patch.object(coverage.scanner, "now", return_value="2020-01-01T00:00:02Z"):
+                superset_record = coverage.scanner.normalize_report_v3(
+                    record(primary, "partial", "static_parse_limit"),
+                    json.dumps(raw).encode(), 1, Path("/source"))
+                superset = self.batch(selection, [superset_record])
+            superset["execution_origin"] = {"run_id": 9203, "run_attempt": 1}
+            self.assertEqual(sum((coverage.finding_identities(superset_record) -
+                                  coverage.represented_finding_identities(witnessed["records"][primary["id"]])).values()), 1)
+            represented = self.recover(root / "superset", selection, [superset], witnessed)
+            visible = represented["records"][primary["id"]]
+            self.assertEqual(len(visible["recovery_witnesses"]), 2)
+            self.assertEqual(coverage.represented_finding_identities(visible),
+                             coverage.finding_identities(superset_record))
+            overflow = self.authentic_batch(selection, 9204, 3, warning="Risk D.", pattern="risk-d",
+                                            status="partial", reason="static_parse_limit")
+            other_batch = self.batch(selection, [record(another)])
+            other_batch["execution_origin"] = {"run_id": 9205, "run_attempt": 1}
+            final = self.recover(root / "overflow", selection, [overflow, other_batch], represented)
+            kept = final["records"][primary["id"]]
+            self.assertEqual(kept["report_digest"], visible["report_digest"])
+            self.assertEqual(kept["recovery_witnesses"], visible["recovery_witnesses"])
+            self.assertEqual(kept["status"], "partial")
+            self.assertIn("recovery_conflict", coverage.reason_codes(kept))
+            self.assertEqual(final["records"][another["id"]]["status"], "complete")
+            replay = self.recover(root / "overflow-replay", selection, [overflow, other_batch], final)
+            self.assertEqual(replay["records"], final["records"])
+
+    def test_authenticated_recovery_witness_survives_source_revision_drift_as_historical(self):
+        """A new catalog pin must not invalidate or mislabel older evidence."""
+        original = item()
+        selection = {"schema_version": 1, "sources": [original]}
+        first = self.authentic_batch(selection, 8801, 0,
+            warning="Earlier source-bound warning.", pattern="original-risk",
+            status="partial", reason="static_parse_limit")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = self.recover(root / "previous", selection, [first])
+            conflicting = self.authentic_batch(selection, 8802, 1,
+                warning="Independent source-bound warning.", pattern="alternate-risk",
+                status="complete", previous=previous)
+            disputed = self.recover(root / "disputed", selection, [conflicting], previous)
+            before = disputed["records"][original["id"]]
+            self.assertEqual(len(before["recovery_witnesses"]), 1)
+            changed = item(revision="b" * 40)
+            later_selection = {"schema_version": 1, "sources": [changed]}
+            coverage.merge_reports(later_selection, disputed,
+                [worker(later_selection)], source_commit=COMMIT, output_dir=root / "later")
+            later = coverage.read_bundle(root / "later")
+            retained = later["records"][original["id"]]
+            self.assertEqual(retained["freshness"], "historical")
+            self.assertEqual(retained["target_revision"], changed["revision"])
+            self.assertEqual(retained["status"], "partial")
+            self.assertEqual(retained["source"], before["source"])
+            self.assertEqual(retained["findings"], before["findings"])
+            self.assertEqual(retained["recovery_witnesses"], before["recovery_witnesses"])
+            self.assertEqual(later["manifest"]["coverage"]["stale"], 1)
+            self.assertEqual(later["manifest"]["coverage"]["pending"], 1)
+            self.assertEqual(later["manifest"]["coverage"]["complete"], 0)
 
     def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
         subject = item()
@@ -477,8 +697,8 @@ class RecoveryTests(unittest.TestCase):
     def test_disjoint_warnings_and_same_fingerprint_different_evidence_are_not_collapsed(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
-        left = self.authentic_batch(selection, 1, 0, warning="First warning.")
-        right = self.authentic_batch(selection, 2, 1, warning="Distinct warning.")
+        left = self.authentic_batch(selection, 1, 0, warning="First warning.", pattern="old-distinct-risk")
+        right = self.authentic_batch(selection, 2, 1, warning="Distinct warning.", pattern="new-distinct-risk")
         metadata = copy.deepcopy(left)
         metadata["execution_origin"]["run_id"] = 3
         metadata["workers"][0]["attempts"][0]["record"]["skill_name"] = "different normalized evidence"
@@ -491,6 +711,35 @@ class RecoveryTests(unittest.TestCase):
                 b = self.recover(root / "b", selection, [right, left])
             self.assertEqual(a["records"], b["records"])
             self.assertIn("not fully represented", a["records"][subject["id"]]["coverage"]["reasons"][-2]["message"])
+            # Neither independent original adverse finding may disappear just
+            # because the two scanner results have the same number of groups.
+            primary = a["records"][subject["id"]]
+            original_left = left["workers"][0]["attempts"][0]["record"]
+            original_right = right["workers"][0]["attempts"][0]["record"]
+            self.assertEqual(primary["findings"], original_left["findings"])
+            self.assertEqual(len(primary["recovery_witnesses"]), 1)
+            self.assertEqual(primary["recovery_witnesses"][0]["origin"],
+                             {"run_id": 2, "run_attempt": 1})
+            self.assertEqual(primary["recovery_witnesses"][0]["record"], original_right)
+            self.assertEqual(coverage.represented_finding_identities(primary),
+                coverage.finding_identities(original_left) | coverage.finding_identities(original_right))
+            replay = self.recover(root / "disjoint-replay", selection, [left, right], a)
+            self.assertEqual(replay["records"], a["records"])
+            self.assertEqual(replay["attempts"], a["attempts"])
+
+            # The same lossless invariant applies when *both* independent
+            # originals report Partial rather than Complete.
+            partial_left = self.authentic_batch(selection, 11, 3, warning="Partial left risk.", pattern="partial-old-risk",
+                status="partial", reason="static_parse_limit")
+            partial_right = self.authentic_batch(selection, 12, 4, warning="Partial right risk.", pattern="partial-new-risk",
+                status="partial", reason="static_parse_limit")
+            partial = self.recover(root / "partial-disjoint", selection, [partial_left, partial_right])
+            partial_record = partial["records"][subject["id"]]
+            self.assertEqual(partial_record["status"], "partial")
+            self.assertEqual(len(partial_record["recovery_witnesses"]), 1)
+            self.assertEqual(coverage.represented_finding_identities(partial_record),
+                coverage.finding_identities(partial_left["workers"][0]["attempts"][0]["record"]) |
+                coverage.finding_identities(partial_right["workers"][0]["attempts"][0]["record"]))
             value = self.recover(root / "metadata", selection, [left, metadata])["records"][subject["id"]]
             self.assertEqual(value["status"], "partial")
             self.assertIn("recovery_conflict", coverage.reason_codes(value))

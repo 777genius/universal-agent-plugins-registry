@@ -78,11 +78,11 @@ def same_repository(left, right, target_revision, repository_aliases=()):
 
 
 def validate_record(record, item, generated, *, scheduled=False, allowed_profiles=None, scanner_identity=None,
-                    repository_aliases=()):
+                    repository_aliases=(), force_historical=False):
     v2.schema(record, RECORD_SCHEMA)
     require(record["id"] == item["id"] and record["kind"] == item["kind"] and
             record["plugin_path"] == item["plugin_path"], "record selection identity differs")
-    historical = record.get("freshness") == "historical"
+    historical = force_historical or record.get("freshness") == "historical"
     identical_repository = record["source"]["repository"].casefold() == item["repository"].casefold()
     require(record["source"]["path"] == item["path"] and (identical_repository or historical and
             same_repository(record["source"]["repository"], item["repository"], item["revision"], repository_aliases)),
@@ -186,6 +186,44 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     not any(analyzer.get(key, 0) != 0 for key in ("failed", "partial", "skipped", "unaccounted")) and
                     (analyzer.get("status") != "disabled" or analyzer.get("analyzer_id") in scanner.DISABLED_STATIC_ANALYZERS),
                     "complete report contains incomplete analyzer evidence")
+    witnesses = record.get("recovery_witnesses", [])
+    if "recovery_witnesses" in record:
+        require(1 <= len(witnesses) <= 2, "empty or excessive recovery witness list")
+        # A scanner can never originate a composite report. The signed v3
+        # record keeps one original primary report and explicitly carries the
+        # other *unaltered* scanner report from an authenticated main checkpoint.
+        # Neither report digest is a digest of a synthetic union.
+        require(record["status"] == "partial" and record["findings_truncated"] and
+                coverage.get("grouping_complete") is False and
+                {"recovery_conflict", "normalization_truncated"} <=
+                {reason["code"] for reason in coverage["reasons"]},
+                "recovery witness requires visible incomplete quarantine")
+        require(len(witnesses) <= 2, "too many independent recovery witnesses")
+        seen_witnesses = set()
+        for witness in witnesses:
+            origin, original = witness["origin"], witness["record"]
+            identity = (origin["run_id"], origin["run_attempt"], original["report_digest"])
+            require(identity not in seen_witnesses and original["source"] == record["source"] and
+                    original["scanner"] == record["scanner"] and
+                    original["report_digest"] != record["report_digest"] and
+                    original["status"] in {"partial", "complete"} and
+                    "recovery_witnesses" not in original and
+                    # Worker scanner output cannot contain publication/queue
+                    # state. Reject bytes that would otherwise be ignored by
+                    # the recursive consumer validation, then shown verbatim.
+                    not any(key in original for key in
+                            ("freshness", "target_revision", "retry", "attempt_history")) and
+                    len(scanner.report_json(witness)) <= 256 << 10,
+                    "invalid or oversized immutable recovery witness")
+            seen_witnesses.add(identity)
+            # The source may legitimately become historical after catalog
+            # revision drift. Revalidate the immutable witness against the
+            # already-validated primary source, never the *new* target revision.
+            original_item = {**item, "repository": record["source"]["repository"],
+                "revision": record["source"]["revision"], "path": record["source"]["path"]}
+            validate_record(original, original_item, generated, scheduled=False,
+                allowed_profiles=allowed_profiles, scanner_identity=scanner_identity,
+                repository_aliases=repository_aliases, force_historical=historical)
     return record
 
 

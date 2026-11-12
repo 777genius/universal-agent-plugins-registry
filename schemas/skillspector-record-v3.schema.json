@@ -1004,6 +1004,87 @@
         1,
         2
       ]
+    },
+    "recovery_witnesses": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "origin",
+          "record"
+        ],
+        "properties": {
+          "origin": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "run_id",
+              "run_attempt"
+            ],
+            "properties": {
+              "run_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "run_attempt": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            }
+          },
+          "record": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "id",
+              "source",
+              "scanner",
+              "profile",
+              "report_digest",
+              "status",
+              "findings",
+              "coverage"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "source": {
+                "type": "object"
+              },
+              "scanner": {
+                "type": "object"
+              },
+              "profile": {
+                "type": "object"
+              },
+              "report_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ]
+              },
+              "findings": {
+                "type": "array",
+                "maxItems": 100000
+              },
+              "coverage": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
