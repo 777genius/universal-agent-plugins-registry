@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,88 @@ class ModernPiEvidenceTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 write_unsigned_candidate(path, candidate)
             self.assertEqual(path.read_bytes(), b"do not overwrite this unrelated artifact")
+
+    def test_competing_creation_immediately_before_open_preserves_bytes(self) -> None:
+        # Deterministically inject a different writer at the last open call,
+        # not before the validation. The output must never be truncated.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private" / "candidate.json"
+            path.parent.mkdir(mode=0o700)
+            unexpected = b"independent writer's output"
+            candidate = {"schema_version": 1}
+            if os.name == "posix":
+                real_open = os.open
+
+                def race(name, flags, mode=0o777, *, dir_fd=None):
+                    if name == path.name and dir_fd is not None:
+                        path.write_bytes(unexpected)
+                    return real_open(name, flags, mode, dir_fd=dir_fd)
+
+                patch = mock.patch("pi_modern_feed_candidate.os.open", side_effect=race)
+            else:
+                real_open = Path.open
+
+                def race(self, mode="r", *args, **kwargs):
+                    if self == path and mode == "x":
+                        path.write_bytes(unexpected)
+                    return real_open(self, mode, *args, **kwargs)
+
+                patch = mock.patch("pi_modern_feed_candidate.Path.open", new=race)
+            with patch, self.assertRaises(FileExistsError):
+                write_unsigned_candidate(path, candidate)
+            self.assertEqual(path.read_bytes(), unexpected)
+
+    def test_candidate_output_symlink_cannot_redirect_or_clobber(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory) / "private"
+            private.mkdir(mode=0o700)
+            path = private / "candidate.json"
+            target = private / "foreign.json"
+            target.write_bytes(b"keep existing foreign bytes")
+            try:
+                path.symlink_to(target)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"symlinks unavailable on this runner: {error}")
+            with self.assertRaises((FileExistsError, OSError)):
+                write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertEqual(target.read_bytes(), b"keep existing foreign bytes")
+            path.unlink()
+            path.symlink_to(private / "missing.json")
+            with self.assertRaises((FileExistsError, OSError)):
+                write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertFalse((private / "missing.json").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX directory-descriptor protection")
+    def test_parent_symlink_swap_cannot_redirect_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory) / "private"
+            private.mkdir(mode=0o700)
+            path = private / "candidate.json"
+            moved = Path(directory) / "private-original"
+            redirected = Path(directory) / "unexpected-repository"
+            redirected.mkdir(mode=0o700)
+            real_open = os.open
+
+            def swap_parent(name, flags, mode=0o777, *, dir_fd=None):
+                if name == path.name and dir_fd is not None:
+                    private.rename(moved)
+                    private.symlink_to(redirected, target_is_directory=True)
+                return real_open(name, flags, mode, dir_fd=dir_fd)
+
+            with mock.patch("pi_modern_feed_candidate.os.open", side_effect=swap_parent):
+                write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertEqual(json.loads((moved / path.name).read_text()), {"schema_version": 1})
+            self.assertFalse((redirected / path.name).exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private directory permissions")
+    def test_shared_parent_does_not_qualify_as_private_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "shared"
+            parent.mkdir(mode=0o755)
+            parent.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "owner-private"):
+                write_unsigned_candidate(parent / "candidate.json", {"schema_version": 1})
+            self.assertFalse((parent / "candidate.json").exists())
 
     def test_candidate_source_must_equal_committed_directory_bytes(self) -> None:
         with mock.patch("pi_modern_feed_candidate.subprocess.run",
