@@ -235,7 +235,10 @@ def main() -> int:
     # source constraints and positive upstream materialization evidence.
     # Never emit an apparently ready modern feed when those checks fail.
     from build_registry import validate_directory
-    validate_directory(candidate, verify_packages=False)
+    validate_directory(
+        candidate, verify_packages=False,
+        allow_unsigned_pi_review_only=args.preproduction_only,
+    )
     require(source_path.read_bytes() == original, "legacy Directory source changed")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     require(not args.output.exists(), "refusing to overwrite candidate")
