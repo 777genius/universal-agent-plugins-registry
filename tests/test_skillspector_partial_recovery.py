@@ -264,7 +264,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
-    def test_rejected_complete_checkpoint_cannot_erase_prior_risk_on_recovery(self):
+    def test_authenticated_complete_conflict_preserves_both_original_witnesses(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
         first = self.authentic_batch(
@@ -297,8 +297,8 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(legacy["records"][subject["id"]]["status"], "partial")
             self.assertEqual(legacy["records"][subject["id"]]["findings"], old["findings"])
 
-            # The exact checkpoint that current assembly rejects must also
-            # fail closed in later recovery if it has a distinct new warning.
+            # The direct merge of two conflicting scanner reports remains
+            # fail-closed, even when the caller claims a trusted worker.
             novel = self.authentic_batch(
                 selection, 5704, 3, warning="New HIGH risk.", pattern="new-risk",
                 status="complete", previous=baseline,
@@ -309,17 +309,40 @@ class RecoveryTests(unittest.TestCase):
                 coverage.apply_outcome(records, attempts, subject, outcome, authenticated_current_worker=True)
             self.assertEqual(records[subject["id"]], old)
             self.assertEqual(attempts, baseline["attempts"])
-            with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings") as failure:
-                self.recover(root / "rejected-later", selection, [novel], baseline)
-            message = str(failure.exception)
-            self.assertIn(coverage.source_digest(subject), message)
-            self.assertIn('"attempt_count":2', message)
-            self.assertIn('"novel_group_instances":1', message)
-            self.assertIn('"old_only_group_instances":1', message)
-            self.assertIn('"old_partially_inspected_files":', message)
-            self.assertIn('"new_partially_inspected_files":', message)
-            self.assertNotIn("New HIGH risk.", message)
-            self.assertFalse((root / "rejected-later" / "manifest.json").exists())
+
+            # The *authenticated main checkpoint* may retain both original
+            # reports, without fabricating a scanner union or claiming Complete.
+            merged = self.recover(root / "witness", selection, [novel], baseline)
+            kept = merged["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertTrue(kept["findings_truncated"])
+            self.assertIn("recovery_conflict", coverage.reason_codes(kept))
+            self.assertEqual(len(kept["recovery_witnesses"]), 1)
+            witness = kept["recovery_witnesses"][0]
+            self.assertEqual(witness["origin"], {"run_id": 5704, "run_attempt": 1})
+            self.assertEqual(witness["record"], outcome["record"])
+            self.assertNotEqual(witness["record"]["report_digest"], kept["report_digest"])
+            self.assertEqual(witness["record"]["source"], kept["source"])
+            self.assertEqual(merged["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(merged["attempts"][subject["id"]]["history"],
+                             outcome["attempt"]["history"])
+            replay = self.recover(root / "witness-replay", selection, [novel], merged)
+            self.assertEqual(replay["records"], merged["records"])
+            self.assertEqual(replay["attempts"], merged["attempts"])
+            self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+
+            # Unauthenticated or oversized evidence cannot enter the signed
+            # report. Neither adversarial input may modify a prior bundle.
+            untrusted = {key: copy.deepcopy(value) for key, value in novel.items()
+                         if key != "execution_origin"}
+            with self.assertRaises(PublicationError):
+                self.recover(root / "untrusted-novel", selection, [untrusted], baseline)
+            oversized = copy.deepcopy(novel)
+            oversized["workers"][0]["attempts"][0]["record"]["findings"][0]["message"] = "x" * (260 << 10)
+            with self.assertRaises(PublicationError):
+                self.recover(root / "oversized-witness", selection, [oversized], baseline)
+            self.assertFalse((root / "oversized-witness" / "index.json").exists())
 
     def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
         subject = item()
