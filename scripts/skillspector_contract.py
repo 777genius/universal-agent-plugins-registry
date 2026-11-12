@@ -78,11 +78,11 @@ def same_repository(left, right, target_revision, repository_aliases=()):
 
 
 def validate_record(record, item, generated, *, scheduled=False, allowed_profiles=None, scanner_identity=None,
-                    repository_aliases=()):
+                    repository_aliases=(), force_historical=False):
     v2.schema(record, RECORD_SCHEMA)
     require(record["id"] == item["id"] and record["kind"] == item["kind"] and
             record["plugin_path"] == item["plugin_path"], "record selection identity differs")
-    historical = record.get("freshness") == "historical"
+    historical = force_historical or record.get("freshness") == "historical"
     identical_repository = record["source"]["repository"].casefold() == item["repository"].casefold()
     require(record["source"]["path"] == item["path"] and (identical_repository or historical and
             same_repository(record["source"]["repository"], item["repository"], item["revision"], repository_aliases)),
@@ -218,7 +218,7 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                 "revision": record["source"]["revision"], "path": record["source"]["path"]}
             validate_record(original, original_item, generated, scheduled=False,
                 allowed_profiles=allowed_profiles, scanner_identity=scanner_identity,
-                repository_aliases=repository_aliases)
+                repository_aliases=repository_aliases, force_historical=historical)
     return record
 
 
