@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 import subprocess
 import sys
 import tempfile
@@ -221,6 +223,29 @@ class ModernPiEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "ancestry must not contain"):
                 write_unsigned_candidate(path, {"schema_version": 1})
             self.assertFalse((actual / "nested" / "candidate.json").exists())
+
+    @unittest.skipUnless(os.name == "nt", "native Windows concurrent CreateFileW")
+    def test_native_windows_competing_writers_have_one_exclusive_winner(self) -> None:
+        # Unlike a mocked wrapper, this exercises the real concurrent
+        # CreateFileW(CREATE_NEW) boundary on the Windows runner.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private" / "candidate.json"
+            path.parent.mkdir(mode=0o700)
+            barrier = Barrier(2)
+
+            def attempt(writer: int) -> str:
+                barrier.wait(timeout=30)
+                try:
+                    write_unsigned_candidate(path, {"writer": writer})
+                except OSError:
+                    return "refused"
+                return "created"
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = [future.result(timeout=45) for future in
+                            (pool.submit(attempt, 1), pool.submit(attempt, 2))]
+            self.assertCountEqual(outcomes, ["created", "refused"])
+            self.assertIn(json.loads(path.read_bytes()), ({"writer": 1}, {"writer": 2}))
 
     @unittest.skipUnless(os.name == "nt", "Windows junction detection support")
     def test_old_windows_python_without_junction_detection_fails_closed(self) -> None:
