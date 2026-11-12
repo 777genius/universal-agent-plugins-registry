@@ -121,10 +121,11 @@ class PiRealMaterializationContracts(unittest.TestCase):
             receipt = {"clients": [{"client_id": "pi", "package_revision": {
                 "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
             }}]}
-            self.assertEqual(
-                expected_package_native_names(Path(directory), receipt, "package", "mixed"),
-                ({"correct-skill/SKILL.md"}, {"correct-server": {"url": "https://example.invalid"}}),
-            )
+            skills, servers, roots = expected_package_native_names(
+                Path(directory), receipt, "package", "mixed")
+            self.assertEqual(skills, {"correct-skill/SKILL.md"})
+            self.assertEqual(servers, {"correct-server": {"url": "https://example.invalid"}})
+            self.assertEqual(roots, (package,))
             wrong_receipt = copy.deepcopy(receipt)
             wrong_receipt["clients"][0]["package_revision"]["manifest_digest"] = (
                 "sha256:" + "0" * 64)
@@ -149,18 +150,23 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 "local": {"command": "node", "args": [str(launcher)]},
                 "remote": {"url": "https://mcp.example.invalid/mcp"},
             }
-            require_expected_mcp_definitions(actual, expected, root)
+            verified_roots = (root / "package",)
+            require_expected_mcp_definitions(actual, expected, verified_roots)
+            unrelated = root / "unrelated" / "runtime" / "launcher.mjs"
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text(launcher.read_text(encoding="utf-8"), encoding="utf-8")
             mutations = (
                 lambda data: data.__setitem__("local", {}),
                 lambda data: data["remote"].__setitem__("url", "https://other.invalid"),
                 lambda data: data["local"].__setitem__("command", "other"),
                 lambda data: data["local"].__setitem__("args", ["/tmp/other/launcher.mjs"]),
+                lambda data: data["local"].__setitem__("args", [str(unrelated)]),
             )
             for mutation in mutations:
                 changed = copy.deepcopy(actual)
                 mutation(changed)
                 with self.assertRaisesRegex(RuntimeError, "native Pi MCP"):
-                    require_expected_mcp_definitions(changed, expected, root)
+                    require_expected_mcp_definitions(changed, expected, verified_roots)
 
     def test_unselected_pi_scope_must_remain_byte_identical(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

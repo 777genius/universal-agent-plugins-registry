@@ -281,6 +281,18 @@ def open_posix_candidate_parent(parent: Path, repo_root: Path) -> int:
     """
     require(".." not in parent.parts, "unsigned candidate path may not traverse upward")
     absolute = parent.absolute()
+    # Darwin exposes /var and /tmp as root-owned aliases into /private.
+    # Normalize ONLY these fixed system aliases before descriptor traversal;
+    # never resolve a user-controlled output ancestor or bypass O_NOFOLLOW.
+    if sys.platform == "darwin" and len(absolute.parts) > 1:
+        alias = absolute.parts[1]
+        if alias in ("var", "tmp"):
+            alias_path = Path("/") / alias
+            if alias_path.is_symlink():
+                require(os.lstat(alias_path).st_uid == 0
+                        and alias_path.resolve(strict=True) == Path("/private") / alias,
+                        "macOS unsigned staging system alias is untrusted")
+                absolute = Path("/private") / Path(*absolute.parts[1:])
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     repository = os.stat(repo_root)
     descriptor = os.open(absolute.anchor, flags)

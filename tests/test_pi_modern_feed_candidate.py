@@ -365,6 +365,14 @@ class ModernPiEvidenceTests(unittest.TestCase):
             self.assertFalse((redirect / "private" / "candidate.json").exists())
             self.assertFalse((moved / "private" / "candidate.json").exists())
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS root-owned /var alias")
+    def test_macos_private_var_alias_retains_descriptor_protection(self) -> None:
+        # A real private temp directory underneath macOS's /var -> /private/var.
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as directory:
+            path = Path(directory) / "candidate.json"
+            write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertEqual(json.loads(path.read_text()), {"schema_version": 1})
+
     @unittest.skipUnless(os.name == "posix", "POSIX private directory permissions")
     def test_shared_parent_does_not_qualify_as_private_staging(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
