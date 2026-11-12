@@ -187,7 +187,8 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     (analyzer.get("status") != "disabled" or analyzer.get("analyzer_id") in scanner.DISABLED_STATIC_ANALYZERS),
                     "complete report contains incomplete analyzer evidence")
     witnesses = record.get("recovery_witnesses", [])
-    if witnesses:
+    if "recovery_witnesses" in record:
+        require(1 <= len(witnesses) <= 2, "empty or excessive recovery witness list")
         # A scanner can never originate a composite report. The signed v3
         # record keeps one original primary report and explicitly carries the
         # other *unaltered* scanner report from an authenticated main checkpoint.
