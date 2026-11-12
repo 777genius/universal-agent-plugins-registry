@@ -207,7 +207,7 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     original["report_digest"] != record["report_digest"] and
                     original["status"] in {"partial", "complete"} and
                     "recovery_witnesses" not in original and
-                    len(canonical_json(witness)) <= 256 << 10,
+                    len(scanner.report_json(witness)) <= 256 << 10,
                     "invalid or oversized immutable recovery witness")
             seen_witnesses.add(identity)
             validate_record(original, item, generated, scheduled=False,
