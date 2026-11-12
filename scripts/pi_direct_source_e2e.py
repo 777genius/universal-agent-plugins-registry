@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -95,6 +96,54 @@ def plugin_record(envelope: dict, name: str, revision: str) -> dict:
             matching.append(item)
     require(len(matching) == 1, "expected one pinned Pi installation with a real materialization receipt")
     return matching[0]
+
+
+
+def expected_package_native_names(root: Path, installation: dict,
+                                  declared_name: str, kind: str) -> tuple[set[str], set[str]]:
+    """Read source-declared component identities from the verified active package.
+
+    The published CLI's pinned revision and manifest digest select the package;
+    arbitrary unrelated native entries cannot satisfy this assertion.
+    """
+    clients = [client for client in installation.get("clients", [])
+               if isinstance(client, dict) and client.get("client_id") == "pi"]
+    require(len(clients) == 1 and isinstance(clients[0].get("package_revision"), dict),
+            "pinned Pi client has no package identity")
+    manifest_digest = clients[0]["package_revision"].get("manifest_digest")
+    require(isinstance(manifest_digest, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", manifest_digest) is not None,
+            "pinned Pi client has no verified manifest digest")
+    candidates = []
+    for path in root.rglob("plugin.json"):
+        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+            continue
+        if "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() != manifest_digest:
+            continue
+        manifest = strict_json(path.read_text(encoding="utf-8"))
+        require(manifest.get("name") == declared_name,
+                "verified package manifest differs from requested package")
+        package = path.parent
+        skill_root = package / "skills"
+        skills = ({skill.relative_to(skill_root).as_posix()
+                   for skill in skill_root.rglob("SKILL.md") if skill.is_file()}
+                  if skill_root.is_dir() and not skill_root.is_symlink() else set())
+        mcp = package / "mcp.json"
+        servers = set()
+        if mcp.exists():
+            require(mcp.is_file() and not mcp.is_symlink(),
+                    "verified package MCP declaration is not regular")
+            raw = strict_json(mcp.read_text(encoding="utf-8")).get("mcpServers")
+            require(isinstance(raw, dict), "verified package MCP declaration invalid")
+            servers = set(raw)
+        candidates.append((skills, servers))
+    require(bool(candidates) and all(item == candidates[0] for item in candidates),
+            "verified pinned package native source unavailable or inconsistent")
+    skills, servers = candidates[0]
+    require((kind not in {"skill", "mixed"} or bool(skills))
+            and (kind not in {"mcp", "mixed"} or bool(servers)),
+            "verified package omitted its expected native components")
+    return skills, servers
 
 
 def require_removed_native_payload(native_root: Path, kind: str, *,
@@ -206,6 +255,24 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         require_native_payload_present()
         listed = call("list")
         first = plugin_record(listed, name, revision)
+        expected_skills, expected_servers = expected_package_native_names(
+            case_root, first, name, kind)
+
+        def require_expected_identity() -> None:
+            if kind in {"skill", "mixed"}:
+                skills = native_root / "skills"
+                found = {path.relative_to(skills).as_posix()
+                         for path in skills.rglob("SKILL.md")}
+                require(found == expected_skills | {"foreign-neighbor/SKILL.md"},
+                        "native Pi Skills differ from verified package identities")
+            if kind in {"mcp", "mixed"}:
+                servers = strict_json((native_root / "mcp.json").read_text(
+                    encoding="utf-8")).get("mcpServers")
+                require(isinstance(servers, dict)
+                        and set(servers) == expected_servers | {"foreign-neighbor"},
+                        "native Pi MCP keys differ from verified package identities")
+
+        require_expected_identity()
         again = call("add", selector, "--no-save", timeout=240)
         repeated = plugin_record(call("list"), name, revision)
         require(first["installation_id"] == repeated["installation_id"],
@@ -238,6 +305,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         require(maintained["installation_id"] == first["installation_id"],
                 "maintenance switched or duplicated the pinned Pi installation")
         require_native_payload_present()
+        require_expected_identity()
         call("remove", first["installation_id"], timeout=120)
         if kind in {"skill", "mixed"}:
             require_removed_native_payload(
