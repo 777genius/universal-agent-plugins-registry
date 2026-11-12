@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -108,7 +109,8 @@ class PiRealMaterializationContracts(unittest.TestCase):
 
     def test_native_names_are_derived_from_verified_package_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            package = Path(directory) / "state" / "managed" / "clients" / "pi" / "package"
+            native_root = Path(directory) / "profile"
+            package = native_root / "extensions" / "package-v1"
             package.mkdir(parents=True)
             manifest = b'{"name":"package","version":"1.0.0"}'
             (package / "plugin.json").write_bytes(manifest)
@@ -118,11 +120,17 @@ class PiRealMaterializationContracts(unittest.TestCase):
             (package / "mcp.json").write_text(
                 json.dumps({"mcpServers": {"correct-server": {"url": "https://example.invalid"}}}),
                 encoding="utf-8")
-            receipt = {"clients": [{"client_id": "pi", "package_revision": {
-                "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
-            }}]}
+            receipt = {"clients": [{
+                "client_id": "pi",
+                "native_profile_root": str(native_root),
+                "target_locator": str(package),
+                "physical_artifact_id": package.name,
+                "package_revision": {
+                    "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
+                },
+            }]}
             skills, servers, roots = expected_package_native_names(
-                Path(directory), receipt, "package", "mixed")
+                native_root, receipt, "package", "mixed")
             self.assertEqual(skills, {"correct-skill/SKILL.md"})
             self.assertEqual(servers, {"correct-server": {"url": "https://example.invalid"}})
             self.assertEqual(roots, (package,))
@@ -131,10 +139,56 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 "sha256:" + "0" * 64)
             with self.assertRaisesRegex(RuntimeError, "source unavailable"):
                 expected_package_native_names(
-                    Path(directory), wrong_receipt, "package", "mixed")
+                    native_root, wrong_receipt, "package", "mixed")
             with self.assertRaisesRegex(RuntimeError, "manifest differs"):
                 expected_package_native_names(
-                    Path(directory), receipt, "other-package", "mixed")
+                    native_root, receipt, "other-package", "mixed")
+
+    def test_copied_manifest_cannot_authorize_foreign_mcp_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native_root = root / "profile"
+            package = native_root / "extensions" / "bound-artifact"
+            (package / "runtime").mkdir(parents=True)
+            launcher = package / "runtime" / "launcher.mjs"
+            launcher.write_text("trusted launcher", encoding="utf-8")
+            manifest = b'{"name":"bound-plugin","version":"1.0.0"}'
+            (package / "plugin.json").write_bytes(manifest)
+            declared = {"local": {
+                "command": "node", "args": ["${PLUGIN_ROOT}/runtime/launcher.mjs"]}}
+            (package / "mcp.json").write_text(
+                json.dumps({"mcpServers": declared}), encoding="utf-8")
+            receipt = {"clients": [{
+                "client_id": "pi",
+                "native_profile_root": str(native_root),
+                "target_locator": str(package),
+                "physical_artifact_id": package.name,
+                "package_revision": {
+                    "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
+                },
+            }]}
+            # A copied manifest and MCP file are not an installer-owned binding.
+            foreign = root / "unrelated" / "plausible-package"
+            shutil.copytree(package, foreign)
+            foreign_launcher = foreign / "runtime" / "launcher.mjs"
+            foreign_launcher.write_text("different executable", encoding="utf-8")
+            skills, servers, roots = expected_package_native_names(
+                native_root, receipt, "bound-plugin", "mcp")
+            self.assertEqual(skills, set())
+            self.assertEqual(servers, declared)
+            self.assertEqual(roots, (package,))
+            require_expected_mcp_definitions(
+                {"local": {"command": "node", "args": [str(launcher)]}},
+                servers, roots)
+            with self.assertRaisesRegex(RuntimeError, "native Pi MCP"):
+                require_expected_mcp_definitions(
+                    {"local": {"command": "node", "args": [str(foreign_launcher)]}},
+                    servers, roots)
+            # Deleting the bound artifact must fail closed despite the copy.
+            shutil.rmtree(package)
+            with self.assertRaises(RuntimeError):
+                expected_package_native_names(
+                    native_root, receipt, "bound-plugin", "mcp")
 
     def test_native_mcp_definitions_reject_empty_wrong_url_and_wrong_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
