@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import PublicationError
-from pi_modern_feed_candidate import (proposed_source, read_evidence_object,
+from pi_modern_feed_candidate import (main, proposed_source, read_evidence_object,
                                       require_committed_directory_source,
                                       require_complete_source_eligibility,
                                       require_unsigned_preproduction_eligibility,
@@ -65,6 +65,22 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 *[receipt(self.suspended, s, "not_eligible") for s in ("user", "project")],
             ],
         }
+
+    def test_source_plans_cannot_open_nonpreproduction_path_even_if_all_planned(self) -> None:
+        # An all-green dry-run/planning report is never a signed managed
+        # install receipt. Refuse the no-flag path *before* Git, file writes,
+        # source reviews, or policy validation can run.
+        arguments = [
+            "pi_modern_feed_candidate.py", "--source-head", HEAD,
+            "--review", "unused-review.json", "--report", "linux=unused.json",
+            "--report", "macos=unused.json", "--report", "windows=unused.json",
+            "--output", "unused-candidate.json",
+        ]
+        with mock.patch.object(sys, "argv", arguments):
+            with mock.patch("pi_modern_feed_candidate.require_exact_checkout") as checkout:
+                with self.assertRaisesRegex(RuntimeError, "--preproduction-only"):
+                    main()
+                checkout.assert_not_called()
 
     def test_candidate_source_must_equal_committed_directory_bytes(self) -> None:
         with mock.patch("pi_modern_feed_candidate.subprocess.run",

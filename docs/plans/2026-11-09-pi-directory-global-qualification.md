@@ -94,6 +94,14 @@ policy validation. The known Marketing Kit -> HubSpot signed Pi dependency may a
 only as a real `refused` outcome, never a PASS. The helper does not convert 70/72 into
 72/72 and never manufactures positive upstream materialization evidence.
 
+The helper accepts **only explicit `--preproduction-only` mode**. Its input
+reports describe direct-source planning, not saved managed installations.
+Even an apparent 72/72 of successful source-plan/dry-run results cannot
+open a sign-ready path; the default/no-flag invocation fails closed before
+source acquisition or candidate output. Real 3-OS saved-install receipts
+and separate protected publication authorization require a different,
+independently reviewed acceptance pipeline.
+
 Output is **only an unsigned source candidate outside the repository**: no keys, Ed25519
 signature, protected promotion, production feed, source policy mutation or approval.
 The legacy shared signed Directory v1 feed is unchanged. A future modern-only signed

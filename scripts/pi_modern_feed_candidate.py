@@ -235,6 +235,12 @@ def main() -> int:
     parser.add_argument("--report", required=True, action="append", help="linux=PATH, macos=PATH or windows=PATH")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    # The only supported inputs are historical direct-source *plans*. Even
+    # 72 successful dry-runs are not saved-install receipts, so this tool can
+    # never emit a sign-ready or production candidate from these reports.
+    require(args.preproduction_only,
+            "source plans are not managed saved-install receipts; "
+            "use --preproduction-only for isolated unsigned review staging")
     require(SHA.fullmatch(args.source_head) is not None, "source HEAD must be a full SHA")
     require_exact_checkout(args.source_head)
     require(not args.output.resolve().is_relative_to(ROOT.resolve()),
@@ -254,10 +260,7 @@ def main() -> int:
               for platform, data in reports.items()}
     expected_eligible = sum(source["distribution_status"] == "active" for source in sources) * len(SCOPES)
     require(len(set(counts.values())) == 1, "cross-OS outcomes differ")
-    if args.preproduction_only:
-        require_unsigned_preproduction_eligibility(counts, expected_eligible)
-    else:
-        require_complete_source_eligibility(counts, expected_eligible)
+    require_unsigned_preproduction_eligibility(counts, expected_eligible)
 
     reviews = read_evidence_object(args.review)
     require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
@@ -268,15 +271,15 @@ def main() -> int:
     from build_registry import validate_directory
     validate_directory(
         candidate, verify_packages=False,
-        allow_unsigned_pi_review_only=args.preproduction_only,
+        allow_unsigned_pi_review_only=True,
     )
     require(source_path.read_bytes() == original, "legacy Directory source changed")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     require(not args.output.exists(), "refusing to overwrite candidate")
     args.output.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n",
                            encoding="utf-8")
-    label = "PREPRODUCTION UNSIGNED REVIEW" if args.preproduction_only else "UNSIGNED"
-    print(f"{label} modern v1 candidate only: OS source-plan coverage={counts}; "
+    print(f"PREPRODUCTION UNSIGNED REVIEW modern v1 candidate only: "
+          f"OS source-plan coverage={counts}; "
           "not actual saved installs, not sign-ready, no Ed25519 signature, approval, "
           "production feed or 72/72 signed eligibility")
     return 0
