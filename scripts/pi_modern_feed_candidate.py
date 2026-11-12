@@ -126,6 +126,17 @@ def require_complete_source_eligibility(counts: dict[str, tuple[int, int]]) -> N
             "modern Pi candidate requires zero refused saved dependency plans on every OS")
 
 
+def require_unsigned_preproduction_eligibility(counts: dict[str, tuple[int, int]]) -> None:
+    """Only permit a REVIEW candidate from complete, consistently classified 3-OS plans.
+
+    A historically Pi-free signed feed may refuse Marketing Kit's HubSpot child.
+    That genuine refusal is never a successful install or permission to sign.
+    """
+    require(set(counts) == PLATFORMS and len(set(counts.values())) == 1
+            and all(planned > 0 and refused in {0, 2} for planned, refused in counts.values()),
+            "preproduction requires complete consistent 3-OS source plans with only known refusals")
+
+
 def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
     """Add reviewed Pi targets to a separate, unsigned modern-feed proposal.
 
@@ -187,6 +198,10 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-head", required=True)
+    parser.add_argument(
+        "--preproduction-only", action="store_true",
+        help="prepare an UNSIGNED review candidate with known legacy Marketing Kit refusals; never sign-ready",
+    )
     parser.add_argument("--review", required=True, type=Path)
     parser.add_argument("--report", required=True, action="append", help="linux=PATH, macos=PATH or windows=PATH")
     parser.add_argument("--output", required=True, type=Path)
@@ -208,7 +223,10 @@ def main() -> int:
     counts = {platform: validate_platform_report(data, platform, args.source_head, sources)
               for platform, data in reports.items()}
     require(len(set(counts.values())) == 1, "cross-OS outcomes differ")
-    require_complete_source_eligibility(counts)
+    if args.preproduction_only:
+        require_unsigned_preproduction_eligibility(counts)
+    else:
+        require_complete_source_eligibility(counts)
 
     reviews = read_evidence_object(args.review)
     require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
@@ -223,8 +241,10 @@ def main() -> int:
     require(not args.output.exists(), "refusing to overwrite candidate")
     args.output.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n",
                            encoding="utf-8")
-    print(f"UNSIGNED modern v1 candidate only: OS coverage={counts}; "
-          "no Ed25519 signature, approval, feed or 72/72 signed eligibility")
+    label = "PREPRODUCTION UNSIGNED REVIEW" if args.preproduction_only else "UNSIGNED"
+    print(f"{label} modern v1 candidate only: OS source-plan coverage={counts}; "
+          "not actual saved installs, not sign-ready, no Ed25519 signature, approval, "
+          "production feed or 72/72 signed eligibility")
     return 0
 
 

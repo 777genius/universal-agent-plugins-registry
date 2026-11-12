@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import PublicationError
 from pi_modern_feed_candidate import (proposed_source, read_evidence_object,
                                       require_complete_source_eligibility,
+                                      require_unsigned_preproduction_eligibility,
                                       validate_platform_report)
 
 HEAD = "a" * 40
@@ -98,6 +99,24 @@ class ModernPiEvidenceTests(unittest.TestCase):
         require_complete_source_eligibility(
             {"linux": (4, 0), "macos": (4, 0), "windows": (4, 0)}
         )
+
+    def test_known_legacy_refusal_allows_only_unsigned_preproduction_review(self) -> None:
+        counts = {"linux": (2, 2), "macos": (2, 2), "windows": (2, 2)}
+        require_unsigned_preproduction_eligibility(counts)
+        with self.assertRaisesRegex(RuntimeError, "zero refused saved dependency plans"):
+            require_complete_source_eligibility(counts)
+
+    def test_unsigned_preproduction_rejects_missing_or_divergent_os(self) -> None:
+        for counts in (
+            {"linux": (2, 2), "macos": (2, 2)},
+            {"linux": (2, 2), "macos": (2, 2), "windows": (4, 0)},
+            {"linux": (0, 2), "macos": (0, 2), "windows": (0, 2)},
+            {"linux": (2, 4), "macos": (2, 4), "windows": (2, 4)},
+        ):
+            with self.subTest(counts=counts), self.assertRaisesRegex(
+                RuntimeError, "complete consistent 3-OS"
+            ):
+                require_unsigned_preproduction_eligibility(counts)
 
     def test_unknown_refusal_cannot_be_counted_as_reviewed(self) -> None:
         report = copy.deepcopy(self.report)
