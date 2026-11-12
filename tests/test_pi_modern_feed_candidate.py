@@ -122,14 +122,16 @@ class ModernPiEvidenceTests(unittest.TestCase):
 
                 patch = mock.patch("pi_modern_feed_candidate.os.open", side_effect=race)
             else:
-                real_open = Path.open
+                from pi_modern_feed_candidate import open_windows_exclusive_nofollow
+                real_open = open_windows_exclusive_nofollow
 
-                def race(self, mode="r", *args, **kwargs):
-                    if self == path and mode == "x":
+                def race_windows(target):
+                    if target == path:
                         path.write_bytes(unexpected)
-                    return real_open(self, mode, *args, **kwargs)
+                    return real_open(target)
 
-                patch = mock.patch("pi_modern_feed_candidate.Path.open", new=race)
+                patch = mock.patch("pi_modern_feed_candidate.open_windows_exclusive_nofollow",
+                                  side_effect=race_windows)
             with patch, self.assertRaises(FileExistsError):
                 write_unsigned_candidate(path, candidate)
             self.assertEqual(path.read_bytes(), unexpected)
