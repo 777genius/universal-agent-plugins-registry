@@ -284,9 +284,13 @@ class PiNativeRemovalTests(unittest.TestCase):
             skill = root / "skills" / "package" / "SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("stale skill", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "skill is still present"):
+            with self.assertRaisesRegex(RuntimeError, "removed Pi skill payload remains"):
                 require_removed_native_payload(root, "skill")
             skill.unlink()
+            # The stronger removal contract rejects leftover empty package directories too.
+            with self.assertRaisesRegex(RuntimeError, "removed Pi skill payload remains"):
+                require_removed_native_payload(root, "skill")
+            skill.parent.rmdir()
             require_removed_native_payload(root, "skill")
 
     def test_remove_keeps_existing_mcp_server_but_rejects_ours(self) -> None:
@@ -310,13 +314,24 @@ class PiNativeRemovalTests(unittest.TestCase):
             foreign = root / "skills" / "foreign-neighbor" / "SKILL.md"
             foreign.parent.mkdir(parents=True)
             foreign.write_text("existing", encoding="utf-8")
-            expected = {"foreign-neighbor/SKILL.md"}
+            expected = native_files(root / "skills")
             require_removed_native_payload(root, "skill", surviving_skills=expected)
             own = root / "skills" / "our-package" / "SKILL.md"
             own.parent.mkdir()
             own.write_text("ours", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "still present"):
+            with self.assertRaisesRegex(RuntimeError, "removed Pi skill payload remains"):
                 require_removed_native_payload(root, "skill", surviving_skills=expected)
+            own.unlink()
+            # A script left behind after SKILL.md was deleted must still fail.
+            script = own.parent / "scripts" / "run.py"
+            script.parent.mkdir()
+            script.write_text("print('stale')\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "removed Pi skill payload remains"):
+                require_removed_native_payload(root, "skill", surviving_skills=expected)
+            script.unlink()
+            script.parent.rmdir()
+            own.parent.rmdir()
+            require_removed_native_payload(root, "skill", surviving_skills=expected)
 
     def test_removal_accepts_unowned_neighbor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
