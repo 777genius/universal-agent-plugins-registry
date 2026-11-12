@@ -257,6 +257,21 @@ def open_windows_exclusive_nofollow(path: Path):
     return os.fdopen(fd, "w", encoding="utf-8", newline="\n")
 
 
+def require_plain_windows_ancestry(parent: Path) -> None:
+    """Refuse junction/symlink ancestors before any Windows staging mutation.
+
+    Checking only the immediate parent misses a junction one directory up,
+    even when the resolved destination is still inside the user's temp tree.
+    This rejects existing redirects, not a claim of race-proof Windows handles.
+    """
+    for component in (parent, *parent.parents):
+        is_junction = getattr(component, "is_junction", None)
+        require(callable(is_junction),
+                "Windows unsigned staging requires junction detection (Python 3.12+)")
+        require(not component.is_symlink() and not is_junction(),
+                "unsigned candidate output ancestry must not contain a symlink or junction")
+
+
 def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     """Create an unsigned review file exclusively in an isolated output directory.
 
@@ -269,17 +284,14 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     root = ROOT.resolve()
     require(not path.resolve().is_relative_to(root),
             "unsigned candidate must stay outside the repository")
+    if os.name == "nt":
+        require_plain_windows_ancestry(path.parent)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # Windows directory junctions are reparse points, but are not reported
-    # by Path.is_symlink(); they must not redirect unsigned staging either.
-    is_junction = getattr(path.parent, "is_junction", None)
-    # Older Windows Python versions cannot distinguish NTFS junctions from
-    # ordinary directories. Refuse rather than silently disable this guard.
-    require(os.name != "nt" or callable(is_junction),
-            "Windows unsigned staging requires junction detection (Python 3.12+)")
-    require(not path.parent.is_symlink()
-            and not (callable(is_junction) and is_junction()),
-            "unsigned candidate output parent must not be a symlink or junction")
+    if os.name == "nt":
+        require_plain_windows_ancestry(path.parent)
+    else:
+        require(not path.parent.is_symlink(),
+                "unsigned candidate output parent must not be a symlink or junction")
     parent = path.parent.resolve(strict=True)
     require(not parent.is_relative_to(root),
             "unsigned candidate output parent must stay outside the repository")

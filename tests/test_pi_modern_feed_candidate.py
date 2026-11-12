@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import PublicationError
 from pi_modern_feed_candidate import (main, proposed_source, read_evidence_object,
+                                      require_plain_windows_ancestry,
                                       require_committed_directory_source,
                                       require_complete_source_eligibility,
                                       require_unsigned_preproduction_eligibility,
@@ -166,6 +167,37 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "symlink or junction"):
                     write_unsigned_candidate(path, {"schema_version": 1})
             self.assertFalse(path.exists())
+
+    def test_nested_junction_classification_rejects_output_ancestry(self) -> None:
+        # A safe-looking immediate parent is not enough if its ancestor is
+        # a reparse point, even when the resolved destination is in temp.
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "alias" / "nested"
+            parent.mkdir(parents=True)
+            with mock.patch.object(
+                Path, "is_junction", new=lambda candidate: candidate.name == "alias",
+                create=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "ancestry must not contain"):
+                    require_plain_windows_ancestry(parent)
+
+    @unittest.skipUnless(os.name == "nt", "native Windows ancestor junction")
+    def test_native_windows_nested_junction_cannot_redirect_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            actual = root / "actual"
+            (actual / "nested").mkdir(parents=True)
+            alias = root / "alias"
+            subprocess.run(
+                ["cmd.exe", "/c", "mklink", "/J", str(alias), str(actual)],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertTrue(alias.is_junction())
+            path = alias / "nested" / "candidate.json"
+            self.assertFalse(path.parent.is_junction())
+            with self.assertRaisesRegex(RuntimeError, "ancestry must not contain"):
+                write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertFalse((actual / "nested" / "candidate.json").exists())
 
     @unittest.skipUnless(os.name == "nt", "Windows junction detection support")
     def test_old_windows_python_without_junction_detection_fails_closed(self) -> None:
