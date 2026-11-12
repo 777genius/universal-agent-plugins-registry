@@ -224,6 +224,19 @@ def require_committed_directory_source(source_head: str, actual: bytes) -> None:
             "working Directory source differs from requested source HEAD")
 
 
+def write_unsigned_candidate(path: Path, candidate: dict) -> None:
+    """Create an isolated review artifact exactly once, without a clobber race.
+
+    An existence check followed by write_text() can truncate a file (or a
+    swapped-in symlink target) if another process creates the path between
+    those operations. Exclusive creation rejects both cases fail-closed.
+    """
+    content = json.dumps(candidate, ensure_ascii=False, indent=2) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as output:
+        output.write(content)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-head", required=True)
@@ -274,10 +287,7 @@ def main() -> int:
         allow_unsigned_pi_review_only=True,
     )
     require(source_path.read_bytes() == original, "legacy Directory source changed")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    require(not args.output.exists(), "refusing to overwrite candidate")
-    args.output.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
+    write_unsigned_candidate(args.output, candidate)
     print(f"PREPRODUCTION UNSIGNED REVIEW modern v1 candidate only: "
           f"OS source-plan coverage={counts}; "
           "not actual saved installs, not sign-ready, no Ed25519 signature, approval, "
