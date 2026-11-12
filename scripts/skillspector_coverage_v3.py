@@ -735,9 +735,17 @@ def finding_identities(record):
                    for finding in record["findings"])
 
 
+def represented_finding_identities(record):
+    """All originally attested groups remain relevant across later rescans."""
+    identities = finding_identities(record)
+    for witness in record.get("recovery_witnesses", []):
+        identities |= finding_identities(witness["record"])
+    return identities
+
+
 def require_represented_degraded_findings(item, old, new, attempt):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
-    old_groups, new_groups = finding_identities(old), finding_identities(new)
+    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
     novel = new_groups - old_groups
     if novel:
         # Purely numeric diagnostics: old/new group counts can be equal while
@@ -771,7 +779,7 @@ def degraded_rescan(old, new):
         return True
     # Finding group IDs can vary across scanner runs. Retain verified
     # source positions, rules and fingerprint identities across rescans.
-    return bool(finding_identities(old) - finding_identities(new))
+    return bool(represented_finding_identities(old) - finding_identities(new))
 
 
 def retained_degraded_replay(item, old_record, old_attempt, outcome):
@@ -1046,7 +1054,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # A recovered Complete may come from a checkpoint rejected in assembly.
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
-    novel = finding_identities(new) - finding_identities(old) if degraded_complete else Counter()
+    novel = finding_identities(new) - represented_finding_identities(old) if degraded_complete else Counter()
     if novel and witness_origin is None:
         # Never substitute a truncated representative for two distinct reports.
         # The recovery caller supplies origin only after authenticating the
