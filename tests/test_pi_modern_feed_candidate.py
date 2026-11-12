@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import copy
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import PublicationError
 from pi_modern_feed_candidate import (proposed_source, read_evidence_object,
+                                      require_committed_directory_source,
                                       require_complete_source_eligibility,
                                       require_unsigned_preproduction_eligibility,
                                       validate_platform_report)
@@ -62,6 +65,16 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 *[receipt(self.suspended, s, "not_eligible") for s in ("user", "project")],
             ],
         }
+
+    def test_candidate_source_must_equal_committed_directory_bytes(self) -> None:
+        with mock.patch("pi_modern_feed_candidate.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0, b"committed")) as read:
+            require_committed_directory_source(HEAD, b"committed")
+            with self.assertRaisesRegex(RuntimeError, "working Directory source differs"):
+                require_committed_directory_source(HEAD, b"uncommitted")
+            self.assertEqual(read.call_args.args[0],
+                             ["git", "show", f"{HEAD}:registry/directory.json"])
+            self.assertTrue(read.call_args.kwargs["check"])
 
     def test_duplicate_json_keys_cannot_reinterpret_ci_or_auth_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

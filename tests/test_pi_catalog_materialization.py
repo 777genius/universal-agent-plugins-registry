@@ -95,6 +95,12 @@ class PiRealMaterializationContracts(unittest.TestCase):
                         expected,
                     )
 
+    def test_boolean_report_schema_is_not_v1(self) -> None:
+        report = fixture(self.sources, "ubuntu-24.04", 0)
+        report["schema_version"] = True
+        with self.assertRaisesRegex(RuntimeError, "report is not exact-head"):
+            verify_report(report, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
+
     def test_dry_run_and_real_refusals_never_count_as_materialization(self) -> None:
         report = fixture(self.sources, "ubuntu-24.04", 0)
         active = next(r for r in report["results"] if r["status"] == "passed")

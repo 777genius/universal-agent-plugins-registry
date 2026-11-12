@@ -89,7 +89,8 @@ def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple
 def verify_report(report: dict, sources: list[dict], head: str,
                   platform: str, shard: int, shards: int) -> int:
     """Fail closed on omitted, repeated, unpinned or non-materialized cases."""
-    require(isinstance(report, dict) and report.get("schema_version") == 1
+    require(isinstance(report, dict) and type(report.get("schema_version")) is int
+            and report["schema_version"] == 1
             and type(report.get("shard")) is int and report["shard"] == shard
             and type(report.get("shards")) is int and report["shards"] == shards
             and report.get("kind") == KIND and report.get("source_head") == head

@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 from directory_publication import PublicationError, read_json
@@ -213,6 +214,16 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
     return result
 
 
+def require_committed_directory_source(source_head: str, actual: bytes) -> None:
+    """Derive the unsigned candidate only from the committed v1 source bytes."""
+    committed = subprocess.run(
+        ["git", "show", f"{source_head}:registry/directory.json"],
+        cwd=ROOT, capture_output=True, check=True, timeout=30,
+    ).stdout
+    require(actual == committed,
+            "working Directory source differs from requested source HEAD")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-head", required=True)
@@ -231,6 +242,7 @@ def main() -> int:
 
     source_path = ROOT / "registry/directory.json"
     original = source_path.read_bytes()
+    require_committed_directory_source(args.source_head, original)
     sources = active_sources(args.source_head)
     reports = {}
     for value in args.report:
