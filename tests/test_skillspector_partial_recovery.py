@@ -555,8 +555,8 @@ class RecoveryTests(unittest.TestCase):
     def test_disjoint_warnings_and_same_fingerprint_different_evidence_are_not_collapsed(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
-        left = self.authentic_batch(selection, 1, 0, warning="First warning.")
-        right = self.authentic_batch(selection, 2, 1, warning="Distinct warning.")
+        left = self.authentic_batch(selection, 1, 0, warning="First warning.", pattern="old-distinct-risk")
+        right = self.authentic_batch(selection, 2, 1, warning="Distinct warning.", pattern="new-distinct-risk")
         metadata = copy.deepcopy(left)
         metadata["execution_origin"]["run_id"] = 3
         metadata["workers"][0]["attempts"][0]["record"]["skill_name"] = "different normalized evidence"
@@ -587,9 +587,9 @@ class RecoveryTests(unittest.TestCase):
 
             # The same lossless invariant applies when *both* independent
             # originals report Partial rather than Complete.
-            partial_left = self.authentic_batch(selection, 11, 3, warning="Partial left risk.",
+            partial_left = self.authentic_batch(selection, 11, 3, warning="Partial left risk.", pattern="partial-old-risk",
                 status="partial", reason="static_parse_limit")
-            partial_right = self.authentic_batch(selection, 12, 4, warning="Partial right risk.",
+            partial_right = self.authentic_batch(selection, 12, 4, warning="Partial right risk.", pattern="partial-new-risk",
                 status="partial", reason="static_parse_limit")
             partial = self.recover(root / "partial-disjoint", selection, [partial_left, partial_right])
             partial_record = partial["records"][subject["id"]]
