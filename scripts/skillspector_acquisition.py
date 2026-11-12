@@ -17,11 +17,12 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER, portable_path
+from scripts.build_bridges import BridgeError, GIT_MODES, LFS_HEADER
 from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError, normalized_path
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
+from scripts.portable_paths import MAX_DEPTH, validate_segment
 
 FETCH_CHUNK_OBJECTS = 32
 TREE_METADATA_BYTES = 16 << 20
@@ -116,12 +117,29 @@ def _run_git(repository, arguments, budget, *, input_bytes=b"", output_limit=STD
     return bytes(output)
 
 
+def scan_portable_path(value, field):
+    """Validate pinned static-scan paths, including NFC Unicode, without relaxing installation rules."""
+    _require(isinstance(value, str) and value and "\\" not in value and "%" not in value,
+             f"{field}: empty or ambiguous path")
+    path = PurePosixPath(value)
+    _require(bool(path.parts) and not path.is_absolute() and path.as_posix() == value and len(path.parts) <= MAX_DEPTH,
+             f"{field}: path must be normalized, relative and bounded")
+    _require(not any(segment.casefold() == ".git" for segment in path.parts) and
+             value.casefold() != ".plugin-kit-ai.lock", f"{field}: reserved path")
+    for segment in path.parts:
+        try:
+            validate_segment(segment)
+        except ValueError as error:
+            raise DiscoveryError(f"{field}: {error}") from error
+    return path
+
+
 def _tree_records(repository, package_path, max_files, budget):
     prefix = normalized_path(package_path)
     raw = _run_git(repository, ["ls-tree", "-rz", "-r", repository.revision, "--", prefix or "."],
         budget, output_limit=TREE_METADATA_BYTES)
     _require(not raw or raw.endswith(b"\0"), "package tree is truncated")
-    records, seen = [], set()
+    records, seen, seen_nodes = [], set(), {}
     prefix_with_slash = prefix + "/" if prefix else ""
     for row in raw.split(b"\0"):
         budget.check()
@@ -134,14 +152,18 @@ def _tree_records(repository, package_path, max_files, budget):
         except (ValueError, UnicodeError) as error:
             raise DiscoveryError("package tree contains an invalid Git entry") from error
         _require(kind == "blob" and mode in GIT_MODES and OID.fullmatch(object_id), "unsupported package tree entry")
-        try:
-            portable_path(full_path, "package tree")
-        except BridgeError as error:
-            raise DiscoveryError(str(error)) from error
         _require(not prefix or full_path.startswith(prefix_with_slash), "package tree escaped the selected root")
         relative = full_path[len(prefix_with_slash):]
-        _require(bool(relative) and full_path.casefold() not in seen, "package tree contains an empty or case-colliding path")
-        seen.add(full_path.casefold())
+        path = scan_portable_path(relative, "package tree")
+        _require(relative.casefold() not in seen, "package tree contains a duplicate or case-colliding path")
+        for depth in range(1, len(path.parts) + 1):
+            component = "/".join(path.parts[:depth])
+            folded = component.casefold()
+            node = (component, depth == len(path.parts))
+            _require(folded not in seen_nodes or seen_nodes[folded] == node,
+                     "package tree contains a case-colliding file or directory")
+            seen_nodes[folded] = node
+        seen.add(relative.casefold())
         records.append((relative, GIT_MODES[mode], object_id))
         if len(records) > max_files:
             raise DiscoveryInputLimitError(f"package tree exceeds {max_files} files")
@@ -300,3 +322,21 @@ def bounded_package_files(repository, package_path, *, max_files, max_file_bytes
         max_file_bytes=max_file_bytes, max_tree_bytes=max_tree_bytes, budget=budget)
     _require(not any(body.startswith(LFS_HEADER) for body in blobs.values()), "Git LFS pointer is forbidden")
     return [(path, mode, blobs[oid]) for path, mode, oid in records]
+
+def materialize_scanned_files(files, root, budget=None):
+    """Stage a validated, read-only Git tree for static scanning, never for installation."""
+    seen = set()
+    for relative, mode, body in files:
+        if budget:
+            budget.check()
+        path = scan_portable_path(relative, "scan file")
+        _require(mode in GIT_MODES.values() and isinstance(body, bytes), "invalid scanned Git blob")
+        folded = relative.casefold()
+        _require(folded not in seen, "scan file path collision")
+        seen.add(folded)
+        destination = root.joinpath(*path.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _require(not destination.exists() and not destination.is_symlink(), "duplicate scan file")
+        destination.write_bytes(body)
+        destination.chmod(mode)
+

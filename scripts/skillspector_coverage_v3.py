@@ -21,8 +21,8 @@ from scripts import skillspector_coverage as v2
 from scripts import skillspector_reports as scanner
 from scripts import skillspector_contract as contract
 from scripts.build_bridges import BridgeError, PinnedRepository
-from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError, materialize_package
-from scripts.skillspector_acquisition import AcquisitionTransferLimit, bounded_package_files
+from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError
+from scripts.skillspector_acquisition import AcquisitionTransferLimit, bounded_package_files, materialize_scanned_files
 from scripts.build_registry import RegistryError, directory_tree_digest
 from scripts.directory_publication import PublicationError, canonical_json, format_timestamp, parse_timestamp, require, sha256_digest
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
@@ -524,7 +524,7 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
                 files = bounded_package_files(pinned, item["path"], max_files=profile["max_files"],
                     max_file_bytes=profile["max_tree_bytes"], max_tree_bytes=profile["max_tree_bytes"])
                 require(any(path == "SKILL.md" for path, _, _ in files), "selected root has no SKILL.md")
-                materialize_package(files, root, pinned.work_budget)
+                materialize_scanned_files(files, root, pinned.work_budget)
                 digest = directory_tree_digest(root)
                 record["source"]["content_digest"] = digest
                 document = (root / "SKILL.md").read_text(encoding="utf-8")
@@ -737,12 +737,21 @@ def finding_identities(record):
 
 def require_represented_degraded_findings(item, old, new, attempt):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
-    novel = finding_identities(new) - finding_identities(old)
+    old_groups, new_groups = finding_identities(old), finding_identities(new)
+    novel = new_groups - old_groups
     if novel:
+        # Purely numeric diagnostics: old/new group counts can be equal while
+        # the findings differ (e.g. a network fallback versus a real advisory).
+        # Keep the original failure and never serialize untrusted finding text.
         context = {"subject_digest": source_digest(item),
             "old_report_digest": old["report_digest"], "new_report_digest": new["report_digest"],
             "old_groups": len(old["findings"]), "new_groups": len(new["findings"]),
-            "novel_group_instances": sum(novel.values()), "attempt_count": attempt["attempt_count"]}
+            "old_only_group_instances": sum((old_groups - new_groups).values()),
+            "novel_group_instances": sum(novel.values()), "attempt_count": attempt["attempt_count"],
+            "old_fully_inspected_files": old["coverage"]["fully_inspected_files"],
+            "new_fully_inspected_files": new["coverage"]["fully_inspected_files"],
+            "old_partially_inspected_files": old["coverage"]["partially_inspected_files"],
+            "new_partially_inspected_files": new["coverage"]["partially_inspected_files"]}
         raise PublicationError("degraded complete introduces unrepresented new findings: " +
             json.dumps(context, sort_keys=True, separators=(",", ":")))
 

@@ -450,6 +450,7 @@ class QueueTests(unittest.TestCase):
                                    authenticated_current_worker=True)
         self.assertIn(coverage.source_digest(subject), str(failure.exception))
         self.assertIn('"novel_group_instances":1', str(failure.exception))
+        self.assertIn('"old_only_group_instances":1', str(failure.exception))
         self.assertNotIn("new-risk", str(failure.exception))
         self.assertEqual(retained[subject["id"]], old)
         self.assertEqual(attempts, {})
@@ -472,6 +473,44 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(attempt["reason"], "recovery_conflict")
         self.assertEqual(attempt["disposition"], "scheduled")
         self.assertEqual(attempt["next_profile"], "static-extended-v3")
+
+    def test_equal_count_osv_fallback_and_dependency_advisory_remain_distinct(self):
+        """A later OSV outage cannot erase independently verified advisories."""
+        subject = item()
+        old = record(subject, status="partial", reason="network_error")
+        new = record(subject)
+        old["coverage"]["fully_inspected_files"] = 31
+        old["coverage"]["partially_inspected_files"] = 3
+        new["coverage"]["fully_inspected_files"] = 34
+        new["coverage"]["partially_inspected_files"] = 0
+        shared = [{"id": f"shared-{i}", "rule": "SAFE", "path": "SKILL.md",
+                   "line": i + 1, "pattern": f"unchanged-{i}", "severity": "LOW"}
+                  for i in range(18)]
+        # This models two verified 19-group scans of the same immutable
+        # package; neither group may be overwritten just because counts match.
+        old["findings"] = shared + [{
+            "id": "osv-offline", "rule": "SC4", "path": "package.json",
+            "line": 1, "pattern": "OSV.dev unreachable, static fallback",
+            "severity": "LOW", "match_fingerprint": "a" * 64}]
+        new["findings"] = shared + [{
+            "id": "osv-advisory", "rule": "SC4", "path": "package.json",
+            "line": 12, "pattern": "Unpinned dependency with an advisory",
+            "severity": "LOW", "match_fingerprint": "b" * 64}]
+        self.assertEqual(len(old["findings"]), len(new["findings"]))
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        with self.assertRaisesRegex(PublicationError, "unrepresented new findings") as failure:
+            coverage.require_represented_degraded_findings(
+                subject, old, new, {"attempt_count": 3})
+        message = str(failure.exception)
+        for expected in ('"old_groups":19', '"new_groups":19',
+                         '"old_only_group_instances":1', '"novel_group_instances":1',
+                         '"old_fully_inspected_files":31', '"new_fully_inspected_files":34',
+                         '"old_partially_inspected_files":3', '"new_partially_inspected_files":0',
+                         '"attempt_count":3'):
+            self.assertIn(expected, message)
+        self.assertNotIn("OSV.dev", message)
+        self.assertNotIn("Unpinned dependency", message)
+        self.assertNotIn("package.json", message)
 
     def test_current_worker_authentication_requires_real_main_package(self):
         """No caller-supplied flag or GitHub-style environment may bypass the artifact verifier."""
@@ -1058,7 +1097,7 @@ class WorkerBudgetTests(unittest.TestCase):
         """Exercise real admission, materialization, normalization and history with a fake clock."""
         elapsed, calls = [0.0], []
         pinned = mock.Mock()
-        materialize = coverage.materialize_package
+        materialize = coverage.materialize_scanned_files
 
         def prepare(seconds, budget):
             elapsed[0] += min(seconds, budget.remaining())
@@ -1092,7 +1131,7 @@ class WorkerBudgetTests(unittest.TestCase):
              mock.patch.object(scanner, "verify_scanner"), \
              mock.patch.object(coverage, "PinnedRepository", side_effect=acquire) as acquisition, \
              mock.patch.object(coverage, "bounded_package_files", side_effect=package), \
-             mock.patch.object(coverage, "materialize_package", side_effect=materialize_with_elapsed_time), \
+             mock.patch.object(coverage, "materialize_scanned_files", side_effect=materialize_with_elapsed_time), \
              mock.patch.object(scanner, "run_scanner_v3", side_effect=analyze):
             result = coverage.scan_partition(selection, Path("/unused-scanner"), previous,
                 source_commit=COMMIT, partition_count=1, budget_seconds=budget_seconds)

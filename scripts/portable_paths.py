@@ -9,6 +9,8 @@ from pathlib import Path
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", "CLOCK$"} | {
     f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
 }
+# Windows also reserves COM¹/COM²/COM³ and LPT¹/LPT²/LPT³ as device names.
+WINDOWS_RESERVED |= {f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "¹²³"}
 WINDOWS_INVALID = set('<>:"/\\|?*')
 MAX_FILES = 10_000
 MAX_FILE_BYTES = 64 << 20
