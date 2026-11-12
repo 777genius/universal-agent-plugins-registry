@@ -94,13 +94,13 @@ def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
     if len(argv) < 10 or argv[1:3] != ["add", item["source"]]:
         return False
     expected = ["--no-save", "--target", "pi", "--scope", scope, "--format", "json"]
-    if argv[3:9] != expected:
+    if argv[3:10] != expected:
         return False
     if scope == "user":
-        return len(argv) == 9
-    return (scope == "project" and len(argv) == 11
-            and argv[9] == "--project-root" and bool(argv[10])
-            and not argv[10].startswith("-"))
+        return len(argv) == 10
+    return (scope == "project" and len(argv) == 12
+            and argv[10] == "--project-root" and bool(argv[11])
+            and not argv[11].startswith("-"))
 
 
 def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple[int, dict]]:
