@@ -110,11 +110,11 @@ class ColdAcquisitionTests(unittest.TestCase):
             "skills/demo/" + ("a" * 256) + ".md",
         )
         for path in paths:
-            row = f"100644 blob {'a' * 40}\\t{path}\\0".encode("utf-8")
-            with self.subTest(path=path), \\
-                 mock.patch.object(acquisition, "_run_git", return_value=row), \\
-                 mock.patch.object(acquisition, "_object_sizes") as sizes, \\
-                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \\
+            row = f"100644 blob {'a' * 40}\t{path}\0".encode("utf-8")
+            with self.subTest(path=path), \
+                 mock.patch.object(acquisition, "_run_git", return_value=row), \
+                 mock.patch.object(acquisition, "_object_sizes") as sizes, \
+                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \
                  self.assertRaises(DiscoveryError):
                 self.read(mock.Mock(work_budget=WorkBudget(5)))
             sizes.assert_not_called()
@@ -125,8 +125,8 @@ class ColdAcquisitionTests(unittest.TestCase):
             pinned, _ = self.fixture(Path(temporary), {
                 "skills/demo/Ω.md": b"one", "skills/demo/ω.md": b"two",
             })
-            with mock.patch.object(acquisition, "_object_sizes") as sizes, \\
-                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \\
+            with mock.patch.object(acquisition, "_object_sizes") as sizes, \
+                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \
                  self.assertRaisesRegex(DiscoveryError, "case-colliding"):
                 self.read(pinned)
             sizes.assert_not_called()
