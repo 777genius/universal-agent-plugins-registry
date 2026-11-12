@@ -98,11 +98,10 @@ jobs:
                           materialize_scanned_files(files, root, pinned.work_budget)
                           assert sum(path.is_file() for path in root.rglob("*")) == count
                           digest = directory_tree_digest(root)
-                          home = Path(directory) / "isolated-scanner-home"
-                          home.mkdir()
-                          code, body = static.run_scanner_v3(
-                              executable, ["scan", str(root), "--no-llm", "--format", "json",
-                                          "--fail-on-incomplete"], home, 180, "static-extended-v3")
+                          with tempfile.TemporaryDirectory(prefix="isolated-skillspector-home-") as home_dir:
+                              code, body = static.run_scanner_v3(
+                                  executable, ["scan", str(root), "--no-llm", "--format", "json",
+                                              "--fail-on-incomplete"], Path(home_dir), 180, "static-extended-v3")
                           report = static.parse_scanner_json(body, "real Unicode source scan")
                           completeness = report["analysis_completeness"]
                           assert code in (0, 1), f"{repository}: unexpected CLI exit {code}"
