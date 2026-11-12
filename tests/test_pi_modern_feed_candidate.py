@@ -247,6 +247,44 @@ class ModernPiEvidenceTests(unittest.TestCase):
             self.assertCountEqual(outcomes, ["created", "refused"])
             self.assertIn(json.loads(path.read_bytes()), ({"writer": 1}, {"writer": 2}))
 
+    @unittest.skipUnless(os.name == "nt", "native Windows creation boundary")
+    def test_native_windows_create_new_refuses_injected_file_at_call_boundary(self) -> None:
+        # Inject a competing file immediately before the real CreateFileW
+        # invocation, not at the outer Python writer. This exercises the
+        # kernel's CREATE_NEW exclusive decision and preserves foreign bytes.
+        import ctypes
+        from pi_modern_feed_candidate import open_windows_exclusive_nofollow
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private" / "candidate.json"
+            path.parent.mkdir(mode=0o700)
+            original_win_dll = ctypes.WinDLL
+            kernel = original_win_dll("kernel32", use_last_error=True)
+            real_create = kernel.CreateFileW
+            foreign = b"independent competing writer"
+
+            class InterceptedCreate:
+                argtypes = None
+                restype = None
+
+                def __call__(self, target, *args):
+                    self_test.assertEqual(target, str(path))
+                    self_test.assertFalse(path.exists())
+                    path.write_bytes(foreign)
+                    real_create.argtypes = self.argtypes
+                    real_create.restype = self.restype
+                    return real_create(target, *args)
+
+            class KernelProxy:
+                CreateFileW = InterceptedCreate()
+
+            self_test = self
+            with mock.patch("ctypes.WinDLL", return_value=KernelProxy()):
+                with self.assertRaises(OSError) as raised:
+                    open_windows_exclusive_nofollow(path)
+            self.assertIn(getattr(raised.exception, "winerror", None), (80, 183))
+            self.assertEqual(path.read_bytes(), foreign)
+
     @unittest.skipUnless(os.name == "nt", "Windows junction detection support")
     def test_old_windows_python_without_junction_detection_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
