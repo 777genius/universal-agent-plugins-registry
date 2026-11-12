@@ -1040,6 +1040,22 @@ def mark_missing_predecessor(record, attempt):
         "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
 
 
+def witness_fits_shard_budget(record, repository):
+    """Budget the actual public shard including this record and its witnesses.
+
+    A record may already approach 8 MiB. A bounded 256-KiB witness does not
+    inherit the reserved space for publication context. Check the exact shard
+    wrapper *after* recovery disclosure is attached, conservatively reserving
+    the maximum allowed future reidentified source ID on both records.
+    """
+    public = scanner.redact_public_record(record)
+    longest_id = "\x00" * 200
+    public["id"] = longest_id
+    for witness in public.get("recovery_witnesses", []):
+        witness["record"]["id"] = longest_id
+    return len(report_json(shard_document(repository, [public]))) <= MAX_SHARD_BYTES
+
+
 def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False, witness_origin=None):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
@@ -1089,6 +1105,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         require_represented_degraded_findings(item, old, new, outcome["attempt"])
     chosen = old if prefer_existing or degraded_complete or disjoint or old.get("recovery_witnesses") else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
+    added_witness = None
     if novel:
         require(old["source"] == new["source"] and
                 old["scanner"] == new["scanner"] and
@@ -1112,6 +1129,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
                          (witness in witnesses or len(witnesses) < 2))
         if representable and witness not in witnesses:
             retained.setdefault("recovery_witnesses", []).append(witness)
+            added_witness = witness
             retained["recovery_witnesses"].sort(key=lambda value: (value["origin"]["run_id"],
                 value["origin"]["run_attempt"], value["record"]["report_digest"]))
     if chosen is new:
@@ -1128,6 +1146,13 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     mark_recovery_uncertainty(retained, attempts[identifier], "recovery_conflict",
         "Independent authenticated executions disagree. This original report is retained; "
         "other authenticated outcomes are not fully represented. Their immutable checkpoint artifacts remain available.")
+    if added_witness is not None and not witness_fits_shard_budget(retained, item["repository"]):
+        # Never let one independently authenticated alternate overflow the
+        # actual signed shard and stop other sources. Drop only the candidate
+        # we just appended, retaining prior witnesses and the disclosure.
+        retained["recovery_witnesses"].remove(added_witness)
+        if not retained["recovery_witnesses"]:
+            del retained["recovery_witnesses"]
     records[identifier] = retained
 
 
