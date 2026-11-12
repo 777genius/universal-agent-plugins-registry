@@ -1004,6 +1004,54 @@
         1,
         2
       ]
+    },
+    "recovery_witnesses": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "origin",
+          "record"
+        ],
+        "properties": {
+          "origin": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "run_id",
+              "run_attempt"
+            ],
+            "properties": {
+              "run_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "run_attempt": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            }
+          },
+          "record": {
+            "allOf": [
+              {
+                "$ref": "#"
+              },
+              {
+                "not": {
+                  "required": [
+                    "recovery_witnesses"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
     }
   },
   "allOf": [
