@@ -12,7 +12,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from pi_catalog_inventory_e2e import active_sources, native_files
-from pi_direct_source_e2e import (expected_package_native_names, require_removed_native_payload)
+from pi_direct_source_e2e import (
+    expected_package_native_names, require_removed_native_payload,
+    require_expected_mcp_definitions, require_unchanged_native_scope,
+)
 from pi_catalog_materialization_e2e import (
     KIND, MANAGED_ROOT, MANAGED_NO_SAVE_DIAGNOSTIC, PLATFORMS, SCOPES, SHARDS,
     case_tuple, selected_sources, source_identity, verify_report, verify_all,
@@ -120,7 +123,7 @@ class PiRealMaterializationContracts(unittest.TestCase):
             }}]}
             self.assertEqual(
                 expected_package_native_names(Path(directory), receipt, "package", "mixed"),
-                ({"correct-skill/SKILL.md"}, {"correct-server"}),
+                ({"correct-skill/SKILL.md"}, {"correct-server": {"url": "https://example.invalid"}}),
             )
             wrong_receipt = copy.deepcopy(receipt)
             wrong_receipt["clients"][0]["package_revision"]["manifest_digest"] = (
@@ -131,6 +134,49 @@ class PiRealMaterializationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "manifest differs"):
                 expected_package_native_names(
                     Path(directory), receipt, "other-package", "mixed")
+
+    def test_native_mcp_definitions_reject_empty_wrong_url_and_wrong_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launcher = root / "package" / "runtime" / "launcher.mjs"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("console.log('fixture')", encoding="utf-8")
+            expected = {
+                "local": {"command": "node", "args": ["${PLUGIN_ROOT}/runtime/launcher.mjs"]},
+                "remote": {"url": "https://mcp.example.invalid/mcp"},
+            }
+            actual = {
+                "local": {"command": "node", "args": [str(launcher)]},
+                "remote": {"url": "https://mcp.example.invalid/mcp"},
+            }
+            require_expected_mcp_definitions(actual, expected, root)
+            mutations = (
+                lambda data: data.__setitem__("local", {}),
+                lambda data: data["remote"].__setitem__("url", "https://other.invalid"),
+                lambda data: data["local"].__setitem__("command", "other"),
+                lambda data: data["local"].__setitem__("args", ["/tmp/other/launcher.mjs"]),
+            )
+            for mutation in mutations:
+                changed = copy.deepcopy(actual)
+                mutation(changed)
+                with self.assertRaisesRegex(RuntimeError, "native Pi MCP"):
+                    require_expected_mcp_definitions(changed, expected, root)
+
+    def test_unselected_pi_scope_must_remain_byte_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            other_scope = Path(directory) / "other" / ".pi"
+            baseline = native_files(other_scope)
+            require_unchanged_native_scope(other_scope, False, baseline)
+            other_scope.mkdir(parents=True)
+            with self.assertRaisesRegex(RuntimeError, "unselected scope"):
+                require_unchanged_native_scope(other_scope, False, baseline)
+            foreign = other_scope / "mcp.json"
+            foreign.write_text('{"mcpServers": {}}', encoding="utf-8")
+            present = native_files(other_scope)
+            require_unchanged_native_scope(other_scope, True, present)
+            foreign.write_text('{"mcpServers": {"unwanted": {}}}', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "unselected scope"):
+                require_unchanged_native_scope(other_scope, True, present)
 
     def test_remove_rejects_leftover_native_skill_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
