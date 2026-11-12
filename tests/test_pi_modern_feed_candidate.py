@@ -334,6 +334,37 @@ class ModernPiEvidenceTests(unittest.TestCase):
             self.assertEqual(json.loads((moved / path.name).read_text()), {"schema_version": 1})
             self.assertFalse((redirected / path.name).exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX ancestor nofollow traversal")
+    def test_intermediate_symlink_swap_during_descriptor_acquisition_fails(self) -> None:
+        # Swap the ancestor immediately before the descriptor-relative open.
+        # Path-based pre-validation already succeeded: this is the race gate.
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            ancestor = base / "ancestor"
+            (ancestor / "private").mkdir(parents=True, mode=0o700)
+            moved = base / "original"
+            redirect = base / "redirect"
+            (redirect / "private").mkdir(parents=True, mode=0o700)
+            path = ancestor / "private" / "candidate.json"
+            real_open = os.open
+            swapped = False
+
+            def swap_intermediate(name, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                if name == "ancestor" and dir_fd is not None and not swapped:
+                    swapped = True
+                    ancestor.rename(moved)
+                    ancestor.symlink_to(redirect, target_is_directory=True)
+                return real_open(name, flags, mode, dir_fd=dir_fd)
+
+            with mock.patch("pi_modern_feed_candidate.os.open",
+                            side_effect=swap_intermediate):
+                with self.assertRaises(OSError):
+                    write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertTrue(swapped)
+            self.assertFalse((redirect / "private" / "candidate.json").exists())
+            self.assertFalse((moved / "private" / "candidate.json").exists())
+
     @unittest.skipUnless(os.name == "posix", "POSIX private directory permissions")
     def test_shared_parent_does_not_qualify_as_private_staging(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
