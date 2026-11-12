@@ -429,6 +429,17 @@ class RecoveryTests(unittest.TestCase):
             coverage.contract.validate_record(retained, renamed,
                 coverage.v2.timestamp(coverage.scanner.now(), "generated"),
                 allowed_profiles=[], scanner_identity={"id": "future-policy"}, scheduled=True)
+            # Genuine original checkpoint records have none of these four
+            # publication-only fields. Even a perfectly valid outer value
+            # must not be accepted in, then silently replaced for, a witness.
+            for key in ("freshness", "target_revision", "retry", "attempt_history"):
+                with self.subTest(witness_injected_publication_field=key):
+                    forged = copy.deepcopy(retained)
+                    forged["recovery_witnesses"][0]["record"][key] = copy.deepcopy(retained[key])
+                    with self.assertRaises(PublicationError):
+                        coverage.contract.validate_record(forged, renamed,
+                            coverage.v2.timestamp(coverage.scanner.now(), "generated"),
+                            allowed_profiles=[], scanner_identity={"id": "future-policy"}, scheduled=True)
 
     def test_authenticated_superset_fork_then_witness_cap_discloses_per_source(self):
         primary = item()

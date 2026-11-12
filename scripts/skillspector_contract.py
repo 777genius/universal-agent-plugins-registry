@@ -208,6 +208,11 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     original["report_digest"] != record["report_digest"] and
                     original["status"] in {"partial", "complete"} and
                     "recovery_witnesses" not in original and
+                    # Worker scanner output cannot contain publication/queue
+                    # state. Reject bytes that would otherwise be ignored by
+                    # the recursive consumer validation, then shown verbatim.
+                    not any(key in original for key in
+                            ("freshness", "target_revision", "retry", "attempt_history")) and
                     len(scanner.report_json(witness)) <= 256 << 10,
                     "invalid or oversized immutable recovery witness")
             seen_witnesses.add(identity)

@@ -1106,6 +1106,8 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         # Unauthenticated/malformed origins still fail closed above.
         witnesses = retained.get("recovery_witnesses", [])
         representable = (witness_fits_max_rebound_id(witness) and
+                         not any(key in new for key in
+                                 ("freshness", "target_revision", "retry", "attempt_history")) and
                          not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses) and
                          (witness in witnesses or len(witnesses) < 2))
         if representable and witness not in witnesses:
