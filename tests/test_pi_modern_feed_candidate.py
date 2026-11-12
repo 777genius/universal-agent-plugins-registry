@@ -167,6 +167,16 @@ class ModernPiEvidenceTests(unittest.TestCase):
                     write_unsigned_candidate(path, {"schema_version": 1})
             self.assertFalse(path.exists())
 
+    @unittest.skipUnless(os.name == "nt", "Windows junction detection support")
+    def test_old_windows_python_without_junction_detection_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private" / "candidate.json"
+            path.parent.mkdir()
+            with mock.patch.object(Path, "is_junction", None):
+                with self.assertRaisesRegex(RuntimeError, "requires junction detection"):
+                    write_unsigned_candidate(path, {"schema_version": 1})
+            self.assertFalse(path.exists())
+
     @unittest.skipUnless(os.name == "nt", "native Windows NTFS junction")
     def test_native_windows_parent_junction_cannot_redirect_output(self) -> None:
         # This is a genuine NTFS junction, not a mocked final-file symlink.
