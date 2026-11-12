@@ -21,8 +21,8 @@ from scripts import skillspector_coverage as v2
 from scripts import skillspector_reports as scanner
 from scripts import skillspector_contract as contract
 from scripts.build_bridges import BridgeError, PinnedRepository
-from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError, materialize_package
-from scripts.skillspector_acquisition import AcquisitionTransferLimit, bounded_package_files
+from scripts.build_discovery_index import DiscoveryError, DiscoveryInputLimitError
+from scripts.skillspector_acquisition import AcquisitionTransferLimit, bounded_package_files, materialize_scanned_files
 from scripts.build_registry import RegistryError, directory_tree_digest
 from scripts.directory_publication import PublicationError, canonical_json, format_timestamp, parse_timestamp, require, sha256_digest
 from scripts.discovery_checkpoint import CheckpointYield, WorkBudget
@@ -524,7 +524,7 @@ def scan_selected(executable, item, pinned, budget, *, profile_id="static-standa
                 files = bounded_package_files(pinned, item["path"], max_files=profile["max_files"],
                     max_file_bytes=profile["max_tree_bytes"], max_tree_bytes=profile["max_tree_bytes"])
                 require(any(path == "SKILL.md" for path, _, _ in files), "selected root has no SKILL.md")
-                materialize_package(files, root, pinned.work_budget)
+                materialize_scanned_files(files, root, pinned.work_budget)
                 digest = directory_tree_digest(root)
                 record["source"]["content_digest"] = digest
                 document = (root / "SKILL.md").read_text(encoding="utf-8")
