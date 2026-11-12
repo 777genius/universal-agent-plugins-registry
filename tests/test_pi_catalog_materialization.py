@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -10,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from pi_catalog_inventory_e2e import active_sources, native_files
-from pi_direct_source_e2e import require_removed_native_payload
+from pi_direct_source_e2e import (expected_package_native_names, require_removed_native_payload)
 from pi_catalog_materialization_e2e import (
     KIND, MANAGED_ROOT, MANAGED_NO_SAVE_DIAGNOSTIC, PLATFORMS, SCOPES, SHARDS,
     case_tuple, selected_sources, source_identity, verify_report, verify_all,
@@ -96,6 +98,35 @@ class PiRealMaterializationContracts(unittest.TestCase):
                         verify_report(report, self.sources, HEAD, platform, shard, SHARDS),
                         expected,
                     )
+
+    def test_native_names_are_derived_from_verified_package_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "state" / "managed" / "clients" / "pi" / "package"
+            package.mkdir(parents=True)
+            manifest = b'{"name":"package","version":"1.0.0"}'
+            (package / "plugin.json").write_bytes(manifest)
+            skill = package / "skills" / "correct-skill" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("original skill", encoding="utf-8")
+            (package / "mcp.json").write_text(
+                json.dumps({"mcpServers": {"correct-server": {"url": "https://example.invalid"}}}),
+                encoding="utf-8")
+            receipt = {"clients": [{"client_id": "pi", "package_revision": {
+                "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
+            }}]}
+            self.assertEqual(
+                expected_package_native_names(Path(directory), receipt, "package", "mixed"),
+                ({"correct-skill/SKILL.md"}, {"correct-server"}),
+            )
+            wrong_receipt = copy.deepcopy(receipt)
+            wrong_receipt["clients"][0]["package_revision"]["manifest_digest"] = (
+                "sha256:" + "0" * 64)
+            with self.assertRaisesRegex(RuntimeError, "source unavailable"):
+                expected_package_native_names(
+                    Path(directory), wrong_receipt, "package", "mixed")
+            with self.assertRaisesRegex(RuntimeError, "manifest differs"):
+                expected_package_native_names(
+                    Path(directory), receipt, "other-package", "mixed")
 
     def test_remove_rejects_leftover_native_skill_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
