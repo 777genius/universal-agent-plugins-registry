@@ -445,9 +445,12 @@ class QueueTests(unittest.TestCase):
                               "line": 2, "pattern": "new-risk", "severity": "CRITICAL"}]
         novel["finding_count"] = 1
         risky = {"record": novel, "attempt": coverage.make_attempt(subject, novel)}
-        with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings"):
+        with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings") as failure:
             coverage.apply_outcome(retained, attempts, subject, risky,
                                    authenticated_current_worker=True)
+        self.assertIn(coverage.source_digest(subject), str(failure.exception))
+        self.assertIn('"novel_group_instances":1', str(failure.exception))
+        self.assertNotIn("new-risk", str(failure.exception))
         self.assertEqual(retained[subject["id"]], old)
         self.assertEqual(attempts, {})
 

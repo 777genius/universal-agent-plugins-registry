@@ -309,8 +309,13 @@ class RecoveryTests(unittest.TestCase):
                 coverage.apply_outcome(records, attempts, subject, outcome, authenticated_current_worker=True)
             self.assertEqual(records[subject["id"]], old)
             self.assertEqual(attempts, baseline["attempts"])
-            with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings"):
+            with self.assertRaisesRegex(PublicationError, "degraded complete introduces unrepresented new findings") as failure:
                 self.recover(root / "rejected-later", selection, [novel], baseline)
+            message = str(failure.exception)
+            self.assertIn(coverage.source_digest(subject), message)
+            self.assertIn('"attempt_count":2', message)
+            self.assertIn('"novel_group_instances":1', message)
+            self.assertNotIn("New HIGH risk.", message)
             self.assertFalse((root / "rejected-later" / "manifest.json").exists())
 
     def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
