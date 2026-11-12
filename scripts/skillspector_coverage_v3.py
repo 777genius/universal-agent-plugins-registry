@@ -735,6 +735,18 @@ def finding_identities(record):
                    for finding in record["findings"])
 
 
+def require_represented_degraded_findings(item, old, new, attempt):
+    """Fail closed with bounded digest-only context, never raw source or security evidence."""
+    novel = finding_identities(new) - finding_identities(old)
+    if novel:
+        context = {"subject_digest": source_digest(item),
+            "old_report_digest": old["report_digest"], "new_report_digest": new["report_digest"],
+            "old_groups": len(old["findings"]), "new_groups": len(new["findings"]),
+            "novel_group_instances": sum(novel.values()), "attempt_count": attempt["attempt_count"]}
+        raise PublicationError("degraded complete introduces unrepresented new findings: " +
+            json.dumps(context, sort_keys=True, separators=(",", ":")))
+
+
 def degraded_rescan(old, new):
     """Require non-regressing coverage and findings for the exact same source."""
     if old is None or old["status"] != "partial" or new["status"] not in {"partial", "complete"} or \
@@ -816,8 +828,7 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
         # Two disjoint finding sets cannot be merged into one attested report.
         # Keep the strict refusal until a reviewed rescan resolves that conflict.
         if degraded_complete:
-            require(not (finding_identities(new) - finding_identities(old_record)),
-                    "degraded complete introduces unrepresented new findings")
+            require_represented_degraded_findings(item, old_record, new, attempt)
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
         quarantine_recovery(records, attempts, item, outcome,
                             prefer_existing=degraded_complete)
@@ -1027,8 +1038,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
     if degraded_complete:
-        require(not (finding_identities(new) - finding_identities(old)),
-                "degraded complete introduces unrepresented new findings")
+        require_represented_degraded_findings(item, old, new, outcome["attempt"])
     chosen = old if prefer_existing or degraded_complete else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
     if chosen is new:
