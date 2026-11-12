@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - ".github/workflows/skillspector-unicode-e2e.yml"
+      - "scripts/skillspector_acquisition.py"
+      - "scripts/skillspector_coverage_v3.py"
+      - "scripts/portable_paths.py"
+      - "tests/test_skillspector_acquisition.py"
+      - "tests/test_portable_paths.py"
 
 permissions:
   contents: read
@@ -49,30 +54,43 @@ jobs:
               ("zenstory-ai/drama-skills", "3d813c30871b4db5f2387d83bdc3a49db8ce7b2b", "skills/short-drama", 31, 621272, 6),
           )
           evidence = []
+          receipt = Path("/tmp/skillspector-unicode-acceptance.json")
+          def persist():
+              status = ("failed" if any(item["status"] == "failed" for item in evidence)
+                        else "passed" if len(evidence) == len(sources) else "in_progress")
+              receipt.write_text(json.dumps(
+                  {"schema_version": 1, "status": status, "sources": evidence}, sort_keys=True, indent=2))
+          persist()
           for repository, revision, selected_root, count, total_bytes, unicode_count in sources:
-              pinned = PinnedRepository(repository, revision, None, work_budget=WorkBudget(120))
+              entry = {"repository": repository, "revision": revision, "selected_root": selected_root,
+                       "status": "in_progress"}
               try:
-                  files = bounded_package_files(pinned, selected_root, max_files=2048,
-                      max_file_bytes=16 << 20, max_tree_bytes=16 << 20)
-                  # Independent GitHub immutable-tree metadata, not scanner-generated counts.
-                  assert len(files) == count, f"{repository}: dropped file(s)"
-                  assert sum(len(body) for _, _, body in files) == total_bytes, f"{repository}: changed bytes"
-                  assert sum(not path.isascii() for path, _, _ in files) == unicode_count
-                  assert all(mode in (0o644, 0o755) for _, mode, _ in files)
-                  assert any(path == "SKILL.md" for path, _, _ in files)
-                  with tempfile.TemporaryDirectory(prefix="skillspector-unicode-proof-") as directory:
-                      root = Path(directory)
-                      materialize_scanned_files(files, root, pinned.work_budget)
-                      assert sum(path.is_file() for path in root.rglob("*")) == count
-                      digest = directory_tree_digest(root)
-                      evidence.append({"repository": repository, "revision": revision,
-                                       "selected_root": selected_root, "file_count": count,
-                                       "unicode_files": unicode_count, "total_bytes": total_bytes,
-                                       "tree_digest": digest, "materialization_complete": True})
+                  pinned = PinnedRepository(repository, revision, None, work_budget=WorkBudget(120))
+                  try:
+                      files = bounded_package_files(pinned, selected_root, max_files=2048,
+                          max_file_bytes=16 << 20, max_tree_bytes=16 << 20)
+                      # Independent GitHub immutable-tree metadata, not scanner-generated counts.
+                      assert len(files) == count, f"{repository}: dropped file(s)"
+                      assert sum(len(body) for _, _, body in files) == total_bytes, f"{repository}: changed bytes"
+                      assert sum(not path.isascii() for path, _, _ in files) == unicode_count
+                      assert all(mode in (0o644, 0o755) for _, mode, _ in files)
+                      assert any(path == "SKILL.md" for path, _, _ in files)
+                      with tempfile.TemporaryDirectory(prefix="skillspector-unicode-proof-") as directory:
+                          root = Path(directory)
+                          materialize_scanned_files(files, root, pinned.work_budget)
+                          assert sum(path.is_file() for path in root.rglob("*")) == count
+                          digest = directory_tree_digest(root)
+                          entry.update(status="complete_acquisition", file_count=count,
+                              unicode_files=unicode_count, total_bytes=total_bytes, tree_digest=digest)
+                  finally:
+                      pinned.close()
+              except Exception as error:
+                  entry.update(status="failed", failure_type=type(error).__name__,
+                               reason=str(error)[:160])
+                  raise
               finally:
-                  pinned.close()
-          Path("/tmp/skillspector-unicode-acceptance.json").write_text(json.dumps(
-              {"schema_version": 1, "status": "passed", "sources": evidence}, sort_keys=True, indent=2))
+                  evidence.append(entry)
+                  persist()
           print(json.dumps(evidence, sort_keys=True))
           PY
       - name: Retain original independent E2E evidence

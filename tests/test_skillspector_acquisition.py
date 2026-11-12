@@ -105,6 +105,8 @@ class ColdAcquisitionTests(unittest.TestCase):
             "skills/demo/references/../escape.md",
             "skills/demo/references/.GIT/config",
             "skills/demo/references/CON.md",
+            "skills/demo/references/COM¹.md",
+            "skills/demo/.plugin-kit-ai.lock",
             "skills/demo/references/trailing .",
             "skills/demo/references/back\\slash.md",
             "skills/demo/" + ("a" * 256) + ".md",
@@ -127,6 +129,29 @@ class ColdAcquisitionTests(unittest.TestCase):
                 with self.subTest(relative=relative), self.assertRaises(DiscoveryError):
                     acquisition.materialize_scanned_files([(relative, 0o644, b"payload")], root)
             self.assertEqual(list(root.rglob("*")), [])
+
+    def test_casefold_parent_directories_are_rejected_before_blob_hydration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pinned, _ = self.fixture(Path(temporary), {
+                "skills/demo/Ω/a.md": b"one", "skills/demo/ω/b.md": b"two",
+            })
+            with mock.patch.object(acquisition, "_object_sizes") as sizes, \
+                 mock.patch.object(acquisition, "_fetch_objects") as fetch, \
+                 self.assertRaisesRegex(DiscoveryError, "case-colliding"):
+                self.read(pinned)
+            sizes.assert_not_called()
+            fetch.assert_not_called()
+
+    def test_selected_root_depth_is_counted_relative_to_the_source_root(self):
+        relative = "/".join(["d"] * 64)
+        self.assertEqual(acquisition.scan_portable_path(relative, "scan file").as_posix(), relative)
+        with self.assertRaises(DiscoveryError):
+            acquisition.scan_portable_path(relative + "/too-deep", "scan file")
+        full_path = "skills/demo/" + relative
+        row = f"100644 blob {'a' * 40}\\t{full_path}\\0".encode("utf-8")
+        with mock.patch.object(acquisition, "_run_git", return_value=row):
+            records = acquisition._tree_records(mock.Mock(), "skills/demo", 512, WorkBudget(5))
+        self.assertEqual(records[0][0], relative)
 
     def test_unicode_casefold_collision_and_symlink_cannot_be_silently_ignored(self):
         with tempfile.TemporaryDirectory() as temporary:

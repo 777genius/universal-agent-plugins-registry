@@ -139,7 +139,7 @@ def _tree_records(repository, package_path, max_files, budget):
     raw = _run_git(repository, ["ls-tree", "-rz", "-r", repository.revision, "--", prefix or "."],
         budget, output_limit=TREE_METADATA_BYTES)
     _require(not raw or raw.endswith(b"\0"), "package tree is truncated")
-    records, seen = [], set()
+    records, seen, seen_nodes = [], set(), {}
     prefix_with_slash = prefix + "/" if prefix else ""
     for row in raw.split(b"\0"):
         budget.check()
@@ -152,11 +152,18 @@ def _tree_records(repository, package_path, max_files, budget):
         except (ValueError, UnicodeError) as error:
             raise DiscoveryError("package tree contains an invalid Git entry") from error
         _require(kind == "blob" and mode in GIT_MODES and OID.fullmatch(object_id), "unsupported package tree entry")
-        scan_portable_path(full_path, "package tree")
         _require(not prefix or full_path.startswith(prefix_with_slash), "package tree escaped the selected root")
         relative = full_path[len(prefix_with_slash):]
-        _require(bool(relative) and full_path.casefold() not in seen, "package tree contains an empty or case-colliding path")
-        seen.add(full_path.casefold())
+        path = scan_portable_path(relative, "package tree")
+        _require(relative.casefold() not in seen, "package tree contains a duplicate or case-colliding path")
+        for depth in range(1, len(path.parts) + 1):
+            component = "/".join(path.parts[:depth])
+            folded = component.casefold()
+            node = (component, depth == len(path.parts))
+            _require(folded not in seen_nodes or seen_nodes[folded] == node,
+                     "package tree contains a case-colliding file or directory")
+            seen_nodes[folded] = node
+        seen.add(relative.casefold())
         records.append((relative, GIT_MODES[mode], object_id))
         if len(records) > max_files:
             raise DiscoveryInputLimitError(f"package tree exceeds {max_files} files")

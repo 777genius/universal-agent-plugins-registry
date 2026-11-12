@@ -13,6 +13,12 @@ import portable_paths  # noqa: E402
 
 
 class PortablePathLimitTests(unittest.TestCase):
+    def test_windows_reserved_superscript_device_names_are_rejected(self) -> None:
+        for name in ("COM¹.md", "COM²", "com³.txt", "LPT¹.cfg", "lpt²", "LPT³.md"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Windows-reserved"):
+                portable_paths.validate_segment(name)
+        portable_paths.validate_segment("马斯克.md")
+
     def test_depth_64_is_allowed_and_depth_65_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
