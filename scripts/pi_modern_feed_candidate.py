@@ -290,7 +290,11 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
     if os.name == "nt":
         require_plain_windows_ancestry(path.parent)
     else:
-        require(not path.parent.is_symlink(),
+        # Preserve the portable parent reparse-point refusal as well as the
+        # POSIX O_NOFOLLOW/dir_fd protection and its existing regression.
+        is_junction = getattr(path.parent, "is_junction", None)
+        require(not path.parent.is_symlink()
+                and not (callable(is_junction) and is_junction()),
                 "unsigned candidate output parent must not be a symlink or junction")
     parent = path.parent.resolve(strict=True)
     require(not parent.is_relative_to(root),
