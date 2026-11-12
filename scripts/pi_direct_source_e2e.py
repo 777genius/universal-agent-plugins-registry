@@ -98,16 +98,14 @@ def plugin_record(envelope: dict, name: str, revision: str) -> dict:
 
 
 def require_removed_native_payload(native_root: Path, kind: str, *,
-                                   surviving_skills: set[str] | None = None,
+                                   surviving_skills: list[tuple[str, str, str]] | None = None,
                                    surviving_servers: dict | None = None) -> None:
     """Removal must clean the owned Pi payload without destroying pre-existing registrations."""
     if kind == "skill":
         skills = native_root / "skills"
         require(not skills.is_symlink(), "Pi skills root became a symlink")
-        remaining = {path.relative_to(skills).as_posix()
-                     for path in skills.rglob("SKILL.md")}
-        require(remaining == (surviving_skills or set()),
-                "removed Pi skill is still present or a foreign skill was lost")
+        require(native_files(skills) == (surviving_skills or []),
+                "removed Pi skill payload remains or foreign skill tree changed")
     elif kind == "mcp":
         config = native_root / "mcp.json"
         require(not config.is_symlink(), "removed Pi MCP configuration became a symlink")
@@ -170,6 +168,8 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
             json.dumps({"mcpServers": {"foreign-neighbor": foreign_server}}) + "\n",
             encoding="utf-8")
 
+    surviving_skill_tree = (native_files(native_root / "skills")
+                            if kind in {"skill", "mixed"} else [])
     args = ["--target", "pi", "--scope", scope, "--format", "json"]
     if scope == "project":
         subprocess.run(["git", "init", "-q"], cwd=project, env=env,
@@ -235,7 +235,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         call("remove", first["installation_id"], timeout=120)
         if kind in {"skill", "mixed"}:
             require_removed_native_payload(
-                native_root, "skill", surviving_skills={"foreign-neighbor/SKILL.md"})
+                native_root, "skill", surviving_skills=surviving_skill_tree)
             require(foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
                     "remove changed pre-existing Pi skill bytes")
         if kind in {"mcp", "mixed"}:
