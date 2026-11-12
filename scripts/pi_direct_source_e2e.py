@@ -99,6 +99,17 @@ def plugin_record(envelope: dict, name: str, revision: str) -> dict:
 
 
 
+def native_skill_markers(skills_root: Path) -> set[str]:
+    """Enumerate real SKILL.md files, never marker directories or symlinks."""
+    if not skills_root.is_dir() or skills_root.is_symlink():
+        return set()
+    return {
+        path.relative_to(skills_root).as_posix()
+        for path in skills_root.rglob("SKILL.md")
+        if path.is_file() and not path.is_symlink()
+    }
+
+
 def expected_package_native_names(root: Path, installation: dict,
                                   declared_name: str, kind: str) -> tuple[set[str], set[str]]:
     """Read source-declared component identities from the verified active package.
@@ -125,9 +136,7 @@ def expected_package_native_names(root: Path, installation: dict,
                 "verified package manifest differs from requested package")
         package = path.parent
         skill_root = package / "skills"
-        skills = ({skill.relative_to(skill_root).as_posix()
-                   for skill in skill_root.rglob("SKILL.md") if skill.is_file()}
-                  if skill_root.is_dir() and not skill_root.is_symlink() else set())
+        skills = native_skill_markers(skill_root)
         mcp = package / "mcp.json"
         servers = set()
         if mcp.exists():
@@ -224,8 +233,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         # not mask a missing native file or MCP entry at initial install.
         if kind in {"skill", "mixed"}:
             skills = native_root / "skills"
-            installed = {path.relative_to(skills).as_posix()
-                         for path in skills.rglob("SKILL.md")}
+            installed = native_skill_markers(skills)
             require("foreign-neighbor/SKILL.md" in installed and len(installed) > 1
                     and foreign_skill.read_text(encoding="utf-8") == foreign_skill_text,
                     "Pi native skill absent or pre-existing Pi skill was changed")
@@ -261,8 +269,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         def require_expected_identity() -> None:
             if kind in {"skill", "mixed"}:
                 skills = native_root / "skills"
-                found = {path.relative_to(skills).as_posix()
-                         for path in skills.rglob("SKILL.md")}
+                found = native_skill_markers(skills)
                 require(found == expected_skills | {"foreign-neighbor/SKILL.md"},
                         "native Pi Skills differ from verified package identities")
             if kind in {"mcp", "mixed"}:

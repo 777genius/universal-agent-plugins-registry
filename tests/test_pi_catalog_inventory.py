@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_direct_source_e2e import CASES, require_removed_native_payload
+from pi_direct_source_e2e import CASES, native_skill_markers, require_removed_native_payload
 from pi_catalog_inventory_e2e import (
     isolated_cli_env, native_files, clone_verified_cli_cache, require_exact_checkout,
     require_published_cli_version,
@@ -263,6 +263,19 @@ class PiPlanningEnvelopeTests(unittest.TestCase):
                 require_saved_pi_receipt(receipt, "user", "example", "b" * 40,
                                          "sha256:" + "a" * 64)
 
+
+
+class PiNativeSkillMarkerTests(unittest.TestCase):
+    def test_directory_named_skill_markdown_cannot_masquerade_as_native_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skills = Path(tmp) / "skills"
+            real = skills / "foreign-neighbor" / "SKILL.md"
+            real.parent.mkdir(parents=True)
+            real.write_text("existing skill", encoding="utf-8")
+            fake = skills / "unrelated" / "SKILL.md"
+            fake.mkdir(parents=True)
+            self.assertEqual(native_skill_markers(skills), {"foreign-neighbor/SKILL.md"})
+            self.assertNotIn("unrelated/SKILL.md", native_skill_markers(skills))
 
 
 class PiNativeRemovalTests(unittest.TestCase):
