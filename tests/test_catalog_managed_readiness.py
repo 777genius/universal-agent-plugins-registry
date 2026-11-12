@@ -139,7 +139,7 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_release_user_foreign_skills_project_and_native_members_survive(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             roots = {name: root / name for name in ("home", "config", "workspace")}
             for path in roots.values():
                 path.mkdir()
@@ -394,6 +394,156 @@ class ManagedReadinessTests(unittest.TestCase):
                             acquire.assert_not_called()
                         child.assert_called_once()
                         self.assertTrue(all(call.kwargs["expected_scope"] == "user" for call in validate.call_args_list))
+
+    def test_snapshot_hashes_files_in_bounded_chunks_without_changing_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary).resolve() / "large-fixture"
+            body = b"snapshot-byte-identity\n" * 100000
+            path.write_bytes(body)
+            sizes = []
+            original_read = os.read
+            def bounded_read(fd, size):
+                if not 0 < size <= 1024 * 1024:
+                    raise AssertionError("snapshot read must have a fixed memory bound")
+                sizes.append(size)
+                return original_read(fd, size)
+            with patch.object(managed.os, "read", side_effect=bounded_read), \
+                    patch.object(Path, "read_bytes", side_effect=AssertionError("unbounded snapshot read")):
+                actual = managed.snapshot_paths({"file": path})
+            self.assertGreater(len(sizes), 1)
+            self.assertEqual(actual, {"file": [(".", path.stat().st_mode & 0o7777,
+                                                "file", hashlib.sha256(body).hexdigest())]})
+
+    def test_snapshot_rejects_symlinked_state_ancestor_before_reading_foreign_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "state-v2.json").write_text("foreign protected bytes")
+            home = root / "home"
+            home.mkdir()
+            alias = home / "state"
+            alias.symlink_to(outside, target_is_directory=True)
+            self.assertEqual(managed.snapshot_paths({"alias": alias})["alias"][0][2], "symlink")
+            with patch.object(managed.os, "read", side_effect=AssertionError("foreign read")):
+                with self.assertRaises(ValueError):
+                    managed.snapshot_paths({"protected": alias / "state-v2.json"})
+
+    def test_disappearing_descendant_cannot_match_absent_user_root(self):
+        for failure in ("file_open", "directory_open", "readlink", "file_read"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                roots = {name: root / name for name in ("home", "config", "state")}
+                roots["home"].mkdir()
+                roots["state"].mkdir()
+                before = managed.snapshot_paths(gate.project.user_paths(roots))
+                self.assertEqual(before["config"], [(".", "absent")])
+                roots["config"].mkdir()
+                leaf = roots["config"] / "child"
+                if failure == "directory_open":
+                    leaf.mkdir()
+                elif failure == "readlink":
+                    leaf.symlink_to("missing-target")
+                else:
+                    leaf.write_bytes(b"new protected state")
+                info = leaf.lstat()
+                identity = (info.st_dev, info.st_ino)
+                triggered = []
+                original_open, original_read, original_readlink = os.open, os.read, os.readlink
+
+                def disappearing_open(path, flags, *args, **kwargs):
+                    if failure in ("file_open", "directory_open") and path == "child" and "dir_fd" in kwargs:
+                        triggered.append(failure)
+                        if failure == "directory_open":
+                            leaf.rmdir()
+                        else:
+                            leaf.unlink()
+                    return original_open(path, flags, *args, **kwargs)
+
+                def disappearing_readlink(path, *args, **kwargs):
+                    if failure == "readlink" and path == "child" and "dir_fd" in kwargs:
+                        triggered.append(failure)
+                        leaf.unlink()
+                    return original_readlink(path, *args, **kwargs)
+
+                def failing_read(fd, size):
+                    opened = os.fstat(fd)
+                    if failure == "file_read" and (opened.st_dev, opened.st_ino) == identity:
+                        triggered.append(failure)
+                        raise FileNotFoundError("controlled snapshot read failure")
+                    return original_read(fd, size)
+
+                with patch.object(managed.os, "open", side_effect=disappearing_open), \
+                        patch.object(managed.os, "readlink", side_effect=disappearing_readlink), \
+                        patch.object(managed.os, "read", side_effect=failing_read):
+                    with self.assertRaisesRegex(ValueError, "managed snapshot path") as caught:
+                        gate.project.validate_user_isolation(before, roots)
+                self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
+                self.assertEqual(triggered, [failure])
+                self.assertTrue(roots["config"].is_dir())
+
+    def test_snapshot_preserves_missing_ancestors_leaves_and_dangling_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            present = root / "present"
+            present.mkdir()
+            link = present / "link"
+            link.symlink_to("missing-target")
+            paths = {"ancestor": root / "missing" / "leaf", "leaf": present / "missing", "link": link}
+            expected = {
+                "ancestor": [(".", "absent")],
+                "leaf": [(".", "absent")],
+                "link": [(".", link.lstat().st_mode & 0o7777, "symlink", "missing-target")],
+            }
+            self.assertEqual(managed.snapshot_paths(paths), expected)
+
+    def test_project_add_reports_fixed_failure_checkpoints_without_child_data(self):
+        # Only a fixed phase and exception class may reach the persisted
+        # catalog failure artifact, even if the child returns private text.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("agentplugins", "codex", "claude", "copilot", "opencode"):
+                path = tools / name
+                path.write_text("#!/bin/sh\\nexit 1\\n")
+                path.chmod(0o700)
+            args = SimpleNamespace(
+                binary=tools / "agentplugins", project_binary=tools / "agentplugins", codex=tools / "codex",
+                claude=tools / "claude", copilot=tools / "copilot",
+                opencode=tools / "opencode", inspector=None, npx=None,
+                failure_phase=None)
+            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
+            release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
+            ctx = {"directory_origin": "https://example.invalid/exact-signed-feed/"}
+            private = "PRIVATE_CHILD_RESPONSE_DO_NOT_LOG"
+            def response(*, code=0, payload=None):
+                return SimpleNamespace(returncode=code, stderr=private,
+                                       stdout=json.dumps(payload or {}))
+            cases = [
+                ("isolated_child", ValueError(private), None),
+                ("exit", None, response(code=1)),
+                ("decode", None, response(payload=["not-a-dict"])),
+                ("user_isolation", None, response(payload={"command": "add", "result": "success", "data": {}})),
+            ]
+            # This test isolates command failure labels. Genuine profile setup
+            # and its integration with this runner have a separate test suite.
+            with patch.object(gate.project, "RELEASE", release), patch.object(
+                    gate.project, "initialize_user_profile", side_effect=lambda _args, _root, roots, _env, _readonly:
+                    managed.snapshot_paths(gate.project.user_paths(roots))):
+                case = gate.project.expected(self.snapshot, gate.selected)
+                self.assertIsNotNone(case)
+                for index, (expected, raised, completed) in enumerate(cases):
+                    with self.subTest(checkpoint=expected), patch.object(
+                        gate, "child", side_effect=raised if raised is not None else None,
+                        return_value=completed), patch.object(
+                        gate.project, "validate_user_isolation",
+                        side_effect=ValueError(private) if expected == "user_isolation" else None):
+                        args.failure_phase = None
+                        with self.assertRaises(ValueError):
+                            managed.run(args, root / f"checkpoint-{index}", case, ctx)
+                        self.assertEqual(args.failure_phase, f"project:add:{expected}")
+                        self.assertNotIn(private, args.failure_phase)
 
     def test_runtime_exposes_explicit_codex_and_owned_cursor_version_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -691,7 +841,7 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_snapshot_tracks_files_modes_symlinks_and_absence(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             file = root / "owned-file"
             file.write_text("initial")
             link = root / "owned-link"

@@ -8,11 +8,14 @@ before executing catalog packages: python -m unittest discover -s tests -p
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
+import select
 import signal
 import stat
 import subprocess
 import sys
+import time
 
 
 _ENV = frozenset({
@@ -24,6 +27,7 @@ _ENV = frozenset({
     "NPM_CONFIG_AUDIT", "NPM_CONFIG_FUND", "NPM_CONFIG_UPDATE_NOTIFIER",
     "NPM_CONFIG_GLOBALCONFIG", "AGENTPLUGINS_HOME", "AGENTPLUGINS_DIRECTORY_ORIGIN",
     "PLUGIN_ROOT", "PLUGIN_DATA", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     "COREPACK_HOME", "NODE_REPL_HISTORY", "npm_config_audit", "npm_config_cache",
     "npm_config_fund", "npm_config_globalconfig", "npm_config_update_notifier",
     "npm_config_userconfig",
@@ -85,6 +89,14 @@ def _command(argv, writable_root, cwd, env, read_only_paths, bwrap):
         raise ValueError("argv must be a nonempty sequence of strings")
     if isinstance(argv, (str, bytes)):
         raise ValueError("argv must not be a shell string")
+    claude = {"CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"}
+    if claude & env.keys():
+        profile = Path(env.get("CLAUDE_CONFIG_DIR", ""))
+        if (env.get("DISABLE_AUTOUPDATER") != "1"
+                or env.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") != "1"
+                or not profile.is_absolute() or profile != profile.resolve()
+                or not profile.is_relative_to(root)):
+            raise ValueError("Claude profile setup requires a confined profile and disabled background traffic")
     command = [str(bwrap), "--unshare-user", "--unshare-pid", "--unshare-ipc",
                "--unshare-uts", "--unshare-cgroup", "--disable-userns",
                "--die-with-parent", "--as-pid-1", "--new-session", "--cap-drop", "ALL",
@@ -118,18 +130,114 @@ def run_isolated(argv: list[str], *, writable_root: Path, cwd: Path,
     if timeout <= 0:
         raise ValueError("timeout must be positive")
     command = _command(argv, writable_root, cwd, env, read_only_paths, bwrap)
-    # No producer secrets enter the wrapper environment or any inherited fd.
-    process = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin"}, cwd="/",
-                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, close_fds=True,
-                               start_new_session=True)
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError("catalog isolation requires Linux pidfd support")
+    probe_fd = None
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
+        probe_fd = os.pidfd_open(os.getpid())
+        signal.pidfd_send_signal(probe_fd, 0)
+    except OSError as error:
+        raise RuntimeError("catalog isolation requires working Linux pidfds") from error
+    finally:
+        if probe_fd is not None:
+            os.close(probe_fd)
+    # bubblewrap reports the host PID of the sandbox's PID 1 before executing
+    # the client. Hold a pidfd so timeout cleanup cannot target a reused PID.
+    read_fd, write_fd = os.pipe()
+    try:
+        release_read, release_write = os.pipe()
+    except BaseException:
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
+    # --block-fd pauses before --new-session and exec. Do not let client code
+    # run until its namespace init is pinned and validated. EOF also releases
+    # this gate, so exceptional cleanup must finish before closing the writer.
+    command[1:1] = ["--info-fd", str(write_fd), "--block-fd", str(release_read)]
+    deadline = time.monotonic() + timeout
+    try:
+        process = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin"}, cwd="/",
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, close_fds=True,
+                                   pass_fds=(write_fd, release_read), start_new_session=True)
+    except BaseException:
+        os.close(read_fd)
+        os.close(release_write)
+        raise
+    finally:
+        os.close(write_fd)
+        os.close(release_read)
+    pidfd = None
+    try:
+        data = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([read_fd], [], [], remaining)[0]:
+                raise subprocess.TimeoutExpired(command, timeout)
+            part = os.read(read_fd, 4096 - len(data))
+            if not part:
+                if data:
+                    raise RuntimeError("incomplete bubblewrap process information")
+                break  # A failed bubblewrap setup has no running sandbox.
+            data.extend(part)
+            try:
+                info = json.loads(data)
+            except (ValueError, UnicodeDecodeError):
+                if len(data) == 4096:
+                    raise RuntimeError("invalid bubblewrap process information")
+                continue
+            child = info.get("child-pid") if isinstance(info, dict) else None
+            if type(child) is not int or child <= 0:
+                raise RuntimeError("invalid bubblewrap process identity")
+            try:
+                candidate_fd = os.pidfd_open(child)
+            except ProcessLookupError:
+                pass  # PID 1 has already exited, taking the namespace with it.
+            else:
+                try:
+                    with open(f"/proc/{child}/status", encoding="utf-8") as status:
+                        fields = dict(line.rstrip().split(":", 1) for line in status if ":" in line)
+                    if (fields.get("PPid", "").strip() != str(process.pid)
+                            or fields.get("NSpid", "").split()[-1:] != ["1"]):
+                        raise RuntimeError("bubblewrap reported an unexpected namespace process")
+                except FileNotFoundError:
+                    # The pidfd still refers only to the exited namespace init.
+                    pass
+                except BaseException:
+                    os.close(candidate_fd)
+                    raise
+                pidfd = candidate_fd
+            break
+        if pidfd is not None:
+            if deadline - time.monotonic() <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                os.write(release_write, b"\0")
+            except BrokenPipeError:
+                pass  # The sandbox already exited during setup.
+            os.close(release_write)
+            release_write = None
+        stdout, stderr = process.communicate(timeout=max(0, deadline - time.monotonic()))
     except BaseException:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.communicate()
+            if pidfd is not None:
+                try:
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
         raise
+    finally:
+        if release_write is not None:
+            os.close(release_write)
+        os.close(read_fd)
+        if pidfd is not None:
+            os.close(pidfd)
+    if not data and process.returncode == 0:
+        raise RuntimeError("bubblewrap completed without process information")
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
