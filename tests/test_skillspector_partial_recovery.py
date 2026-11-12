@@ -569,6 +569,35 @@ class RecoveryTests(unittest.TestCase):
                 b = self.recover(root / "b", selection, [right, left])
             self.assertEqual(a["records"], b["records"])
             self.assertIn("not fully represented", a["records"][subject["id"]]["coverage"]["reasons"][-2]["message"])
+            # Neither independent original adverse finding may disappear just
+            # because the two scanner results have the same number of groups.
+            primary = a["records"][subject["id"]]
+            original_left = left["workers"][0]["attempts"][0]["record"]
+            original_right = right["workers"][0]["attempts"][0]["record"]
+            self.assertEqual(primary["findings"], original_left["findings"])
+            self.assertEqual(len(primary["recovery_witnesses"]), 1)
+            self.assertEqual(primary["recovery_witnesses"][0]["origin"],
+                             {"run_id": 2, "run_attempt": 1})
+            self.assertEqual(primary["recovery_witnesses"][0]["record"], original_right)
+            self.assertEqual(coverage.represented_finding_identities(primary),
+                coverage.finding_identities(original_left) | coverage.finding_identities(original_right))
+            replay = self.recover(root / "disjoint-replay", selection, [left, right], a)
+            self.assertEqual(replay["records"], a["records"])
+            self.assertEqual(replay["attempts"], a["attempts"])
+
+            # The same lossless invariant applies when *both* independent
+            # originals report Partial rather than Complete.
+            partial_left = self.authentic_batch(selection, 11, 3, warning="Partial left risk.",
+                status="partial", reason="static_parse_limit")
+            partial_right = self.authentic_batch(selection, 12, 4, warning="Partial right risk.",
+                status="partial", reason="static_parse_limit")
+            partial = self.recover(root / "partial-disjoint", selection, [partial_left, partial_right])
+            partial_record = partial["records"][subject["id"]]
+            self.assertEqual(partial_record["status"], "partial")
+            self.assertEqual(len(partial_record["recovery_witnesses"]), 1)
+            self.assertEqual(coverage.represented_finding_identities(partial_record),
+                coverage.finding_identities(partial_left["workers"][0]["attempts"][0]["record"]) |
+                coverage.finding_identities(partial_right["workers"][0]["attempts"][0]["record"]))
             value = self.recover(root / "metadata", selection, [left, metadata])["records"][subject["id"]]
             self.assertEqual(value["status"], "partial")
             self.assertIn("recovery_conflict", coverage.reason_codes(value))
