@@ -309,6 +309,18 @@ class ModernPiCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "all active Pi targets"):
             proposed_source(self.source, [self.tool], review)
 
+    def test_boolean_review_schema_version_cannot_impersonate_v1(self) -> None:
+        review = copy.deepcopy(self.review)
+        review["schema_version"] = True
+        with self.assertRaisesRegex(RuntimeError, "review document contract"):
+            proposed_source(self.source, [self.tool], review)
+
+    def test_boolean_review_release_sequence_cannot_impersonate_one(self) -> None:
+        review = copy.deepcopy(self.review)
+        review["reviews"][0]["release_sequence"] = True
+        with self.assertRaisesRegex(RuntimeError, "must be an integer"):
+            proposed_source(self.source, [self.tool], review)
+
     def test_review_digest_mismatch_is_rejected(self) -> None:
         review = copy.deepcopy(self.review)
         review["reviews"][0]["tree_digest"] = "sha256:" + "c" * 64

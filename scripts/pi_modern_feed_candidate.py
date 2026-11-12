@@ -160,7 +160,8 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
     while independently checking the native Project client policy.
     """
     require(isinstance(reviews, dict) and set(reviews) == {"schema_version", "source_commit", "reviews"}
-            and reviews["schema_version"] == 1 and isinstance(reviews["reviews"], list),
+            and type(reviews["schema_version"]) is int and reviews["schema_version"] == 1
+            and isinstance(reviews["reviews"], list),
             "review document contract is invalid")
     source_map = {(item["distribution"], item["release_sequence"]): item
                   for item in sources if item["distribution_status"] == "active"}
@@ -168,6 +169,8 @@ def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
     for record in reviews["reviews"]:
         require(isinstance(record, dict) and set(record) == REVIEW_FIELDS,
                 "Pi transport/auth review has missing or extra fields")
+        require(type(record["release_sequence"]) is int,
+                "Pi review release sequence must be an integer, never bool")
         key = (record["distribution"], record["release_sequence"])
         require(key in source_map and key not in review_map,
                 "unqualified or duplicate Pi target review")
