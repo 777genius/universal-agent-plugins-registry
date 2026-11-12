@@ -367,6 +367,85 @@ class RecoveryTests(unittest.TestCase):
                 self.recover(root / "oversized-witness", selection, [oversized], baseline)
             self.assertFalse((root / "oversized-witness" / "index.json").exists())
 
+    def test_witness_reidentification_and_historical_scanner_drift(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(selection, 9101, 0, warning="Original risk.",
+                                     pattern="reidentify-old", status="partial", reason="static_parse_limit")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = self.recover(root / "primary", selection, [first])
+            second = self.authentic_batch(selection, 9102, 1, warning="Independent risk.",
+                                          pattern="reidentify-new", status="complete", previous=before)
+            conflicted = self.recover(root / "conflict", selection, [second], before)
+            original = conflicted["records"][subject["id"]]
+            self.assertEqual(len(original["recovery_witnesses"]), 1)
+            renamed = {**subject, "id": "fixture/reidentified", "revision": "b" * 40}
+            updated = {"schema_version": 1, "sources": [renamed]}
+            coverage.merge_reports(updated, conflicted, [worker(updated)],
+                source_commit=COMMIT, output_dir=root / "renamed")
+            retained = coverage.read_bundle(root / "renamed")["records"][renamed["id"]]
+            self.assertEqual(retained["freshness"], "historical")
+            self.assertEqual(retained["id"], renamed["id"])
+            self.assertEqual(retained["report_digest"], original["report_digest"])
+            self.assertEqual(retained["recovery_witnesses"][0]["record"]["id"], renamed["id"])
+            self.assertEqual(retained["recovery_witnesses"][0]["record"]["report_digest"],
+                             original["recovery_witnesses"][0]["record"]["report_digest"])
+            # A later scanner/profile policy change must not make authenticated
+            # historical evidence unreadable; current evidence still uses the
+            # strict current-manifest admission checks.
+            coverage.contract.validate_record(retained, renamed,
+                coverage.v2.timestamp(coverage.scanner.now(), "generated"),
+                allowed_profiles=[], scanner_identity={"id": "future-policy"}, scheduled=True)
+
+    def test_authenticated_superset_fork_then_witness_cap_discloses_per_source(self):
+        primary = item()
+        another = item(id="fixture/other", repository="owner/other", path="skills/other")
+        selection = {"schema_version": 1, "sources": [primary, another]}
+        original = self.authentic_batch(selection, 9201, 0, warning="Risk A.", pattern="risk-a",
+                                        status="partial", reason="static_parse_limit")
+        alternate = self.authentic_batch(selection, 9202, 1, warning="Risk B.", pattern="risk-b",
+                                         status="partial", reason="static_parse_limit")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = self.recover(root / "primary", selection, [original])
+            witnessed = self.recover(root / "witnessed", selection, [alternate], first)
+            self.assertEqual(len(witnessed["records"][primary["id"]]["recovery_witnesses"]), 1)
+            raw = upstream_report()
+            raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": message,
+                              "location": {"file": "SKILL.md", "start_line": 1}, "pattern": pattern}
+                             for message, pattern in (("Risk A.", "risk-a"), ("Risk B.", "risk-b"),
+                                                      ("Risk C.", "risk-c"))]
+            raw["analysis_completeness"].update(is_complete=False, status="partial", partially_inspected_files=1)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Bounded fixture limitation."}]
+            with mock.patch.object(coverage.scanner, "now", return_value="2020-01-01T00:00:02Z"):
+                superset_record = coverage.scanner.normalize_report_v3(
+                    record(primary, "partial", "static_parse_limit"),
+                    json.dumps(raw).encode(), 1, Path("/source"))
+                superset = self.batch(selection, [superset_record])
+            superset["execution_origin"] = {"run_id": 9203, "run_attempt": 1}
+            self.assertEqual(sum((coverage.finding_identities(superset_record) -
+                                  coverage.represented_finding_identities(witnessed["records"][primary["id"]])).values()), 1)
+            represented = self.recover(root / "superset", selection, [superset], witnessed)
+            visible = represented["records"][primary["id"]]
+            self.assertEqual(len(visible["recovery_witnesses"]), 2)
+            self.assertEqual(coverage.represented_finding_identities(visible),
+                             coverage.finding_identities(superset_record))
+            overflow = self.authentic_batch(selection, 9204, 3, warning="Risk D.", pattern="risk-d",
+                                            status="partial", reason="static_parse_limit")
+            other_batch = self.batch(selection, [record(another)])
+            other_batch["execution_origin"] = {"run_id": 9205, "run_attempt": 1}
+            final = self.recover(root / "overflow", selection, [overflow, other_batch], represented)
+            kept = final["records"][primary["id"]]
+            self.assertEqual(kept["report_digest"], visible["report_digest"])
+            self.assertEqual(kept["recovery_witnesses"], visible["recovery_witnesses"])
+            self.assertEqual(kept["status"], "partial")
+            self.assertIn("recovery_conflict", coverage.reason_codes(kept))
+            self.assertEqual(final["records"][another["id"]]["status"], "complete")
+            replay = self.recover(root / "overflow-replay", selection, [overflow, other_batch], final)
+            self.assertEqual(replay["records"], final["records"])
+
     def test_authenticated_recovery_witness_survives_source_revision_drift_as_historical(self):
         """A new catalog pin must not invalidate or mislabel older evidence."""
         original = item()
