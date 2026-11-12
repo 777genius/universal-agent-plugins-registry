@@ -122,8 +122,15 @@ def validate_platform_report(report: dict, platform: str, head: str,
 
 def require_complete_source_eligibility(counts: dict[str, tuple[int, int]]) -> None:
     """Block staging when any OS still refuses a real saved dependency plan."""
-    require(bool(counts) and all(refused == 0 for _, refused in counts.values()),
-            "modern Pi candidate requires zero refused saved dependency plans on every OS")
+    # This helper is also callable outside main(), so independently require
+    # all three OS with identical positive counts; an empty/partial report or
+    # bool masquerading as an integer must never qualify a candidate.
+    require(set(counts) == PLATFORMS and len(set(counts.values())) == 1
+            and all(type(planned) is int and planned > 0
+                    and type(refused) is int and refused == 0
+                    for planned, refused in counts.values()),
+            "modern Pi candidate requires complete identical 3-OS source plans "
+            "with zero refused saved dependency plans")
 
 
 def require_unsigned_preproduction_eligibility(counts: dict[str, tuple[int, int]]) -> None:
@@ -133,7 +140,9 @@ def require_unsigned_preproduction_eligibility(counts: dict[str, tuple[int, int]
     That genuine refusal is never a successful install or permission to sign.
     """
     require(set(counts) == PLATFORMS and len(set(counts.values())) == 1
-            and all(planned > 0 and refused in {0, 2} for planned, refused in counts.values()),
+            and all(type(planned) is int and planned > 0
+                    and type(refused) is int and refused in {0, 2}
+                    for planned, refused in counts.values()),
             "preproduction requires complete consistent 3-OS source plans with only known refusals")
 
 
