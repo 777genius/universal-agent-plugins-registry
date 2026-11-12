@@ -360,6 +360,38 @@ class RecoveryTests(unittest.TestCase):
                 self.recover(root / "oversized-witness", selection, [oversized], baseline)
             self.assertFalse((root / "oversized-witness" / "index.json").exists())
 
+    def test_authenticated_recovery_witness_survives_source_revision_drift_as_historical(self):
+        """A new catalog pin must not invalidate or mislabel older evidence."""
+        original = item()
+        selection = {"schema_version": 1, "sources": [original]}
+        first = self.authentic_batch(selection, 8801, 0,
+            warning="Earlier source-bound warning.", pattern="original-risk",
+            status="partial", reason="static_parse_limit")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = self.recover(root / "previous", selection, [first])
+            conflicting = self.authentic_batch(selection, 8802, 1,
+                warning="Independent source-bound warning.", pattern="alternate-risk",
+                status="complete", previous=previous)
+            disputed = self.recover(root / "disputed", selection, [conflicting], previous)
+            before = disputed["records"][original["id"]]
+            self.assertEqual(len(before["recovery_witnesses"]), 1)
+            changed = item(revision="b" * 40)
+            later_selection = {"schema_version": 1, "sources": [changed]}
+            coverage.merge_reports(later_selection, disputed,
+                [worker(later_selection)], source_commit=COMMIT, output_dir=root / "later")
+            later = coverage.read_bundle(root / "later")
+            retained = later["records"][original["id"]]
+            self.assertEqual(retained["freshness"], "historical")
+            self.assertEqual(retained["target_revision"], changed["revision"])
+            self.assertEqual(retained["status"], "partial")
+            self.assertEqual(retained["source"], before["source"])
+            self.assertEqual(retained["findings"], before["findings"])
+            self.assertEqual(retained["recovery_witnesses"], before["recovery_witnesses"])
+            self.assertEqual(later["manifest"]["coverage"]["stale"], 1)
+            self.assertEqual(later["manifest"]["coverage"]["pending"], 1)
+            self.assertEqual(later["manifest"]["coverage"]["complete"], 0)
+
     def test_sequential_conflict_with_unverified_attempt_history_is_rejected(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
