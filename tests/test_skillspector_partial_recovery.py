@@ -367,6 +367,27 @@ class RecoveryTests(unittest.TestCase):
                 self.recover(root / "oversized-witness", selection, [oversized], baseline)
             self.assertFalse((root / "oversized-witness" / "index.json").exists())
 
+    def test_witness_admission_reserves_worst_case_reidentified_source_id(self):
+        # 200 JSON control characters are 1,200 bytes (6 escaped bytes each),
+        # a stricter upper bound than 200 astral Unicode scalars (800 bytes).
+        witness = {"origin": {"run_id": 9912, "run_attempt": 1},
+                   "record": {"id": "short", "payload": ""}}
+        rebound = copy.deepcopy(witness)
+        rebound["record"]["id"] = "\x00" * 200
+        max_bytes = 256 << 10
+        padding = max_bytes - len(coverage.scanner.report_json(rebound))
+        self.assertGreater(padding, 0)
+        witness["record"]["payload"] = "x" * padding
+        self.assertTrue(coverage.witness_fits_max_rebound_id(witness))
+        for candidate in ("\x00" * 200, "\U0001f984" * 200, "x" * 200):
+            rebound = copy.deepcopy(witness)
+            rebound["record"]["id"] = candidate
+            self.assertLessEqual(len(coverage.scanner.report_json(rebound)), max_bytes)
+        witness["record"]["payload"] += "x"
+        self.assertFalse(coverage.witness_fits_max_rebound_id(witness))
+        # A short original ID fits, but the longer target must fail admission.
+        self.assertLessEqual(len(coverage.scanner.report_json(witness)), max_bytes)
+
     def test_witness_reidentification_and_historical_scanner_drift(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}

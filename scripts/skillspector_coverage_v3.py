@@ -810,6 +810,19 @@ def retained_degraded_replay(item, old_record, old_attempt, outcome):
             not finding_identities(new) - finding_identities(old_record))
 
 
+def witness_fits_max_rebound_id(witness):
+    """Reserve the v3 selection schema's 200-character worst-case JSON ID.
+
+    A JSON-escaped control character uses 6 bytes, more than any scalar
+    encoded by UTF-8 or other JSON escaping with ensure_ascii=False.
+    Rebinding a witness during source re-identification must not make a
+    previously admitted signed record unreadable.
+    """
+    sized = copy.deepcopy(witness)
+    sized["record"]["id"] = "\x00" * 200
+    return len(report_json(sized)) <= 256 << 10
+
+
 def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticated_current_worker=False):
     """Commit one record/retry transaction while retaining useful failed-scan fallback."""
     attempt, new = outcome["attempt"], outcome["record"]
@@ -1092,7 +1105,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         # and the explicit incomplete/conflict disclosure and retry below.
         # Unauthenticated/malformed origins still fail closed above.
         witnesses = retained.get("recovery_witnesses", [])
-        representable = (len(report_json(witness)) <= 256 << 10 and
+        representable = (witness_fits_max_rebound_id(witness) and
                          not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses) and
                          (witness in witnesses or len(witnesses) < 2))
         if representable and witness not in witnesses:
