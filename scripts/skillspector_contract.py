@@ -192,7 +192,7 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
         # record keeps one original primary report and explicitly carries the
         # other *unaltered* scanner report from an authenticated main checkpoint.
         # Neither report digest is a digest of a synthetic union.
-        require(not historical and record["status"] == "partial" and record["findings_truncated"] and
+        require(record["status"] == "partial" and record["findings_truncated"] and
                 coverage.get("grouping_complete") is False and
                 {"recovery_conflict", "normalization_truncated"} <=
                 {reason["code"] for reason in coverage["reasons"]},
@@ -210,7 +210,12 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     len(scanner.report_json(witness)) <= 256 << 10,
                     "invalid or oversized immutable recovery witness")
             seen_witnesses.add(identity)
-            validate_record(original, item, generated, scheduled=False,
+            # The source may legitimately become historical after catalog
+            # revision drift. Revalidate the immutable witness against the
+            # already-validated primary source, never the *new* target revision.
+            original_item = {**item, "repository": record["source"]["repository"],
+                "revision": record["source"]["revision"], "path": record["source"]["path"]}
+            validate_record(original, original_item, generated, scheduled=False,
                 allowed_profiles=allowed_profiles, scanner_identity=scanner_identity,
                 repository_aliases=repository_aliases)
     return record
