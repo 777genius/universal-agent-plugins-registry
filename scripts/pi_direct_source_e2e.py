@@ -170,6 +170,11 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
 
     surviving_skill_tree = (native_files(native_root / "skills")
                             if kind in {"skill", "mixed"} else [])
+    def require_native_payload_present() -> None:
+        # Require materialization immediately after add. A later repair must
+        # not mask a missing native file or MCP entry at initial install.
+        require_native_payload_present()
+
     args = ["--target", "pi", "--scope", scope, "--format", "json"]
     if scope == "project":
         subprocess.run(["git", "init", "-q"], cwd=project, env=env,
@@ -184,6 +189,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         return outcome
     try:
         add = call("add", selector, "--no-save", timeout=240)
+        require_native_payload_present()
         listed = call("list")
         first = plugin_record(listed, name, revision)
         again = call("add", selector, "--no-save", timeout=240)
