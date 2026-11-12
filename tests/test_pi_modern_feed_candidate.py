@@ -100,6 +100,31 @@ class ModernPiEvidenceTests(unittest.TestCase):
             {"linux": (4, 0), "macos": (4, 0), "windows": (4, 0)}
         )
 
+    def test_unsigned_review_gate_cannot_accept_partial_or_spoofed_os_counts(self) -> None:
+        for counts in (
+            {"linux": (4, 0)},
+            {"linux": (4, 0), "macos": (4, 0), "windows": (2, 0)},
+            {"linux": (4, 0), "macos": (4, 0), "windows": (4, 2)},
+            {"linux": (True, 0), "macos": (True, 0), "windows": (True, 0)},
+            {"linux": (4, False), "macos": (4, False), "windows": (4, False)},
+            {"linux": (-1, 0), "macos": (-1, 0), "windows": (-1, 0)},
+        ):
+            with self.subTest(counts=counts), self.assertRaisesRegex(
+                RuntimeError, "complete identical 3-OS"
+            ):
+                require_complete_source_eligibility(counts)
+
+    def test_preproduction_gate_rejects_boolean_or_negative_case_totals(self) -> None:
+        for counts in (
+            {"linux": (True, 2), "macos": (True, 2), "windows": (True, 2)},
+            {"linux": (2, False), "macos": (2, False), "windows": (2, False)},
+            {"linux": (-1, 2), "macos": (-1, 2), "windows": (-1, 2)},
+        ):
+            with self.subTest(counts=counts), self.assertRaisesRegex(
+                RuntimeError, "complete consistent 3-OS"
+            ):
+                require_unsigned_preproduction_eligibility(counts)
+
     def test_known_legacy_refusal_allows_only_unsigned_preproduction_review(self) -> None:
         counts = {"linux": (2, 2), "macos": (2, 2), "windows": (2, 2)}
         require_unsigned_preproduction_eligibility(counts)
