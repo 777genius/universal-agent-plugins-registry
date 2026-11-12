@@ -1037,18 +1037,51 @@
             }
           },
           "record": {
-            "allOf": [
-              {
-                "$ref": "#"
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "id",
+              "source",
+              "scanner",
+              "profile",
+              "report_digest",
+              "status",
+              "findings",
+              "coverage"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
               },
-              {
-                "not": {
-                  "required": [
-                    "recovery_witnesses"
-                  ]
-                }
+              "source": {
+                "type": "object"
+              },
+              "scanner": {
+                "type": "object"
+              },
+              "profile": {
+                "type": "object"
+              },
+              "report_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ]
+              },
+              "findings": {
+                "type": "array",
+                "maxItems": 100000
+              },
+              "coverage": {
+                "type": "object"
               }
-            ]
+            }
           }
         }
       }
