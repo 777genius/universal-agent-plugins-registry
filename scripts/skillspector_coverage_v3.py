@@ -294,6 +294,10 @@ def previous_records(previous, selection, *, repository_aliases=None):
         record = copy.deepcopy(prior) if "coverage" in prior else contract.import_legacy(prior,
             profile=previous["manifest"]["profile"], scanner_identity=previous["manifest"]["scanner"])
         record["id"] = item["id"]
+        # The selection ID is an index, not scanner content authority. Keep
+        # the original source/digest of each witness while rebinding this ID.
+        for witness in record.get("recovery_witnesses", []):
+            witness["record"]["id"] = item["id"]
         record["target_revision"] = item["revision"]
         record["freshness"] = "current" if (record["source"]["repository"].casefold() == item["repository"].casefold() and
             record["source"]["revision"] == item["revision"] and contract.known_profile(record)) else "historical"
@@ -1063,7 +1067,8 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         new["status"] in {"complete", "partial"} and
         old["source"] == new["source"] and old["scanner"] == new["scanner"] and
         bool(old_groups - new_groups) and bool(new_groups - old_groups))
-    novel = new_groups - old_groups if degraded_complete or disjoint else Counter()
+    novel = (new_groups - old_groups if degraded_complete or disjoint or
+             (witness_origin is not None and old.get("recovery_witnesses")) else Counter())
     if novel and witness_origin is None:
         # A verified *current* worker does not provide an independent main
         # run origin. Preserve its existing safe quarantine semantics; only
@@ -1081,14 +1086,18 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
                 "recovery_witnesses" not in new,
                 "unverifiable recovery witness cannot be published")
         witness = {"origin": copy.deepcopy(witness_origin), "record": copy.deepcopy(new)}
-        require(len(report_json(witness)) <= 256 << 10, "immutable recovery witness exceeds bound")
-        witnesses = retained.setdefault("recovery_witnesses", [])
-        require(not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses),
-                "authenticated recovery origin has conflicting witness")
-        if witness not in witnesses:
-            require(len(witnesses) < 2, "independent recovery witness limit exceeded")
-            witnesses.append(witness)
-            witnesses.sort(key=lambda value: (value["origin"]["run_id"],
+        # These candidate bytes came from an authenticated checkpoint. A
+        # witness that cannot fit the signed contract cannot invalidate other
+        # sources or replace existing verified findings. Keep the original(s)
+        # and the explicit incomplete/conflict disclosure and retry below.
+        # Unauthenticated/malformed origins still fail closed above.
+        witnesses = retained.get("recovery_witnesses", [])
+        representable = (len(report_json(witness)) <= 256 << 10 and
+                         not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses) and
+                         (witness in witnesses or len(witnesses) < 2))
+        if representable and witness not in witnesses:
+            retained.setdefault("recovery_witnesses", []).append(witness)
+            retained["recovery_witnesses"].sort(key=lambda value: (value["origin"]["run_id"],
                 value["origin"]["run_attempt"], value["record"]["report_digest"]))
     if chosen is new:
         # Worker evidence is not a scheduled report and has no queue controls.
