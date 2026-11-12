@@ -80,6 +80,29 @@ def require_managed_refusal(result: dict) -> None:
             "Marketing Kit direct-source denial was not the expected managed-dependency gate")
 
 
+def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
+    """Accept only the actual pinned no-save native add command, never dry-run.
+
+    This checks command provenance, not an entitlement for managed saved installs.
+    Project root is runner-disposable and therefore variable between cases.
+    """
+    if not isinstance(op, dict) or type(op.get("exit")) is not int or op["exit"] != 0:
+        return False
+    argv = op.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+        return False
+    if len(argv) < 10 or argv[1:3] != ["add", item["source"]]:
+        return False
+    expected = ["--no-save", "--target", "pi", "--scope", scope, "--format", "json"]
+    if argv[3:9] != expected:
+        return False
+    if scope == "user":
+        return len(argv) == 9
+    return (scope == "project" and len(argv) == 11
+            and argv[9] == "--project-root" and bool(argv[10])
+            and not argv[10].startswith("-"))
+
+
 def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple[int, dict]]:
     require(shards == SHARDS and 0 <= shard < shards, "invalid catalog shard")
     return [(index, item) for index, item in enumerate(sources)
@@ -145,10 +168,14 @@ def verify_report(report: dict, sources: list[dict], head: str,
                 and case.get("account_oauth_qualified") is False
                 and isinstance(case.get("operations"), list)
                 and len(case["operations"]) >= 8
-                and any(op.get("argv", [None, None])[1] == "add"
-                        and op.get("exit") == 0 for op in case["operations"]
-                        if isinstance(op, dict) and isinstance(op.get("argv"), list)
-                        and len(op["argv"]) >= 2)
+                and sum(real_pinned_add(op, item, key[2])
+                        for op in case["operations"]) == 2
+                and all(real_pinned_add(op, item, key[2])
+                        for op in case["operations"]
+                        if isinstance(op, dict)
+                        and isinstance(op.get("argv"), list)
+                        and len(op["argv"]) >= 2
+                        and op["argv"][1] == "add")
                 and any(op.get("argv", [None, None])[1] == "remove"
                         and op.get("exit") == 0 for op in case["operations"]
                         if isinstance(op, dict) and isinstance(op.get("argv"), list)
