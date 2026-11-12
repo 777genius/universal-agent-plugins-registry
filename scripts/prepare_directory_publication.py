@@ -728,10 +728,12 @@ def build_candidate(
     external_overrides: dict[str, Path] | None = None,
     historical_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    # This path is permanently the *legacy* schema-1 signer. Refuse Pi
+    # independently of schema support, including before a future schema
+    # update could make the otherwise valid target parse successfully.
+    if isinstance(source, dict) and isinstance(source.get("distributions"), list):
+        require_pi_free_legacy_distributions(source["distributions"])
     validate_with_schema(source, SOURCE_SCHEMA)
-    # This path is permanently the *legacy* schema-1 signer. Do not rely on
-    # PR tests to protect older readers if a future reviewed policy adds Pi.
-    require_pi_free_legacy_distributions(source["distributions"])
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be a full lowercase SHA")
     try:
         # Establish recipe/source binding before package validation so a
