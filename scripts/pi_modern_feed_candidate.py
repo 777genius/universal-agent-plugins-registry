@@ -9,6 +9,9 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import os
+import stat
+import tempfile
 import json
 from pathlib import Path
 import re
@@ -225,16 +228,49 @@ def require_committed_directory_source(source_head: str, actual: bytes) -> None:
 
 
 def write_unsigned_candidate(path: Path, candidate: dict) -> None:
-    """Create an isolated review artifact exactly once, without a clobber race.
+    """Create an unsigned review file exclusively in an isolated output directory.
 
-    An existence check followed by write_text() can truncate a file (or a
-    swapped-in symlink target) if another process creates the path between
-    those operations. Exclusive creation rejects both cases fail-closed.
+    POSIX pins the verified private parent by directory descriptor: replacing
+    its pathname with a symlink cannot redirect the final file creation.
+    Windows is restricted to the current user's home/temporary output roots.
+    This is local preproduction staging, never a signed publication path.
     """
     content = json.dumps(candidate, ensure_ascii=False, indent=2) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8") as output:
-        output.write(content)
+    root = ROOT.resolve()
+    require(not path.resolve().is_relative_to(root),
+            "unsigned candidate must stay outside the repository")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    require(not path.parent.is_symlink(),
+            "unsigned candidate output parent must not be a symlink")
+    parent = path.parent.resolve(strict=True)
+    require(not parent.is_relative_to(root),
+            "unsigned candidate output parent must stay outside the repository")
+
+    if os.name == "posix":
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(parent_fd)
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                    and (stat.S_IMODE(info.st_mode) & 0o077) == 0,
+                    "unsigned candidate requires an owner-private output directory")
+            current = os.stat(path.parent, follow_symlinks=False)
+            require((info.st_dev, info.st_ino) == (current.st_dev, current.st_ino)
+                    and not path.parent.resolve(strict=True).is_relative_to(root),
+                    "unsigned candidate output parent changed during verification")
+            fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=parent_fd)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
+                output.write(content)
+        finally:
+            os.close(parent_fd)
+    else:
+        # Windows has no portable Python dir_fd. Stay within the user's
+        # private profile/temp tree, not an arbitrary shared or repo path.
+        trusted = (Path.home().resolve(), Path(tempfile.gettempdir()).resolve())
+        require(any(parent.is_relative_to(base) for base in trusted),
+                "Windows unsigned candidate output must be in the user home/temp directory")
+        with path.open("x", encoding="utf-8", newline="\n") as output:
+            output.write(content)
 
 
 def main() -> int:
