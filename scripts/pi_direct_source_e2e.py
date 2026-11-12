@@ -175,6 +175,14 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
     else:
         raise RuntimeError("unsupported Pi materialization kind")
 
+def require_unchanged_native_scope(root: Path, existed: bool,
+                                   baseline: list[tuple[str, str, str]]) -> None:
+    """A scoped Pi install must never materialize in the other Pi scope."""
+    require(not root.is_symlink() and root.exists() == existed
+            and native_files(root) == baseline,
+            "Pi native installation modified the unselected scope")
+
+
 def run_case(cli: str, source_head: str, temp: Path, case: tuple,
              scope: str, binary_seed: Path) -> dict:
     case_id, name, source_path, revision, kind, repository = case
@@ -213,7 +221,13 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
     # Unowned native Pi registrations must survive add, repair and remove.
     # This is stronger than preserving only unrelated sentinel text files.
     native_root = pi_profile if scope == "user" else project / ".pi"
+    untouched_root = project / ".pi" if scope == "user" else pi_profile
+    untouched_exists = untouched_root.exists()
+    untouched_baseline = native_files(untouched_root)
     native_root.mkdir(parents=True, exist_ok=True)
+    def assert_scope_isolation() -> None:
+        require_unchanged_native_scope(
+            untouched_root, untouched_exists, untouched_baseline)
     foreign_skill = native_root / "skills" / "foreign-neighbor" / "SKILL.md"
     foreign_skill_text = ("---\nname: foreign-neighbor\n"
                           "description: Existing unowned Pi skill\n---\n\nKeep intact.\n")
@@ -260,6 +274,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         return outcome
     try:
         add = call("add", selector, "--no-save", timeout=240)
+        assert_scope_isolation()
         require_native_payload_present()
         listed = call("list")
         first = plugin_record(listed, name, revision)
@@ -281,6 +296,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
 
         require_expected_identity()
         again = call("add", selector, "--no-save", timeout=240)
+        assert_scope_isolation()
         repeated = plugin_record(call("list"), name, revision)
         require(first["installation_id"] == repeated["installation_id"],
                 "duplicate or switched installation identity")
@@ -302,18 +318,21 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                 "direct full-SHA installations require explicit switch"
                 in refused.get("error_tail", ""),
                 "pinned Git update must refuse with explicit switch guidance")
+        assert_scope_isolation()
         require(native_files(native_root) == before_update,
                 "refused immutable source update changed Pi native files")
         require(native_files(case_root / "state") == before_installer_state and
                 native_files(case_root / "binary-cache") == before_installer_cache,
                 "refused immutable source update changed installer state or cache")
         call("repair", first["installation_id"], timeout=240)
+        assert_scope_isolation()
         maintained = plugin_record(call("list"), name, revision)
         require(maintained["installation_id"] == first["installation_id"],
                 "maintenance switched or duplicated the pinned Pi installation")
         require_native_payload_present()
         require_expected_identity()
         call("remove", first["installation_id"], timeout=120)
+        assert_scope_isolation()
         if kind in {"skill", "mixed"}:
             require_removed_native_payload(
                 native_root, "skill", surviving_skills=surviving_skill_tree)
