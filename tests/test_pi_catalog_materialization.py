@@ -26,6 +26,10 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
     for _, item in selected_sources(sources, shard, SHARDS):
         for scope in SCOPES:
             record = {**source_identity(item), "scope": scope}
+            add_command = [
+                "agentplugins", "add", item["source"], "--no-save",
+                "--target", "pi", "--scope", scope, "--format", "json",
+            ] + (["--project-root", "/tmp/project"] if scope == "project" else [])
             if item["distribution_status"] == "active" and item["distribution"] == MANAGED_ROOT:
                 diagnostic = "agentplugins: " + MANAGED_NO_SAVE_DIAGNOSTIC
                 record.update({
@@ -39,9 +43,9 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
                     "status": "passed", "verification": "native-files-and-receipt-only",
                     "runtime_claims": False, "account_oauth_qualified": False,
                     "operations": [
-                        {"argv": ["agentplugins", "add"], "exit": 0},
+                        {"argv": add_command, "exit": 0},
                         {"argv": ["agentplugins", "list"], "exit": 0},
-                        {"argv": ["agentplugins", "add"], "exit": 0},
+                        {"argv": add_command, "exit": 0},
                         {"argv": ["agentplugins", "info"], "exit": 0},
                         {"argv": ["agentplugins", "update"], "exit": 1},
                         {"argv": ["agentplugins", "repair"], "exit": 0},
@@ -168,6 +172,31 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 RuntimeError, "native Pi lifecycle incomplete"
             ):
                 verify_report(variant, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
+
+    def test_native_receipts_require_exact_real_source_no_save_add(self) -> None:
+        baseline = fixture(self.sources, "ubuntu-24.04", 0)
+        for edit in ("dry-run", "no-save-removed", "other-source", "wrong-scope",
+                     "wrong-target", "extra-flag"):
+            report = copy.deepcopy(baseline)
+            case = next(r for r in report["results"] if r["status"] == "passed")
+            argv = next(op["argv"] for op in case["operations"]
+                        if op["argv"][1] == "add")
+            if edit == "dry-run":
+                argv.append("--dry-run")
+            elif edit == "no-save-removed":
+                argv.remove("--no-save")
+            elif edit == "other-source":
+                argv[2] = "github:foreign/source@" + HEAD + "//plugins/other"
+            elif edit == "wrong-scope":
+                argv[7] = "project" if argv[7] == "user" else "user"
+            elif edit == "wrong-target":
+                argv[5] = "codex"
+            else:
+                argv.extend(["--save", "yes"])
+            with self.subTest(edit=edit), self.assertRaisesRegex(
+                RuntimeError, "native Pi lifecycle incomplete"
+            ):
+                verify_report(report, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
 
     def test_managed_dependency_denial_is_real_and_never_positive_evidence(self) -> None:
         selected = next(
