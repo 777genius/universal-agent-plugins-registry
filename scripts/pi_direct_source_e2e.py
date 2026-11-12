@@ -111,7 +111,7 @@ def native_skill_markers(skills_root: Path) -> set[str]:
 
 
 def expected_package_native_names(root: Path, installation: dict,
-                                  declared_name: str, kind: str) -> tuple[set[str], set[str]]:
+                                  declared_name: str, kind: str) -> tuple[set[str], dict]:
     """Read source-declared component identities from the verified active package.
 
     The published CLI's pinned revision and manifest digest select the package;
@@ -138,13 +138,16 @@ def expected_package_native_names(root: Path, installation: dict,
         skill_root = package / "skills"
         skills = native_skill_markers(skill_root)
         mcp = package / "mcp.json"
-        servers = set()
+        servers = {}
         if mcp.exists():
             require(mcp.is_file() and not mcp.is_symlink(),
                     "verified package MCP declaration is not regular")
             raw = strict_json(mcp.read_text(encoding="utf-8")).get("mcpServers")
             require(isinstance(raw, dict), "verified package MCP declaration invalid")
-            servers = set(raw)
+            require(all(isinstance(name, str) and name and isinstance(value, dict)
+                        for name, value in raw.items()),
+                    "verified package MCP server definitions invalid")
+            servers = raw
         candidates.append((skills, servers))
     require(bool(candidates) and all(item == candidates[0] for item in candidates),
             "verified pinned package native source unavailable or inconsistent")
@@ -174,6 +177,38 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
                 "removed Pi MCP registration remains or a foreign server was changed")
     else:
         raise RuntimeError("unsupported Pi materialization kind")
+
+def require_expected_mcp_definitions(actual: dict, expected: dict,
+                                     case_root: Path) -> None:
+    """Match source-verified MCP command/args or URL, not just server keys."""
+    for name, declared in expected.items():
+        installed = actual.get(name)
+        require(isinstance(declared, dict) and isinstance(installed, dict),
+                "native Pi MCP definition is missing or malformed")
+        if isinstance(declared.get("url"), str) and declared["url"]:
+            require(installed.get("url") == declared["url"],
+                    "native Pi MCP URL differs from pinned package")
+            continue
+        command = declared.get("command")
+        args = declared.get("args", [])
+        require(isinstance(command, str) and command
+                and installed.get("command") == command
+                and isinstance(args, list) and isinstance(installed.get("args"), list)
+                and len(args) == len(installed["args"]),
+                "native Pi MCP command or argument structure differs from pinned package")
+        for source_arg, native_arg in zip(args, installed["args"]):
+            require(isinstance(source_arg, str) and isinstance(native_arg, str),
+                    "native Pi MCP arguments must be strings")
+            if source_arg.startswith("${PLUGIN_ROOT}/"):
+                suffix = source_arg[len("${PLUGIN_ROOT}"):].replace("\\", "/")
+                native = native_arg.replace("\\", "/")
+                require(native.endswith(suffix) and Path(native_arg).is_absolute()
+                        and Path(native_arg).resolve().is_relative_to(case_root.resolve()),
+                        "native Pi MCP runtime argument is not pinned to its package")
+            else:
+                require(native_arg == source_arg,
+                        "native Pi MCP argument differs from pinned package")
+
 
 def require_unchanged_native_scope(root: Path, existed: bool,
                                    baseline: list[tuple[str, str, str]]) -> None:
@@ -291,8 +326,9 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                 servers = strict_json((native_root / "mcp.json").read_text(
                     encoding="utf-8")).get("mcpServers")
                 require(isinstance(servers, dict)
-                        and set(servers) == expected_servers | {"foreign-neighbor"},
+                        and set(servers) == set(expected_servers) | {"foreign-neighbor"},
                         "native Pi MCP keys differ from verified package identities")
+                require_expected_mcp_definitions(servers, expected_servers, case_root)
 
         require_expected_identity()
         again = call("add", selector, "--no-save", timeout=240)
