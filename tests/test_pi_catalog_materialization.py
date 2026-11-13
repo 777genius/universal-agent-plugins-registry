@@ -17,6 +17,7 @@ from pi_catalog_inventory_e2e import active_sources, native_files
 from pi_direct_source_e2e import (
     expected_package_native_names, pinned_source_bytes, run_case,
     require_pinned_native_snapshot, require_removed_native_payload,
+    require_removed_pi_extension_payload,
     require_expected_mcp_definitions, require_unchanged_native_scope,
     verified_private_pi_binding,
 )
@@ -586,6 +587,39 @@ class PiRealMaterializationContracts(unittest.TestCase):
             foreign.write_text('{"mcpServers": {"unwanted": {}}}', encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "unselected scope"):
                 require_unchanged_native_scope(other_scope, True, present)
+
+    def test_remove_requires_extension_cleanup_and_foreign_preservation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            native = Path(directory)
+            extensions = native / "extensions"
+            foreign = extensions / "foreign-neighbor" / "keep.txt"
+            foreign.parent.mkdir(parents=True)
+            foreign.write_text("foreign bytes", encoding="utf-8")
+            baseline = native_files(extensions)
+            owned = extensions / "bound-package"
+            require_removed_pi_extension_payload(native, (owned,), baseline)
+
+            owned.mkdir()
+            (owned / "plugin.json").write_text("owned", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "extension artifact remains"):
+                require_removed_pi_extension_payload(native, (owned,), baseline)
+            shutil.rmtree(owned)
+            require_removed_pi_extension_payload(native, (owned,), baseline)
+
+            foreign.write_text("corrupted", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "foreign extension tree changed"):
+                require_removed_pi_extension_payload(native, (owned,), baseline)
+            foreign.write_text("foreign bytes", encoding="utf-8")
+            orphan = extensions / "unowned-new-entry"
+            orphan.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "foreign extension tree changed"):
+                require_removed_pi_extension_payload(native, (owned,), baseline)
+            orphan.rmdir()
+            require_removed_pi_extension_payload(native, (owned,), baseline)
+
+            with self.assertRaisesRegex(RuntimeError, "bound extension artifact"):
+                require_removed_pi_extension_payload(
+                    native, (native / "unrelated" / "bound-package",), baseline)
 
     def test_remove_rejects_leftover_native_skill_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
