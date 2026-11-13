@@ -223,9 +223,14 @@ class PiRealMaterializationContracts(unittest.TestCase):
             state["schema_version"] = 5
             write()
             path.unlink()
-            path.symlink_to(state_root / "missing")
             with self.assertRaisesRegex(RuntimeError, "absent or redirected"):
                 check()
+            # Windows CI may not grant symlink creation privilege; absence is
+            # covered on every OS and symlink refusal on POSIX.
+            if sys.platform != "win32":
+                path.symlink_to(state_root / "missing")
+                with self.assertRaisesRegex(RuntimeError, "absent or redirected"):
+                    check()
 
     def test_copied_manifest_cannot_authorize_foreign_mcp_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
