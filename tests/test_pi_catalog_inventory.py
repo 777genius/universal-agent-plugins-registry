@@ -11,7 +11,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_direct_source_e2e import CASES, native_skill_markers, require_removed_native_payload
+from pi_direct_source_e2e import (
+    CASES, native_skill_markers, require_removed_native_payload,
+    require_removed_pi_extension_payload,
+)
 from pi_catalog_inventory_e2e import (
     isolated_cli_env, native_files, clone_verified_cli_cache, require_exact_checkout,
     require_published_cli_version,
@@ -345,6 +348,38 @@ class PiNativeRemovalTests(unittest.TestCase):
             script.parent.rmdir()
             own.parent.rmdir()
             require_removed_native_payload(root, "skill", surviving_skills=expected)
+
+    def test_remove_checks_bound_extension_and_preserves_foreign_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            extensions = root / "extensions"
+            foreign = extensions / "foreign-neighbor" / "keep.txt"
+            foreign.parent.mkdir(parents=True)
+            foreign.write_text("keep", encoding="utf-8")
+            baseline = native_files(extensions)
+            owned = extensions / "owned-package"
+
+            # A missing verified binding cannot prove an extension was removed.
+            with self.assertRaisesRegex(RuntimeError, "bound extension"):
+                require_removed_pi_extension_payload(root, (), baseline)
+            require_removed_pi_extension_payload(root, (owned,), baseline)
+
+            owned.mkdir()
+            artifact = owned / "plugin.json"
+            artifact.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "extension artifact remains"):
+                require_removed_pi_extension_payload(root, (owned,), baseline)
+            artifact.unlink()
+            # An empty owned directory is also a surviving native artifact.
+            with self.assertRaisesRegex(RuntimeError, "extension artifact remains"):
+                require_removed_pi_extension_payload(root, (owned,), baseline)
+            owned.rmdir()
+
+            foreign.write_text("changed", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "foreign extension tree changed"):
+                require_removed_pi_extension_payload(root, (owned,), baseline)
+            foreign.write_text("keep", encoding="utf-8")
+            require_removed_pi_extension_payload(root, (owned,), baseline)
 
     def test_removal_accepts_unowned_neighbor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

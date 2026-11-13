@@ -441,10 +441,11 @@ def require_removed_pi_extension_payload(
     require(not extensions.is_symlink()
             and native_files(extensions) == surviving_extensions,
             "removed Pi extension artifact remains or foreign extension tree changed")
-    require(all(package.parent == extensions
-                and not package.exists() and not package.is_symlink()
-                for package in owned_roots),
-            "removed Pi bound extension artifact remains")
+    require(bool(owned_roots)
+            and all(package.parent == extensions
+                    and not package.exists() and not package.is_symlink()
+                    for package in owned_roots),
+            "removed Pi bound extension artifact remains or binding missing")
 
 
 def require_expected_mcp_definitions(actual: dict, expected: dict,
