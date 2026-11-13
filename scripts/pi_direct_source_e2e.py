@@ -481,12 +481,21 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                       else project / ".uap" / "state-v2.json")
         private_binding = verified_private_pi_binding(
             state_path, first, name, revision, repository, source_path, scope)
+        source_read = lambda relative: pinned_source_bytes(
+            repository, revision, source_path, relative)
         expected_skills, expected_servers, verified_package_roots = expected_package_native_names(
             native_root, {"clients": [private_binding]}, name, kind,
-            source_read=lambda relative: pinned_source_bytes(
-                repository, revision, source_path, relative))
+            source_read=source_read)
 
         def require_expected_identity() -> None:
+            # Reverify immutable source bytes on every lifecycle checkpoint.
+            # A repeat add or repair must not silently replace the bound
+            # package's MCP declaration, launcher, or skill contents.
+            current = expected_package_native_names(
+                native_root, {"clients": [private_binding]}, name, kind,
+                source_read=source_read)
+            require(current == (expected_skills, expected_servers, verified_package_roots),
+                    "pinned Pi package changed during native lifecycle")
             if kind in {"skill", "mixed"}:
                 skills = native_root / "skills"
                 found = native_skill_markers(skills)
@@ -504,6 +513,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         require_expected_identity()
         again = call("add", selector, "--no-save", timeout=240)
         assert_scope_isolation()
+        require_expected_identity()
         repeated = plugin_record(call("list"), name, revision)
         require(first["installation_id"] == repeated["installation_id"],
                 "duplicate or switched installation identity")
