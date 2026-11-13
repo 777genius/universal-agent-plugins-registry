@@ -257,6 +257,40 @@ def open_windows_exclusive_nofollow(path: Path):
     return os.fdopen(fd, "w", encoding="utf-8", newline="\n")
 
 
+
+def require_windows_output_handle_origin(fd: int, expected: Path) -> None:
+    """Check the opened file handle against the pre-create trusted parent.
+
+    An attacker may replace a Windows ancestor after the pathname checks.
+    CREATE_NEW alone prevents clobbering, not writing into the redirected
+    directory. Check the final *handle*, before writing any review bytes.
+    A raced redirect can at worst create an empty file in disposable temp.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    final_path = kernel32.GetFinalPathNameByHandleW
+    final_path.argtypes = (wintypes.HANDLE, wintypes.LPWSTR,
+                           wintypes.DWORD, wintypes.DWORD)
+    final_path.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = final_path(msvcrt.get_osfhandle(fd), buffer, len(buffer), 0)
+    require(0 < length < len(buffer),
+            "unsigned candidate cannot verify opened Windows output handle")
+
+    def normalized(value: str) -> str:
+        if value.startswith("\\\\?\\UNC\\"):
+            value = "\\\\" + value[8:]
+        elif value.startswith("\\\\?\\"):
+            value = value[4:]
+        return os.path.normcase(os.path.normpath(value))
+
+    require(normalized(buffer.value) == normalized(str(expected)),
+            "unsigned candidate output ancestry changed before file creation")
+
+
 def require_plain_windows_ancestry(parent: Path) -> None:
     """Refuse junction/symlink ancestors before any Windows staging mutation.
 
@@ -322,7 +356,8 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
 
     POSIX pins the verified private parent by directory descriptor: replacing
     its pathname with a symlink cannot redirect the final file creation.
-    Windows is restricted to the current user's home/temporary output roots.
+    Windows is restricted to the user's home/temp roots and binds the actual
+    opened file handle to the previously checked parent before writing bytes.
     This is local preproduction staging, never a signed publication path.
     """
     # A relative Windows path can inherit a junction from cwd while the
@@ -364,6 +399,7 @@ def write_unsigned_candidate(path: Path, candidate: dict) -> None:
         require(any(parent.is_relative_to(base) for base in trusted),
                 "Windows unsigned candidate output must be in the user home/temp directory")
         with open_windows_exclusive_nofollow(path) as output:
+            require_windows_output_handle_origin(output.fileno(), parent / path.name)
             output.write(content)
 
 

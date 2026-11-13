@@ -225,6 +225,40 @@ class ModernPiEvidenceTests(unittest.TestCase):
                 write_unsigned_candidate(path, {"schema_version": 1})
             self.assertFalse((actual / "nested" / "candidate.json").exists())
 
+    @unittest.skipUnless(os.name == "nt", "native Windows ancestor race")
+    def test_windows_ancestor_swap_at_create_cannot_receive_review_bytes(self) -> None:
+        # Both preliminary ancestry checks have completed before this swap.
+        # The final opened handle must still be bound to that checked parent.
+        from pi_modern_feed_candidate import open_windows_exclusive_nofollow
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "private"
+            private.mkdir(mode=0o700)
+            moved = root / "private-original"
+            redirected = root / "redirected"
+            redirected.mkdir(mode=0o700)
+            path = private / "candidate.json"
+
+            def swap_after_checks(target):
+                private.rename(moved)
+                subprocess.run(
+                    ["cmd.exe", "/c", "mklink", "/J", str(private), str(redirected)],
+                    check=True, capture_output=True, text=True,
+                )
+                return open_windows_exclusive_nofollow(target)
+
+            with mock.patch("pi_modern_feed_candidate.open_windows_exclusive_nofollow",
+                            side_effect=swap_after_checks):
+                with self.assertRaisesRegex(RuntimeError, "output ancestry changed"):
+                    write_unsigned_candidate(path, {"private_review": "must not be written"})
+            self.assertFalse((moved / "candidate.json").exists())
+            raced = redirected / "candidate.json"
+            # CREATE_NEW may have created an empty leaf before handle validation;
+            # candidate bytes must never be written into that redirected tree.
+            if raced.exists():
+                self.assertEqual(raced.read_bytes(), b"")
+
     @unittest.skipUnless(os.name == "nt", "native Windows concurrent CreateFileW")
     def test_native_windows_competing_writers_have_one_exclusive_winner(self) -> None:
         # Unlike a mocked wrapper, this exercises the real concurrent
