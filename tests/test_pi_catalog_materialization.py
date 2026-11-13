@@ -29,6 +29,8 @@ from pi_catalog_materialization_e2e import (
 )
 
 HEAD = "a" * 40
+RUN_ID = 123456789
+RUN_ATTEMPT = 2
 
 
 def fixture(sources: list[dict], platform: str, shard: int) -> dict:
@@ -83,6 +85,7 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
             results.append(record)
     return {
         "schema_version": 1, "kind": KIND, "source_head": HEAD,
+        "github_run_id": RUN_ID, "github_run_attempt": RUN_ATTEMPT,
         "uap_cli": "public npm 0.1.102",
         "native_pi": "real npm @earendil-works/pi-coding-agent@1.5.0",
         "runner_os": PLATFORMS[platform], "shard": shard, "shards": SHARDS,
@@ -911,9 +914,24 @@ class PiRealMaterializationContracts(unittest.TestCase):
                     path.write_text(json.dumps(fixture(self.sources, platform, shard)),
                                     encoding="utf-8")
                     paths.append(path)
-            pack = build_upstream_review_pack(paths, self.sources, HEAD)
+            pack = build_upstream_review_pack(paths, self.sources, HEAD,
+                                              (RUN_ID, RUN_ATTEMPT))
             self.assertEqual(pack["kind"], "pi-upstream-native-review-only")
             self.assertTrue(pack["unsigned"])
+            self.assertEqual(pack["original_workflow_run"],
+                             {"id": RUN_ID, "attempt": RUN_ATTEMPT})
+            original_sources = {item["distribution"]: (index, item)
+                                for index, item in enumerate(self.sources)}
+            for case in pack["cases"]:
+                index, source = original_sources[case["distribution"]]
+                for key in ("source", "revision", "tree_digest",
+                            "manifest_digest", "release_sequence"):
+                    self.assertEqual(case[key], source[key])
+                self.assertIn(case["scope"], SCOPES)
+                self.assertEqual(case["original_artifact"],
+                                 f"pi-materialization-{next(key for key, value in PLATFORMS.items() if value == case['runner_os'])}-{index % SHARDS}")
+                self.assertEqual(case["original_run_id"], RUN_ID)
+                self.assertEqual(case["original_run_attempt"], RUN_ATTEMPT)
             for key in ("production_published", "signed_managed_eligibility",
                         "managed_saved_installation", "oauth_or_tool_call_qualified"):
                 self.assertFalse(pack[key])
@@ -925,6 +943,17 @@ class PiRealMaterializationContracts(unittest.TestCase):
             self.assertTrue(all(case["result"] == "direct-source-no-save-native-lifecycle"
                                 and "installation_id" not in case and "operations" not in case
                                 for case in pack["cases"]))
+            with self.assertRaisesRegex(RuntimeError, "do not belong"):
+                build_upstream_review_pack(paths, self.sources, HEAD,
+                                           (RUN_ID + 1, RUN_ATTEMPT))
+            altered = json.loads(paths[0].read_text(encoding="utf-8"))
+            altered["github_run_attempt"] = RUN_ATTEMPT + 1
+            paths[0].write_text(json.dumps(altered), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "different workflow runs"):
+                build_upstream_review_pack(paths, self.sources, HEAD,
+                                           (RUN_ID, RUN_ATTEMPT))
+            altered["github_run_attempt"] = RUN_ATTEMPT
+            paths[0].write_text(json.dumps(altered), encoding="utf-8")
             for path in paths:
                 report = json.loads(path.read_text(encoding="utf-8"))
                 upstream = next((case for case in report["results"]
@@ -937,7 +966,8 @@ class PiRealMaterializationContracts(unittest.TestCase):
             else:
                 self.fail("missing upstream fixture")
             with self.assertRaisesRegex(RuntimeError, "real native Pi lifecycle incomplete"):
-                build_upstream_review_pack(paths, self.sources, HEAD)
+                build_upstream_review_pack(paths, self.sources, HEAD,
+                                           (RUN_ID, RUN_ATTEMPT))
 
     def test_aggregate_requires_nine_original_artifacts(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "one original report"):

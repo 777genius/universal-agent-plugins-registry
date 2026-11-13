@@ -175,6 +175,20 @@ def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple
             if index % shards == shard]
 
 
+def github_run_identity() -> tuple[int, int]:
+    """Only derive provenance from the actual Actions run, never a report."""
+    require(os.environ.get("GITHUB_ACTIONS") == "true"
+            and os.environ.get("GITHUB_REPOSITORY")
+            == "777genius/universal-agent-plugins-registry",
+            "review packet requires a trusted GitHub Actions run")
+    values = (os.environ.get("GITHUB_RUN_ID", ""),
+              os.environ.get("GITHUB_RUN_ATTEMPT", ""))
+    require(all(value.isascii() and value.isdecimal() and int(value) > 0
+                for value in values),
+            "missing valid GitHub Actions run id/attempt")
+    return int(values[0]), int(values[1])
+
+
 def verify_report(report: dict, sources: list[dict], head: str,
                   platform: str, shard: int, shards: int) -> int:
     """Fail closed on omitted, repeated, unpinned or non-materialized cases."""
@@ -182,6 +196,10 @@ def verify_report(report: dict, sources: list[dict], head: str,
             and report["schema_version"] == 1
             and type(report.get("shard")) is int and report["shard"] == shard
             and type(report.get("shards")) is int and report["shards"] == shards
+            and type(report.get("github_run_id")) is int
+            and report["github_run_id"] > 0
+            and type(report.get("github_run_attempt")) is int
+            and report["github_run_attempt"] > 0
             and report.get("kind") == KIND and report.get("source_head") == head
             and report.get("runner_os") == PLATFORMS[platform]
             and report.get("uap_cli") == "public npm 0.1.102"
@@ -250,6 +268,7 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
                  for shard in range(SHARDS)}
     counts = {platform: 0 for platform in PLATFORMS}
     upstream_cases: list[dict] = []
+    original_run: tuple[int, int] | None = None
     for path in paths:
         report = read_json(path)
         require(isinstance(report, dict), "materialization artifact must be JSON object")
@@ -261,6 +280,10 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
                 "duplicate or unrecognized original OS/shard materialization artifact")
         counts[platform] += verify_report(
             report, sources, head, platform, shard, SHARDS)
+        provenance = (report["github_run_id"], report["github_run_attempt"])
+        require(original_run is None or original_run == provenance,
+                "original native reports come from different workflow runs/attempts")
+        original_run = provenance
         # Only export validated public immutable identities. Never serialize
         # executable commands, credentials, installation IDs or native paths.
         for case in report["results"]:
@@ -279,6 +302,8 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
                 "tree_digest": case["tree_digest"],
                 "manifest_digest": case["manifest_digest"],
                 "original_artifact": f"pi-materialization-{platform}-{shard}",
+                "original_run_id": report["github_run_id"],
+                "original_run_attempt": report["github_run_attempt"],
                 "result": "direct-source-no-save-native-lifecycle",
             })
         remaining.remove((platform, shard))
@@ -299,14 +324,21 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
     return upstream_cases
 
 
-def build_upstream_review_pack(paths: list[Path], sources: list[dict], head: str) -> dict:
+def build_upstream_review_pack(paths: list[Path], sources: list[dict],
+                               head: str, expected_run: tuple[int, int]) -> dict:
     """Aggregate upstream Pi native receipts for review, NOT signing authority."""
     reviewed = {item["distribution"] for item in sources
                 if item["distribution"] in UPSTREAM_REVIEW_IDS
                 and item["distribution_status"] == "active"}
     require(reviewed == UPSTREAM_REVIEW_IDS,
             "upstream review requires both active immutable source releases")
+    require(type(expected_run) is tuple and len(expected_run) == 2
+            and all(type(value) is int and value > 0 for value in expected_run),
+            "invalid trusted workflow provenance")
     cases = verify_all(paths, sources, head)
+    require(all((case["original_run_id"], case["original_run_attempt"])
+                == expected_run for case in cases),
+            "native receipts do not belong to this GitHub Actions run/attempt")
     expected = {(runner, distribution, scope)
                 for runner in PLATFORMS.values()
                 for distribution in UPSTREAM_REVIEW_IDS
@@ -318,6 +350,7 @@ def build_upstream_review_pack(paths: list[Path], sources: list[dict], head: str
     return {
         "schema_version": 1, "kind": "pi-upstream-native-review-only",
         "source_head": head, "published_cli": "0.1.102", "native_pi": "1.5.0",
+        "original_workflow_run": {"id": expected_run[0], "attempt": expected_run[1]},
         "unsigned": True, "production_published": False,
         "signed_managed_eligibility": False,
         "managed_saved_installation": False, "oauth_or_tool_call_qualified": False,
@@ -341,6 +374,8 @@ def run_shard(args: argparse.Namespace, sources: list[dict]) -> int:
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "schema_version": 1, "kind": KIND, "source_head": args.source_head,
+        "github_run_id": github_run_identity()[0],
+        "github_run_attempt": github_run_identity()[1],
         "tested_at": datetime.now(timezone.utc).isoformat(),
         "uap_cli": "public npm 0.1.102",
         "native_pi": "real npm @earendil-works/pi-coding-agent@1.5.0",
@@ -401,7 +436,8 @@ def main() -> int:
                 "verification cannot execute native packages")
         if args.upstream_review_output is not None:
             pack = build_upstream_review_pack(
-                args.verify_report, sources, args.source_head)
+                args.verify_report, sources, args.source_head,
+                github_run_identity())
             with args.upstream_review_output.open("x", encoding="utf-8") as output:
                 json.dump(pack, output, indent=2)
                 output.write("\n")
