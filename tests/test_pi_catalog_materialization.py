@@ -948,7 +948,7 @@ class PiRealMaterializationContracts(unittest.TestCase):
                                            (RUN_ID + 1, RUN_ATTEMPT))
             # Exercise a shard that actually contains an upstream receipt,
             # so the earlier attempt must survive into the exported packet.
-            upstream_path = next(path for path in paths
+            upstream_path = next(path for path in paths[1:]
                                  if any(case["distribution"] in UPSTREAM_REVIEW_IDS
                                         for case in json.loads(
                                             path.read_text(encoding="utf-8"))["results"]))
