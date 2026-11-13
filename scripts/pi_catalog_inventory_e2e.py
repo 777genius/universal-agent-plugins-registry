@@ -193,7 +193,9 @@ def active_sources(head: str) -> list[dict]:
             require(set(release["components"]) <= {"skills", "mcp", "extensions"},
                     "unqualified portable component in active release")
             require(bool(release["manifest_name"]) and
-                    re.fullmatch(r"sha256:[0-9a-f]{64}", release["tree_digest"]) is not None,
+                    re.fullmatch(r"sha256:[0-9a-f]{64}", release["tree_digest"]) is not None
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}",
+                                     release["manifest_digest"]) is not None,
                     "active release lacks immutable root package identity")
             sources.append({
                 "distribution": distribution["id"],
@@ -203,6 +205,7 @@ def active_sources(head: str) -> list[dict]:
                 "manifest_name": release["manifest_name"],
                 "revision": revision,
                 "tree_digest": release["tree_digest"],
+                "manifest_digest": release["manifest_digest"],
                 "source": f"github:{repo}@{revision}//{source['path']}",
             })
     require(bool(sources), "no active release policies were inventoried")

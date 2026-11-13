@@ -60,7 +60,7 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
                         "source": item["source"], "client_id": "pi", "scope": scope,
                         "resolved_revision": item["revision"],
                         "tree_digest": item["tree_digest"],
-                        "manifest_digest": "sha256:" + "d" * 64,
+                        "manifest_digest": item["manifest_digest"],
                     },
                     "operations": [
                         {"argv": add_command, "exit": 0},
@@ -774,7 +774,8 @@ class PiRealMaterializationContracts(unittest.TestCase):
         baseline = fixture(self.sources, "ubuntu-24.04", 0)
         for changed in ("all-four-ids", "identity-id", "identity-missing",
                         "identity-source", "identity-scope", "identity-revision",
-                        "identity-tree", "identity-name", "identity-digest"):
+                        "identity-tree", "identity-name", "identity-digest",
+                        "identity-digest-malformed"):
             report = copy.deepcopy(baseline)
             case = next(r for r in report["results"] if r["status"] == "passed")
             identity = case["verified_public_installation"]
@@ -796,6 +797,13 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 identity["tree_digest"] = "sha256:" + "0" * 64
             elif changed == "identity-name":
                 identity["name"] = "unrelated-plugin"
+            elif changed == "identity-digest":
+                # Must reject an alternative well-formed SHA-256, not only
+                # malformed strings, against independently reviewed releases.
+                old = identity["manifest_digest"]
+                identity["manifest_digest"] = "sha256:" + (
+                    "f" if old != "sha256:" + "f" * 64 else "e"
+                ) * 64
             else:
                 identity["manifest_digest"] = "not-a-sha256"
             with self.subTest(changed=changed), self.assertRaisesRegex(

@@ -58,7 +58,7 @@ def case_tuple(item: dict, index: int) -> tuple:
 def source_identity(item: dict) -> dict:
     return {key: item[key] for key in (
         "distribution", "distribution_status", "release_sequence", "components",
-        "manifest_name", "revision", "tree_digest", "source"
+        "manifest_name", "revision", "tree_digest", "manifest_digest", "source"
     )}
 
 
@@ -136,6 +136,7 @@ def real_pinned_lifecycle(operations: object, identity: object, item: dict,
             or identity["client_id"] != "pi" or identity["scope"] != scope
             or identity["resolved_revision"] != item["revision"]
             or identity["tree_digest"] != item["tree_digest"]
+            or identity["manifest_digest"] != item["manifest_digest"]
             or not isinstance(identity["manifest_digest"], str)
             or re.fullmatch(r"sha256:[0-9a-f]{64}", identity["manifest_digest"]) is None):
         return False
