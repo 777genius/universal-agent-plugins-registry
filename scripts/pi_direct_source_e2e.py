@@ -313,6 +313,17 @@ def expected_package_native_names(root: Path, installation: dict,
             "verified package omitted its expected native components")
     return skills, servers, (package,)
 
+
+def require_pinned_native_snapshot(root: Path, installation: dict,
+                                   declared_name: str, kind: str,
+                                   source_read: Callable[[str], bytes],
+                                   baseline: tuple[set[str], dict, tuple[Path, ...]]) -> None:
+    """Revalidate the bound package after each add and after repair."""
+    current = expected_package_native_names(
+        root, installation, declared_name, kind, source_read=source_read)
+    require(current == baseline, "pinned Pi package changed during native lifecycle")
+
+
 def require_removed_native_payload(native_root: Path, kind: str, *,
                                    surviving_skills: list[tuple[str, str, str]] | None = None,
                                    surviving_servers: dict | None = None) -> None:
@@ -491,11 +502,9 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
             # Reverify immutable source bytes on every lifecycle checkpoint.
             # A repeat add or repair must not silently replace the bound
             # package's MCP declaration, launcher, or skill contents.
-            current = expected_package_native_names(
+            require_pinned_native_snapshot(
                 native_root, {"clients": [private_binding]}, name, kind,
-                source_read=source_read)
-            require(current == (expected_skills, expected_servers, verified_package_roots),
-                    "pinned Pi package changed during native lifecycle")
+                source_read, (expected_skills, expected_servers, verified_package_roots))
             if kind in {"skill", "mixed"}:
                 skills = native_root / "skills"
                 found = native_skill_markers(skills)

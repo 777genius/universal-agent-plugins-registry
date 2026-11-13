@@ -8,13 +8,15 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from pi_catalog_inventory_e2e import active_sources, native_files
 from pi_direct_source_e2e import (
-    expected_package_native_names, require_removed_native_payload,
+    expected_package_native_names, pinned_source_bytes,
+    require_pinned_native_snapshot, require_removed_native_payload,
     require_expected_mcp_definitions, require_unchanged_native_scope,
     verified_private_pi_binding,
 )
@@ -280,6 +282,9 @@ class PiRealMaterializationContracts(unittest.TestCase):
             self.assertEqual(skills, set())
             self.assertEqual(servers, declared)
             self.assertEqual(roots, (package,))
+            baseline = (skills, servers, roots)
+            require_pinned_native_snapshot(
+                native_root, receipt, "bound-plugin", "mcp", source_read, baseline)
             require_expected_mcp_definitions(
                 {"local": {"command": "node", "args": [str(launcher)]}},
                 servers, roots)
@@ -294,15 +299,13 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 json.dumps({"mcpServers": {"local": {
                     "command": "node", "args": ["--tampered"]}}}), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "immutable pinned source"):
-                expected_package_native_names(
-                    native_root, receipt, "bound-plugin", "mcp",
-                    source_read=source_read)
+                require_pinned_native_snapshot(
+                    native_root, receipt, "bound-plugin", "mcp", source_read, baseline)
             (package / "mcp.json").write_bytes(source_files["mcp.json"])
             launcher.write_text("tampered bound launcher", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "immutable pinned source"):
-                expected_package_native_names(
-                    native_root, receipt, "bound-plugin", "mcp",
-                    source_read=source_read)
+                require_pinned_native_snapshot(
+                    native_root, receipt, "bound-plugin", "mcp", source_read, baseline)
             launcher.write_bytes(source_files["runtime/launcher.mjs"])
             # Deleting the bound artifact must fail closed despite the copy.
             shutil.rmtree(package)
@@ -310,6 +313,55 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 expected_package_native_names(
                     native_root, receipt, "bound-plugin", "mcp",
                     source_read=source_read)
+
+
+    def test_pinned_source_reader_uses_exact_git_sha_and_refuses_redirect(self) -> None:
+        # Offline transport contract: no live source fetch or credentials.
+        revision = "a" * 40
+        url = ("https://raw.githubusercontent.com/example/fixture/" + revision
+               + "/plugins/example/mcp.json")
+
+        class Response:
+            status = 200
+
+            def __init__(self, origin: str):
+                self.origin = origin
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def geturl(self):
+                return self.origin
+
+            def read(self, size: int) -> bytes:
+                self_size = size
+                if self_size <= 0:
+                    raise AssertionError("bounded read required")
+                return b"immutable-mcp"
+
+        pinned_source_bytes.cache_clear()
+        with patch("pi_direct_source_e2e.urlopen", return_value=Response(url)) as fetch:
+            self.assertEqual(
+                pinned_source_bytes("example/fixture", revision,
+                                    "plugins/example", "mcp.json"),
+                b"immutable-mcp")
+            self.assertEqual(fetch.call_args.args[0].full_url, url)
+            self.assertEqual(fetch.call_args.kwargs["timeout"], 45)
+        with patch("pi_direct_source_e2e.urlopen",
+                   return_value=Response("https://untrusted.example/mcp.json")):
+            with self.assertRaisesRegex(RuntimeError, "left the immutable GitHub origin"):
+                pinned_source_bytes("example/fixture", revision,
+                                    "plugins/example", "other.json")
+        for relative in ("../other.json", "/absolute", "runtime\\launcher.mjs"):
+            with self.subTest(relative=relative), self.assertRaisesRegex(
+                RuntimeError, "unsafe repository or package path"
+            ):
+                pinned_source_bytes("example/fixture", revision,
+                                    "plugins/example", relative)
+        pinned_source_bytes.cache_clear()
 
     def test_native_mcp_definitions_reject_empty_wrong_url_and_wrong_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
