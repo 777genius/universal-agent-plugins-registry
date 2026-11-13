@@ -420,6 +420,20 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
     else:
         raise RuntimeError("unsupported Pi materialization kind")
 
+def require_removed_pi_extension_payload(
+        native_root: Path, owned_roots: tuple[Path, ...],
+        surviving_extensions: list[tuple[str, str, str]]) -> None:
+    """After remove, no bound artifact may survive and foreign extensions stay byte-identical."""
+    extensions = native_root / "extensions"
+    require(not extensions.is_symlink()
+            and native_files(extensions) == surviving_extensions,
+            "removed Pi extension artifact remains or foreign extension tree changed")
+    require(all(package.parent == extensions
+                and not package.exists() and not package.is_symlink()
+                for package in owned_roots),
+            "removed Pi bound extension artifact remains")
+
+
 def require_expected_mcp_definitions(actual: dict, expected: dict,
                                      verified_package_roots: tuple[Path, ...]) -> None:
     """Match source-verified MCP command/args or URL, not just server keys."""
@@ -526,6 +540,11 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
             json.dumps({"mcpServers": {"foreign-neighbor": foreign_server}}) + "\n",
             encoding="utf-8")
 
+    foreign_extension = native_root / "extensions" / "foreign-neighbor" / "keep.txt"
+    foreign_extension.parent.mkdir(parents=True, exist_ok=True)
+    foreign_extension_text = "unowned Pi extension bytes\n"
+    foreign_extension.write_text(foreign_extension_text, encoding="utf-8")
+    surviving_extensions = native_files(native_root / "extensions")
     surviving_skill_tree = (native_files(native_root / "skills")
                             if kind in {"skill", "mixed"} else [])
     def require_native_payload_present() -> None:
@@ -582,6 +601,8 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                 native_root, {"clients": [private_binding]}, name, kind,
                 source_read, (expected_skills, expected_servers, verified_package_roots),
                 case_root=case_root)
+            require(foreign_extension.read_text(encoding="utf-8") == foreign_extension_text,
+                    "Pi native lifecycle changed a foreign extension")
             if kind in {"skill", "mixed"}:
                 skills = native_root / "skills"
                 found = native_skill_markers(skills)
@@ -636,6 +657,8 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         require_expected_identity()
         call("remove", first["installation_id"], timeout=120)
         assert_scope_isolation()
+        require_removed_pi_extension_payload(
+            native_root, verified_package_roots, surviving_extensions)
         if kind in {"skill", "mixed"}:
             require_removed_native_payload(
                 native_root, "skill", surviving_skills=surviving_skill_tree)
