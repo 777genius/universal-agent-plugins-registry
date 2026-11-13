@@ -294,6 +294,10 @@ def previous_records(previous, selection, *, repository_aliases=None):
         record = copy.deepcopy(prior) if "coverage" in prior else contract.import_legacy(prior,
             profile=previous["manifest"]["profile"], scanner_identity=previous["manifest"]["scanner"])
         record["id"] = item["id"]
+        # The selection ID is an index, not scanner content authority. Keep
+        # the original source/digest of each witness while rebinding this ID.
+        for witness in record.get("recovery_witnesses", []):
+            witness["record"]["id"] = item["id"]
         record["target_revision"] = item["revision"]
         record["freshness"] = "current" if (record["source"]["repository"].casefold() == item["repository"].casefold() and
             record["source"]["revision"] == item["revision"] and contract.known_profile(record)) else "historical"
@@ -735,9 +739,17 @@ def finding_identities(record):
                    for finding in record["findings"])
 
 
+def represented_finding_identities(record):
+    """All originally attested groups remain relevant across later rescans."""
+    identities = finding_identities(record)
+    for witness in record.get("recovery_witnesses", []):
+        identities |= finding_identities(witness["record"])
+    return identities
+
+
 def require_represented_degraded_findings(item, old, new, attempt):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
-    old_groups, new_groups = finding_identities(old), finding_identities(new)
+    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
     novel = new_groups - old_groups
     if novel:
         # Purely numeric diagnostics: old/new group counts can be equal while
@@ -771,7 +783,7 @@ def degraded_rescan(old, new):
         return True
     # Finding group IDs can vary across scanner runs. Retain verified
     # source positions, rules and fingerprint identities across rescans.
-    return bool(finding_identities(old) - finding_identities(new))
+    return bool(represented_finding_identities(old) - finding_identities(new))
 
 
 def retained_degraded_replay(item, old_record, old_attempt, outcome):
@@ -796,6 +808,19 @@ def retained_degraded_replay(item, old_record, old_attempt, outcome):
         return False
     return (attempt["fingerprint"] == attempt_fingerprint(item, new) and
             not finding_identities(new) - finding_identities(old_record))
+
+
+def witness_fits_max_rebound_id(witness):
+    """Reserve the v3 selection schema's 200-character worst-case JSON ID.
+
+    A JSON-escaped control character uses 6 bytes, more than any scalar
+    encoded by UTF-8 or other JSON escaping with ensure_ascii=False.
+    Rebinding a witness during source re-identification must not make a
+    previously admitted signed record unreadable.
+    """
+    sized = copy.deepcopy(witness)
+    sized["record"]["id"] = "\x00" * 200
+    return len(report_json(sized)) <= 256 << 10
 
 
 def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticated_current_worker=False):
@@ -1015,7 +1040,23 @@ def mark_missing_predecessor(record, attempt):
         "outside the bounded recovery window. This original evidence is retained with uncertainty until a fresh scan.")
 
 
-def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False):
+def witness_fits_shard_budget(record, repository):
+    """Budget the actual public shard including this record and its witnesses.
+
+    A record may already approach 8 MiB. A bounded 256-KiB witness does not
+    inherit the reserved space for publication context. Check the exact shard
+    wrapper *after* recovery disclosure is attached, conservatively reserving
+    the maximum allowed future reidentified source ID on both records.
+    """
+    public = scanner.redact_public_record(record)
+    longest_id = "\x00" * 200
+    public["id"] = longest_id
+    for witness in public.get("recovery_witnesses", []):
+        witness["record"]["id"] = longest_id
+    return len(report_json(shard_document(repository, [public]))) <= MAX_SHARD_BYTES
+
+
+def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False, witness_origin=None):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
     Attempt numbers belong to the originating queue lineage. A conflicting fork
@@ -1046,10 +1087,51 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # A recovered Complete may come from a checkpoint rejected in assembly.
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
-    if degraded_complete:
+    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
+    # Two genuine Partial (or independent fork) scans can each contain an
+    # adverse group missing from the other. Quarantining just the "stronger"
+    # representative would hide the second authenticated security finding.
+    disjoint = (witness_origin is not None and
+        old["status"] in {"complete", "partial"} and
+        new["status"] in {"complete", "partial"} and
+        old["source"] == new["source"] and old["scanner"] == new["scanner"] and
+        bool(old_groups - new_groups) and bool(new_groups - old_groups))
+    novel = (new_groups - old_groups if degraded_complete or disjoint or
+             (witness_origin is not None and old.get("recovery_witnesses")) else Counter())
+    if novel and witness_origin is None:
+        # A verified *current* worker does not provide an independent main
+        # run origin. Preserve its existing safe quarantine semantics; only
+        # archive authenticated historical workers as independent witnesses.
         require_represented_degraded_findings(item, old, new, outcome["attempt"])
-    chosen = old if prefer_existing or degraded_complete else max((old, new), key=rank)
+    chosen = old if prefer_existing or degraded_complete or disjoint or old.get("recovery_witnesses") else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
+    added_witness = None
+    if novel:
+        require(old["source"] == new["source"] and
+                old["scanner"] == new["scanner"] and
+                new["report_digest"] != old["report_digest"] and
+                isinstance(witness_origin, dict) and
+                set(witness_origin) == {"run_id", "run_attempt"} and
+                all(type(value) is int and value > 0 for value in witness_origin.values()) and
+                "recovery_witnesses" not in new,
+                "unverifiable recovery witness cannot be published")
+        witness = {"origin": copy.deepcopy(witness_origin), "record": copy.deepcopy(new)}
+        # These candidate bytes came from an authenticated checkpoint. A
+        # witness that cannot fit the signed contract cannot invalidate other
+        # sources or replace existing verified findings. Keep the original(s)
+        # and the explicit incomplete/conflict disclosure and retry below.
+        # Unauthenticated/malformed origins still fail closed above.
+        witnesses = retained.get("recovery_witnesses", [])
+        representable = (witness_fits_max_rebound_id(witness) and
+                         not any(key in new for key in
+                                 ("freshness", "target_revision", "retry", "attempt_history")) and
+                         not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses) and
+                         (witness in witnesses or len(witnesses) < 2))
+        if representable and witness not in witnesses:
+            retained.setdefault("recovery_witnesses", []).append(witness)
+            added_witness = witness
+            retained["recovery_witnesses"].sort(key=lambda value: (value["origin"]["run_id"],
+                value["origin"]["run_attempt"], value["record"]["report_digest"]))
     if chosen is new:
         # Worker evidence is not a scheduled report and has no queue controls.
         # It is already authenticated and validated against this exact selected
@@ -1064,6 +1146,13 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     mark_recovery_uncertainty(retained, attempts[identifier], "recovery_conflict",
         "Independent authenticated executions disagree. This original report is retained; "
         "other authenticated outcomes are not fully represented. Their immutable checkpoint artifacts remain available.")
+    if added_witness is not None and not witness_fits_shard_budget(retained, item["repository"]):
+        # Never let one independently authenticated alternate overflow the
+        # actual signed shard and stop other sources. Drop only the candidate
+        # we just appended, retaining prior witnesses and the disclosure.
+        retained["recovery_witnesses"].remove(added_witness)
+        if not retained["recovery_witnesses"]:
+            del retained["recovery_witnesses"]
     records[identifier] = retained
 
 
@@ -1181,7 +1270,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
             if old_record is not None and outcome["record"]["status"] == "complete" and \
                     degraded_rescan(old_record, outcome["record"]):
-                quarantine_recovery(records, attempts, item, outcome)
+                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
             elif old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
                 records[item["id"]] = copy.deepcopy(outcome["record"])
                 records[item["id"]]["freshness"] = "current"
@@ -1198,7 +1287,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 records[identifier] = copy.deepcopy(outcome["record"])
                 records[identifier]["freshness"] = "current"
             elif outcome["record"]["status"] != "error":
-                quarantine_recovery(records, attempts, item, outcome)
+                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
             mark_missing_predecessor(records[identifier], attempts[identifier])
             diagnostics["missing_predecessor_executions"] += 1
             if len(diagnostics["examples"]) < 32:
@@ -1241,7 +1330,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 require(attempt == make_attempt(item, outcome["record"], old_attempt, old_record,
                     at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                 attempts[item["id"]] = copy.deepcopy(attempt)
-                quarantine_recovery(records, attempts, item, outcome)
+                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
                 if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                     mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                 applied += 1
@@ -1256,7 +1345,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     diagnostics["equivalent_executions"] += 1
                 else:
                     before = copy.deepcopy((old_record, old_attempt))
-                    quarantine_recovery(records, attempts, item, outcome)
+                    quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
                     if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                         mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                     if (records[item["id"]], attempts[item["id"]]) != before:

@@ -1,0 +1,145 @@
+name: SkillSpector original checkpoint recovery E2E
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-original-recovery-e2e.yml"
+      - "scripts/skillspector_coverage_v3.py"
+      - "scripts/skillspector_contract.py"
+      - "scripts/skillspector_recovery.py"
+      - "scripts/skillspector_reports.py"
+      - "scripts/skillspector_coverage.py"
+      - "scripts/directory_publication.py"
+      - "schemas/skillspector-record-v3.schema.json"
+      - "schemas/skillspector-manifest-v3.schema.json"
+      - "schemas/skillspector-shard-v3.schema.json"
+      - "tests/test_skillspector_partial_recovery.py"
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: skillspector-original-recovery-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  original-witness:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Download two exact immutable artifacts from the original authenticated main runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/777genius/universal-agent-plugins-registry/actions/artifacts/13869606431/zip" > "${RUNNER_TEMP}/published.zip"
+          gh api "repos/777genius/universal-agent-plugins-registry/actions/artifacts/13797985159/zip" > "${RUNNER_TEMP}/checkpoint.zip"
+          echo "ccce43343116481776e314b59074ca9a57e68e814581bd3b3c770429d38b74ae  ${RUNNER_TEMP}/published.zip" | sha256sum -c --status
+          echo "c8cbbcb81bb0d84c3fcf33d037e682f1524da799bb544c8ddb1568f9eb175497  ${RUNNER_TEMP}/checkpoint.zip" | sha256sum -c --status
+      - name: Authenticate original worker and perform lossless source-bound recovery
+        timeout-minutes: 23
+        env:
+          ARTIFACT_ROOT: ${{ runner.temp }}
+        run: |
+          python3 - <<'PY'
+          import copy, hashlib, json, os, re, tempfile, zipfile
+          from pathlib import Path
+          from scripts import skillspector_coverage_v3 as coverage
+          from scripts import skillspector_recovery as recovery
+          from scripts import skillspector_reports as scanner
+          root = Path(os.environ["ARTIFACT_ROOT"])
+          with tempfile.TemporaryDirectory(prefix="skillspector-authenticated-recovery-") as temporary:
+              base = Path(temporary)
+              source = base / "previous"
+              source.mkdir()
+              with zipfile.ZipFile(root / "published.zip") as archive:
+                  assert len(archive.namelist()) <= 2500 and archive.testzip() is None
+                  for info in archive.infolist():
+                      assert re.fullmatch(
+                          r"(?:index|selection|attempts|coverage|recovery|publication-base)\.json|shards/[0-9a-f]{64}\.json",
+                          info.filename) and not info.is_dir() and info.file_size <= 64 << 20
+                      dest = source / info.filename
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      dest.write_bytes(archive.read(info))
+              previous = coverage.read_bundle(source)
+              assert previous["manifest"]["source_commit"] == "87f61c1b8b9bb8426d4717f384a4fca177975994"
+              assert previous["manifest"]["coverage"]["error"] == 49
+              selection = previous["selection"]
+              item = next(x for x in selection["sources"] if
+                          x["repository"] == "atlassian/forge-skills" and x["path"] == "skills/forge-app-builder")
+              old = previous["records"][item["id"]]
+              assert old["status"] == "partial" and len(old["findings"]) == 19
+              assert old["report_digest"] == "sha256:43f5899724ed309e9c88d016020b403eb3ae2f8f98feef9dff8eb7c10a796072"
+              with zipfile.ZipFile(root / "checkpoint.zip") as archive:
+                  assert archive.testzip() is None
+                  assert set(archive.namelist()) == {"selection.json", "coverage.json", "worker.json", "provenance.json"}
+                  provenance = json.loads(archive.read("provenance.json"))
+                  documents = {name: archive.read(name) for name in ("selection.json", "coverage.json", "worker.json")}
+                  for name, body in documents.items():
+                      assert provenance["files"][name] == {"bytes": len(body),
+                          "digest": "sha256:" + hashlib.sha256(body).hexdigest()}
+              assert (provenance["run_id"], provenance["run_attempt"], provenance["head_branch"]) == (42854039402, 1, "main")
+              batch = recovery.validate_provenance(provenance, documents)
+              assert batch["execution_origin"] == {"run_id": 42854039402, "run_attempt": 1}
+              assert not batch["unsupported_policy"]
+              # Validate the entire original worker before isolating the one
+              # published incident. Never alter or publish an original ZIP.
+              outcomes = [a for a in batch["workers"][0]["attempts"] if a["attempt"]["id"] == item["id"]]
+              assert len(outcomes) == 1
+              original = copy.deepcopy(outcomes[0]["record"])
+              assert original["status"] == "complete" and len(original["findings"]) == 19
+              assert original["report_digest"] == "sha256:922af6952e717825096add9c864f26e137fbddf09161be1a7dadffa2ae89aa29"
+              assert original["source"] == old["source"]
+              batch["workers"][0]["attempts"] = outcomes
+              discovery = scanner.read_report_json(source / "coverage.json", max_bytes=coverage.MAX_DISCOVERY_BYTES)
+              def recover(prior, path):
+                  coverage.recover_previous(selection, prior, [batch],
+                      source_commit=previous["manifest"]["source_commit"],
+                      discovery_summary=discovery, output_dir=path)
+                  return coverage.read_bundle(path)
+              first = recover(previous, base / "first")
+              kept = first["records"][item["id"]]
+              assert kept["status"] == "partial" and kept["findings_truncated"]
+              assert kept["report_digest"] == old["report_digest"] and kept["findings"] == old["findings"]
+              assert {"recovery_conflict", "normalization_truncated"} <= {
+                  reason["code"] for reason in kept["coverage"]["reasons"]}
+              assert len(kept.get("recovery_witnesses", [])) == 1
+              witness = kept["recovery_witnesses"][0]
+              assert witness["origin"] == {"run_id": 42854039402, "run_attempt": 1}
+              assert witness["record"] == original
+              # Retry scheduling *must* change to recovery_conflict, while the
+              # authenticated execution history, count and source remain exact.
+              prior_attempt = previous["attempts"][item["id"]]
+              reconciled_attempt = first["attempts"][item["id"]]
+              for key in ("history", "attempt_count", "fingerprint", "scanner", "source_digest", "profile"):
+                  assert reconciled_attempt[key] == prior_attempt[key], key
+              assert reconciled_attempt["reason"] in {
+                  "recovery_conflict", "recovery_conflict_attempt_limit"}
+              assert reconciled_attempt["disposition"] in {"scheduled", "exhausted"}
+              assert reconciled_attempt["attempt_count"] > 0
+              second = recover(first, base / "replay")
+              assert second["records"][item["id"]] == kept
+              assert second["attempts"][item["id"]] == first["attempts"][item["id"]]
+              union = coverage.finding_identities(old) | coverage.finding_identities(original)
+              assert sum(union.values()) == 20
+              receipt = {"schema_version": 1, "status": "passed", "source_digest": coverage.source_digest(item),
+                  "primary_report_digest": old["report_digest"],
+                  "witness_report_digest": original["report_digest"],
+                  "original_run": provenance["run_id"], "union_findings": sum(union.values()),
+                  "replay_idempotent": True, "original_reports_unchanged": True}
+              (root / "original-recovery-proof.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
+              print(json.dumps(receipt, sort_keys=True))
+          PY
+      - name: Preserve bounded acceptance receipt only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: skillspector-original-recovery-proof
+          path: ${{ runner.temp }}/original-recovery-proof.json
+          if-no-files-found: warn
+          retention-days: 7
