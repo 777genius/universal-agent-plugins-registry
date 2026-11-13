@@ -16,6 +16,7 @@ from pi_catalog_inventory_e2e import active_sources, native_files
 from pi_direct_source_e2e import (
     expected_package_native_names, require_removed_native_payload,
     require_expected_mcp_definitions, require_unchanged_native_scope,
+    verified_private_pi_binding,
 )
 from pi_catalog_materialization_e2e import (
     KIND, MANAGED_ROOT, MANAGED_NO_SAVE_DIAGNOSTIC, PLATFORMS, SCOPES, SHARDS,
@@ -143,6 +144,88 @@ class PiRealMaterializationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "manifest differs"):
                 expected_package_native_names(
                     native_root, receipt, "other-package", "mixed")
+
+    def test_public_pi_list_requires_exact_persisted_private_binding(self) -> None:
+        # The released 0.1.102 list API intentionally omits private locators.
+        # Only its matching local state receipt may authorize native inspection.
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "state"
+            state_root.mkdir()
+            path = state_root / "state-v2.json"
+            revision = "a" * 40
+            digest = "sha256:" + "b" * 64
+            tree = "sha256:" + "c" * 64
+            package = Path(directory) / "profile" / "extensions" / "bound"
+            private_binding = {
+                "client_binding_id": "owned-pi", "client_id": "pi", "scope": "user",
+                "native_profile_root": str(package.parent.parent),
+                "physical_artifact_id": "bound", "target_locator": str(package),
+                "materialization": "materialized",
+                "verification": "installation_verified",
+                "package_revision": {
+                    "resolved_revision": revision, "tree_digest": tree,
+                    "manifest_digest": digest,
+                },
+            }
+            public = {
+                "installation_id": "owned-installation", "name": "bound-plugin",
+                "clients": [{
+                    "client_id": "pi", "scope": "user",
+                    "materialization": "materialized",
+                    "verification": "installation_verified",
+                    "package_revision": {
+                        "resolved_revision": revision, "tree_digest": tree,
+                        "manifest_digest": digest,
+                    },
+                }],
+            }
+            state = {"schema_version": 5, "installations": [{
+                "installation_id": "owned-installation",
+                "declared_name": "bound-plugin",
+                "source": {
+                    "repository": "owner/repo",
+                    "package_subpath": "plugins/bound", "resolved_revision": revision,
+                },
+                "package": {"manifest_digest": digest},
+                "clients": {"owned-pi": private_binding},
+            }]}
+            def write() -> None:
+                path.write_text(json.dumps(state), encoding="utf-8")
+            def check(view: dict = public, scope: str = "user") -> dict:
+                return verified_private_pi_binding(
+                    path, view, "bound-plugin", revision,
+                    "owner/repo", "plugins/bound", scope)
+            write()
+            self.assertNotIn("target_locator", public["clients"][0])
+            self.assertEqual(check(), private_binding)
+            wrong_public = copy.deepcopy(public)
+            wrong_public["clients"][0]["package_revision"]["manifest_digest"] = (
+                "sha256:" + "0" * 64)
+            with self.assertRaisesRegex(RuntimeError, "ownership"):
+                check(wrong_public)
+            with self.assertRaisesRegex(RuntimeError, "public Pi receipt"):
+                check(scope="project")
+            state["installations"][0]["source"]["package_subpath"] = "plugins/other"
+            write()
+            with self.assertRaisesRegex(RuntimeError, "private Pi source"):
+                check()
+            state["installations"][0]["source"]["package_subpath"] = "plugins/bound"
+            state["installations"][0]["clients"]["second"] = {
+                **private_binding, "client_binding_id": "second"}
+            write()
+            with self.assertRaisesRegex(RuntimeError, "unique selected scope"):
+                check()
+            state["installations"][0]["clients"].pop("second")
+            state["schema_version"] = True
+            write()
+            with self.assertRaisesRegex(RuntimeError, "schema"):
+                check()
+            state["schema_version"] = 5
+            write()
+            path.unlink()
+            path.symlink_to(state_root / "missing")
+            with self.assertRaisesRegex(RuntimeError, "absent or redirected"):
+                check()
 
     def test_copied_manifest_cannot_authorize_foreign_mcp_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
