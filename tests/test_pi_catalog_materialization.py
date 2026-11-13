@@ -964,6 +964,22 @@ class PiRealMaterializationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "future attempt"):
                 build_upstream_review_pack(paths, self.sources, HEAD,
                                            (RUN_ID, RUN_ATTEMPT))
+            # The aggregator must not ignore a future-attempt report merely
+            # because its shard has no github/github or upstash/context7 case.
+            altered["github_run_attempt"] = RUN_ATTEMPT
+            upstream_path.write_text(json.dumps(altered), encoding="utf-8")
+            non_upstream_path = next(path for path in paths
+                                     if all(case["distribution"] not in UPSTREAM_REVIEW_IDS
+                                            for case in json.loads(
+                                                path.read_text(encoding="utf-8"))["results"]))
+            non_upstream = json.loads(non_upstream_path.read_text(encoding="utf-8"))
+            non_upstream["github_run_attempt"] = RUN_ATTEMPT + 1
+            non_upstream_path.write_text(json.dumps(non_upstream), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "future attempt"):
+                build_upstream_review_pack(paths, self.sources, HEAD,
+                                           (RUN_ID, RUN_ATTEMPT))
+            non_upstream["github_run_attempt"] = RUN_ATTEMPT
+            non_upstream_path.write_text(json.dumps(non_upstream), encoding="utf-8")
             # Failed-jobs-only retries keep successful artifacts from earlier
             # attempts in the same run. Preserve their exact per-shard lineage.
             altered["github_run_attempt"] = RUN_ATTEMPT - 1

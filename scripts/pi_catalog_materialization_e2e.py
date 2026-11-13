@@ -261,7 +261,8 @@ def verify_report(report: dict, sources: list[dict], head: str,
     return passed
 
 
-def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
+def verify_all(paths: list[Path], sources: list[dict], head: str,
+               expected_run: tuple[int, int] | None = None) -> list[dict]:
     require(len(paths) == len(PLATFORMS) * SHARDS,
             "required one original report for every OS and shard")
     remaining = {(platform, shard) for platform in PLATFORMS
@@ -287,6 +288,13 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
         require(original_run_id is None or original_run_id == run_id,
                 "original native reports come from different workflow runs")
         original_run_id = run_id
+        # Validate EVERY original shard against the trusted aggregator attempt,
+        # including shards without an upstream review case. Earlier attempts
+        # from failed-jobs-only reruns remain valid within this same run.
+        if expected_run is not None:
+            require(run_id == expected_run[0]
+                    and report["github_run_attempt"] <= expected_run[1],
+                    "native receipts do not belong to this run or use a future attempt")
         # Only export validated public immutable identities. Never serialize
         # executable commands, credentials, installation IDs or native paths.
         for case in report["results"]:
@@ -338,7 +346,7 @@ def build_upstream_review_pack(paths: list[Path], sources: list[dict],
     require(type(expected_run) is tuple and len(expected_run) == 2
             and all(type(value) is int and value > 0 for value in expected_run),
             "invalid trusted workflow provenance")
-    cases = verify_all(paths, sources, head)
+    cases = verify_all(paths, sources, head, expected_run=expected_run)
     require(all(case["original_run_id"] == expected_run[0]
                 and 0 < case["original_run_attempt"] <= expected_run[1]
                 for case in cases),
@@ -446,7 +454,8 @@ def main() -> int:
                 json.dump(pack, output, indent=2)
                 output.write("\n")
         else:
-            verify_all(args.verify_report, sources, args.source_head)
+            verify_all(args.verify_report, sources, args.source_head,
+                       expected_run=github_run_identity())
         return 0
     require(args.upstream_review_output is None,
             "upstream review output requires nine independently verified reports")
