@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from pi_catalog_inventory_e2e import active_sources, native_files
 from pi_direct_source_e2e import (
-    expected_package_native_names, pinned_source_bytes,
+    expected_package_native_names, pinned_source_bytes, run_case,
     require_pinned_native_snapshot, require_removed_native_payload,
     require_expected_mcp_definitions, require_unchanged_native_scope,
     verified_private_pi_binding,
@@ -315,6 +315,109 @@ class PiRealMaterializationContracts(unittest.TestCase):
                     source_read=source_read)
 
 
+
+    def test_run_case_refuses_mutated_bound_launcher_after_repair(self) -> None:
+        # Offline lifecycle simulation: invoke the actual run_case checkpoints
+        # and mutate only the owned package during the repair operation.
+        revision = "a" * 40
+        manifest = b'{"name":"fixture","version":"1.0.0"}'
+        source_mcp = json.dumps({"mcpServers": {"local": {
+            "command": "node",
+            "args": ["${PLUGIN_ROOT}/runtime/launcher.mjs"],
+        }}}).encode("utf-8")
+        trusted = {
+            "plugin.json": manifest,
+            "mcp.json": source_mcp,
+            "runtime/launcher.mjs": b"trusted launcher",
+        }
+        digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
+        tree_digest = "sha256:" + "c" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            case_root = scratch / "offline-user"
+            native_root = case_root / "home" / ".pi" / "agent"
+            package = native_root / "extensions" / "bound"
+            launcher = package / "runtime" / "launcher.mjs"
+            state_file = case_root / "state" / "state-v2.json"
+            binding = {
+                "client_binding_id": "bound-pi", "client_id": "pi", "scope": "user",
+                "native_profile_root": str(native_root),
+                "target_locator": str(package),
+                "physical_artifact_id": "bound",
+                "materialization": "materialized",
+                "verification": "installation_verified",
+                "package_revision": {
+                    "resolved_revision": revision, "tree_digest": tree_digest,
+                    "manifest_digest": digest,
+                },
+            }
+            public = {
+                "installation_id": "offline-install", "name": "fixture",
+                "clients": [{
+                    "client_id": "pi", "scope": "user",
+                    "materialization": "materialized",
+                    "verification": "installation_verified",
+                    "package_revision": binding["package_revision"].copy(),
+                }],
+            }
+            state = {
+                "schema_version": 5,
+                "installations": [{
+                    "installation_id": "offline-install", "declared_name": "fixture",
+                    "source": {
+                        "repository": "example/fixture",
+                        "package_subpath": "plugins/example",
+                        "resolved_revision": revision,
+                    },
+                    "package": {"manifest_digest": digest},
+                    "clients": {"bound-pi": binding},
+                }],
+            }
+
+            def fake_command(argv, cwd, env, *, timeout=180):
+                verb = argv[1]
+                result = {"argv": [Path(argv[0]).name, *argv[1:]],
+                          "exit": 0, "data": {}}
+                if verb == "add" and not package.exists():
+                    launcher.parent.mkdir(parents=True)
+                    (package / "plugin.json").write_bytes(manifest)
+                    (package / "mcp.json").write_bytes(source_mcp)
+                    launcher.write_bytes(trusted["runtime/launcher.mjs"])
+                    foreign = {"command": "node", "args": ["--version"]}
+                    (native_root / "mcp.json").write_text(json.dumps({
+                        "mcpServers": {
+                            "foreign-neighbor": foreign,
+                            "local": {"command": "node", "args": [str(launcher)]},
+                        },
+                    }), encoding="utf-8")
+                    state_file.write_text(json.dumps(state), encoding="utf-8")
+                if verb == "list":
+                    result["data"] = {"installations": [public]}
+                if verb == "update":
+                    result["exit"] = 1
+                    result["error_tail"] = (
+                        "direct full-SHA installations require explicit switch")
+                if verb == "repair":
+                    launcher.write_bytes(b"tampered during repair")
+                return result
+
+            with (patch("pi_direct_source_e2e.command",
+                        side_effect=fake_command),
+                  patch("pi_direct_source_e2e.clone_verified_cli_cache",
+                        side_effect=lambda seed, destination: destination.mkdir()),
+                  patch("pi_direct_source_e2e.pinned_source_bytes",
+                        side_effect=lambda repo, sha, subpath, relative: trusted[relative])):
+                result = run_case(
+                    "agentplugins", revision, scratch,
+                    ("offline", "fixture", "plugins/example", revision,
+                     "mcp", "example/fixture"),
+                    "user", scratch / "seed")
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("immutable pinned source", result.get("error", ""))
+            self.assertTrue(any(op["argv"][1] == "repair"
+                                for op in result["operations"]))
+
     def test_pinned_source_reader_uses_exact_git_sha_and_refuses_redirect(self) -> None:
         # Offline transport contract: no live source fetch or credentials.
         revision = "a" * 40
@@ -342,6 +445,18 @@ class PiRealMaterializationContracts(unittest.TestCase):
                     raise AssertionError("bounded read required")
                 return b"immutable-mcp"
 
+        pinned_source_bytes.cache_clear()
+        with patch("pi_direct_source_e2e.subprocess.run") as git:
+            git.return_value.returncode = 0
+            git.return_value.stdout = b"pinned Git object"
+            self.assertEqual(
+                pinned_source_bytes(
+                    "777genius/universal-agent-plugins-registry",
+                    revision, "plugins/example", "mcp.json"),
+                b"pinned Git object")
+            self.assertEqual(
+                git.call_args.args[0],
+                ["git", "show", f"{revision}:plugins/example/mcp.json"])
         pinned_source_bytes.cache_clear()
         with patch("pi_direct_source_e2e.urlopen", return_value=Response(url)) as fetch:
             self.assertEqual(
