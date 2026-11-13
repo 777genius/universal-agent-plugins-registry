@@ -101,7 +101,8 @@ def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
 
 
 
-def real_pinned_lifecycle(operations: object, item: dict, scope: str) -> bool:
+def real_pinned_lifecycle(operations: object, identity: object, item: dict,
+                          scope: str) -> bool:
     """Require the complete ordered native journey in each positive E2E receipt."""
     if not isinstance(operations, list) or len(operations) != 10:
         return False
@@ -120,8 +121,23 @@ def real_pinned_lifecycle(operations: object, item: dict, scope: str) -> bool:
         flags.extend(commands[0][10:])
     elif scope != "user":
         return False
-    install_id = commands[4][2] if len(commands[4]) >= 3 else ""
-    if not install_id or install_id.startswith("-"):
+    # This identity comes from the real public list and was cross-checked
+    # against the persisted scoped Pi binding before the runner emitted it.
+    # Do not allow all four maintenance verbs to select the same foreign ID.
+    fields = {"installation_id", "name", "source", "client_id", "scope",
+              "resolved_revision", "tree_digest", "manifest_digest"}
+    if not isinstance(identity, dict) or set(identity) != fields:
+        return False
+    install_id = identity["installation_id"]
+    if (not isinstance(install_id, str) or not 0 < len(install_id) <= 256
+            or install_id.startswith("-")
+            or identity["name"] != item["manifest_name"]
+            or identity["source"] != item["source"]
+            or identity["client_id"] != "pi" or identity["scope"] != scope
+            or identity["resolved_revision"] != item["revision"]
+            or identity["tree_digest"] != item["tree_digest"]
+            or not isinstance(identity["manifest_digest"], str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", identity["manifest_digest"]) is None):
         return False
     expected = [
         [binary, "add", item["source"], "--no-save", *flags],
@@ -207,6 +223,7 @@ def verify_report(report: dict, sources: list[dict], head: str,
                     f"{platform}/{shard}: Marketing Kit was misreported as native evidence")
             require_managed_refusal({**case, "status": "failed"}, item, key[2])
             require(case.get("verification") is None
+                    and case.get("verified_public_installation") is None
                     and case.get("runtime_claims") is None,
                     f"{platform}/{shard}: a denied install gained positive native evidence")
             continue
@@ -214,7 +231,9 @@ def verify_report(report: dict, sources: list[dict], head: str,
                 and case.get("verification") == "native-files-and-receipt-only"
                 and case.get("runtime_claims") is False
                 and case.get("account_oauth_qualified") is False
-                and real_pinned_lifecycle(case.get("operations"), item, key[2]),
+                and real_pinned_lifecycle(
+                    case.get("operations"), case.get("verified_public_installation"),
+                    item, key[2]),
                 f"{platform}/{shard}: real native Pi lifecycle incomplete: {key}")
         passed += 1
     require(len(seen) == len(expected),
