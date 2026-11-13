@@ -30,7 +30,8 @@ def source_case(name: str, status: str = "active") -> dict:
     return {
         "distribution": name, "distribution_status": status, "release_sequence": 1,
         "source": f"github:owner/repo@{HEAD}//plugins/tool",
-        "revision": HEAD, "tree_digest": DIGEST, "manifest_name": "tool",
+        "revision": HEAD, "tree_digest": DIGEST,
+        "manifest_digest": "sha256:" + "c" * 64, "manifest_name": "tool",
         "components": ["mcp"],
     }
 
@@ -412,6 +413,19 @@ class ModernPiEvidenceTests(unittest.TestCase):
             path.write_text("[]", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "expected a JSON object"):
                 read_evidence_object(path)
+
+    def test_source_plan_receipt_must_match_reviewed_manifest_digest(self) -> None:
+        # A different well-formed SHA-256 cannot masquerade as the immutable
+        # source release's manifest. Planning is not signed install authority.
+        self.assertEqual(validate_platform_report(self.report, "linux", HEAD, self.sources),
+                         (2, 2))
+        tampered = copy.deepcopy(self.report)
+        tampered["results"][0]["manifest_digest"] = "sha256:" + "d" * 64
+        with self.assertRaisesRegex(RuntimeError, "mismatched immutable source evidence"):
+            validate_platform_report(tampered, "linux", HEAD, self.sources)
+        tampered["results"][0].pop("manifest_digest")
+        with self.assertRaisesRegex(RuntimeError, "mismatched immutable source evidence"):
+            validate_platform_report(tampered, "linux", HEAD, self.sources)
 
     def test_known_marketing_refusal_remains_explicit_failure(self) -> None:
         self.assertEqual(validate_platform_report(self.report, "linux", HEAD, self.sources),

@@ -245,7 +245,7 @@ def run_case(cli: str, item: dict, number: int, scratch: Path, scope: str, binar
     state_baseline = native_files(root / "state")
     result = {key: item[key] for key in (
         "distribution", "distribution_status", "release_sequence", "components",
-        "manifest_name", "revision", "tree_digest", "source"
+        "manifest_name", "revision", "tree_digest", "manifest_digest", "source"
     )}
     result["scope"] = scope
     result["status"] = "unverified"

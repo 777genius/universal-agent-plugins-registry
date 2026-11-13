@@ -80,8 +80,8 @@ def validate_platform_report(report: dict, platform: str, head: str,
         seen.add(key)
         source = expected[key]
         require(all(case.get(field) == source[field] for field in
-                    ("source", "revision", "tree_digest", "manifest_name",
-                     "distribution_status", "components")),
+                    ("source", "revision", "tree_digest", "manifest_digest",
+                     "manifest_name", "distribution_status", "components")),
                 f"{platform}: mismatched immutable source evidence")
         status = case.get("status")
         if source["distribution_status"] != "active":
