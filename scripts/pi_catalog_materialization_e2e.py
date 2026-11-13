@@ -62,36 +62,11 @@ def source_identity(item: dict) -> dict:
     )}
 
 
-def require_managed_refusal(result: dict) -> None:
-    """Require the actual public CLI denial, never a synthetic negative PASS."""
-    operations = result.get("operations")
-    require(result.get("status") == "failed"
-            and isinstance(result.get("error"), str)
-            and MANAGED_NO_SAVE_DIAGNOSTIC in result["error"]
-            and isinstance(operations, list) and len(operations) == 1
-            and isinstance(operations[0], dict)
-            and isinstance(operations[0].get("argv"), list)
-            and len(operations[0]["argv"]) >= 2
-            and operations[0]["argv"][1] == "add"
-            and type(operations[0].get("exit")) is int
-            and operations[0]["exit"] != 0
-            and isinstance(operations[0].get("error_tail"), str)
-            and MANAGED_NO_SAVE_DIAGNOSTIC in operations[0]["error_tail"],
-            "Marketing Kit direct-source denial was not the expected managed-dependency gate")
-
-
-def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
-    """Accept only the actual pinned no-save native add command, never dry-run.
-
-    This checks command provenance, not an entitlement for managed saved installs.
-    Project root is runner-disposable and therefore variable between cases.
-    """
-    if not isinstance(op, dict) or type(op.get("exit")) is not int or op["exit"] != 0:
-        return False
-    argv = op.get("argv")
+def pinned_add_argv(argv: object, item: dict, scope: str) -> bool:
+    """Validate the exact immutable --no-save Pi request even when it is denied."""
     if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
         return False
-    if len(argv) < 10 or argv[1:3] != ["add", item["source"]]:
+    if len(argv) < 10 or not argv[0] or argv[1:3] != ["add", item["source"]]:
         return False
     expected = ["--no-save", "--target", "pi", "--scope", scope, "--format", "json"]
     if argv[3:10] != expected:
@@ -101,6 +76,28 @@ def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
     return (scope == "project" and len(argv) == 12
             and argv[10] == "--project-root" and bool(argv[11])
             and not argv[11].startswith("-"))
+
+
+def require_managed_refusal(result: dict, item: dict, scope: str) -> None:
+    """Count only a real refusal of this pinned Pi --no-save request."""
+    operations = result.get("operations")
+    require(result.get("status") == "failed"
+            and isinstance(result.get("error"), str)
+            and MANAGED_NO_SAVE_DIAGNOSTIC in result["error"]
+            and isinstance(operations, list) and len(operations) == 1
+            and isinstance(operations[0], dict)
+            and pinned_add_argv(operations[0].get("argv"), item, scope)
+            and type(operations[0].get("exit")) is int
+            and operations[0]["exit"] != 0
+            and isinstance(operations[0].get("error_tail"), str)
+            and MANAGED_NO_SAVE_DIAGNOSTIC in operations[0]["error_tail"],
+            "Marketing Kit direct-source denial was not the expected managed-dependency gate")
+
+
+def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
+    """Require the pinned Pi --no-save request and its successful exit code."""
+    return (isinstance(op, dict) and type(op.get("exit")) is int
+            and op["exit"] == 0 and pinned_add_argv(op.get("argv"), item, scope))
 
 
 def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple[int, dict]]:
@@ -157,7 +154,7 @@ def verify_report(report: dict, sources: list[dict], head: str,
         if item["distribution"] == MANAGED_ROOT:
             require(case.get("status") == "requires_managed_saved_install",
                     f"{platform}/{shard}: Marketing Kit was misreported as native evidence")
-            require_managed_refusal({**case, "status": "failed"})
+            require_managed_refusal({**case, "status": "failed"}, item, key[2])
             require(case.get("verification") is None
                     and case.get("runtime_claims") is None,
                     f"{platform}/{shard}: a denied install gained positive native evidence")
@@ -261,7 +258,7 @@ def run_shard(args: argparse.Namespace, sources: list[dict]) -> int:
                             and outcome.get("source") == item["source"],
                             "Pi lifecycle executed a different source or scope")
                     if item["distribution"] == MANAGED_ROOT:
-                        require_managed_refusal(outcome)
+                        require_managed_refusal(outcome, item, scope)
                         # This is a verified refusal, NOT a positive install.
                         outcome["status"] = "requires_managed_saved_install"
                     result = {**identity, **outcome}

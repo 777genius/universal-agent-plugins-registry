@@ -42,7 +42,7 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
                 record.update({
                     "status": "requires_managed_saved_install",
                     "error": f"catalog-case/{scope}: add failed: {diagnostic}",
-                    "operations": [{"argv": ["agentplugins", "add"],
+                    "operations": [{"argv": add_command.copy(),
                                     "exit": 1, "error_tail": diagnostic}],
                 })
             elif item["distribution_status"] == "active":
@@ -666,7 +666,9 @@ class PiRealMaterializationContracts(unittest.TestCase):
                       if case["distribution"] == MANAGED_ROOT)
         self.assertEqual(denied["status"], "requires_managed_saved_install")
         self.assertEqual(denied["operations"][0]["exit"], 1)
-        for changed in ("false_pass", "arbitrary_refusal", "zero_exit", "extra_operation"):
+        for changed in ("false_pass", "arbitrary_refusal", "zero_exit",
+                        "extra_operation", "wrong_source", "wrong_scope",
+                        "wrong_target", "no_save_removed", "dry_run"):
             variant = copy.deepcopy(baseline)
             candidate = next(case for case in variant["results"]
                              if case["distribution"] == MANAGED_ROOT
@@ -677,6 +679,17 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 candidate["error"] = "unrelated refusal"
             elif changed == "zero_exit":
                 candidate["operations"][0]["exit"] = 0
+            elif changed == "wrong_source":
+                candidate["operations"][0]["argv"][2] = "github:other/other@" + HEAD + "//wrong"
+            elif changed == "wrong_scope":
+                candidate["operations"][0]["argv"][7] = (
+                    "project" if candidate["scope"] == "user" else "user")
+            elif changed == "wrong_target":
+                candidate["operations"][0]["argv"][5] = "codex"
+            elif changed == "no_save_removed":
+                candidate["operations"][0]["argv"].remove("--no-save")
+            elif changed == "dry_run":
+                candidate["operations"][0]["argv"].append("--dry-run")
             else:
                 candidate["operations"].append({"argv": ["agentplugins", "remove"],
                                                 "exit": 0})
