@@ -433,7 +433,10 @@ class PiRealMaterializationContracts(unittest.TestCase):
             source_bytes = json.dumps(authored, indent=2).encode()
             projected = {"$schema": schema, "mcpServers": {"owned": {
                 "type": "stdio", "command": "node",
-                "args": [str(package / "runtime" / "launcher.mjs")],
+                # Go ApplyStdioDataContract performs literal token replacement
+                # in args. On Windows the authored forward slash remains after
+                # the native PLUGIN_ROOT; it is not filepath-normalized.
+                "args": [str(package) + "/runtime/launcher.mjs"],
                 "env": {"PLUGIN_ROOT": str(package), "PLUGIN_DATA": str(data)},
                 "cwd": str(package),
             }}}
