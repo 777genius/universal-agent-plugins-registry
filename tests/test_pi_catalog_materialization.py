@@ -127,17 +127,18 @@ class PiRealMaterializationContracts(unittest.TestCase):
             foreign = skills / "foreign-neighbor" / "SKILL.md"
             owned.parent.mkdir(parents=True)
             foreign.parent.mkdir(parents=True)
-            trusted = b"pinned skill bytes\\n"
-            owned.write_bytes(trusted)
+            # Synthetic, non-secret fixture bytes in a disposable test directory.
+            skill_fixture_bytes = b"pinned skill bytes\\n"
+            owned.write_bytes(skill_fixture_bytes)
             foreign.write_text("unowned bytes", encoding="utf-8")
-            source_read = {"skills/owned/SKILL.md": trusted}.__getitem__
+            source_read = {"skills/owned/SKILL.md": skill_fixture_bytes}.__getitem__
             require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
             foreign.write_text("foreign changed", encoding="utf-8")
             require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
             owned.write_bytes(b"modified after repair")
             with self.assertRaisesRegex(RuntimeError, "native Pi Skill differs"):
                 require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
-            owned.write_bytes(trusted)
+            owned.write_bytes(skill_fixture_bytes)
             owned.unlink()
             with self.assertRaisesRegex(RuntimeError, "native Pi Skill differs"):
                 require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
