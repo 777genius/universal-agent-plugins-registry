@@ -31,6 +31,7 @@ KIND = "pi-pinned-source-native-materialization"
 # This root has mandatory signed saved dependencies. The immutable public CLI
 # must refuse a direct --no-save install; it needs a distinct managed signed E2E.
 MANAGED_ROOT = "777genius/marketing-kit"
+UPSTREAM_REVIEW_IDS = frozenset({"github/github", "upstash/context7"})
 MANAGED_NO_SAVE_DIAGNOSTIC = (
     "package marketing-kit declares UAP requirements; use a managed saved "
     "add/install workflow instead of --no-save or local/manual installation"
@@ -242,12 +243,13 @@ def verify_report(report: dict, sources: list[dict], head: str,
     return passed
 
 
-def verify_all(paths: list[Path], sources: list[dict], head: str) -> None:
+def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
     require(len(paths) == len(PLATFORMS) * SHARDS,
             "required one original report for every OS and shard")
     remaining = {(platform, shard) for platform in PLATFORMS
                  for shard in range(SHARDS)}
     counts = {platform: 0 for platform in PLATFORMS}
+    upstream_cases: list[dict] = []
     for path in paths:
         report = read_json(path)
         require(isinstance(report, dict), "materialization artifact must be JSON object")
@@ -259,6 +261,26 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> None:
                 "duplicate or unrecognized original OS/shard materialization artifact")
         counts[platform] += verify_report(
             report, sources, head, platform, shard, SHARDS)
+        # Only export validated public immutable identities. Never serialize
+        # executable commands, credentials, installation IDs or native paths.
+        for case in report["results"]:
+            if case["distribution"] not in UPSTREAM_REVIEW_IDS:
+                continue
+            require(case["status"] == "passed"
+                    and case["verification"] == "native-files-and-receipt-only",
+                    "upstream source has no positive native Pi materialization")
+            upstream_cases.append({
+                "distribution": case["distribution"],
+                "release_sequence": case["release_sequence"],
+                "runner_os": report["runner_os"],
+                "scope": case["scope"],
+                "source": case["source"],
+                "revision": case["revision"],
+                "tree_digest": case["tree_digest"],
+                "manifest_digest": case["manifest_digest"],
+                "original_artifact": f"pi-materialization-{platform}-{shard}",
+                "result": "direct-source-no-save-native-lifecycle",
+            })
         remaining.remove((platform, shard))
     require(not remaining, "OS/shard materialization evidence missing")
     expected = sum(
@@ -274,6 +296,34 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> None:
           "Marketing Kit user/project explicitly refused by managed-dependency gate "
           "(NOT materialized; requires separate signed saved E2E); "
           "72/72 signed eligibility and account authentication NOT tested")
+    return upstream_cases
+
+
+def build_upstream_review_pack(paths: list[Path], sources: list[dict], head: str) -> dict:
+    """Aggregate upstream Pi native receipts for review, NOT signing authority."""
+    reviewed = {item["distribution"] for item in sources
+                if item["distribution"] in UPSTREAM_REVIEW_IDS
+                and item["distribution_status"] == "active"}
+    require(reviewed == UPSTREAM_REVIEW_IDS,
+            "upstream review requires both active immutable source releases")
+    cases = verify_all(paths, sources, head)
+    expected = {(runner, distribution, scope)
+                for runner in PLATFORMS.values()
+                for distribution in UPSTREAM_REVIEW_IDS
+                for scope in SCOPES}
+    observed = {(case["runner_os"], case["distribution"], case["scope"])
+                for case in cases}
+    require(len(cases) == len(expected) and observed == expected,
+            "incomplete or repeated upstream native Pi review receipts")
+    return {
+        "schema_version": 1, "kind": "pi-upstream-native-review-only",
+        "source_head": head, "published_cli": "0.1.102", "native_pi": "1.5.0",
+        "unsigned": True, "production_published": False,
+        "signed_managed_eligibility": False,
+        "managed_saved_installation": False, "oauth_or_tool_call_qualified": False,
+        "cases": sorted(cases, key=lambda case: (
+            case["runner_os"], case["distribution"], case["scope"])),
+    }
 
 
 def run_shard(args: argparse.Namespace, sources: list[dict]) -> int:
@@ -340,6 +390,7 @@ def main() -> int:
     parser.add_argument("--shard", type=int)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--verify-report", type=Path, action="append")
+    parser.add_argument("--upstream-review-output", type=Path)
     parser.add_argument("--cli", default="agentplugins")
     args = parser.parse_args()
     require(SHA.fullmatch(args.source_head) is not None, "source HEAD must be full SHA")
@@ -348,8 +399,17 @@ def main() -> int:
     if args.verify_report:
         require(args.shard is None and args.platform is None and args.report is None,
                 "verification cannot execute native packages")
-        verify_all(args.verify_report, sources, args.source_head)
+        if args.upstream_review_output is not None:
+            pack = build_upstream_review_pack(
+                args.verify_report, sources, args.source_head)
+            with args.upstream_review_output.open("x", encoding="utf-8") as output:
+                json.dump(pack, output, indent=2)
+                output.write("\n")
+        else:
+            verify_all(args.verify_report, sources, args.source_head)
         return 0
+    require(args.upstream_review_output is None,
+            "upstream review output requires nine independently verified reports")
     require(args.platform is not None and args.shard is not None
             and args.report is not None, "materialization requires OS/shard/report")
     return run_shard(args, sources)

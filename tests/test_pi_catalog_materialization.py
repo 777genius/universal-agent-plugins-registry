@@ -25,6 +25,7 @@ from pi_direct_source_e2e import (
 from pi_catalog_materialization_e2e import (
     KIND, MANAGED_ROOT, MANAGED_NO_SAVE_DIAGNOSTIC, PLATFORMS, SCOPES, SHARDS,
     case_tuple, selected_sources, source_identity, verify_report, verify_all,
+    build_upstream_review_pack, UPSTREAM_REVIEW_IDS,
 )
 
 HEAD = "a" * 40
@@ -900,6 +901,43 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 verify_report(baseline, self.sources, HEAD, "ubuntu-24.04", shard, SHARDS)
             return
         self.fail("fixture must include the suspended distribution")
+
+    def test_upstream_native_review_only_after_3os_immutable_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for platform in PLATFORMS:
+                for shard in range(SHARDS):
+                    path = Path(directory) / f"{platform}-{shard}.json"
+                    path.write_text(json.dumps(fixture(self.sources, platform, shard)),
+                                    encoding="utf-8")
+                    paths.append(path)
+            pack = build_upstream_review_pack(paths, self.sources, HEAD)
+            self.assertEqual(pack["kind"], "pi-upstream-native-review-only")
+            self.assertTrue(pack["unsigned"])
+            for key in ("production_published", "signed_managed_eligibility",
+                        "managed_saved_installation", "oauth_or_tool_call_qualified"):
+                self.assertFalse(pack[key])
+            self.assertEqual(len(pack["cases"]), 12)
+            self.assertEqual({case["distribution"] for case in pack["cases"]},
+                             UPSTREAM_REVIEW_IDS)
+            self.assertEqual({case["runner_os"] for case in pack["cases"]},
+                             set(PLATFORMS.values()))
+            self.assertTrue(all(case["result"] == "direct-source-no-save-native-lifecycle"
+                                and "installation_id" not in case and "operations" not in case
+                                for case in pack["cases"]))
+            for path in paths:
+                report = json.loads(path.read_text(encoding="utf-8"))
+                upstream = next((case for case in report["results"]
+                                 if case["distribution"] in UPSTREAM_REVIEW_IDS), None)
+                if upstream:
+                    upstream["verified_public_installation"]["tree_digest"] = (
+                        "sha256:" + "0" * 64)
+                    path.write_text(json.dumps(report), encoding="utf-8")
+                    break
+            else:
+                self.fail("missing upstream fixture")
+            with self.assertRaisesRegex(RuntimeError, "real native Pi lifecycle incomplete"):
+                build_upstream_review_pack(paths, self.sources, HEAD)
 
     def test_aggregate_requires_nine_original_artifacts(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "one original report"):
