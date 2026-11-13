@@ -555,6 +555,17 @@ class PiRealMaterializationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "left the immutable GitHub origin"):
                 pinned_source_bytes("example/fixture", revision,
                                     "plugins/example", "other.json")
+        # Hostname-only matching would accept same-origin substitutions of
+        # the pinned revision path or query; bind the complete source URL.
+        for redirect in (url, url + "?alternate=1"):
+            with self.subTest(redirect=redirect), patch(
+                "pi_direct_source_e2e.urlopen", return_value=Response(redirect)
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "left the immutable GitHub origin"
+                ):
+                    pinned_source_bytes("example/fixture", revision,
+                                        "plugins/example", "other.json")
         for relative in ("../other.json", "/absolute", "runtime\\launcher.mjs"):
             with self.subTest(relative=relative), self.assertRaisesRegex(
                 RuntimeError, "unsafe repository or package path"

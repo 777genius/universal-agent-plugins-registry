@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from datetime import datetime, timezone
 
@@ -207,8 +207,7 @@ def pinned_source_bytes(repository: str, revision: str,
     request = Request(url, headers={"User-Agent": "uap-pi-source-e2e/1"})
     with urlopen(request, timeout=45) as response:
         require(response.status == 200
-                and urlparse(response.geturl()).scheme == "https"
-                and urlparse(response.geturl()).hostname == "raw.githubusercontent.com",
+                and response.geturl() == url,
                 "pinned source response left the immutable GitHub origin")
         data = response.read(PINNED_SOURCE_LIMIT + 1)
     require(0 < len(data) <= PINNED_SOURCE_LIMIT,
