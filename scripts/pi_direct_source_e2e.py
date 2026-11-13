@@ -600,6 +600,20 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                       else project / ".uap" / "state-v2.json")
         private_binding = verified_private_pi_binding(
             state_path, first, name, revision, repository, source_path, scope)
+        # The independent aggregator must bind every reported maintenance verb
+        # to the actual public installation observed and privately verified.
+        # Keep only bounded non-secret identities; never serialize local roots.
+        verified_revision = private_binding["package_revision"]
+        report["verified_public_installation"] = {
+            "installation_id": first["installation_id"],
+            "name": first["name"],
+            "source": selector,
+            "client_id": "pi",
+            "scope": scope,
+            "resolved_revision": verified_revision["resolved_revision"],
+            "tree_digest": verified_revision["tree_digest"],
+            "manifest_digest": verified_revision["manifest_digest"],
+        }
         source_read = lambda relative: pinned_source_bytes(
             repository, revision, source_path, relative)
         expected_skills, expected_servers, verified_package_roots = expected_package_native_names(
