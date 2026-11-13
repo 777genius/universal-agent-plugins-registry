@@ -946,28 +946,34 @@ class PiRealMaterializationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "do not belong"):
                 build_upstream_review_pack(paths, self.sources, HEAD,
                                            (RUN_ID + 1, RUN_ATTEMPT))
-            altered = json.loads(paths[0].read_text(encoding="utf-8"))
+            # Exercise a shard that actually contains an upstream receipt,
+            # so the earlier attempt must survive into the exported packet.
+            upstream_path = next(path for path in paths
+                                 if any(case["distribution"] in UPSTREAM_REVIEW_IDS
+                                        for case in json.loads(
+                                            path.read_text(encoding="utf-8"))["results"]))
+            altered = json.loads(upstream_path.read_text(encoding="utf-8"))
             altered["github_run_id"] = RUN_ID + 1
-            paths[0].write_text(json.dumps(altered), encoding="utf-8")
+            upstream_path.write_text(json.dumps(altered), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "different workflow runs"):
                 build_upstream_review_pack(paths, self.sources, HEAD,
                                            (RUN_ID, RUN_ATTEMPT))
             altered["github_run_id"] = RUN_ID
             altered["github_run_attempt"] = RUN_ATTEMPT + 1
-            paths[0].write_text(json.dumps(altered), encoding="utf-8")
+            upstream_path.write_text(json.dumps(altered), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "future attempt"):
                 build_upstream_review_pack(paths, self.sources, HEAD,
                                            (RUN_ID, RUN_ATTEMPT))
             # Failed-jobs-only retries keep successful artifacts from earlier
             # attempts in the same run. Preserve their exact per-shard lineage.
             altered["github_run_attempt"] = RUN_ATTEMPT - 1
-            paths[0].write_text(json.dumps(altered), encoding="utf-8")
+            upstream_path.write_text(json.dumps(altered), encoding="utf-8")
             retried = build_upstream_review_pack(paths, self.sources, HEAD,
                                                  (RUN_ID, RUN_ATTEMPT))
             self.assertTrue(any(case["original_run_attempt"] == RUN_ATTEMPT - 1
                                 for case in retried["cases"]))
             altered["github_run_attempt"] = RUN_ATTEMPT
-            paths[0].write_text(json.dumps(altered), encoding="utf-8")
+            upstream_path.write_text(json.dumps(altered), encoding="utf-8")
             for path in paths:
                 report = json.loads(path.read_text(encoding="utf-8"))
                 upstream = next((case for case in report["results"]
