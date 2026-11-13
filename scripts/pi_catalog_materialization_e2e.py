@@ -100,6 +100,57 @@ def real_pinned_add(op: dict, item: dict, scope: str) -> bool:
             and op["exit"] == 0 and pinned_add_argv(op.get("argv"), item, scope))
 
 
+
+def real_pinned_lifecycle(operations: object, item: dict, scope: str) -> bool:
+    """Require the complete ordered native journey in each positive E2E receipt."""
+    if not isinstance(operations, list) or len(operations) != 10:
+        return False
+    if not all(isinstance(op, dict) and isinstance(op.get("argv"), list)
+               and all(isinstance(arg, str) for arg in op["argv"])
+               and len(op["argv"]) >= 2 for op in operations):
+        return False
+    commands = [op["argv"] for op in operations]
+    binary = commands[0][0]
+    if not binary or not real_pinned_add(operations[0], item, scope) or (
+        not real_pinned_add(operations[2], item, scope)
+    ):
+        return False
+    flags = ["--target", "pi", "--scope", scope, "--format", "json"]
+    if scope == "project":
+        flags.extend(commands[0][10:])
+    elif scope != "user":
+        return False
+    install_id = commands[4][2] if len(commands[4]) >= 3 else ""
+    if not install_id or install_id.startswith("-"):
+        return False
+    expected = [
+        [binary, "add", item["source"], "--no-save", *flags],
+        [binary, "list", *flags],
+        [binary, "add", item["source"], "--no-save", *flags],
+        [binary, "list", *flags],
+        [binary, "info", install_id, *flags],
+        [binary, "update", install_id, *flags],
+        [binary, "repair", install_id, *flags],
+        [binary, "list", *flags],
+        [binary, "remove", install_id, *flags],
+        [binary, "list", *flags],
+    ]
+    if commands != expected:
+        return False
+    for index, op in enumerate(operations):
+        if type(op.get("exit")) is not int:
+            return False
+        if index == 5:
+            if op["exit"] == 0 or not isinstance(op.get("error_tail"), str) or (
+                "direct full-SHA installations require explicit switch"
+                not in op["error_tail"]
+            ):
+                return False
+        elif op["exit"] != 0:
+            return False
+    return True
+
+
 def selected_sources(sources: list[dict], shard: int, shards: int) -> list[tuple[int, dict]]:
     require(shards == SHARDS and 0 <= shard < shards, "invalid catalog shard")
     return [(index, item) for index, item in enumerate(sources)
@@ -163,20 +214,7 @@ def verify_report(report: dict, sources: list[dict], head: str,
                 and case.get("verification") == "native-files-and-receipt-only"
                 and case.get("runtime_claims") is False
                 and case.get("account_oauth_qualified") is False
-                and isinstance(case.get("operations"), list)
-                and len(case["operations"]) >= 8
-                and sum(real_pinned_add(op, item, key[2])
-                        for op in case["operations"]) == 2
-                and all(real_pinned_add(op, item, key[2])
-                        for op in case["operations"]
-                        if isinstance(op, dict)
-                        and isinstance(op.get("argv"), list)
-                        and len(op["argv"]) >= 2
-                        and op["argv"][1] == "add")
-                and any(op.get("argv", [None, None])[1] == "remove"
-                        and op.get("exit") == 0 for op in case["operations"]
-                        if isinstance(op, dict) and isinstance(op.get("argv"), list)
-                        and len(op["argv"]) >= 2),
+                and real_pinned_lifecycle(case.get("operations"), item, key[2]),
                 f"{platform}/{shard}: real native Pi lifecycle incomplete: {key}")
         passed += 1
     require(len(seen) == len(expected),

@@ -48,18 +48,26 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
                                     "exit": 1, "error_tail": diagnostic}],
                 })
             elif item["distribution_status"] == "active":
+                flags = ["--target", "pi", "--scope", scope, "--format", "json"]
+                if scope == "project":
+                    flags.extend(["--project-root", "/tmp/project"])
+                install_id = "fixture-installation"
                 record.update({
                     "status": "passed", "verification": "native-files-and-receipt-only",
                     "runtime_claims": False, "account_oauth_qualified": False,
                     "operations": [
                         {"argv": add_command, "exit": 0},
-                        {"argv": ["agentplugins", "list"], "exit": 0},
-                        {"argv": add_command, "exit": 0},
-                        {"argv": ["agentplugins", "info"], "exit": 0},
-                        {"argv": ["agentplugins", "update"], "exit": 1},
-                        {"argv": ["agentplugins", "repair"], "exit": 0},
-                        {"argv": ["agentplugins", "list"], "exit": 0},
-                        {"argv": ["agentplugins", "remove"], "exit": 0},
+                        {"argv": ["agentplugins", "list", *flags], "exit": 0},
+                        {"argv": add_command.copy(), "exit": 0},
+                        {"argv": ["agentplugins", "list", *flags], "exit": 0},
+                        {"argv": ["agentplugins", "info", install_id, *flags], "exit": 0},
+                        {"argv": ["agentplugins", "update", install_id, *flags],
+                         "exit": 1, "error_tail":
+                         "direct full-SHA installations require explicit switch"},
+                        {"argv": ["agentplugins", "repair", install_id, *flags], "exit": 0},
+                        {"argv": ["agentplugins", "list", *flags], "exit": 0},
+                        {"argv": ["agentplugins", "remove", install_id, *flags], "exit": 0},
+                        {"argv": ["agentplugins", "list", *flags], "exit": 0},
                     ],
                 })
             else:
@@ -716,6 +724,37 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 argv[5] = "codex"
             else:
                 argv.extend(["--save", "yes"])
+            with self.subTest(edit=edit), self.assertRaisesRegex(
+                RuntimeError, "native Pi lifecycle incomplete"
+            ):
+                verify_report(report, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
+
+    def test_positive_reports_require_complete_ordered_native_lifecycle(self) -> None:
+        baseline = fixture(self.sources, "ubuntu-24.04", 0)
+        for edit in ("missing-final-list", "swapped-repair-remove", "failed-repair",
+                     "successful-update", "wrong-update-reason", "foreign-remove",
+                     "wrong-list-scope", "extra-operation", "noninteger-exit"):
+            report = copy.deepcopy(baseline)
+            case = next(r for r in report["results"] if r["status"] == "passed")
+            ops = case["operations"]
+            if edit == "missing-final-list":
+                ops.pop()
+            elif edit == "swapped-repair-remove":
+                ops[6], ops[8] = ops[8], ops[6]
+            elif edit == "failed-repair":
+                ops[6]["exit"] = 1
+            elif edit == "successful-update":
+                ops[5]["exit"] = 0
+            elif edit == "wrong-update-reason":
+                ops[5]["error_tail"] = "network error"
+            elif edit == "foreign-remove":
+                ops[8]["argv"][2] = "another-installation"
+            elif edit == "wrong-list-scope":
+                ops[7]["argv"][5] = "codex"
+            elif edit == "extra-operation":
+                ops.append(copy.deepcopy(ops[-1]))
+            else:
+                ops[9]["exit"] = False
             with self.subTest(edit=edit), self.assertRaisesRegex(
                 RuntimeError, "native Pi lifecycle incomplete"
             ):
