@@ -19,6 +19,7 @@ from pi_direct_source_e2e import (
     require_pinned_native_snapshot, require_removed_native_payload,
     require_removed_pi_extension_payload,
     require_expected_mcp_definitions, require_unchanged_native_scope,
+    require_expected_native_skill_bytes,
     verified_private_pi_binding,
 )
 from pi_catalog_materialization_e2e import (
@@ -110,6 +111,28 @@ class PiRealMaterializationContracts(unittest.TestCase):
                         verify_report(report, self.sources, HEAD, platform, shard, SHARDS),
                         expected,
                     )
+
+    def test_native_skill_contents_match_exact_pinned_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skills = Path(directory) / "skills"
+            owned = skills / "owned" / "SKILL.md"
+            foreign = skills / "foreign-neighbor" / "SKILL.md"
+            owned.parent.mkdir(parents=True)
+            foreign.parent.mkdir(parents=True)
+            trusted = b"pinned skill bytes\\n"
+            owned.write_bytes(trusted)
+            foreign.write_text("unowned bytes", encoding="utf-8")
+            source_read = {"skills/owned/SKILL.md": trusted}.__getitem__
+            require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
+            foreign.write_text("foreign changed", encoding="utf-8")
+            require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
+            owned.write_bytes(b"modified after repair")
+            with self.assertRaisesRegex(RuntimeError, "native Pi Skill differs"):
+                require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
+            owned.write_bytes(trusted)
+            owned.unlink()
+            with self.assertRaisesRegex(RuntimeError, "native Pi Skill differs"):
+                require_expected_native_skill_bytes(skills, {"owned/SKILL.md"}, source_read)
 
     def test_native_names_are_derived_from_verified_package_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
