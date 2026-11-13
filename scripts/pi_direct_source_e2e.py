@@ -99,6 +99,73 @@ def plugin_record(envelope: dict, name: str, revision: str) -> dict:
 
 
 
+def verified_private_pi_binding(state_path: Path, public_installation: dict,
+                                declared_name: str, revision: str, repository: str,
+                                source_path: str, scope: str) -> dict:
+    """Bind public list evidence to the CLI's exact persisted Pi ownership.
+
+    Published CLI 0.1.102 deliberately omits private target locators from
+    list JSON. Never infer those paths from a copied manifest or public view.
+    """
+    require(state_path.parent.is_dir() and not state_path.parent.is_symlink()
+            and state_path.is_file() and not state_path.is_symlink(),
+            "persisted Pi ownership state is absent or redirected")
+    raw = state_path.read_bytes()
+    require(0 < len(raw) <= 8 * 1024 * 1024,
+            "persisted Pi ownership state exceeds the bounded fixture")
+    state = strict_json(raw.decode("utf-8"))
+    require(type(state.get("schema_version")) is int
+            and state["schema_version"] == 5,
+            "persisted Pi ownership state has an unexpected schema")
+    installations = state.get("installations")
+    require(isinstance(installations, list),
+            "persisted Pi ownership installations are missing")
+    matching = [item for item in installations
+                if isinstance(item, dict) and
+                item.get("installation_id") == public_installation.get("installation_id")]
+    require(len(matching) == 1 and matching[0].get("declared_name") == declared_name,
+            "private Pi installation does not match public receipt")
+    installed = matching[0]
+    source = installed.get("source")
+    require(isinstance(source, dict)
+            and source.get("repository") == repository
+            and source.get("package_subpath") == source_path
+            and source.get("resolved_revision") == revision,
+            "private Pi source differs from the pinned public request")
+    public_clients = [item for item in public_installation.get("clients", [])
+                      if isinstance(item, dict) and item.get("client_id") == "pi"
+                      and item.get("scope") == scope]
+    require(len(public_clients) == 1
+            and isinstance(public_clients[0].get("package_revision"), dict),
+            "public Pi receipt has no unique scoped revision")
+    clients = installed.get("clients")
+    require(isinstance(clients, dict), "private Pi binding map is absent")
+    bindings = [item for item in clients.values()
+                if isinstance(item, dict)
+                and item.get("client_id") == "pi"
+                and item.get("scope") == scope]
+    require(len(bindings) == 1,
+            "private Pi receipt has no unique selected scope binding")
+    binding = bindings[0]
+    public = public_clients[0]
+    private_revision = binding.get("package_revision")
+    public_revision = public["package_revision"]
+    package = installed.get("package")
+    require(isinstance(private_revision, dict) and isinstance(package, dict)
+            and all(isinstance(public_revision.get(key), str)
+                    and public_revision[key] == private_revision.get(key)
+                    for key in ("resolved_revision", "tree_digest", "manifest_digest"))
+            and private_revision.get("resolved_revision") == revision
+            and package.get("manifest_digest") == private_revision.get("manifest_digest")
+            and binding.get("materialization") == public.get("materialization")
+            and binding.get("verification") == public.get("verification")
+            and binding.get("client_binding_id") in clients,
+            "private Pi ownership does not match the public pinned receipt")
+    require(clients[binding["client_binding_id"]] == binding,
+            "private Pi binding key differs from recorded ownership")
+    return binding
+
+
 def native_skill_markers(skills_root: Path) -> set[str]:
     """Enumerate real SKILL.md files, never marker directories or symlinks."""
     if not skills_root.is_dir() or skills_root.is_symlink():
@@ -334,8 +401,12 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         require_native_payload_present()
         listed = call("list")
         first = plugin_record(listed, name, revision)
+        state_path = (case_root / "state" / "state-v2.json" if scope == "user"
+                      else project / ".uap" / "state-v2.json")
+        private_binding = verified_private_pi_binding(
+            state_path, first, name, revision, repository, source_path, scope)
         expected_skills, expected_servers, verified_package_roots = expected_package_native_names(
-            native_root, first, name, kind)
+            native_root, {"clients": [private_binding]}, name, kind)
 
         def require_expected_identity() -> None:
             if kind in {"skill", "mixed"}:
