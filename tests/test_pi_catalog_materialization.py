@@ -55,6 +55,13 @@ def fixture(sources: list[dict], platform: str, shard: int) -> dict:
                 record.update({
                     "status": "passed", "verification": "native-files-and-receipt-only",
                     "runtime_claims": False, "account_oauth_qualified": False,
+                    "verified_public_installation": {
+                        "installation_id": install_id, "name": item["manifest_name"],
+                        "source": item["source"], "client_id": "pi", "scope": scope,
+                        "resolved_revision": item["revision"],
+                        "tree_digest": item["tree_digest"],
+                        "manifest_digest": "sha256:" + "d" * 64,
+                    },
                     "operations": [
                         {"argv": add_command, "exit": 0},
                         {"argv": ["agentplugins", "list", *flags], "exit": 0},
@@ -757,6 +764,39 @@ class PiRealMaterializationContracts(unittest.TestCase):
             else:
                 ops[9]["exit"] = False
             with self.subTest(edit=edit), self.assertRaisesRegex(
+                RuntimeError, "native Pi lifecycle incomplete"
+            ):
+                verify_report(report, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
+
+    def test_native_lifecycle_binds_every_maintenance_id_to_verified_list(self) -> None:
+        baseline = fixture(self.sources, "ubuntu-24.04", 0)
+        for changed in ("all-four-ids", "identity-id", "identity-missing",
+                        "identity-source", "identity-scope", "identity-revision",
+                        "identity-tree", "identity-name", "identity-digest"):
+            report = copy.deepcopy(baseline)
+            case = next(r for r in report["results"] if r["status"] == "passed")
+            identity = case["verified_public_installation"]
+            if changed == "all-four-ids":
+                # Swapping ALL maintenance verbs bypassed the previous verifier.
+                for index in (4, 5, 6, 8):
+                    case["operations"][index]["argv"][2] = "foreign-installation"
+            elif changed == "identity-id":
+                identity["installation_id"] = "foreign-installation"
+            elif changed == "identity-missing":
+                del case["verified_public_installation"]
+            elif changed == "identity-source":
+                identity["source"] = "github:foreign/other@" + HEAD + "//other"
+            elif changed == "identity-scope":
+                identity["scope"] = "project"
+            elif changed == "identity-revision":
+                identity["resolved_revision"] = "b" * 40
+            elif changed == "identity-tree":
+                identity["tree_digest"] = "sha256:" + "0" * 64
+            elif changed == "identity-name":
+                identity["name"] = "unrelated-plugin"
+            else:
+                identity["manifest_digest"] = "not-a-sha256"
+            with self.subTest(changed=changed), self.assertRaisesRegex(
                 RuntimeError, "native Pi lifecycle incomplete"
             ):
                 verify_report(report, self.sources, HEAD, "ubuntu-24.04", 0, SHARDS)
