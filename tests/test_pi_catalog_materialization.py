@@ -130,8 +130,14 @@ class PiRealMaterializationContracts(unittest.TestCase):
                     "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
                 },
             }]}
+            source_files = {
+                "plugin.json": manifest,
+                "mcp.json": (package / "mcp.json").read_bytes(),
+                "skills/correct-skill/SKILL.md": skill.read_bytes(),
+            }
+            source_read = source_files.__getitem__
             skills, servers, roots = expected_package_native_names(
-                native_root, receipt, "package", "mixed")
+                native_root, receipt, "package", "mixed", source_read=source_read)
             self.assertEqual(skills, {"correct-skill/SKILL.md"})
             self.assertEqual(servers, {"correct-server": {"url": "https://example.invalid"}})
             self.assertEqual(roots, (package,))
@@ -140,10 +146,12 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 "sha256:" + "0" * 64)
             with self.assertRaisesRegex(RuntimeError, "source unavailable"):
                 expected_package_native_names(
-                    native_root, wrong_receipt, "package", "mixed")
+                    native_root, wrong_receipt, "package", "mixed",
+                    source_read=source_read)
             with self.assertRaisesRegex(RuntimeError, "manifest differs"):
                 expected_package_native_names(
-                    native_root, receipt, "other-package", "mixed")
+                    native_root, receipt, "other-package", "mixed",
+                    source_read=source_read)
 
     def test_public_pi_list_requires_exact_persisted_private_binding(self) -> None:
         # The released 0.1.102 list API intentionally omits private locators.
@@ -255,13 +263,20 @@ class PiRealMaterializationContracts(unittest.TestCase):
                     "manifest_digest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
                 },
             }]}
+            source_files = {
+                "plugin.json": manifest,
+                "mcp.json": (package / "mcp.json").read_bytes(),
+                "runtime/launcher.mjs": launcher.read_bytes(),
+            }
+            source_read = source_files.__getitem__
             # A copied manifest and MCP file are not an installer-owned binding.
             foreign = root / "unrelated" / "plausible-package"
             shutil.copytree(package, foreign)
             foreign_launcher = foreign / "runtime" / "launcher.mjs"
             foreign_launcher.write_text("different executable", encoding="utf-8")
             skills, servers, roots = expected_package_native_names(
-                native_root, receipt, "bound-plugin", "mcp")
+                native_root, receipt, "bound-plugin", "mcp",
+                source_read=source_read)
             self.assertEqual(skills, set())
             self.assertEqual(servers, declared)
             self.assertEqual(roots, (package,))
@@ -272,11 +287,29 @@ class PiRealMaterializationContracts(unittest.TestCase):
                 require_expected_mcp_definitions(
                     {"local": {"command": "node", "args": [str(foreign_launcher)]}},
                     servers, roots)
+            # Tampering inside the *owned* artifact must not become the
+            # expected configuration merely because the private state and
+            # plugin.json digest remain unchanged.
+            (package / "mcp.json").write_text(
+                json.dumps({"mcpServers": {"local": {
+                    "command": "node", "args": ["--tampered"]}}}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "immutable pinned source"):
+                expected_package_native_names(
+                    native_root, receipt, "bound-plugin", "mcp",
+                    source_read=source_read)
+            (package / "mcp.json").write_bytes(source_files["mcp.json"])
+            launcher.write_text("tampered bound launcher", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "immutable pinned source"):
+                expected_package_native_names(
+                    native_root, receipt, "bound-plugin", "mcp",
+                    source_read=source_read)
+            launcher.write_bytes(source_files["runtime/launcher.mjs"])
             # Deleting the bound artifact must fail closed despite the copy.
             shutil.rmtree(package)
             with self.assertRaises(RuntimeError):
                 expected_package_native_names(
-                    native_root, receipt, "bound-plugin", "mcp")
+                    native_root, receipt, "bound-plugin", "mcp",
+                    source_read=source_read)
 
     def test_native_mcp_definitions_reject_empty_wrong_url_and_wrong_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

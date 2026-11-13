@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from functools import lru_cache
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Callable
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 from datetime import datetime, timezone
 
 from pi_catalog_inventory_e2e import (
@@ -166,6 +170,62 @@ def verified_private_pi_binding(state_path: Path, public_installation: dict,
     return binding
 
 
+
+ROOT = Path(__file__).resolve().parents[1]
+PINNED_SOURCE_LIMIT = 16 * 1024 * 1024
+
+
+@lru_cache(maxsize=512)
+def pinned_source_bytes(repository: str, revision: str,
+                        package_subpath: str, relative: str) -> bytes:
+    """Independently read source bytes at the exact reviewed Git commit.
+
+    Never use the installed package (or its mutable state receipts) as its
+    own integrity reference. No authentication, source execution, or tags.
+    """
+    posix = PurePosixPath(relative)
+    subpath = PurePosixPath(package_subpath)
+    require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is not None
+            and re.fullmatch(r"[0-9a-f]{40}", revision) is not None
+            and all(p not in ("", ".", "..") for p in (*posix.parts, *subpath.parts))
+            and relative == posix.as_posix() and package_subpath == subpath.as_posix()
+            and not posix.is_absolute() and not subpath.is_absolute()
+            and all("\\" not in p and ":" not in p for p in (*posix.parts, *subpath.parts)),
+            "immutable source contains an unsafe repository or package path")
+    fullpath = f"{package_subpath}/{relative}"
+    if repository == "777genius/universal-agent-plugins-registry":
+        # The runner already has the exact Git objects for this checkout.
+        # For older shallow revisions fall through to the pinned HTTPS source.
+        result = subprocess.run(["git", "show", f"{revision}:{fullpath}"],
+                                cwd=ROOT, capture_output=True, timeout=30, check=False)
+        if result.returncode == 0:
+            require(0 < len(result.stdout) <= PINNED_SOURCE_LIMIT,
+                    "pinned Git source file exceeds the integrity bound")
+            return result.stdout
+    url = (f"https://raw.githubusercontent.com/{repository}/{revision}/"
+           f"{quote(fullpath, safe='/')}")
+    request = Request(url, headers={"User-Agent": "uap-pi-source-e2e/1"})
+    with urlopen(request, timeout=45) as response:
+        require(response.status == 200
+                and urlparse(response.geturl()).scheme == "https"
+                and urlparse(response.geturl()).hostname == "raw.githubusercontent.com",
+                "pinned source response left the immutable GitHub origin")
+        data = response.read(PINNED_SOURCE_LIMIT + 1)
+    require(0 < len(data) <= PINNED_SOURCE_LIMIT,
+            "pinned HTTPS source file missing or exceeds integrity bound")
+    return data
+
+
+def require_source_file(package: Path, relative: str,
+                        source_read: Callable[[str], bytes]) -> None:
+    """Compare bound installed bytes with independently pinned source bytes."""
+    path = package / relative
+    require(path.is_file() and not path.is_symlink()
+            and path.resolve(strict=True).is_relative_to(package.resolve(strict=True))
+            and path.read_bytes() == source_read(relative),
+            f"bound package file differs from immutable pinned source: {relative}")
+
+
 def native_skill_markers(skills_root: Path) -> set[str]:
     """Enumerate real SKILL.md files, never marker directories or symlinks."""
     if not skills_root.is_dir() or skills_root.is_symlink():
@@ -178,7 +238,8 @@ def native_skill_markers(skills_root: Path) -> set[str]:
 
 
 def expected_package_native_names(root: Path, installation: dict,
-                                  declared_name: str, kind: str) -> tuple[set[str], dict, tuple[Path, ...]]:
+                                  declared_name: str, kind: str, *,
+                                  source_read: Callable[[str], bytes]) -> tuple[set[str], dict, tuple[Path, ...]]:
     """Read source-declared component identities from the verified active package.
 
     The published CLI's pinned revision and manifest digest select the package;
@@ -217,21 +278,36 @@ def expected_package_native_names(root: Path, installation: dict,
             and "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest()
             == manifest_digest,
             "verified pinned package native source unavailable")
+    require_source_file(package, "plugin.json", source_read)
     manifest = strict_json(manifest_path.read_text(encoding="utf-8"))
     require(manifest.get("name") == declared_name,
             "verified package manifest differs from requested package")
     skills = native_skill_markers(package / "skills")
+    for skill in skills:
+        require_source_file(package, f"skills/{skill}", source_read)
     mcp = package / "mcp.json"
     servers = {}
     if mcp.exists():
         require(mcp.is_file() and not mcp.is_symlink(),
                 "verified package MCP declaration is not regular")
+        require_source_file(package, "mcp.json", source_read)
         raw = strict_json(mcp.read_text(encoding="utf-8")).get("mcpServers")
         require(isinstance(raw, dict), "verified package MCP declaration invalid")
         require(all(isinstance(name, str) and name and isinstance(value, dict)
                     for name, value in raw.items()),
                 "verified package MCP server definitions invalid")
         servers = raw
+        for definition in servers.values():
+            args = definition.get("args", [])
+            require(isinstance(args, list), "verified package MCP args malformed")
+            for arg in args:
+                if isinstance(arg, str) and arg.startswith("${PLUGIN_ROOT}/"):
+                    relative = arg[len("${PLUGIN_ROOT}/"):]
+                    posix = PurePosixPath(relative)
+                    require(relative == posix.as_posix() and not posix.is_absolute()
+                            and all(part not in ("", ".", "..") for part in posix.parts),
+                            "verified package MCP launcher path is unsafe")
+                    require_source_file(package, relative, source_read)
     require((kind not in {"skill", "mixed"} or bool(skills))
             and (kind not in {"mcp", "mixed"} or bool(servers)),
             "verified package omitted its expected native components")
@@ -406,7 +482,9 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
         private_binding = verified_private_pi_binding(
             state_path, first, name, revision, repository, source_path, scope)
         expected_skills, expected_servers, verified_package_roots = expected_package_native_names(
-            native_root, {"clients": [private_binding]}, name, kind)
+            native_root, {"clients": [private_binding]}, name, kind,
+            source_read=lambda relative: pinned_source_bytes(
+                repository, revision, source_path, relative))
 
         def require_expected_identity() -> None:
             if kind in {"skill", "mixed"}:
