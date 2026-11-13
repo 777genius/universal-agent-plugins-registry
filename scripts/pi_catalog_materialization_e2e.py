@@ -268,7 +268,7 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
                  for shard in range(SHARDS)}
     counts = {platform: 0 for platform in PLATFORMS}
     upstream_cases: list[dict] = []
-    original_run: tuple[int, int] | None = None
+    original_run_id: int | None = None
     for path in paths:
         report = read_json(path)
         require(isinstance(report, dict), "materialization artifact must be JSON object")
@@ -280,10 +280,13 @@ def verify_all(paths: list[Path], sources: list[dict], head: str) -> list[dict]:
                 "duplicate or unrecognized original OS/shard materialization artifact")
         counts[platform] += verify_report(
             report, sources, head, platform, shard, SHARDS)
-        provenance = (report["github_run_id"], report["github_run_attempt"])
-        require(original_run is None or original_run == provenance,
-                "original native reports come from different workflow runs/attempts")
-        original_run = provenance
+        run_id = report["github_run_id"]
+        # Rerunning only failed shards legitimately mixes attempts inside one
+        # workflow run. Bind each original artifact to its own attempt, while
+        # refusing different workflow runs altogether.
+        require(original_run_id is None or original_run_id == run_id,
+                "original native reports come from different workflow runs")
+        original_run_id = run_id
         # Only export validated public immutable identities. Never serialize
         # executable commands, credentials, installation IDs or native paths.
         for case in report["results"]:
@@ -336,9 +339,10 @@ def build_upstream_review_pack(paths: list[Path], sources: list[dict],
             and all(type(value) is int and value > 0 for value in expected_run),
             "invalid trusted workflow provenance")
     cases = verify_all(paths, sources, head)
-    require(all((case["original_run_id"], case["original_run_attempt"])
-                == expected_run for case in cases),
-            "native receipts do not belong to this GitHub Actions run/attempt")
+    require(all(case["original_run_id"] == expected_run[0]
+                and 0 < case["original_run_attempt"] <= expected_run[1]
+                for case in cases),
+            "native receipts do not belong to this run or use a future attempt")
     expected = {(runner, distribution, scope)
                 for runner in PLATFORMS.values()
                 for distribution in UPSTREAM_REVIEW_IDS
