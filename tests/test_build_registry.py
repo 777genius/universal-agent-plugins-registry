@@ -1100,7 +1100,7 @@ class DirectoryDomainTests(unittest.TestCase):
             if distribution["id"] in {"777genius/firebase", "777genius/hubspot-developer"}:
                 expected_sequences = [1, 2, 3, 4, 5, 6, 7, 8]
             elif distribution["id"] == "777genius/context7":
-                expected_sequences = [1, 2, 3, 4, 5, 6]
+                expected_sequences = [1, 2, 3, 4, 5, 6, 7]
             elif distribution["id"] in {
                 "777genius/cloudflare-docs-bridge", "777genius/github-bridge",
                 "777genius/playwright-bridge",
@@ -1240,13 +1240,13 @@ class DirectoryDomainTests(unittest.TestCase):
         all_clients = registry.resolve_directory(source, "context7", context7_clients)
         self.assertEqual((all_clients["distribution_id"], all_clients["release_sequence"]), ("upstash/context7", 1))
         bridge = registry.resolve_directory(source, "777genius/context7", context7_clients)
-        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 6))
+        self.assertEqual((bridge["distribution_id"], bridge["release_sequence"]), ("777genius/context7", 7))
 
         context7 = next(
             product for product in registry.directory_preview(source)["products"]
             if product["id"] == "context7"
         )
-        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 6)
+        local = next(item for item in context7["distributions"] if item["id"] == "777genius/context7" and item["release_sequence"] == 7)
         self.assertEqual(
             [item["client"] for item in local["eligible_targets"]],
             ["codex", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder"],

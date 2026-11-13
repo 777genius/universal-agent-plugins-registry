@@ -3,6 +3,6 @@
   "package": "@upstash/context7-mcp",
   "version": "4.4.4",
   "entrypoint": "node_modules/@upstash/context7-mcp/dist/index.js",
-  "package_lock_sha256": "sha256:f5fc9787228b00165aeb4573bd48f2d96d9d72b82bb3a2dd3badf95bfcb36313",
+  "package_lock_sha256": "sha256:ba45adff6a9762c0cc75b450eeba6491b5f82b7e140f21d108974cf6521d68ee",
   "omit_optional": false
 }

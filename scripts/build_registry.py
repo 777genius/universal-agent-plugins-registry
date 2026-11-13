@@ -210,6 +210,14 @@ LOCKED_NPM_REVIEWED_CLOSURES = {
         "optional_install_scripts": frozenset(),
     },
     (
+        "@upstash/context7-mcp", "4.4.4",
+        "sha256:ba45adff6a9762c0cc75b450eeba6491b5f82b7e140f21d108974cf6521d68ee",
+    ): {
+        "overrides": {"qs": "6.16.1", "@hono/node-server": "2.1.8"},
+        "ignored_install_scripts": frozenset(),
+        "optional_install_scripts": frozenset(),
+    },
+    (
         "firebase-tools", "15.34.2",
         "sha256:ec383d8f3864d18b8e31787bd45a7a35adf0918fc0c18d26d9c95e16177c7f76",
     ): {
