@@ -418,6 +418,64 @@ class PiRealMaterializationContracts(unittest.TestCase):
             self.assertTrue(any(op["argv"][1] == "repair"
                                 for op in result["operations"]))
 
+    def test_projected_mcp_accepts_only_source_derived_stdio_rewrites(self) -> None:
+        from pi_direct_source_e2e import verified_projected_mcp_source
+        with tempfile.TemporaryDirectory() as directory:
+            case_root = Path(directory)
+            package = case_root / "profile" / "extensions" / "owned"
+            package.mkdir(parents=True)
+            data = case_root / "state" / "plugin-data"
+            schema = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+            authored = {"$schema": schema, "mcpServers": {"owned": {
+                "type": "stdio", "command": "node",
+                "args": ["${PLUGIN_ROOT}/runtime/launcher.mjs"],
+            }}}
+            source_bytes = json.dumps(authored, indent=2).encode()
+            projected = {"$schema": schema, "mcpServers": {"owned": {
+                "type": "stdio", "command": "node",
+                "args": [str(package / "runtime" / "launcher.mjs")],
+                "env": {"PLUGIN_ROOT": str(package), "PLUGIN_DATA": str(data)},
+                "cwd": str(package),
+            }}}
+            mcp = package / "mcp.json"
+            def write(value: dict) -> None:
+                mcp.write_text(json.dumps(value), encoding="utf-8")
+            write(projected)
+            source_read = lambda relative: source_bytes
+            self.assertEqual(
+                verified_projected_mcp_source(package, source_read, case_root),
+                authored["mcpServers"])
+            for field, wrong in (
+                ("command", "other"),
+                ("args", [str(case_root / "unrelated.mjs")]),
+                ("cwd", str(case_root / "wrong")),
+                ("env", {"PLUGIN_ROOT": str(package), "PLUGIN_DATA": str(data),
+                         "FOREIGN": "injected"}),
+            ):
+                with self.subTest(field=field):
+                    tampered = copy.deepcopy(projected)
+                    tampered["mcpServers"]["owned"][field] = wrong
+                    write(tampered)
+                    with self.assertRaisesRegex(
+                        RuntimeError, "projected Pi MCP configuration differs"
+                    ):
+                        verified_projected_mcp_source(package, source_read, case_root)
+            tampered = copy.deepcopy(projected)
+            tampered["mcpServers"]["owned"]["env"]["PLUGIN_ROOT"] = str(case_root / "foreign")
+            write(tampered)
+            with self.assertRaisesRegex(RuntimeError, "plugin root differs"):
+                verified_projected_mcp_source(package, source_read, case_root)
+            tampered = copy.deepcopy(projected)
+            tampered["mcpServers"]["owned"]["env"]["PLUGIN_DATA"] = str(case_root.parent / "foreign")
+            write(tampered)
+            with self.assertRaisesRegex(RuntimeError, "escaped disposable ownership"):
+                verified_projected_mcp_source(package, source_read, case_root)
+            tampered = copy.deepcopy(projected)
+            tampered["mcpServers"]["foreign"] = {"url": "https://evil.invalid"}
+            write(tampered)
+            with self.assertRaisesRegex(RuntimeError, "projected Pi MCP configuration differs"):
+                verified_projected_mcp_source(package, source_read, case_root)
+
     def test_pinned_source_reader_uses_exact_git_sha_and_refuses_redirect(self) -> None:
         # Offline transport contract: no live source fetch or credentials.
         revision = "a" * 40

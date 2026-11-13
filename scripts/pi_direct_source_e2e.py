@@ -226,6 +226,80 @@ def require_source_file(package: Path, relative: str,
             f"bound package file differs from immutable pinned source: {relative}")
 
 
+def verified_projected_mcp_source(
+    package: Path, source_read: Callable[[str], bytes],
+    case_root: Path | None = None,
+) -> dict:
+    """Verify authored MCP definitions across Pi's deterministic stdio projection.
+
+    ProjectMCPServers rewrites a staged stdio mcp.json with managed cwd, env
+    and argument expansion. Do not confuse this with source-byte tampering.
+    Unknown rewrites, injected servers and foreign data roots remain denied.
+    """
+    authored = strict_json(source_read("mcp.json").decode("utf-8"))
+    actual = strict_json((package / "mcp.json").read_text(encoding="utf-8"))
+    servers = authored.get("mcpServers")
+    require(isinstance(servers, dict)
+            and all(isinstance(k, str) and k and isinstance(v, dict)
+                    for k, v in servers.items()), "pinned MCP definitions invalid")
+    if actual == authored:
+        return servers
+    schema = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+    require(authored.get("$schema") in (None, schema), "pinned MCP schema differs")
+    expected = {"$schema": schema, "mcpServers": {}}
+    active = str(package)
+    for name, original in servers.items():
+        if original.get("type") != "stdio":
+            expected["mcpServers"][name] = original
+            continue
+        staged = actual.get("mcpServers", {}).get(name)
+        require(isinstance(staged, dict) and isinstance(staged.get("env"), dict)
+                and staged["env"].get("PLUGIN_ROOT") == active,
+                "projected MCP plugin root differs from pinned binding")
+        data = staged["env"].get("PLUGIN_DATA")
+        require(isinstance(data, str) and Path(data).is_absolute()
+                and (case_root is None or
+                     Path(data).resolve().is_relative_to(case_root.resolve(strict=True))),
+                "projected MCP data root escaped disposable ownership")
+        def expand(value: str) -> str:
+            return value.replace("${PLUGIN_ROOT}", active).replace("${PLUGIN_DATA}", data)
+        original_env = original.get("env", {})
+        require(isinstance(original_env, dict)
+                and "PLUGIN_ROOT" not in original_env and "PLUGIN_DATA" not in original_env,
+                "source overrides reserved MCP environment")
+        projected = dict(original)
+        projected["env"] = {
+            **{k: expand(v) if isinstance(v, str) else v
+               for k, v in original_env.items()},
+            "PLUGIN_ROOT": active, "PLUGIN_DATA": data,
+        }
+        args = original.get("args", [])
+        require(isinstance(args, list), "pinned MCP args malformed")
+        if "args" in original:
+            projected["args"] = [expand(v) if isinstance(v, str) else v for v in args]
+        cmd = original.get("command")
+        if isinstance(cmd, str) and cmd.startswith("./"):
+            projected["command"] = str(package / cmd[2:])
+        cwd = original.get("cwd", "")
+        require(isinstance(cwd, str), "pinned MCP cwd malformed")
+        if cwd in ("", ".", "./", "${PLUGIN_ROOT}"):
+            projected["cwd"] = active
+        elif cwd == "${PLUGIN_DATA}":
+            projected["cwd"] = data
+        elif cwd.startswith("${PLUGIN_ROOT}/"):
+            projected["cwd"] = str(package / cwd[len("${PLUGIN_ROOT}/"):])
+        elif cwd.startswith("${PLUGIN_DATA}/"):
+            projected["cwd"] = str(Path(data) / cwd[len("${PLUGIN_DATA}/"):])
+        elif cwd.startswith("./"):
+            projected["cwd"] = str(package / cwd[2:])
+        else:
+            raise RuntimeError("unsupported pinned MCP cwd projection")
+        expected["mcpServers"][name] = projected
+    require(actual == expected,
+            "projected Pi MCP configuration differs from immutable pinned source")
+    return servers
+
+
 def native_skill_markers(skills_root: Path) -> set[str]:
     """Enumerate real SKILL.md files, never marker directories or symlinks."""
     if not skills_root.is_dir() or skills_root.is_symlink():
@@ -239,7 +313,8 @@ def native_skill_markers(skills_root: Path) -> set[str]:
 
 def expected_package_native_names(root: Path, installation: dict,
                                   declared_name: str, kind: str, *,
-                                  source_read: Callable[[str], bytes]) -> tuple[set[str], dict, tuple[Path, ...]]:
+                                  source_read: Callable[[str], bytes],
+                                  case_root: Path | None = None) -> tuple[set[str], dict, tuple[Path, ...]]:
     """Read source-declared component identities from the verified active package.
 
     The published CLI's pinned revision and manifest digest select the package;
@@ -290,8 +365,7 @@ def expected_package_native_names(root: Path, installation: dict,
     if mcp.exists():
         require(mcp.is_file() and not mcp.is_symlink(),
                 "verified package MCP declaration is not regular")
-        require_source_file(package, "mcp.json", source_read)
-        raw = strict_json(mcp.read_text(encoding="utf-8")).get("mcpServers")
+        raw = verified_projected_mcp_source(package, source_read, case_root)
         require(isinstance(raw, dict), "verified package MCP declaration invalid")
         require(all(isinstance(name, str) and name and isinstance(value, dict)
                     for name, value in raw.items()),
@@ -317,10 +391,12 @@ def expected_package_native_names(root: Path, installation: dict,
 def require_pinned_native_snapshot(root: Path, installation: dict,
                                    declared_name: str, kind: str,
                                    source_read: Callable[[str], bytes],
-                                   baseline: tuple[set[str], dict, tuple[Path, ...]]) -> None:
+                                   baseline: tuple[set[str], dict, tuple[Path, ...]],
+                                   case_root: Path | None = None) -> None:
     """Revalidate the bound package after each add and after repair."""
     current = expected_package_native_names(
-        root, installation, declared_name, kind, source_read=source_read)
+        root, installation, declared_name, kind, source_read=source_read,
+        case_root=case_root)
     require(current == baseline, "pinned Pi package changed during native lifecycle")
 
 
@@ -496,7 +572,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
             repository, revision, source_path, relative)
         expected_skills, expected_servers, verified_package_roots = expected_package_native_names(
             native_root, {"clients": [private_binding]}, name, kind,
-            source_read=source_read)
+            source_read=source_read, case_root=case_root)
 
         def require_expected_identity() -> None:
             # Reverify immutable source bytes on every lifecycle checkpoint.
@@ -504,7 +580,8 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
             # package's MCP declaration, launcher, or skill contents.
             require_pinned_native_snapshot(
                 native_root, {"clients": [private_binding]}, name, kind,
-                source_read, (expected_skills, expected_servers, verified_package_roots))
+                source_read, (expected_skills, expected_servers, verified_package_roots),
+                case_root=case_root)
             if kind in {"skill", "mixed"}:
                 skills = native_root / "skills"
                 found = native_skill_markers(skills)
