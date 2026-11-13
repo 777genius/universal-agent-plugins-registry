@@ -420,6 +420,20 @@ def require_removed_native_payload(native_root: Path, kind: str, *,
     else:
         raise RuntimeError("unsupported Pi materialization kind")
 
+def require_expected_native_skill_bytes(
+        skills_root: Path, owned_skills: set[str],
+        source_read: Callable[[str], bytes]) -> None:
+    """Pi-native owned Skills must retain their pinned bytes, not only their names."""
+    require(not skills_root.is_symlink(), "native Pi Skills root became a symlink")
+    for relative in owned_skills:
+        native = skills_root / relative
+        require(native.is_file() and not native.is_symlink()
+                and native.resolve(strict=True).is_relative_to(
+                    skills_root.resolve(strict=True))
+                and native.read_bytes() == source_read(f"skills/{relative}"),
+                f"native Pi Skill differs from pinned source: {relative}")
+
+
 def require_removed_pi_extension_payload(
         native_root: Path, owned_roots: tuple[Path, ...],
         surviving_extensions: list[tuple[str, str, str]]) -> None:
@@ -608,6 +622,7 @@ def run_case(cli: str, source_head: str, temp: Path, case: tuple,
                 found = native_skill_markers(skills)
                 require(found == expected_skills | {"foreign-neighbor/SKILL.md"},
                         "native Pi Skills differ from verified package identities")
+                require_expected_native_skill_bytes(skills, expected_skills, source_read)
             if kind in {"mcp", "mixed"}:
                 servers = strict_json((native_root / "mcp.json").read_text(
                     encoding="utf-8")).get("mcpServers")
