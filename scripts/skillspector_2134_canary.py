@@ -160,6 +160,9 @@ def finding_group_evidence(record: dict) -> dict:
                 record.get("findings_truncated") is False)
     if complete and len(groups) != total:
         raise ValueError("finding-group enumeration contradicts complete grouping")
+    def content_digest(value):
+        return "sha256:" + hashlib.sha256(json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     ids = set()
     normalized = []
     for group in groups:
@@ -167,17 +170,19 @@ def finding_group_evidence(record: dict) -> dict:
             not DIGEST.fullmatch(group["id"]) or group["id"] in ids or
             not isinstance(group.get("rule"), str) or
             group.get("severity") not in {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"} or
-            not isinstance(group.get("path"), str)):
+            not isinstance(group.get("path"), str) or
+            type(group.get("raw_count")) is not int or group["raw_count"] < 0 or
+            not isinstance(group.get("occurrences"), list)):
             raise ValueError("invalid or duplicate normalized security finding group")
         ids.add(group["id"])
-        normalized.append({key: group[key] for key in
-                           ("id", "rule", "severity", "path")})
+        normalized.append({**{key: group[key] for key in
+                           ("id", "rule", "severity", "path")},
+                           "raw_count": group["raw_count"],
+                           "occurrence_count": len(group["occurrences"]),
+                           "normalized_group_sha256": content_digest(group)})
     coverage_findings = coverage.get("original_findings", [])
     if not isinstance(coverage_findings, list):
         raise ValueError("invalid original coverage finding evidence")
-    def content_digest(value):
-        return "sha256:" + hashlib.sha256(json.dumps(
-            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return {"grouping_complete": complete, "group_count": total,
             "groups": sorted(normalized, key=lambda group: group["id"]),
             "coverage_finding_count": len(coverage_findings),
@@ -188,8 +193,12 @@ def finding_group_delta(original: dict, candidate: dict) -> dict:
     """Report unmatched groups for mandatory manual review; never auto-promote."""
     current = finding_group_evidence(candidate)
     old = original["original_finding_groups"]
-    old_ids = {group["id"] for group in old["groups"]}
-    new_ids = {group["id"] for group in current["groups"]}
+    old_by_id = {group["id"]: group for group in old["groups"]}
+    new_by_id = {group["id"]: group for group in current["groups"]}
+    old_ids, new_ids = set(old_by_id), set(new_by_id)
+    changed_common = sorted(group_id for group_id in (old_ids & new_ids)
+        if old_by_id[group_id]["normalized_group_sha256"] !=
+           new_by_id[group_id]["normalized_group_sha256"])
     return {
         "old_group_count": old["group_count"],
         "new_group_count": current["group_count"],
@@ -197,6 +206,7 @@ def finding_group_delta(original: dict, candidate: dict) -> dict:
         "new_grouping_complete": current["grouping_complete"],
         "old_groups_not_in_candidate": sorted(old_ids - new_ids),
         "candidate_groups_not_in_old": sorted(new_ids - old_ids),
+        "matching_ids_with_changed_occurrences_or_evidence": changed_common,
         "candidate_groups": current["groups"],
         "old_coverage_finding_count": old["coverage_finding_count"],
         "new_coverage_finding_count": current["coverage_finding_count"],
@@ -205,7 +215,7 @@ def finding_group_delta(original: dict, candidate: dict) -> dict:
         "independent_review_required": True,
         "eligible_for_no_loss_assertion": (
             old["grouping_complete"] and current["grouping_complete"] and
-            not (old_ids - new_ids) and
+            not (old_ids - new_ids) and not changed_common and
             old["coverage_findings_sha256"] == current["coverage_findings_sha256"]),
     }
 
