@@ -401,7 +401,9 @@ def validate_2134_parser_diagnostics(body: bytes) -> int:
         if not isinstance(value, dict) or not _PARSER_FIELDS <= value.keys() <= (
             _PARSER_FIELDS | _PARSER_RESOURCE_FIELDS):
             raise ValueError("unrecognized 2.13.4 parser diagnostic shape")
-        if (value["cause"] not in _PARSER_CAUSES or
+        if (any(type(value[key]) is not str for key in
+                ("cause", "check", "unchecked_scope", "location_precision")) or
+                value["cause"] not in _PARSER_CAUSES or
                 value["check"] not in _PARSER_CHECKS or
                 value["unchecked_scope"] not in _PARSER_SCOPES or
                 value["location_precision"] not in {"source_span", "enclosing_expression"} or

@@ -386,6 +386,8 @@ class UpgradeCanaryTests(unittest.TestCase):
             lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
                 check="unknown_attacker_check"),
             lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
+                check=[]),
+            lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
                 observed_characters=-1),
             lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
                 full_input_checked="yes"),
