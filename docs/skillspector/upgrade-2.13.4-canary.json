@@ -86,5 +86,6 @@
       "reason": "static_parse_limit",
       "finding_count": 4
     }
-  ]
+  ],
+  "manifest_digest": "sha256:d912a6f7e25d2d12cd65faebb98f19e92460985fd418cdea9b84ad87be6b58dd"
 }
