@@ -193,8 +193,10 @@ class UpgradeCanaryTests(unittest.TestCase):
     def test_interrupted_canary_receipt_retains_evidence_but_never_qualifies(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "proof.json"
-            cases = {"source_report_commit": "a" * 40, "cases": [{}, {}]}
-            evidence = [{"original_finding_groups": {"groups": ["original"]}}]
+            cases = {"source_report_commit": "a" * 40,
+                     "cases": [{"id": "source-1"}, {"id": "source-2"}]}
+            evidence = [{"original_finding_groups": {"groups": ["original"]}},
+                        {"original_finding_groups": {"groups": ["second"]}}]
             completed = [{"id": "source-1", "new_status": "partial",
                           "candidate_record": {"findings": [{"evidence": "visible"}]}}]
             checkpoint = pilot.measurement_receipt(cases, evidence, completed, finished=False)
@@ -206,7 +208,11 @@ class UpgradeCanaryTests(unittest.TestCase):
             self.assertEqual(persisted["cases_expected"], 2)
             self.assertEqual(persisted["results"][0]["candidate_record"]["findings"][0]["evidence"], "visible")
             self.assertFalse(output.with_name("proof.json.tmp").exists())
-            complete = pilot.measurement_receipt(cases, evidence, completed * 2, finished=True)
+            with self.assertRaisesRegex(ValueError, "incomplete or out-of-order"):
+                pilot.measurement_receipt(cases, evidence, completed, finished=True)
+            second = {"id": "source-2", "new_status": "partial",
+                      "candidate_record": {"findings": []}}
+            complete = pilot.measurement_receipt(cases, evidence, [completed[0], second], finished=True)
             pilot.persist_receipt(output, complete)
             final = json.loads(output.read_text(encoding="utf-8"))
             self.assertTrue(final["measurement_finished"])
