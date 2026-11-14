@@ -33,10 +33,18 @@ def qualify(bundle: dict, *, report_commit: str) -> dict:
             manifest["scanner"] == coverage.SCANNER and
             manifest["profile"] == coverage.PROFILE,
             "unreviewed scanner, catalog source or retry policy")
+    # The directory can legitimately contain several registry identities for
+    # the same upstream path. Only cohort ambiguity matters to this bounded
+    # admission proof: never fail on unrelated duplicate source paths, but
+    # refuse even one extra candidate for either qualified immutable root.
+    cohort_keys = set(COHORT)
+    require(len(cohort_keys) == len(COHORT), "duplicate qualified cohort pin")
     index = {}
     for item in bundle["selection"]["sources"]:
         key = (item["repository"].casefold(), item["revision"], item["path"])
-        require(key not in index, "ambiguous exact source identity")
+        if key not in cohort_keys:
+            continue
+        require(key not in index, "ambiguous qualified immutable source identity")
         index[key] = item
     receipts = []
     for repository, revision, path in COHORT:
