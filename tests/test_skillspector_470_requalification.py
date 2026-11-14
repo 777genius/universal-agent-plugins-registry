@@ -146,6 +146,25 @@ class RequalificationBoundary(unittest.TestCase):
         with self.assertRaises(PublicationError):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
+    def test_unrelated_directory_aliases_do_not_invalidate_bounded_cohort(self):
+        # A catalog can select multiple distinct consumer IDs for an unrelated
+        # identical upstream path. It must not block auditing the two qualified
+        # pins; ambiguity *inside* the cohort remains a hard failure below.
+        bundle = self.fixture()
+        for suffix in ("first", "second"):
+            bundle["selection"]["sources"].append({
+                "id": "unrelated:" + suffix,
+                "kind": "standalone_skill",
+                "repository": "other/skill",
+                "revision": "c" * 40,
+                "path": "SAME",
+                "plugin_path": None,
+            })
+        self.assertEqual(
+            proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)["cohort_size"],
+            2,
+        )
+
     def test_missing_or_conflicting_history_and_duplicate_pin_fail(self):
         bundle = self.fixture()
         identifier = bundle["selection"]["sources"][0]["id"]
