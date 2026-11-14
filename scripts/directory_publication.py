@@ -22,8 +22,10 @@ from typing import Any, Callable
 
 if __package__:
     from .client_contract import load_client_ids
+    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed, reviewed_source_path
 else:
     from client_contract import load_client_ids
+    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed, reviewed_source_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,7 +46,7 @@ MAX_ENVELOPE_BYTES = 16 << 10
 MAX_LATEST_BYTES = 16 << 10
 MAX_LEDGER_SNAPSHOTS = 100_000
 JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
-WIRE_EVIDENCE_CUTOVER_SEQUENCE = 15
+WIRE_EVIDENCE_CUTOVER_SEQUENCE = LEGACY_FEED.wire_evidence_cutover_sequence
 LEDGER_CONTRACT_NAME = "ledger-contract.json"
 OPENSSL = "/usr/bin/openssl"
 ED25519_PRIVATE_DER_PREFIX = bytes.fromhex("302e020100300506032b657004220420")
@@ -544,6 +546,30 @@ def validate_directory_records(
         _positive_integer(revocation["release_sequence"], f"revocations[{index}].release_sequence")
 
 
+def require_feed_clients(value: dict[str, Any], feed: DirectoryFeedContract = LEGACY_FEED) -> None:
+    fixed_feed(feed)
+    if feed is LEGACY_FEED:
+        if __package__:
+            from .legacy_directory_client_boundary import require_legacy_directory_clients
+        else:
+            from legacy_directory_client_boundary import require_legacy_directory_clients
+        require_legacy_directory_clients(value["distributions"], value.get("evidence", []))
+
+
+def load_feed_trusted_keys(path: Path, feed: DirectoryFeedContract = LEGACY_FEED) -> dict[str, bytes]:
+    """Modern production entrypoints accept only their reviewed source key file."""
+    fixed_feed(feed)
+    if feed is MODERN_FEED:
+        require(path.resolve() == reviewed_source_path(ROOT, feed.trusted_keys_path),
+                "modern Directory trust must use its fixed reviewed-source key file")
+    trusted = load_public_keys(path)
+    if feed is MODERN_FEED:
+        legacy = load_public_keys(ROOT / LEGACY_FEED.trusted_keys_path)
+        require(not (set(trusted) & set(legacy)) and not (set(trusted.values()) & set(legacy.values())),
+                "modern Directory signing identity must be independent of legacy trust")
+    return trusted
+
+
 def verify_envelope(
     snapshot: bytes, envelope: dict[str, Any], trusted_keys: dict[str, bytes], *,
     validate_schema: bool = True,
@@ -588,10 +614,11 @@ def validate_snapshot_semantics(
     snapshot: dict[str, Any],
     previous: dict[str, Any] | None = None,
     historical_evidence: dict[str, dict[str, Any]] | None = None,
-    *, validate_schema: bool = True,
+    *, validate_schema: bool = True, feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> None:
+    fixed_feed(feed)
     if validate_schema:
-        validate_with_schema(snapshot, SNAPSHOT_SCHEMA)
+        validate_with_schema(snapshot, ROOT / feed.snapshot_schema_path)
     require(set(snapshot) == {
         "snapshot_schema_version", "sequence", "publication_id", "source_commit",
         "generated_at", "expires_at", "products", "distributions", "evidence", "revocations",
@@ -606,12 +633,13 @@ def validate_snapshot_semantics(
     require(isinstance(snapshot["source_commit"], str) and SHA_RE.fullmatch(snapshot["source_commit"]) is not None, "snapshot source commit is invalid")
     for field in ("products", "distributions", "evidence", "revocations"):
         require(isinstance(snapshot[field], list), f"snapshot {field} must be an array")
+    require_feed_clients(snapshot, feed)
     has_wire_evidence = any("trust" in evidence for evidence in snapshot["evidence"])
     require(
         not has_wire_evidence or all("trust" in evidence for evidence in snapshot["evidence"]),
         "snapshot cannot mix legacy and wire evidence shapes",
     )
-    wire_evidence = snapshot["sequence"] >= WIRE_EVIDENCE_CUTOVER_SEQUENCE
+    wire_evidence = snapshot["sequence"] >= feed.wire_evidence_cutover_sequence
     validate_directory_records(snapshot, snapshot=True, wire_evidence=wire_evidence)
     generated = parse_timestamp(snapshot["generated_at"], "generated_at")
     expires = parse_timestamp(snapshot["expires_at"], "expires_at")
@@ -801,15 +829,16 @@ def load_ledger_latest(
     ledger_root: Path, trusted_keys: dict[str, bytes], *,
     allow_initialization: bool = False, seed_commit: str | None = None,
     minimum_sequence: int | None = None, validate_schema: bool = True,
-    require_external_floor: bool = False,
+    require_external_floor: bool = False, feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]], dict[str, list[tuple[dict[str, Any], dict[str, Any]]]]] | None:
-    feed = ledger_root / "registry" / "schemas" / "1"
-    latest_path = feed / "latest.json"
+    profile = fixed_feed(feed)
+    feed_root = ledger_root / profile.feed_path
+    latest_path = feed_root / "latest.json"
     if not latest_path.exists():
         require(allow_initialization, "publication ledger latest pointer is missing; explicit initialization is required")
         require(seed_commit is not None and SHA_RE.fullmatch(seed_commit) is not None, "initialization requires an exact seed commit")
         require(minimum_sequence is None, "initialization cannot accept an existing sequence floor")
-        require(not feed.exists() or not any(feed.iterdir()), "initial publication feed is not empty")
+        require(not feed_root.exists() or not any(feed_root.iterdir()), "initial publication feed is not empty")
         return None
     require(not allow_initialization or minimum_sequence is None, "initialization cannot accept an existing sequence floor")
     if require_external_floor and not allow_initialization:
@@ -819,7 +848,7 @@ def load_ledger_latest(
             and 1 <= minimum_sequence <= JSON_SAFE_INTEGER_MAX,
             "normal publication requires the immutable tag sequence floor",
         )
-    contract_path = feed / LEDGER_CONTRACT_NAME
+    contract_path = feed_root / LEDGER_CONTRACT_NAME
     contract_body = read_bytes_bounded(contract_path, MAX_LATEST_BYTES)
     contract = parse_json_bytes(contract_body, str(contract_path), max_bytes=MAX_LATEST_BYTES)
     require(
@@ -830,7 +859,7 @@ def load_ledger_latest(
     )
     require(canonical_json(contract) == contract_body, "publication ledger contract marker is not canonical JSON")
     require(
-        {path.name for path in feed.iterdir()} == {
+        {path.name for path in feed_root.iterdir()} == {
             LEDGER_CONTRACT_NAME, "latest.json", "snapshots",
         },
         "publication ledger feed contains unexpected entries",
@@ -839,7 +868,7 @@ def load_ledger_latest(
     require_integer_const(contract["schema_version"], 1, "publication ledger schema version is unsupported")
     require_integer_const(contract["initial_sequence"], 1, "publication ledger initial sequence marker is invalid")
     require(isinstance(contract["seed_commit"], str) and SHA_RE.fullmatch(contract["seed_commit"]) is not None, "publication ledger seed commit marker is invalid")
-    require(contract["sequence_tag_prefix"] == "directory-publication-schema-1-sequence-", "publication ledger tag namespace marker is invalid")
+    require(contract["sequence_tag_prefix"] == profile.sequence_tag_prefix, "publication ledger tag namespace marker is invalid")
     if seed_commit is not None:
         require(contract["seed_commit"] == seed_commit, "publication ledger seed commit differs from the protected contract")
     latest_body = read_bytes_bounded(latest_path, MAX_LATEST_BYTES)
@@ -856,7 +885,7 @@ def load_ledger_latest(
         )
         require(highest >= minimum_sequence, "publication ledger latest sequence regressed below the immutable tag floor")
     require(highest <= MAX_LEDGER_SNAPSHOTS, "publication ledger exceeds supported history bound")
-    snapshots_dir = feed / "snapshots"
+    snapshots_dir = feed_root / "snapshots"
     require(snapshots_dir.is_dir(), "publication ledger snapshots directory is missing")
     actual_files = {path.name for path in snapshots_dir.iterdir()}
     expected_files: set[str] = set()
@@ -879,7 +908,7 @@ def load_ledger_latest(
         verify_envelope(snapshot_bytes, envelope, trusted_keys, validate_schema=validate_schema)
         snapshot = parse_json_bytes(snapshot_bytes, str(snapshot_path), max_bytes=MAX_SNAPSHOT_BYTES)
         require(isinstance(snapshot, dict), "snapshot must be an object")
-        validate_snapshot_semantics(snapshot, previous, historical_evidence, validate_schema=validate_schema)
+        validate_snapshot_semantics(snapshot, previous, historical_evidence, validate_schema=validate_schema, feed=profile)
         require(snapshot["sequence"] == sequence == envelope["sequence"], f"publication ledger sequence {sequence} identity mismatch")
         publications.setdefault(snapshot["publication_id"], []).append((snapshot, envelope))
         previous = snapshot

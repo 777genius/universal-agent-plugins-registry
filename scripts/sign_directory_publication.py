@@ -13,40 +13,44 @@ from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from directory_publication import (
-    MAX_CANDIDATE_BYTES,
-    MAX_SNAPSHOT_BYTES,
-    LEDGER_CONTRACT_NAME,
-    WIRE_EVIDENCE_CUTOVER_SEQUENCE,
-    PublicationError,
-    atomic_write,
-    candidate_digest,
-    canonical_json,
-    ed25519_private_key,
-    ed25519_public_bytes,
-    ed25519_sign,
-    format_timestamp,
-    load_ledger_latest,
-    load_public_keys,
-    parse_json_bytes,
-    parse_timestamp,
-    read_json,
-    read_bytes_bounded,
-    require,
-    require_integer_const,
-    sha256_digest,
-    signature_message,
-    validate_envelope_contract,
-    validate_directory_records,
-    validate_latest,
-    validate_snapshot_semantics,
-)
-from publication_trust_policy import (
-    load_publication_trust_config,
-    validate_publication_eligibility_trust,
-)
-from sequence_boundaries import next_public_sequence, parse_public_sequence
-from legacy_directory_client_boundary import require_legacy_directory_clients
+if __package__:
+    from .directory_publication import (
+        MAX_CANDIDATE_BYTES, MAX_SNAPSHOT_BYTES, LEDGER_CONTRACT_NAME, PublicationError,
+        atomic_write, candidate_digest, canonical_json, ed25519_private_key, ed25519_public_bytes,
+        ed25519_sign, format_timestamp, load_ledger_latest, load_feed_trusted_keys,
+        parse_json_bytes, parse_timestamp, read_json, read_bytes_bounded, require,
+        require_integer_const, require_feed_clients, sha256_digest, signature_message,
+        validate_envelope_contract, validate_directory_records, validate_latest,
+        validate_snapshot_semantics,
+    )
+    from .publication_trust_policy import (
+        load_publication_trust_config, validate_publication_eligibility_trust,
+    )
+    from .sequence_boundaries import (
+        next_public_sequence, parse_public_sequence,
+    )
+    from .directory_feed_contract import (
+        DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed, reviewed_source_path,
+    )
+else:
+    from directory_publication import (
+        MAX_CANDIDATE_BYTES, MAX_SNAPSHOT_BYTES, LEDGER_CONTRACT_NAME, PublicationError,
+        atomic_write, candidate_digest, canonical_json, ed25519_private_key, ed25519_public_bytes,
+        ed25519_sign, format_timestamp, load_ledger_latest, load_feed_trusted_keys,
+        parse_json_bytes, parse_timestamp, read_json, read_bytes_bounded, require,
+        require_integer_const, require_feed_clients, sha256_digest, signature_message,
+        validate_envelope_contract, validate_directory_records, validate_latest,
+        validate_snapshot_semantics,
+    )
+    from publication_trust_policy import (
+        load_publication_trust_config, validate_publication_eligibility_trust,
+    )
+    from sequence_boundaries import (
+        next_public_sequence, parse_public_sequence,
+    )
+    from directory_feed_contract import (
+        DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed, reviewed_source_path,
+    )
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,9 +59,11 @@ TRUST_CONFIG = ROOT / "registry" / "publication" / "config.json"
 
 def snapshot_evidence_for_sequence(
     evidence: list[dict[str, object]], distributions: list[dict[str, object]], sequence: int,
+    *, feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> list[dict[str, object]]:
     """Project wire-only candidates into the immutable pre-cutover ledger shape."""
-    if sequence >= WIRE_EVIDENCE_CUTOVER_SEQUENCE:
+    fixed_feed(feed)
+    if sequence >= feed.wire_evidence_cutover_sequence:
         return copy.deepcopy(evidence)
     distribution_map = {distribution["id"]: distribution for distribution in distributions}
     release_map = {
@@ -109,7 +115,7 @@ def assign_release_publication_times(
     return assigned
 
 
-def validate_bound_candidate(candidate: dict[str, object]) -> None:
+def validate_bound_candidate(candidate: dict[str, object], *, feed: DirectoryFeedContract = LEGACY_FEED) -> None:
     """Validate the complete signer-facing schema using only the standard library."""
     require(set(candidate) == {
         "candidate_schema_version", "snapshot_schema_version", "publication_id",
@@ -133,14 +139,15 @@ def validate_bound_candidate(candidate: dict[str, object]) -> None:
         require(isinstance(candidate[field], list), f"candidate {field} must be an array")
     # A prepared artifact cannot bypass this boundary by skipping the
     # no-secret preparation step. Check even revoked/suspended policies.
-    require_legacy_directory_clients(candidate["distributions"], candidate["evidence"])
+    require_feed_clients(candidate, feed)
     validate_directory_records(candidate, snapshot=False)
 
 
-def verify_sequence_one_transaction(ledger: Path, seed_commit: str) -> None:
+def verify_sequence_one_transaction(ledger: Path, seed_commit: str, *, feed: DirectoryFeedContract = LEGACY_FEED) -> None:
     """Bind an initialization retry to its immutable sequence-1 transaction."""
     git = "/usr/bin/git"
-    tag = "refs/tags/directory-publication-schema-1-sequence-00000000000000000001"
+    fixed_feed(feed)
+    tag = feed.sequence_ref_prefix + "00000000000000000001"
 
     def run(*arguments: str, capture: bool = False) -> str:
         try:
@@ -163,22 +170,27 @@ def verify_sequence_one_transaction(ledger: Path, seed_commit: str) -> None:
     require(parents == [seed_commit], "sequence-1 publication commit is not the exact seed transaction")
     changed = run("diff", "--name-only", seed_commit, tag_commit, capture=True).splitlines()
     require(sorted(changed) == sorted([
-        "registry/schemas/1/latest.json",
-        "registry/schemas/1/ledger-contract.json",
-        "registry/schemas/1/snapshots/00000000000000000001.envelope.json",
-        "registry/schemas/1/snapshots/00000000000000000001.json",
+        f"{feed.feed_path}/latest.json",
+        f"{feed.feed_path}/ledger-contract.json",
+        f"{feed.feed_path}/snapshots/00000000000000000001.envelope.json",
+        f"{feed.feed_path}/snapshots/00000000000000000001.json",
     ]), "sequence-1 publication transaction changed unexpected paths")
-    run("diff", "--quiet", tag_commit, head_commit, "--", "registry/schemas/1")
-    run("diff", "--quiet", "HEAD", "--", "registry/schemas/1")
+    run("diff", "--quiet", tag_commit, head_commit, "--", feed.feed_path)
+    run("diff", "--quiet", "HEAD", "--", feed.feed_path)
 
 
-def main() -> int:
+def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
+    fixed_feed(feed)
+    trust_config = TRUST_CONFIG if feed is LEGACY_FEED else reviewed_source_path(ROOT, feed.trust_config_path)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--candidate-digest", required=True)
-    parser.add_argument("--config", type=Path, required=True)
+    if feed is LEGACY_FEED:
+        parser.add_argument("--config", type=Path, required=True)
+        parser.add_argument("--trusted-keys", type=Path, required=True)
+    else:
+        parser.set_defaults(config=trust_config, trusted_keys=ROOT / feed.trusted_keys_path)
     parser.add_argument("--ledger", type=Path, required=True)
-    parser.add_argument("--trusted-keys", type=Path, required=True)
     parser.add_argument("--key-id", required=True)
     parser.add_argument("--now", required=True)
     parser.add_argument("--result", type=Path, required=True)
@@ -187,26 +199,29 @@ def main() -> int:
     parser.add_argument("--ledger-sequence-floor", type=parse_public_sequence)
     args = parser.parse_args()
     try:
+        if feed is MODERN_FEED:
+            load_publication_trust_config(trust_config)
+            load_feed_trusted_keys(args.trusted_keys, feed)
         candidate_body = read_bytes_bounded(args.candidate, MAX_CANDIDATE_BYTES)
         candidate = parse_json_bytes(candidate_body, str(args.candidate), max_bytes=4 << 20)
         require(isinstance(candidate, dict), "candidate must be an object")
-        validate_bound_candidate(candidate)
+        validate_bound_candidate(candidate, feed=feed)
         require(canonical_json(candidate) == candidate_body, "candidate is not canonical JSON")
         require(candidate_digest(candidate_body) == args.candidate_digest, "candidate digest mismatch")
         require(
-            args.config.resolve() == TRUST_CONFIG.resolve(),
-            f"--config must name the trusted-source publication config {TRUST_CONFIG}",
+            args.config.resolve() == trust_config.resolve(),
+            f"--config must name the trusted-source publication config {trust_config}",
         )
-        config = load_publication_trust_config(TRUST_CONFIG)
+        config = load_publication_trust_config(trust_config)
         validate_publication_eligibility_trust(
             candidate["products"], candidate["distributions"],
             candidate["evidence"], config,
         )
         now = parse_timestamp(args.now, "now")
-        trusted = load_public_keys(args.trusted_keys)
+        trusted = load_feed_trusted_keys(args.trusted_keys, feed)
         require(args.key_id in trusted, f"active key ID {args.key_id!r} is not trusted")
-        encoded_private = os.environ.get("DIRECTORY_ED25519_PRIVATE_KEY")
-        require(encoded_private is not None, "DIRECTORY_ED25519_PRIVATE_KEY is not set")
+        encoded_private = os.environ.get(feed.private_key_environment)
+        require(encoded_private is not None, f"{feed.private_key_environment} is not set")
         private_key = ed25519_private_key(encoded_private)
         require(ed25519_public_bytes(private_key) == trusted[args.key_id], "private key does not match active trusted key ID")
 
@@ -214,10 +229,11 @@ def main() -> int:
             args.ledger, trusted, allow_initialization=args.initialize_ledger,
             seed_commit=args.ledger_seed_commit, minimum_sequence=args.ledger_sequence_floor,
             validate_schema=False, require_external_floor=True,
+            feed=feed,
         )
         if args.initialize_ledger and loaded is not None:
             require(args.ledger_seed_commit is not None, "initialization requires an exact seed commit")
-            verify_sequence_one_transaction(args.ledger, args.ledger_seed_commit)
+            verify_sequence_one_transaction(args.ledger, args.ledger_seed_commit, feed=feed)
         previous = loaded[0] if loaded else None
         historical_evidence = loaded[2] if loaded else {}
         publications = loaded[3] if loaded else {}
@@ -238,6 +254,7 @@ def main() -> int:
             )
             expected_evidence = snapshot_evidence_for_sequence(
                 candidate["evidence"], distributions, matched["sequence"],  # type: ignore[arg-type]
+                feed=feed,
             )
             require(matched["products"] == candidate["products"] and matched["distributions"] == distributions and matched["evidence"] == expected_evidence and matched["revocations"] == candidate["revocations"], "publication ID was reused for different candidate content")
             result = {"reused": True, "sequence": matched["sequence"], "snapshot_digest": sha256_digest(canonical_json(matched))}
@@ -260,10 +277,11 @@ def main() -> int:
             "distributions": distributions,
             "evidence": snapshot_evidence_for_sequence(
                 candidate["evidence"], distributions, sequence,  # type: ignore[arg-type]
+                feed=feed,
             ),
             "revocations": candidate["revocations"],
         }
-        validate_snapshot_semantics(snapshot, previous, historical_evidence, validate_schema=False)
+        validate_snapshot_semantics(snapshot, previous, historical_evidence, validate_schema=False, feed=feed)
         snapshot_body = canonical_json(snapshot)
         require(len(snapshot_body) <= MAX_SNAPSHOT_BYTES, "generated snapshot exceeds response size contract")
         snapshot_digest = sha256_digest(snapshot_body)
@@ -297,22 +315,22 @@ def main() -> int:
         }
         validate_envelope_contract(envelope)
         validate_latest(latest, validate_schema=False)
-        feed = args.ledger / "registry" / "schemas" / "1"
+        feed_root = args.ledger / feed.feed_path
         if previous is None:
             contract = {
                 "contract_version": 1,
                 "initial_sequence": 1,
                 "schema_version": 1,
                 "seed_commit": args.ledger_seed_commit,
-                "sequence_tag_prefix": "directory-publication-schema-1-sequence-",
+                "sequence_tag_prefix": feed.sequence_tag_prefix,
             }
-            atomic_write(feed / LEDGER_CONTRACT_NAME, canonical_json(contract))
-        snapshot_path = feed / latest["snapshot_path"]
-        envelope_path = feed / latest["envelope_path"]
+            atomic_write(feed_root / LEDGER_CONTRACT_NAME, canonical_json(contract))
+        snapshot_path = feed_root / latest["snapshot_path"]
+        envelope_path = feed_root / latest["envelope_path"]
         require(not snapshot_path.exists() and not envelope_path.exists(), f"sequence {sequence} artifact already exists")
         atomic_write(snapshot_path, snapshot_body)
         atomic_write(envelope_path, canonical_json(envelope))
-        atomic_write(feed / "latest.json", canonical_json(latest))
+        atomic_write(feed_root / "latest.json", canonical_json(latest))
         result = {"reused": False, "sequence": sequence, "snapshot_digest": snapshot_digest}
         atomic_write(args.result, canonical_json(result))
         print(f"published sequence {sequence} {snapshot_digest}")

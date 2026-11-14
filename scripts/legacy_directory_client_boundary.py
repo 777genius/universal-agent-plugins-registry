@@ -8,7 +8,10 @@ signed snapshot, including evidence, before evaluating release eligibility.
 """
 from __future__ import annotations
 
-from directory_publication import require
+if __package__:
+    from .directory_publication import require
+else:
+    from directory_publication import require
 
 # This is a historical wire boundary, not the list of currently supported UAP
 # adapters. Never derive it from a newer released client-capability contract.
