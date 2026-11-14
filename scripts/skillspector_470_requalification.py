@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import subprocess
 from pathlib import Path
 
 from scripts import skillspector_coverage_v3 as coverage
@@ -94,12 +95,25 @@ def qualify(bundle: dict, *, report_commit: str) -> dict:
             "receipts": receipts}
 
 
+def verify_checkout(root: Path) -> None:
+    """Bind input to a clean checkout of the exact immutable Git tree."""
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True)
+    require(head.stdout.strip() == BASELINE_REPORT_COMMIT,
+            "report checkout does not match original immutable Git SHA")
+    status = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
+                             "--untracked-files=all"],
+                            capture_output=True, text=True, check=True)
+    require(not status.stdout.strip(), "immutable report checkout has uncommitted changes")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--published", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     root = args.published.resolve(strict=True)
+    verify_checkout(root)
     # Existing v3 reader validates all immutable shards, records, attempt
     # histories, scanner policies, selection digest, and bounds.
     before = (root / "index.json").read_bytes()

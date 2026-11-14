@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from scripts import skillspector_470_requalification as proof
 from scripts import skillspector_coverage_v3 as coverage
@@ -51,6 +53,22 @@ class RequalificationBoundary(unittest.TestCase):
                          "profiles": [{"id": "standard"}]},
             "selection": {"sources": sources}, "records": records, "attempts": attempts,
         }
+
+    def test_checkout_must_be_clean_and_exact_immutable_git_head(self):
+        from scripts.directory_publication import PublicationError
+        good = type("Proc", (), {"stdout": proof.BASELINE_REPORT_COMMIT + "\\n"})()
+        clean = type("Proc", (), {"stdout": ""})()
+        wrong = type("Proc", (), {"stdout": "f" * 40})()
+        dirty = type("Proc", (), {"stdout": " M reports/skillspector/v3/index.json"})()
+        with patch.object(proof.subprocess, "run", side_effect=[good, clean]) as run:
+            proof.verify_checkout(Path("/checked-out-report"))
+            self.assertEqual(run.call_count, 2)
+        with patch.object(proof.subprocess, "run", return_value=wrong):
+            with self.assertRaises(PublicationError):
+                proof.verify_checkout(Path("/checked-out-report"))
+        with patch.object(proof.subprocess, "run", side_effect=[good, dirty]):
+            with self.assertRaises(PublicationError):
+                proof.verify_checkout(Path("/checked-out-report"))
 
     def test_proof_preserves_original_evidence_and_never_authorizes_retry(self):
         bundle = self.fixture()

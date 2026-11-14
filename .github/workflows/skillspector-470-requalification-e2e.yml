@@ -1,4 +1,4 @@
-name: SkillSpector #470 immutable exhausted-Error admission audit
+name: "SkillSpector #470 immutable exhausted-Error admission audit"
 on:
   pull_request:
     paths:
