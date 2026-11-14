@@ -273,5 +273,25 @@ class UpgradeCanaryTests(unittest.TestCase):
         self.assertTrue(result["manual_finding_review_required"])
 
 
+    def test_normalization_failure_probe_preserves_exception_without_raw_leak(self):
+        secret = "a sensitive source excerpt"
+        capture = {}
+
+        def failing_normalizer():
+            raise ValueError(secret)
+
+        wrapped = pilot.probe_normalization(failing_normalizer, capture)
+        with self.assertRaisesRegex(ValueError, secret):
+            wrapped()
+        self.assertEqual(capture["stage"], "normalize_report_v3")
+        self.assertEqual(capture["exception_type"], "ValueError")
+        self.assertEqual(
+            capture["message_sha256"],
+            "sha256:" + hashlib.sha256(secret.encode()).hexdigest(),
+        )
+        self.assertNotIn(secret, json.dumps(capture))
+        self.assertEqual(pilot.probe_normalization(lambda x: x + 1, {})(2), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -289,6 +289,26 @@ def candidate_profile(production_profile: dict) -> dict:
     return document
 
 
+def probe_normalization(normalizer, diagnostic: dict):
+    """Record a redacted exception identity without changing scanner semantics.
+
+    The original exception is always re-raised; no raw source, report, or
+    exception message is written into public CI logs.
+    """
+    def wrapped(*args, **kwargs):
+        try:
+            return normalizer(*args, **kwargs)
+        except Exception as error:
+            diagnostic.update({
+                "stage": "normalize_report_v3",
+                "exception_type": type(error).__name__,
+                "message_sha256": "sha256:" + hashlib.sha256(
+                    str(error).encode("utf-8", "replace")[:2048]).hexdigest(),
+            })
+            raise
+    return wrapped
+
+
 def scan(executable: Path, cases: dict) -> dict:
     from scripts import skillspector_reports as scanner
     from scripts import skillspector_coverage_v3 as coverage
@@ -314,13 +334,19 @@ def scan(executable: Path, cases: dict) -> dict:
         budget = WorkBudget(300)
         pin = PinnedRepository(item["repository"], item["revision"], None,
             github_token=os.environ.get("GITHUB_TOKEN"), work_budget=budget)
+        diagnostic = {}
+        original_normalizer = scanner.normalize_report_v3
+        scanner.normalize_report_v3 = probe_normalization(original_normalizer, diagnostic)
         try:
             # Reuse the production acquisition, immutable byte digest and scanner limits.
             record = coverage.scan_selected(executable, subject, pin, budget,
                                             profile_id="static-standard-v3")
         finally:
+            scanner.normalize_report_v3 = original_normalizer
             pin.close()
         comparison = compare(item, record)
+        if record["status"] == "error" and "scan_failed" in comparison["error_codes"]:
+            comparison["failure_probe"] = diagnostic or {"stage": "before_normalization"}
         comparison["candidate_report_digest"] = record.get("report_digest")
         comparison["finding_group_delta"] = finding_group_delta(
             original_evidence[len(results)], record)
@@ -364,6 +390,7 @@ def main() -> int:
             "finding_review_required": change["independent_review_required"],
             "no_loss_proven": change["eligible_for_no_loss_assertion"],
             "same_immutable_source": row["same_source"],
+            "failure_probe": row.get("failure_probe"),
         })
     print(json.dumps({"status": "measurement_only", "result_counts": result["result_counts"],
                       "promotion_authorized": False, "case_evidence": rows}, sort_keys=True))
