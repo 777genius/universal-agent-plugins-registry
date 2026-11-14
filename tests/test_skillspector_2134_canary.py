@@ -19,6 +19,7 @@ class UpgradeCanaryTests(unittest.TestCase):
         return {
             "source": {key: source[key] for key in ("repository", "revision", "path", "content_digest")},
             "scanner": copy.deepcopy(pilot.SCANNER),
+            "profile": pilot.candidate_profile_identity(),
             "status": status, "finding_count": findings,
             "execution": {"state": "completed", "exit_code": 0},
             "coverage": {"status": status, "reasons": [], "fully_inspected_files": 1,
@@ -133,6 +134,17 @@ class UpgradeCanaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identity"):
             pilot.compare(old, record)
 
+    def test_unpatched_candidate_profile_identity_is_mandatory(self):
+        old = self.baseline["cases"][0]
+        expected = pilot.candidate_profile_identity()
+        self.assertEqual(expected["id"], "static-standard-v3")
+        for changed in ({"digest": "sha256:" + "f" * 64},
+                        {"id": "static-extended-v3"}):
+            record = self.record(old)
+            record["profile"].update(changed)
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "candidate profile identity"):
+                pilot.compare(old, record)
+
     def test_false_complete_fails_closed(self):
         old = self.baseline["cases"][0]
         mutations = [
@@ -179,7 +191,7 @@ class UpgradeCanaryTests(unittest.TestCase):
         original = self.record()
         group = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "CRITICAL", "path": "SKILL.md",
                  "raw_count": 1, "occurrences": [{"path": "SKILL.md", "line": 3}]}
-        original.update(finding_group_count=1, findings=[group])
+        original.update(finding_group_count=1, finding_count=1, findings=[group])
         original["coverage"]["original_findings"] = [{"id": "AE1"}]
         bound = {"original_finding_groups": pilot.finding_group_evidence(original)}
         unchanged = pilot.finding_group_delta(bound, copy.deepcopy(original))
@@ -204,11 +216,33 @@ class UpgradeCanaryTests(unittest.TestCase):
         changed = copy.deepcopy(original)
         changed["findings"][0]["occurrences"].pop()
         changed["findings"][0]["raw_count"] = 1
+        changed["finding_count"] = 1
         delta = pilot.finding_group_delta(bound, changed)
         self.assertEqual(delta["old_groups_not_in_candidate"], [])
         self.assertEqual(delta["matching_ids_with_changed_occurrences_or_evidence"],
                          [group["id"]])
         self.assertFalse(delta["eligible_for_no_loss_assertion"])
+
+    def test_finding_occurrence_accounting_fails_closed(self):
+        record = self.record()
+        group = {"id": "sha256:" + "c" * 64, "rule": "S1", "severity": "HIGH",
+                 "path": "SKILL.md", "raw_count": 2,
+                 "occurrences": [{"path": "SKILL.md", "line": 5},
+                                 {"path": "SKILL.md", "line": 9}]}
+        record.update(finding_group_count=1, finding_count=2, findings=[group])
+        self.assertEqual(pilot.finding_group_evidence(record)["group_count"], 1)
+        missing_occurrence = copy.deepcopy(record)
+        missing_occurrence["findings"][0]["occurrences"].pop()
+        with self.assertRaisesRegex(ValueError, "normalized security finding group"):
+            pilot.finding_group_evidence(missing_occurrence)
+        missing_total = copy.deepcopy(record)
+        missing_total["finding_count"] = 1
+        with self.assertRaisesRegex(ValueError, "count contradicts"):
+            pilot.finding_group_evidence(missing_total)
+        zero_group = copy.deepcopy(record)
+        zero_group["findings"][0].update(raw_count=0, occurrences=[])
+        with self.assertRaisesRegex(ValueError, "normalized security finding group"):
+            pilot.finding_group_evidence(zero_group)
 
     def test_malformed_group_identity_or_incomplete_enumeration_rejected(self):
         original = self.record()
