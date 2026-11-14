@@ -16,7 +16,15 @@ on:
       - "scripts/legacy_directory_client_boundary.py"
       - "scripts/directory_publication.py"
       - "scripts/directory_feed_contract.py"
+      - "scripts/directory_deployment_contract.py"
       - "scripts/directory_publication_cas.py"
+      - "scripts/modern_directory_publication_cas.py"
+      - "scripts/pages_compositor.py"
+      - "scripts/modern_pages_compositor.py"
+      - "scripts/verify_directory_publication.py"
+      - "scripts/verify_modern_directory_publication.py"
+      - "scripts/observe_directory_publication.py"
+      - "scripts/observe_modern_directory_publication.py"
       - "scripts/publication_trust_policy.py"
       - "scripts/prepare_directory_publication.py"
       - "scripts/prepare_modern_directory_publication.py"
@@ -29,6 +37,7 @@ on:
       - "tests/test_build_registry.py"
       - "tests/test_client_contract.py"
       - "tests/test_directory_feed_contract.py"
+      - "tests/test_modern_publication_mechanics.py"
       - "tests/test_legacy_pi_publication_boundary.py"
       - "tests/test_repository_identity.py"
       - ".github/workflows/registry.yml"
@@ -48,7 +57,15 @@ on:
       - "scripts/legacy_directory_client_boundary.py"
       - "scripts/directory_publication.py"
       - "scripts/directory_feed_contract.py"
+      - "scripts/directory_deployment_contract.py"
       - "scripts/directory_publication_cas.py"
+      - "scripts/modern_directory_publication_cas.py"
+      - "scripts/pages_compositor.py"
+      - "scripts/modern_pages_compositor.py"
+      - "scripts/verify_directory_publication.py"
+      - "scripts/verify_modern_directory_publication.py"
+      - "scripts/observe_directory_publication.py"
+      - "scripts/observe_modern_directory_publication.py"
       - "scripts/publication_trust_policy.py"
       - "scripts/prepare_directory_publication.py"
       - "scripts/prepare_modern_directory_publication.py"
@@ -61,6 +78,7 @@ on:
       - "tests/test_build_registry.py"
       - "tests/test_client_contract.py"
       - "tests/test_directory_feed_contract.py"
+      - "tests/test_modern_publication_mechanics.py"
       - "tests/test_legacy_pi_publication_boundary.py"
       - "tests/test_repository_identity.py"
 
@@ -82,9 +100,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - run: python3 -m pip install check-jsonschema==0.37.4 PyYAML==6.0.3
+      - run: python3 -m pip install check-jsonschema==0.37.4 PyYAML==6.0.3 cryptography==46.0.3
       - run: python3 scripts/sync_client_contract.py --check
       - run: python3 -m unittest tests.test_client_contract tests.test_legacy_pi_publication_boundary tests.test_directory_feed_contract
+      - run: python3 -m unittest tests.test_modern_publication_mechanics tests.test_directory_publication_cas tests.test_pages_compositor tests.test_sequence_entry_boundaries
       - run: python3 -m unittest tests.test_build_registry
       - run: python3 scripts/build_registry.py --check
       - run: check-jsonschema --schemafile schemas/registry-entry.schema.json registry/entries/*.json

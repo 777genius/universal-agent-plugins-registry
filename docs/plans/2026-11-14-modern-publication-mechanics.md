@@ -50,6 +50,12 @@ plans and require both to remain current before a deployment handoff. Preserve
 every other byte and path from the existing composition. Do not add a generic
 multi-feed workflow framework or duplicate the production workflow.
 
+Modern materialization is an exact same-tree, single-parent child of its signed
+commit. Static site bytes remain under the legacy composition authority. The
+combined private plan binds both selected plans, the exact composed Git tree
+and a digest of both lineages' refs; selection checks refs before and after
+composition. The observer takes its ledger identity from this rechecked plan.
+
 The existing external Pages deployment receipt/checkpoint authority stays shared.
 Actual protected workflow integration and modern marker advancement after a
 successful deployment are a separately reviewed activation change.
@@ -98,12 +104,17 @@ Independent review and hosted checks must cover the final commit.
 
 | Area | Estimated added/changed lines |
 | --- | ---: |
-| Production mechanics and fixed entrypoints | 400-600 |
+| Production mechanics and fixed entrypoints | 650-750 |
 | Disposable integration and adversarial tests | 650-900 |
 | Plan and operational contract documentation | 100-150 |
 
 Estimated complexity: 6/10. Target reliability after verification: 9/10.
 Implementation confidence before review: 8/10. These are planning estimates.
+The production estimate increased after accounting for first-publication
+approval, preserving both authorities in one composed tree, atomic ref-state
+comparison and the fixed-source observer. None introduces a public signed wire
+contract. Deploying a whole modern ledger would omit independently advanced
+legacy/Discovery/Security bytes, so a constant-only ref substitution is unsafe.
 
 After this mechanics change, activation still requires the real independently
 approved issuer/public key/origin, reviewed source and evidence pins, protected

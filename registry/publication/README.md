@@ -48,6 +48,53 @@ target, old-client readability, cross-feed rejection, rollback protection,
 retry behavior and append-only history. No modern production origin, key,
 bootstrap, target grant or approval is established by this foundation.
 
+### Modern publication mechanics (still not activated)
+
+The [mechanics plan](../../docs/plans/2026-11-14-modern-publication-mechanics.md)
+extends the shared CAS, verifier, observer and compositor through the same fixed
+contract. `modern_directory_publication_cas.py` uses only the modern ledger,
+sequence tags, `directory-modern-publication-schema-1-promotion-intent-*` and
+`directory-modern-publication-schema-1-production`. Existing legacy commands and
+their Discovery/Security interleaving are unchanged. Modern rejects foreign
+ledger interleaving; its materialized commit is a single-parent, same-tree child
+of its signed commit. It never authorizes changes to site or sibling feed bytes.
+
+The fixed reviewed file `registry/publication/modern/production-marker.json`
+must contain exactly `contract_version` (1), `marker_ref`, `sequence_tag_prefix`,
+`bootstrap_ledger_commit`, `origin` and `publisher_app_id`. Ref values must match
+the fixed modern contract, the bootstrap must be an immutable full commit ID,
+and the HTTPS origin must use the fixed modern path and an authority independent
+of the existing legacy production origin (including hostname/port aliases).
+The file and modern public key remain absent. No command can substitute a
+different configuration, key file or origin through arguments or environment.
+The initial seed establishes ancestry only; the first composition requires an
+approved immutable intent and records no production marker until deployment.
+
+`modern_pages_compositor.py plan --repo REPO --output PLAN` selects the existing
+approved legacy site and current Discovery/Security feeds, then overlays only
+`registry/modern/schemas/1` from the approved modern publication. It records both
+plans, the exact combined Git tree and a digest of all relevant refs.
+`modern_pages_compositor.py require-current --repo REPO --plan PLAN` recomputes
+and compares that complete identity. Both legacy-triggered and modern-triggered
+deployments must use this combined path after activation: neither a historical
+legacy tree nor a whole modern ledger can be deployed on its own.
+
+`verify_modern_directory_publication.py` verifies a local `--feed` directory with
+the fixed modern public trust and sequence-1 evidence rules.
+`observe_modern_directory_publication.py --repo REPO --plan PLAN --output RECEIPT`
+rechecks the combined plan, verifies the bounded public response, compares its
+sequence, publication ID, source and digest to the selected signed Git object,
+then rechecks the refs again. The private receipt derives the modern ledger
+commit, legacy ledger commit and composition tree from that verified plan.
+This proves exact publication readback; it does not attest client runtime.
+
+The modern `evidence-publish` legacy bootstrap operation is intentionally
+refused. Modern evidence belongs in the reviewed source of a subsequent signed
+publication, rather than as an unrelated append to its isolated ledger.
+Protected App/ref/environment provisioning, actual public trust and origin,
+the existing serialized production workflow and external Pages success receipt
+remain separate activation gates. No production workflow is changed here.
+
 ## Artifact contract
 
 Schema 1 is served below `registry/schemas/1/`. Historical snapshot and

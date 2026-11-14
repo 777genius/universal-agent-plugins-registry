@@ -25,6 +25,22 @@ class DirectoryFeedContract:
     def sequence_ref_prefix(self) -> str:
         return "refs/tags/" + self.sequence_tag_prefix
 
+    @property
+    def production_ref(self) -> str:
+        return self.sequence_ref_prefix.removesuffix("sequence-") + "production"
+
+    @property
+    def approval_ref(self) -> str:
+        return self.sequence_ref_prefix.removesuffix("sequence-") + "launch-approved"
+
+    @property
+    def intent_ref_prefix(self) -> str:
+        return self.sequence_ref_prefix.removesuffix("sequence-") + "promotion-intent-"
+
+    @property
+    def deployment_contract_path(self) -> str:
+        return str(Path(self.trust_config_path).with_name("production-marker.json"))
+
 
 LEGACY_FEED = DirectoryFeedContract(
     name="legacy",
