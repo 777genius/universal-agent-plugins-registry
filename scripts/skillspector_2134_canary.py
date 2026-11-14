@@ -229,16 +229,23 @@ def compare(item: dict, record: dict) -> dict:
         raise ValueError("rescan source differs from immutable baseline")
     if record["scanner"] != SCANNER or record["status"] not in {"complete", "partial", "error"}:
         raise ValueError("untrusted scanner identity or status")
-    if record["status"] == "complete" and (record["coverage"]["status"] != "complete" or
-        record["execution"]["state"] != "completed" or record["coverage"]["reasons"] or
-        record["coverage"].get("fully_inspected_files", 0) <= 0 or
-        record["coverage"].get("grouping_complete") is not True or
-        record["coverage"].get("ledger_exceptions") or
-        record["coverage"].get("reference_evidence_truncated") or
-        record["errors"] or record["coverage"]["partially_inspected_files"] or
-        record["coverage"]["entirely_uninspected_files"] or
-        record["findings_truncated"]):
-        raise ValueError("claimed Complete lacks complete evidence")
+    if record["status"] == "complete":
+        coverage = record["coverage"]
+        analyzers = coverage.get("analyzers", [])
+        required = {"artifact_integrity", "static_patterns_prompt_injection", "static_yara"}
+        completed = {a.get("analyzer_id") for a in analyzers if isinstance(a, dict)
+                     and a.get("status") == "completed"}
+        if (coverage["status"] != "complete" or record["execution"]["state"] != "completed" or
+            record["execution"].get("exit_code") not in (0, 1) or coverage["reasons"] or
+            coverage.get("fully_inspected_files", 0) <= 0 or
+            coverage.get("grouping_complete") is not True or
+            coverage.get("ledger_exceptions") or
+            coverage.get("reference_evidence_truncated") or record["errors"] or
+            coverage["partially_inspected_files"] or coverage["entirely_uninspected_files"] or
+            record["findings_truncated"] or not required.issubset(completed) or
+            any(not isinstance(a, dict) or a.get("status") not in
+                {"completed", "not_applicable", "disabled"} for a in analyzers)):
+            raise ValueError("claimed Complete lacks complete evidence")
     status = record["status"]
     found = record["finding_count"]
     return {
@@ -251,6 +258,19 @@ def compare(item: dict, record: dict) -> dict:
         "coverage_reasons": sorted(set(x["code"] for x in record["coverage"]["reasons"])),
         "error_codes": sorted(set(x["code"] for x in record["errors"])),
     }
+
+
+def candidate_profile(production_profile: dict) -> dict:
+    """Never attest an unapplied v2.13.1 maintenance patch on raw 2.13.4.
+
+    This read-only canary intentionally checks out NVIDIA\u0027s unmodified source.
+    Keep its semantic identity distinct from every published UAP profile.
+    """
+    document = copy.deepcopy(production_profile)
+    document.pop("reference_inventory_patch", None)
+    document["reference_analyzer_semantics"] = "unmodified-upstream-2.13.4"
+    document["upgrade_canary_scanner_revision"] = SCANNER["revision"]
+    return document
 
 
 def scan(executable: Path, cases: dict) -> dict:
@@ -267,8 +287,7 @@ def scan(executable: Path, cases: dict) -> dict:
 
     # The canary is an isolated process; published scanner and profiles remain unchanged.
     scanner.SCANNER = copy.deepcopy(SCANNER)
-    standard = copy.deepcopy(scanner.STANDARD_PROFILE_DOCUMENT)
-    standard["upgrade_canary_scanner_revision"] = SCANNER["revision"]
+    standard = candidate_profile(scanner.STANDARD_PROFILE_DOCUMENT)
     scanner.PROFILE_DOCUMENTS["static-standard-v3"] = standard
     scanner.PROFILES["static-standard-v3"] = {
         "id": "static-standard-v3", "digest": sha256_digest(canonical_json(standard))}

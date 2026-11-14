@@ -20,8 +20,10 @@ class UpgradeCanaryTests(unittest.TestCase):
             "source": {key: source[key] for key in ("repository", "revision", "path", "content_digest")},
             "scanner": copy.deepcopy(pilot.SCANNER),
             "status": status, "finding_count": findings,
-            "execution": {"state": "completed"},
+            "execution": {"state": "completed", "exit_code": 0},
             "coverage": {"status": status, "reasons": [], "fully_inspected_files": 1,
+                         "analyzers": [{"analyzer_id": k, "status": "completed"} for k in
+                                       ("artifact_integrity", "static_patterns_prompt_injection", "static_yara")],
                          "grouping_complete": True, "ledger_exceptions": [],
                          "reference_evidence_truncated": False, "partially_inspected_files": 0,
                          "entirely_uninspected_files": 0},
@@ -45,6 +47,8 @@ class UpgradeCanaryTests(unittest.TestCase):
             "status": "partial", "freshness": "current", "finding_count": item["finding_count"],
             "scanner": {"id": "skillspector", "version": "2.13.1"},
             "retry": {"reason": item["reason"]}, "findings": [], "report_digest": "sha256:" + "1" * 64,
+            "finding_group_count": 0, "findings_truncated": False,
+            "coverage": {"grouping_complete": True, "original_findings": []},
         }
         shard_data = {"schema_version": 3, "repository": item["repository"], "records": [original]}
         shard_bytes = (json.dumps(shard_data, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -63,7 +67,7 @@ class UpgradeCanaryTests(unittest.TestCase):
         proof = pilot.verify_published_baseline(cases, fetcher=lambda path, _: blobs[path])
         self.assertEqual(len(proof), 1)
         self.assertEqual(proof[0]["original_report_digest"], "sha256:" + "1" * 64)
-        self.assertEqual(proof[0]["original_finding_group_count"], None)
+        self.assertEqual(proof[0]["original_finding_group_count"], 0)
         self.assertTrue(proof[0]["original_findings_sha256"].startswith("sha256:"))
 
     def test_baseline_tamper_or_replay_is_rejected(self):
@@ -142,6 +146,9 @@ class UpgradeCanaryTests(unittest.TestCase):
             lambda r: r["coverage"].update(partially_inspected_files=1),
             lambda r: r["coverage"].update(entirely_uninspected_files=1),
             lambda r: r.update(findings_truncated=True),
+            lambda r: r["coverage"].update(analyzers=[]),
+            lambda r: r["coverage"]["analyzers"][0].update(status="partial"),
+            lambda r: r["execution"].update(exit_code=137),
         ]
         for mutate in mutations:
             record = self.record(old)
@@ -213,6 +220,14 @@ class UpgradeCanaryTests(unittest.TestCase):
         original.update(finding_group_count=2, findings=[a, copy.deepcopy(a)])
         with self.assertRaisesRegex(ValueError, "duplicate"):
             pilot.finding_group_evidence(original)
+
+    def test_unpatched_canary_profile_is_not_mislabeled_as_production_patch(self):
+        source = {"id": "static-standard-v3", "reference_inventory_patch": "uap-directory-inventory-url-host-v2"}
+        candidate = pilot.candidate_profile(source)
+        self.assertNotIn("reference_inventory_patch", candidate)
+        self.assertEqual(candidate["reference_analyzer_semantics"], "unmodified-upstream-2.13.4")
+        self.assertEqual(candidate["upgrade_canary_scanner_revision"], pilot.SCANNER["revision"])
+        self.assertEqual(source["reference_inventory_patch"], "uap-directory-inventory-url-host-v2")
 
     def test_partial_remains_partial(self):
         old = self.baseline["cases"][0]
