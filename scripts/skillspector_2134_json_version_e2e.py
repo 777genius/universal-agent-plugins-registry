@@ -100,8 +100,10 @@ def content_findings(report: dict) -> collections.Counter:
     def coverage_only(issue):
         tags = issue.get("tags", [])
         # Never exempt a finding that also carries independent security evidence.
+        # Exempt only pure coverage tags; mixed content/policy/security tags
+        # are independent findings that must survive the candidate scan.
         return (issue.get("id") in {"AE1", "AE7"} and isinstance(tags, list)
-                and "coverage" in tags and "security" not in tags)
+                and tags == ["coverage"])
     return collections.Counter(
         json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         for item in report.get("issues", [])

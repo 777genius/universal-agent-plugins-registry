@@ -81,6 +81,19 @@ class ExactReferenceDifferenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "security findings"):
             proof.assert_delta(old, new)
 
+    def test_mixed_coverage_content_or_policy_is_not_suppressed(self):
+        for issue_id in ("AE1", "AE7"):
+            for extra_tag in ("content", "policy", "unknown"):
+                with self.subTest(issue_id=issue_id, extra_tag=extra_tag):
+                    old, new = self.fixtures()
+                    old["issues"].append({
+                        "id": issue_id, "tags": ["coverage", extra_tag],
+                        "severity": "HIGH",
+                        "location": {"file": "SKILL.md", "start_line": 17},
+                    })
+                    with self.assertRaisesRegex(ValueError, "security findings"):
+                        proof.assert_delta(old, new)
+
     def test_malformed_issue_evidence_fails_closed(self):
         old, new = self.fixtures()
         new["issues"].append("missing actual issue data")
