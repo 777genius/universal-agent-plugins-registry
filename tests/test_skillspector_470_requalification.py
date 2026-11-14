@@ -74,6 +74,35 @@ class RequalificationBoundary(unittest.TestCase):
             with self.assertRaises(PublicationError):
                 proof.external_output(root, alias / "attempts.json")
 
+    def test_output_must_be_outside_entire_immutable_git_worktree(self):
+        # A destination beside reports/v3 is still inside the same immutable
+        # checkout. The original subtree-only guard incorrectly permitted it.
+        import tempfile
+        with tempfile.TemporaryDirectory() as name:
+            checkout = Path(name) / "published"
+            root = checkout / "reports" / "skillspector" / "v3"
+            root.mkdir(parents=True)
+            external = Path(name) / "receipt.json"
+            self.assertEqual(
+                proof.external_output(root, external, checkout_root=checkout), external
+            )
+            for target in (
+                checkout / "receipt.json",
+                checkout / "reports" / "other.json",
+                root / "index.json",
+            ):
+                with self.subTest(target=target):
+                    with self.assertRaisesRegex(PublicationError, "immutable published checkout"):
+                        proof.external_output(root, target, checkout_root=checkout)
+            alias = Path(name) / "published-alias"
+            alias.symlink_to(checkout, target_is_directory=True)
+            with self.assertRaisesRegex(PublicationError, "immutable published checkout"):
+                proof.external_output(root, alias / "receipt.json", checkout_root=checkout)
+            with self.assertRaisesRegex(PublicationError, "invalid immutable checkout boundary"):
+                proof.external_output(
+                    root, external, checkout_root=Path(name) / "unrelated"
+                )
+
     def test_checkout_must_be_clean_and_exact_immutable_git_head(self):
         from scripts.directory_publication import PublicationError
         good = type("Proc", (), {"stdout": proof.BASELINE_REPORT_COMMIT + "\n"})()
