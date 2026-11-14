@@ -98,10 +98,10 @@ class RequalificationBoundary(unittest.TestCase):
             alias.symlink_to(checkout, target_is_directory=True)
             with self.assertRaisesRegex(PublicationError, "immutable published checkout"):
                 proof.external_output(root, alias / "receipt.json", checkout_root=checkout)
+            unrelated = Path(name) / "unrelated"
+            unrelated.mkdir()
             with self.assertRaisesRegex(PublicationError, "invalid immutable checkout boundary"):
-                proof.external_output(
-                    root, external, checkout_root=Path(name) / "unrelated"
-                )
+                proof.external_output(root, external, checkout_root=unrelated)
 
     def test_checkout_must_be_clean_and_exact_immutable_git_head(self):
         from scripts.directory_publication import PublicationError
