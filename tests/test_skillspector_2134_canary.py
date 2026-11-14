@@ -149,6 +149,50 @@ class UpgradeCanaryTests(unittest.TestCase):
             with self.subTest(record=record), self.assertRaisesRegex(ValueError, "complete evidence"):
                 pilot.compare(old, record)
 
+    def test_security_group_identity_loss_even_with_unchanged_count(self):
+        original = self.record()
+        a = {"id": "sha256:" + "a" * 64, "rule": "S1", "severity": "HIGH", "path": "SKILL.md"}
+        b = {"id": "sha256:" + "b" * 64, "rule": "S2", "severity": "LOW", "path": "src.py"}
+        c = {"id": "sha256:" + "c" * 64, "rule": "S3", "severity": "LOW", "path": "SKILL.md"}
+        original.update(finding_group_count=2, findings=[a, b])
+        original["coverage"]["original_findings"] = [{"id": "AE1", "reason": "missing"}]
+        bound = {"original_finding_groups": pilot.finding_group_evidence(original)}
+        candidate = copy.deepcopy(original)
+        candidate["findings"] = [b, c]  # Same total; a HIGH finding vanished.
+        difference = pilot.finding_group_delta(bound, candidate)
+        self.assertEqual(difference["old_group_count"], difference["new_group_count"])
+        self.assertEqual(difference["old_groups_not_in_candidate"], [a["id"]])
+        self.assertEqual(difference["candidate_groups_not_in_old"], [c["id"]])
+        self.assertFalse(difference["eligible_for_no_loss_assertion"])
+        self.assertTrue(difference["independent_review_required"])
+
+    def test_group_delta_refuses_incomplete_or_changed_coverage_evidence(self):
+        original = self.record()
+        group = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "CRITICAL", "path": "SKILL.md"}
+        original.update(finding_group_count=1, findings=[group])
+        original["coverage"]["original_findings"] = [{"id": "AE1"}]
+        bound = {"original_finding_groups": pilot.finding_group_evidence(original)}
+        unchanged = pilot.finding_group_delta(bound, copy.deepcopy(original))
+        self.assertTrue(unchanged["eligible_for_no_loss_assertion"])
+        changed = copy.deepcopy(original)
+        changed["coverage"]["original_findings"] = []
+        delta = pilot.finding_group_delta(bound, changed)
+        self.assertTrue(delta["coverage_findings_digest_changed"])
+        self.assertFalse(delta["eligible_for_no_loss_assertion"])
+        changed["coverage"]["original_findings"] = original["coverage"]["original_findings"]
+        changed["coverage"]["grouping_complete"] = False
+        self.assertFalse(pilot.finding_group_delta(bound, changed)["eligible_for_no_loss_assertion"])
+
+    def test_malformed_group_identity_or_incomplete_enumeration_rejected(self):
+        original = self.record()
+        original.update(finding_group_count=1, findings=[])
+        with self.assertRaisesRegex(ValueError, "enumeration"):
+            pilot.finding_group_evidence(original)
+        a = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "HIGH", "path": "SKILL.md"}
+        original.update(finding_group_count=2, findings=[a, copy.deepcopy(a)])
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            pilot.finding_group_evidence(original)
+
     def test_partial_remains_partial(self):
         old = self.baseline["cases"][0]
         record = self.record(old, status="partial")
