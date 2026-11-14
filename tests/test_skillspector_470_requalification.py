@@ -15,7 +15,7 @@ from scripts.directory_publication import PublicationError
 class RequalificationBoundary(unittest.TestCase):
     def fixture(self):
         sources = [
-            {"id": r + "/" + p, "kind": "standalone_skill", "repository": r,
+            {"id": proof.COHORT_IDS[r], "kind": "standalone_skill", "repository": r,
              "revision": s, "path": p, "plugin_path": None}
             for r, s, p in proof.COHORT
         ]
@@ -144,6 +144,19 @@ class RequalificationBoundary(unittest.TestCase):
         identifier = bundle["selection"]["sources"][0]["id"]
         bundle["records"][identifier]["errors"] = [{"code": "input_limit_exceeded"}]
         with self.assertRaises(PublicationError):
+            proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
+
+    def test_root_skill_path_is_empty_and_published_id_is_separate(self):
+        bundle = self.fixture()
+        source = bundle["selection"]["sources"][0]
+        self.assertEqual(source["path"], "")
+        self.assertEqual(source["id"], "alchaincyf/elon-musk-skill/elon-musk-perspective")
+        self.assertEqual(
+            proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)["cohort_size"],
+            2,
+        )
+        source["id"] = "alchaincyf/elon-musk-skill/other-consumer-id"
+        with self.assertRaisesRegex(PublicationError, "source ID or checkout path"):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
     def test_unrelated_directory_aliases_do_not_invalidate_bounded_cohort(self):
