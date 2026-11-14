@@ -293,5 +293,50 @@ class UpgradeCanaryTests(unittest.TestCase):
         self.assertEqual(pilot.probe_normalization(lambda x: x + 1, {})(2), 3)
 
 
+    def test_ephemeral_finding_id_drift_is_distinct_from_security_evidence_change(self):
+        group_id = "sha256:" + "f" * 64
+        old_id = "finding-" + "1" * 32
+        new_id = "finding-" + "2" * 32
+        original = self.record(findings=1)
+        group = {
+            "id": group_id, "rule": "RP1", "severity": "MEDIUM",
+            "path": "SKILL.md", "raw_count": 1,
+            "finding_ids": [old_id],
+            "occurrences": [{"path": "SKILL.md", "line": 5, "finding_id": old_id}],
+            "evidence": {"risk": "retained"},
+        }
+        original.update(finding_group_count=1, findings=[group])
+        original["coverage"]["original_findings"] = []
+        baseline = {"original_finding_groups": pilot.finding_group_evidence(original)}
+
+        candidate = copy.deepcopy(original)
+        candidate["findings"][0]["finding_ids"] = [new_id]
+        candidate["findings"][0]["occurrences"][0]["finding_id"] = new_id
+        delta = pilot.finding_group_delta(baseline, candidate)
+        self.assertEqual(delta["matching_ids_with_only_generated_id_drift"], [group_id])
+        self.assertEqual(delta["matching_ids_with_semantic_evidence_change"], [])
+        # A diagnostic alone never authorizes a Complete promotion.
+        self.assertFalse(delta["eligible_for_no_loss_assertion"])
+
+        candidate["findings"][0]["occurrences"][0]["line"] = 6
+        delta = pilot.finding_group_delta(baseline, candidate)
+        self.assertEqual(delta["matching_ids_with_semantic_evidence_change"], [group_id])
+        self.assertEqual(delta["matching_ids_with_only_generated_id_drift"], [])
+
+        candidate = copy.deepcopy(original)
+        candidate["findings"][0]["evidence"]["risk"] = "lost"
+        delta = pilot.finding_group_delta(baseline, candidate)
+        self.assertEqual(delta["matching_ids_with_semantic_evidence_change"], [group_id])
+
+    def test_unrecognized_finding_id_is_not_silently_discarded(self):
+        group = {"rule": "SC1", "finding_ids": ["custom-id"],
+                 "occurrences": [{"finding_id": "custom-id", "line": 1}]}
+        changed = copy.deepcopy(group)
+        changed["finding_ids"] = ["other-id"]
+        changed["occurrences"][0]["finding_id"] = "other-id"
+        self.assertNotEqual(pilot.semantic_group_digest(group),
+                            pilot.semantic_group_digest(changed))
+
+
 if __name__ == "__main__":
     unittest.main()

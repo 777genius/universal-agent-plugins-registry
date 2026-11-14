@@ -143,6 +143,32 @@ def verify_published_baseline(cases: dict, *, fetcher=None) -> list[dict]:
     return evidence
 
 
+# Scanner-emitted per-scan finding IDs are correlation tokens, not content evidence.
+# Retain the original full-group digest for fail-closed authorization, and
+# separately compare a strictly bounded semantic view to diagnose ID drift.
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\\Z")
+
+
+def semantic_group_digest(group: dict) -> str:
+    """Hash all group security content except verified generated correlation IDs."""
+    value = copy.deepcopy(group)
+    ids = value.get("finding_ids")
+    if isinstance(ids, list) and all(
+        isinstance(item, str) and _GENERATED_FINDING_ID.fullmatch(item) for item in ids
+    ):
+        value.pop("finding_ids")
+    occurrences = value.get("occurrences")
+    if isinstance(occurrences, list):
+        for item in occurrences:
+            if (isinstance(item, dict) and
+                isinstance(item.get("finding_id"), str) and
+                _GENERATED_FINDING_ID.fullmatch(item["finding_id"])):
+                item.pop("finding_id")
+    return "sha256:" + hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+
+
 def finding_group_evidence(record: dict) -> dict:
     """Expose original/candidate group identities without redefining scanner findings.
 
@@ -182,7 +208,8 @@ def finding_group_evidence(record: dict) -> dict:
                            ("id", "rule", "severity", "path")},
                            "raw_count": group["raw_count"],
                            "occurrence_count": len(group["occurrences"]),
-                           "normalized_group_sha256": content_digest(group)})
+                           "normalized_group_sha256": content_digest(group),
+                           "semantic_group_sha256": semantic_group_digest(group)})
     if complete and sum(group["raw_count"] for group in groups) != record["finding_count"]:
         raise ValueError("normalized finding count contradicts complete grouping")
     coverage_findings = coverage.get("original_findings", [])
@@ -204,6 +231,10 @@ def finding_group_delta(original: dict, candidate: dict) -> dict:
     changed_common = sorted(group_id for group_id in (old_ids & new_ids)
         if old_by_id[group_id]["normalized_group_sha256"] !=
            new_by_id[group_id]["normalized_group_sha256"])
+    semantic_change = sorted(group_id for group_id in (old_ids & new_ids)
+        if old_by_id[group_id]["semantic_group_sha256"] !=
+           new_by_id[group_id]["semantic_group_sha256"])
+    generated_id_only = sorted(set(changed_common) - set(semantic_change))
     return {
         "old_group_count": old["group_count"],
         "new_group_count": current["group_count"],
@@ -212,6 +243,8 @@ def finding_group_delta(original: dict, candidate: dict) -> dict:
         "old_groups_not_in_candidate": sorted(old_ids - new_ids),
         "candidate_groups_not_in_old": sorted(new_ids - old_ids),
         "matching_ids_with_changed_occurrences_or_evidence": changed_common,
+        "matching_ids_with_semantic_evidence_change": semantic_change,
+        "matching_ids_with_only_generated_id_drift": generated_id_only,
         "candidate_groups": current["groups"],
         "old_coverage_finding_count": old["coverage_finding_count"],
         "new_coverage_finding_count": current["coverage_finding_count"],
@@ -387,6 +420,8 @@ def main() -> int:
             "old_groups": change["old_group_count"], "new_groups": change["new_group_count"],
             "removed_groups": len(change["old_groups_not_in_candidate"]),
             "changed_group_evidence": len(change["matching_ids_with_changed_occurrences_or_evidence"]),
+            "changed_semantic_group_evidence": len(change["matching_ids_with_semantic_evidence_change"]),
+            "generated_id_only_group_drift": len(change["matching_ids_with_only_generated_id_drift"]),
             "finding_review_required": change["independent_review_required"],
             "no_loss_proven": change["eligible_for_no_loss_assertion"],
             "same_immutable_source": row["same_source"],
