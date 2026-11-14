@@ -19,7 +19,9 @@ class ExactReferenceDifferenceTests(unittest.TestCase):
                 "evidence": "Run python3 scripts/required.sh"}
         issue = {"id": "AE2", "tags": ["security"], "severity": "HIGH",
                  "location": {"file": "SKILL.md", "start_line": 13}}
-        old = {"analysis_completeness": {"status": "partial", "partially_inspected_files": 0,
+        old = {"analysis_completeness": {"status": "partial", "is_complete": False,
+                                         "partially_inspected_files": 0,
+                                         "ledger_exceptions": [{"reason_code": "referenced_uninspected"}],
                                          "references": [meta, real]},
                "issues": [issue]}
         new = copy.deepcopy(old)
@@ -60,6 +62,29 @@ class ExactReferenceDifferenceTests(unittest.TestCase):
         old["analysis_completeness"]["references"].append(
             copy.deepcopy(old["analysis_completeness"]["references"][0]))
         with self.assertRaisesRegex(ValueError, "candidate removed another reference"):
+            proof.assert_delta(old, new)
+
+    def test_missing_executable_never_qualifies_as_complete_with_caveats(self):
+        old, new = self.fixtures()
+        new["analysis_completeness"]["status"] = "complete_with_caveats"
+        new["analysis_completeness"]["is_complete"] = True
+        with self.assertRaisesRegex(ValueError, "missing executable"):
+            proof.assert_delta(old, new)
+        old, new = self.fixtures()
+        new["analysis_completeness"]["ledger_exceptions"] = []
+        with self.assertRaisesRegex(ValueError, "missing executable"):
+            proof.assert_delta(old, new)
+
+    def test_coverage_tag_does_not_hide_independent_security_finding(self):
+        old, new = self.fixtures()
+        old["issues"].append({"id": "AE1", "tags": ["coverage", "security"], "severity": "HIGH"})
+        with self.assertRaisesRegex(ValueError, "security findings"):
+            proof.assert_delta(old, new)
+
+    def test_malformed_issue_evidence_fails_closed(self):
+        old, new = self.fixtures()
+        new["issues"].append("missing actual issue data")
+        with self.assertRaisesRegex(ValueError, "invalid security issue"):
             proof.assert_delta(old, new)
 
     def test_coverage_only_finding_may_disappear_but_content_may_not(self):

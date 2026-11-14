@@ -69,6 +69,16 @@ def run(scanner: Path, skill: Path) -> tuple[int, dict]:
         metadata.get("llm_requested") is not False or metadata.get("inference_usage") != [] or
         result.get("execution_successful") is not True):
         raise ValueError("scanner provenance or execution differs")
+    coverage = result.get("analysis_completeness")
+    if not isinstance(coverage, dict):
+        raise ValueError("missing scanner coverage result")
+    status = coverage.get("status")
+    is_complete = coverage.get("is_complete")
+    if (status == "partial" and (is_complete is not False or completed.returncode != 1)
+        or status in {"complete", "complete_with_caveats"}
+        and (is_complete is not True or completed.returncode != 0)
+        or status not in {"partial", "complete", "complete_with_caveats"}):
+        raise ValueError("inconsistent no-LLM coverage status and CLI exit")
     return completed.returncode, result
 
 
@@ -83,9 +93,15 @@ def version_row(row: dict) -> bool:
 
 
 def content_findings(report: dict) -> collections.Counter:
+    if not isinstance(report.get("issues"), list) or not all(
+        isinstance(issue, dict) for issue in report["issues"]
+    ):
+        raise ValueError("invalid security issue evidence")
     def coverage_only(issue):
         tags = issue.get("tags", [])
-        return issue.get("id") in {"AE1", "AE7"} and "coverage" in tags
+        # Never exempt a finding that also carries independent security evidence.
+        return (issue.get("id") in {"AE1", "AE7"} and isinstance(tags, list)
+                and "coverage" in tags and "security" not in tags)
     return collections.Counter(
         json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         for item in report.get("issues", [])
@@ -96,8 +112,9 @@ def content_findings(report: dict) -> collections.Counter:
 def assert_delta(old: dict, new: dict) -> dict:
     old_refs = old["analysis_completeness"]["references"]
     new_refs = new["analysis_completeness"]["references"]
-    if not isinstance(old_refs, list) or not isinstance(new_refs, list):
-        raise ValueError("missing reference evidence")
+    if (not isinstance(old_refs, list) or not isinstance(new_refs, list)
+        or not all(isinstance(row, dict) for row in old_refs + new_refs)):
+        raise ValueError("missing or malformed reference evidence")
     old_versions = [x for x in old_refs if version_row(x)]
     new_versions = [x for x in new_refs if version_row(x)]
     old_keys = collections.Counter(ref_identity(x) for x in old_refs)
@@ -112,9 +129,26 @@ def assert_delta(old: dict, new: dict) -> dict:
         raise ValueError("non-coverage security findings changed")
     if new.get("analysis_completeness", {}).get("partially_inspected_files", 0) >        old.get("analysis_completeness", {}).get("partially_inspected_files", 0):
         raise ValueError("candidate increased uninspected-file count")
+    # A missing interpreter operand can never be "complete_with_caveats".
+    remaining_executables = [
+        row for row in new_refs
+        if row.get("status") == "missing"
+        and row.get("reference_kind") == "inline_command"
+    ]
+    if remaining_executables:
+        coverage = new["analysis_completeness"]
+        ledger = coverage.get("ledger_exceptions")
+        if (coverage.get("status") != "partial"
+            or coverage.get("is_complete") is not False
+            or not isinstance(ledger, list)
+            or not any(isinstance(row, dict)
+                       and row.get("reason_code") == "referenced_uninspected"
+                       for row in ledger)):
+            raise ValueError("candidate falsely considers missing executable covered")
     return {"fake_version_rows_removed": len(old_versions), "new_reference_rows": len(new_refs),
             "retained_reference_rows": len(old_refs) - len(old_versions),
             "noncoverage_finding_groups_unchanged": True,
+            "remaining_missing_executable_rows": len(remaining_executables),
             "baseline_completeness": old["analysis_completeness"]["status"],
             "candidate_completeness": new["analysis_completeness"]["status"]}
 
