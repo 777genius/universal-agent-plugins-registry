@@ -20,6 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
+if __package__:
+    from .client_contract import load_client_ids
+else:
+    from client_contract import load_client_ids
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_SCHEMA = ROOT / "schemas" / "directory-snapshot.schema.json"
@@ -302,8 +307,7 @@ REPOSITORY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*
 PACKAGE_PATH_RE = re.compile(r"(?!/)(?!.*(?:^|/)\.\.?/)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
 TIMESTAMP_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-CLIENTS = {"codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
-           "grok", "kimi", "qoder"}
+CLIENTS = frozenset(load_client_ids())
 EVIDENCE_WORKFLOW_RE = re.compile(r"[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml")
 EVIDENCE_SOURCE_REF_RE = re.compile(r"refs/heads/[A-Za-z0-9._/-]+")
 

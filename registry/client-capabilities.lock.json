@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "repository": "777genius/universal-agent-plugins",
+  "release": "agentplugins-v0.1.108",
+  "revision": "8c3cfa28e332c533b0cc0845739c0275730a4285",
+  "path": "landing/data/clientCapabilities.generated.json",
+  "digest": "sha256:57e78f6c8559c2e0367311dfeebc6f6148f2c1654b0e5d563b3670b163910c89"
+}
