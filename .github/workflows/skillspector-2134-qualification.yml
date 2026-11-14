@@ -1,0 +1,57 @@
+name: SkillSpector 2.13.4 incomplete-coverage qualification (read-only)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/skillspector-2134-qualification.yml'
+      - 'scripts/skillspector_2134_canary.py'
+      - 'tests/test_skillspector_2134_canary.py'
+      - 'docs/skillspector/upgrade-2.13.4-canary.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: 54824463814a0be01360792523ec7245a69190fc # signed release v2.13.4
+          persist-credentials: false
+          path: scanner
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned runtime and released scanner without model credentials
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4 cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+      - name: Fail-closed canary contract regression tests
+        working-directory: source
+        run: python3 -m unittest -v tests.test_skillspector_2134_canary
+      - name: Measure the exact source-bound incomplete-coverage corpus
+        working-directory: source
+        timeout-minutes: 45
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m scripts.skillspector_2134_canary \
+            --cases docs/skillspector/upgrade-2.13.4-canary.json \
+            --scanner "$GITHUB_WORKSPACE/scanner/.venv/bin/skillspector" \
+            --output "$RUNNER_TEMP/skillspector-2134-canary/proof.json"
+      - name: Preserve measured evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-2134-incomplete-coverage-canary
+          path: ${{ runner.temp }}/skillspector-2134-canary/
+          if-no-files-found: warn
+          retention-days: 7
