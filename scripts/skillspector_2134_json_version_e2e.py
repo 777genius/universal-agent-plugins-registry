@@ -107,7 +107,8 @@ def assert_delta(old: dict, new: dict) -> dict:
     if (len(old_versions) != 1 or new_versions or
         deleted != collections.Counter({ref_identity(old_versions[0]): 1}) or added):
         raise ValueError("candidate removed another reference or retained fake VERSION dependency")
-    if not old.get("issues") is not None or content_findings(old) != content_findings(new):
+    if (not isinstance(old.get("issues"), list) or not isinstance(new.get("issues"), list) or
+        content_findings(old) != content_findings(new)):
         raise ValueError("non-coverage security findings changed")
     if new.get("analysis_completeness", {}).get("partially_inspected_files", 0) >        old.get("analysis_completeness", {}).get("partially_inspected_files", 0):
         raise ValueError("candidate increased uninspected-file count")
@@ -136,7 +137,7 @@ def main() -> int:
         raise ValueError("upstream real Skill commit changed")
     skill = source / "skills/asc-workflow"
     raw = (skill / "SKILL.md").read_bytes()
-    git_blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\\0" + raw).hexdigest()
+    git_blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
     if git_blob != SOURCE_SKILL_BLOB:
         raise ValueError("immutable real SKILL.md blob differs")
     before = scan_tree(skill)
