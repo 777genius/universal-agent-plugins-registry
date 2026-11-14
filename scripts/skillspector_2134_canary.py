@@ -138,8 +138,76 @@ def verify_published_baseline(cases: dict, *, fetcher=None) -> list[dict]:
                          "original_finding_group_count": original.get("finding_group_count"),
                          "original_findings_sha256": "sha256:" + hashlib.sha256(json.dumps(original.get("findings", []),
                              ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+                         "original_finding_groups": finding_group_evidence(original),
                          "original_shard_digest": digest})
     return evidence
+
+
+def finding_group_evidence(record: dict) -> dict:
+    """Expose original/candidate group identities without redefining scanner findings.
+
+    A count can remain unchanged while a different security group disappears.
+    Group IDs are the published v3 SHA-256 fingerprints; no inferred matching
+    across analyzer versions can authorize a safety conclusion.
+    """
+    groups = record.get("findings")
+    total = record.get("finding_group_count")
+    coverage = record.get("coverage")
+    if (not isinstance(groups, list) or type(total) is not int or total < 0 or
+        not isinstance(coverage, dict)):
+        raise ValueError("missing independently reviewable finding-group evidence")
+    complete = (coverage.get("grouping_complete") is True and
+                record.get("findings_truncated") is False)
+    if complete and len(groups) != total:
+        raise ValueError("finding-group enumeration contradicts complete grouping")
+    ids = set()
+    normalized = []
+    for group in groups:
+        if (not isinstance(group, dict) or not isinstance(group.get("id"), str) or
+            not DIGEST.fullmatch(group["id"]) or group["id"] in ids or
+            not isinstance(group.get("rule"), str) or
+            group.get("severity") not in {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"} or
+            not isinstance(group.get("path"), str)):
+            raise ValueError("invalid or duplicate normalized security finding group")
+        ids.add(group["id"])
+        normalized.append({key: group[key] for key in
+                           ("id", "rule", "severity", "path")})
+    coverage_findings = coverage.get("original_findings", [])
+    if not isinstance(coverage_findings, list):
+        raise ValueError("invalid original coverage finding evidence")
+    def content_digest(value):
+        return "sha256:" + hashlib.sha256(json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {"grouping_complete": complete, "group_count": total,
+            "groups": sorted(normalized, key=lambda group: group["id"]),
+            "coverage_finding_count": len(coverage_findings),
+            "coverage_findings_sha256": content_digest(coverage_findings)}
+
+
+def finding_group_delta(original: dict, candidate: dict) -> dict:
+    """Report unmatched groups for mandatory manual review; never auto-promote."""
+    current = finding_group_evidence(candidate)
+    old = original["original_finding_groups"]
+    old_ids = {group["id"] for group in old["groups"]}
+    new_ids = {group["id"] for group in current["groups"]}
+    return {
+        "old_group_count": old["group_count"],
+        "new_group_count": current["group_count"],
+        "old_grouping_complete": old["grouping_complete"],
+        "new_grouping_complete": current["grouping_complete"],
+        "old_groups_not_in_candidate": sorted(old_ids - new_ids),
+        "candidate_groups_not_in_old": sorted(new_ids - old_ids),
+        "candidate_groups": current["groups"],
+        "old_coverage_finding_count": old["coverage_finding_count"],
+        "new_coverage_finding_count": current["coverage_finding_count"],
+        "coverage_findings_digest_changed": (
+            old["coverage_findings_sha256"] != current["coverage_findings_sha256"]),
+        "independent_review_required": True,
+        "eligible_for_no_loss_assertion": (
+            old["grouping_complete"] and current["grouping_complete"] and
+            not (old_ids - new_ids) and
+            old["coverage_findings_sha256"] == current["coverage_findings_sha256"]),
+    }
 
 
 def compare(item: dict, record: dict) -> dict:
@@ -208,7 +276,11 @@ def scan(executable: Path, cases: dict) -> dict:
                                             profile_id="static-standard-v3")
         finally:
             pin.close()
-        results.append(compare(item, record))
+        comparison = compare(item, record)
+        comparison["candidate_report_digest"] = record.get("report_digest")
+        comparison["finding_group_delta"] = finding_group_delta(
+            original_evidence[len(results)], record)
+        results.append(comparison)
     counts = Counter(row["new_status"] for row in results)
     return {
         "schema_version": 1, "kind": "skillspector-upgrade-canary-readonly",
