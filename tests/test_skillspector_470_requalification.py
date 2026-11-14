@@ -25,6 +25,10 @@ class RequalificationBoundary(unittest.TestCase):
                         "fingerprint": "a", "reason": "transient_source_failure"}] * 3 + [
                        {"at": "2026-11-14T00:00:00Z", "profile": {}, "status": "error",
                         "fingerprint": "b", "reason": "transient_retry_limit"}]
+            # 4 earlier attempts remain in the immutable ledger in addition
+            # to the current exhausted policy epoch's 4 attempts.
+            history = [{**event, "at": "2026-11-02T00:00:00Z"}
+                       for event in history] + history
             attempt = {
                 "id": source["id"], "source_digest": coverage.source_digest(source),
                 "scanner": copy.deepcopy(coverage.SCANNER),
@@ -91,6 +95,7 @@ class RequalificationBoundary(unittest.TestCase):
         unchanged = copy.deepcopy(bundle)
         result = proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
         self.assertEqual(result["cohort_size"], 2)
+        self.assertEqual([x["old_history_entry_count"] for x in result["receipts"]], [8, 8])
         self.assertEqual(result["production_error_reduction"], 0)
         self.assertFalse(result["ready_for_auto_promotion"])
         self.assertTrue(all(not x["new_attempt_authorized"] and not x["candidate_complete"]
@@ -177,6 +182,15 @@ class RequalificationBoundary(unittest.TestCase):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)["cohort_size"],
             2,
         )
+
+    def test_old_four_entries_cannot_replace_eight_entry_provenance(self):
+        bundle = self.fixture()
+        identifier = bundle["selection"]["sources"][0]["id"]
+        truncated = copy.deepcopy(bundle["attempts"][identifier]["history"][-4:])
+        bundle["attempts"][identifier]["history"] = truncated
+        bundle["records"][identifier]["attempt_history"] = copy.deepcopy(truncated)
+        with self.assertRaisesRegex(PublicationError, "intact exhausted"):
+            proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
     def test_missing_or_conflicting_history_and_duplicate_pin_fail(self):
         bundle = self.fixture()
