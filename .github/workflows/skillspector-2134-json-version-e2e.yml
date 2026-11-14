@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/skillspector-2134-json-version-e2e.yml'
       - 'scripts/skillspector_2134_json_version_e2e.py'
+      - 'tests/test_skillspector_2134_json_version_e2e.py'
   workflow_dispatch:
 
 permissions:
@@ -42,6 +43,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+      - name: Prove exact comparator fails closed on reference/finding loss
+        working-directory: source
+        run: python3 -m unittest -v tests.test_skillspector_2134_json_version_e2e
       - name: Install both immutable locked no-provider scanners
         run: |
           python3 -m pip install --disable-pip-version-check uv==0.13.4
