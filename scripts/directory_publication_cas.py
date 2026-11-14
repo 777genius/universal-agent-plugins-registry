@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+if __package__:
+    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, fixed_feed
+else:
+    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, fixed_feed
+
 
 GIT = "/usr/bin/git"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -411,23 +416,29 @@ def materialize_transition(
     raise CasError("materialization push failed with exact pre-state still present")
 
 
-def validate_signed_directory_append(repo: Path, ledger_old: str, signed: str, sequence_tag: str) -> None:
+def validate_signed_directory_append(
+    repo: Path, ledger_old: str, signed: str, sequence_tag: str,
+    *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> None:
     """Authenticate the prepared Directory delta independently of its parent SHA."""
+    fixed_feed(feed)
+    if not re.fullmatch(re.escape(feed.sequence_ref_prefix) + r"[0-9]{20}", sequence_tag):
+        raise CasError("signed Directory append uses the wrong feed tag namespace")
     if _git(repo, ["show", "-s", "--format=%P", signed]).stdout.strip().split() != [ledger_old]:
         raise CasError("signed ledger is not the exact old-ledger child")
     if _git(repo, ["show", "-s", "--format=%B", signed]).stdout != "chore(directory): publish signed snapshot\n\n":
         raise CasError("signed Directory commit message is invalid")
     sequence = int(sequence_tag.rsplit("-", 1)[1])
-    if sequence < 1:
-        raise CasError("sequence tag must name a positive sequence")
+    if not 1 <= sequence <= 9_007_199_254_740_991:
+        raise CasError("sequence tag must name a positive JSON-safe sequence")
     stem = f"{sequence:020d}"
     expected = {
-        "registry/schemas/1/latest.json": {"A", "M"},
-        f"registry/schemas/1/snapshots/{stem}.envelope.json": {"A"},
-        f"registry/schemas/1/snapshots/{stem}.json": {"A"},
+        f"{feed.feed_path}/latest.json": {"A", "M"},
+        f"{feed.feed_path}/snapshots/{stem}.envelope.json": {"A"},
+        f"{feed.feed_path}/snapshots/{stem}.json": {"A"},
     }
     if sequence == 1:
-        expected["registry/schemas/1/ledger-contract.json"] = {"A"}
+        expected[f"{feed.feed_path}/ledger-contract.json"] = {"A"}
     changed = _git(
         repo, ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", ledger_old, signed],
     ).stdout.splitlines()

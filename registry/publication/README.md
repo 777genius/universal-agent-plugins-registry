@@ -5,6 +5,49 @@ publication service, database, or transparency-log platform. Reviewed data on
 `main` is prepared without secrets; a protected environment signs one bounded
 canonical candidate and appends it to the protected publication branch.
 
+## Modern schema-1 foundation (not activated)
+
+`scripts/directory_feed_contract.py` defines two fixed publication lineages.
+Existing entrypoints still select the legacy contract. Its signed history,
+sequence namespace, signing identity and 14-client boundary remain unchanged.
+The modern entrypoints reuse preparation, evidence trust, signing, ledger
+validation and immutable append validation. They do not select a profile from
+candidate data, command-line options or environment variables.
+
+| Contract | Legacy | Modern reservation |
+| --- | --- | --- |
+| Artifact directory | `registry/schemas/1` | `registry/modern/schemas/1` |
+| Ledger ref | `refs/heads/directory-publication-ledger` | `refs/heads/directory-modern-publication-ledger` |
+| Sequence tag prefix | `directory-publication-schema-1-sequence-` | `directory-modern-publication-schema-1-sequence-` |
+| Reviewed trust files | `registry/publication/{config,trusted-keys}.json` | `registry/publication/modern/{config,trusted-keys}.json` |
+| Signing secret | `DIRECTORY_ED25519_PRIVATE_KEY` | `DIRECTORY_MODERN_ED25519_PRIVATE_KEY` |
+| Current evidence shape begins at | Sequence 15 | Sequence 1 |
+
+Both lineages use snapshot schema 1 and the same canonical bytes and signature
+framing. Their snapshot schemas reference shared record definitions; the legacy
+schema retains its exact historical evidence cutover. The modern publisher
+accepts the known IDs from the pinned client contract, without creating any
+target, scope, evidence or release-policy grants from those IDs.
+
+`prepare_modern_directory_publication.py` and
+`sign_modern_directory_publication.py` accept only the modern trust files at
+their fixed reviewed source paths. They reject symlink redirection and any key
+ID or public key reused from legacy trust. The modern files are deliberately
+absent, so the entrypoints fail before reading a candidate, using a signing
+secret or writing publication output. Tests provision existing fixture keys
+only in disposable source trees.
+
+This change does not connect modern publication to protected CAS mutation,
+promotion or Pages deployment. Before activation, a separate reviewed change
+must provision an independent protected signing key and evidence-trust policy;
+protect the modern ledger, immutable sequence tags and launch/promotion controls;
+bind the actual origin, bootstrap and cache namespace in each consumer; and
+connect those controls to the shared publication and deployment workflow. That
+change must verify exact-source compatibility evidence for each new signed
+target, old-client readability, cross-feed rejection, rollback protection,
+retry behavior and append-only history. No modern production origin, key,
+bootstrap, target grant or approval is established by this foundation.
+
 ## Artifact contract
 
 Schema 1 is served below `registry/schemas/1/`. Historical snapshot and
