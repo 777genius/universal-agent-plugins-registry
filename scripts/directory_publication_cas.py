@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 if __package__:
-    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, fixed_feed
+    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed
 else:
-    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, fixed_feed
+    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed
 
 
 GIT = "/usr/bin/git"
@@ -160,7 +160,9 @@ def read_ref_state(repo: Path, remote: str, main_ref: str, ledger_ref: str, tag_
     return RefState(observed.get(main_ref), observed.get(ledger_ref), observed.get(tag_ref))
 
 
-def validate_materialized_descendant(repo: Path, materialized: str, signed: str) -> None:
+def validate_materialized_descendant(
+    repo: Path, materialized: str, signed: str, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> None:
     """Authenticate the one allowed post-publication ledger descendant.
 
     Site materialization is deliberately a separate, single-parent commit.  It
@@ -168,6 +170,7 @@ def validate_materialized_descendant(repo: Path, materialized: str, signed: str)
     This lets an exact workflow rerun distinguish its own completed deployment
     transaction from arbitrary forward movement of the protected ledger.
     """
+    fixed_feed(feed)
     _require_sha(materialized, "materialized ledger")
     _require_sha(signed, "signed ledger")
     if materialized == signed:
@@ -175,6 +178,16 @@ def validate_materialized_descendant(repo: Path, materialized: str, signed: str)
     parents = _git(repo, ["show", "-s", "--format=%P", materialized]).stdout.strip().split()
     if parents != [signed]:
         raise CasError("materialized ledger is not the exact signed-commit child")
+    if feed is MODERN_FEED and _git(repo, ["diff", "--quiet", signed, materialized], check=False).returncode != 0:
+        raise CasError("modern materialization must preserve the exact signed tree")
+    if feed is MODERN_FEED:
+        latest = json.loads(_git(repo, ["show", f"{signed}:{feed.feed_path}/latest.json"]).stdout)
+        sequence = latest.get("sequence")
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            raise CasError("modern materialization has an invalid Directory sequence")
+        parent = _git(repo, ["rev-parse", f"{signed}^"]).stdout.strip()
+        validate_signed_directory_append(repo, parent, signed,
+                                         f"{feed.sequence_ref_prefix}{sequence:020d}", feed=feed)
     if _git(repo, ["diff", "--quiet", signed, materialized, "--", "registry", "discovery", "security"], check=False).returncode != 0:
         raise CasError("materialized ledger changed signed registry bytes or feed bytes")
     message = _git(repo, ["show", "-s", "--format=%B", materialized]).stdout
@@ -281,8 +294,12 @@ def _validate_feed_or_recovery(repo: Path, remote: str, previous: str, descendan
         validate_discovery_recovery_append(repo, previous, descendant, tagged)
 
 
-def validate_staged_lineage(repo: Path, current: str, signed: str, remote: str = "origin") -> str:
+def validate_staged_lineage(
+    repo: Path, current: str, signed: str, remote: str = "origin",
+    *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> str:
     """Return the exact site materialization below safe signed-feed appends."""
+    fixed_feed(feed)
     _require_sha(current, "current ledger")
     _require_sha(signed, "signed ledger")
     if _git(repo, ["merge-base", "--is-ancestor", signed, current], check=False).returncode != 0:
@@ -293,12 +310,14 @@ def validate_staged_lineage(repo: Path, current: str, signed: str, remote: str =
     if not descendants:
         raise CasError("staged publication has no materialized site commit")
     materialized = descendants[0]
-    validate_materialized_descendant(repo, materialized, signed)
+    validate_materialized_descendant(repo, materialized, signed, feed=feed)
     previous = materialized
     for descendant in descendants[1:]:
         parents = _git(repo, ["show", "-s", "--format=%P", descendant]).stdout.strip().split()
         if parents != [previous]:
             raise CasError("staged ledger has a non-linear post-materialization append")
+        if feed is MODERN_FEED:
+            raise CasError("modern ledger does not permit foreign feed interleaving")
         _validate_feed_or_recovery(repo, remote, previous, descendant)
         previous = descendant
     if _git(repo, ["diff", "--quiet", signed, current, "--", "registry"], check=False).returncode != 0:
@@ -311,16 +330,23 @@ def atomic_transition(
     ledger_new: str, sequence_tag: str, attempts: int = 3,
     push_runner: Callable[[Sequence[str]], bool] | None = None,
     materialized_output: Path | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> str:
     """Publish only exact pre-state, accept only exact committed state, else fail."""
+    fixed_feed(feed)
     for value, label in ((source, "source"), (marker, "marker"), (ledger_old, "old ledger"), (ledger_new, "new ledger")):
         _require_sha(value, label)
-    if not sequence_tag.startswith("refs/tags/directory-publication-schema-1-sequence-"):
+    if not sequence_tag.startswith(feed.sequence_ref_prefix):
         raise CasError("sequence tag is outside the publication namespace")
     if not 1 <= attempts <= 3:
         raise CasError("attempt count must be between one and three")
     main_ref = "refs/heads/main"
-    ledger_ref = "refs/heads/directory-publication-ledger"
+    ledger_ref = feed.ledger_ref
+    if feed is MODERN_FEED:
+        validate_signed_directory_append(repo, ledger_old, ledger_new, sequence_tag, feed=feed)
+        sequence = int(sequence_tag.rsplit("-", 1)[1])
+        publication_id, _digest = _snapshot_identity(repo, ledger_new, sequence, feed=feed)
+        validate_marker(repo, marker, source, publication_id)
     before = RefState(source, ledger_old, None)
     committed = RefState(marker, ledger_new, ledger_new)
     if materialized_output is not None:
@@ -335,7 +361,7 @@ def atomic_transition(
             fetched = _git(repo, ["fetch", "--no-tags", remote, state.ledger], check=False)
             if fetched.returncode != 0:
                 raise CasError("cannot acquire materialized ledger descendant")
-            validate_materialized_descendant(repo, state.ledger, ledger_new)
+            validate_materialized_descendant(repo, state.ledger, ledger_new, feed=feed)
             if materialized_output is not None:
                 materialized_output.write_text(state.ledger + "\n", encoding="ascii")
             return "materialized"
@@ -384,13 +410,17 @@ def atomic_transition(
 def materialize_transition(
     repo: Path, remote: str, *, ledger_old: str, ledger_new: str, attempts: int = 3,
     push_runner: Callable[[Sequence[str]], bool] | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> str:
     """Advance the ledger with an exact lease, accepting only exact readback."""
+    fixed_feed(feed)
     _require_sha(ledger_old, "old ledger")
     _require_sha(ledger_new, "new ledger")
     if not 1 <= attempts <= 3:
         raise CasError("attempt count must be between one and three")
-    ledger_ref = "refs/heads/directory-publication-ledger"
+    ledger_ref = feed.ledger_ref
+    if feed is MODERN_FEED:
+        validate_materialized_descendant(repo, ledger_new, ledger_old, feed=feed)
 
     def read() -> str | None:
         return read_ref_state(repo, remote, "refs/heads/__unused-main", ledger_ref, "refs/tags/__unused-tag").ledger
@@ -480,7 +510,11 @@ def _replace_root_entries(repo: Path, base: str, donor: str, names: set[bytes]) 
             entries[name] = donated[name]
         else:
             entries.pop(name, None)
-    data = b"\0".join(entries.values()) + b"\0"
+    return _write_tree_entries(repo, entries)
+
+
+def _write_tree_entries(repo: Path, entries: dict[bytes, bytes]) -> str:
+    data = b"\0".join(entries.values()) + (b"\0" if entries else b"")
     result = subprocess.run(
         [GIT, "-C", str(repo), "mktree", "-z"], input=data,
         check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -514,15 +548,21 @@ def _commit_like(repo: Path, template: str, tree: str, parent: str) -> str:
 def reassemble_materialization(
     repo: Path, *, ledger_old: str, prepared_signed: str, prepared_materialized: str,
     ledger_head: str, sequence_tag: str, remote: str = "origin",
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> tuple[str, str]:
     """Reparent approved Directory and static bytes over feed-only ledger movement."""
+    fixed_feed(feed)
     for value, label in ((ledger_old, "old ledger"), (prepared_signed, "prepared signed"),
                          (prepared_materialized, "prepared materialized"), (ledger_head, "current ledger")):
         _require_sha(value, label)
-    if not re.fullmatch(r"refs/tags/directory-publication-schema-1-sequence-[0-9]{20}", sequence_tag):
+    if not re.fullmatch(re.escape(feed.sequence_ref_prefix) + r"[0-9]{20}", sequence_tag):
         raise CasError("sequence tag is outside the publication namespace")
-    validate_signed_directory_append(repo, ledger_old, prepared_signed, sequence_tag)
-    validate_materialized_descendant(repo, prepared_materialized, prepared_signed)
+    validate_signed_directory_append(repo, ledger_old, prepared_signed, sequence_tag, feed=feed)
+    validate_materialized_descendant(repo, prepared_materialized, prepared_signed, feed=feed)
+    if feed is MODERN_FEED:
+        if ledger_head != ledger_old:
+            raise CasError("modern ledger moved; prepare a new publication instead of rebasing")
+        return prepared_signed, prepared_materialized
     if _git(repo, ["merge-base", "--is-ancestor", ledger_old, ledger_head], check=False).returncode != 0:
         raise CasError("current ledger does not descend from the prepared ledger parent")
     previous = ledger_old
@@ -559,23 +599,25 @@ def atomic_materialized_transition(
     signed: str, materialized: str, sequence_tag: str, publication_id: str,
     attempts: int = 3,
     push_runner: Callable[[Sequence[str]], bool] | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> str:
     """Publish P, S and M in one ref transaction, with S the sole parent of M."""
+    fixed_feed(feed)
     for value, label in (
         (source, "source"), (marker, "marker"), (ledger_old, "old ledger"),
         (signed, "signed ledger"), (materialized, "materialized ledger"),
     ):
         _require_sha(value, label)
-    if not re.fullmatch(r"refs/tags/directory-publication-schema-1-sequence-[0-9]{20}", sequence_tag):
+    if not re.fullmatch(re.escape(feed.sequence_ref_prefix) + r"[0-9]{20}", sequence_tag):
         raise CasError("sequence tag is outside the publication namespace")
     if not 1 <= attempts <= 3:
         raise CasError("attempt count must be between one and three")
     validate_marker(repo, marker, source, publication_id)
-    validate_signed_directory_append(repo, ledger_old, signed, sequence_tag)
-    validate_materialized_descendant(repo, materialized, signed)
+    validate_signed_directory_append(repo, ledger_old, signed, sequence_tag, feed=feed)
+    validate_materialized_descendant(repo, materialized, signed, feed=feed)
 
     main_ref = "refs/heads/main"
-    ledger_ref = "refs/heads/directory-publication-ledger"
+    ledger_ref = feed.ledger_ref
     before = RefState(source, ledger_old, None)
     committed = RefState(marker, materialized, signed)
     arguments = [
@@ -616,6 +658,7 @@ def atomic_rebased_materialized_transition(
     prepared_signed: str, prepared_materialized: str, authenticated_head: str,
     sequence_tag: str, publication_id: str, attempts: int = 3,
     push_runner: Callable[[Sequence[str]], bool] | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> RebasedPublication:
     """Publish H->S1->M1 after feed-only movement, never trusting a new H silently.
 
@@ -623,17 +666,18 @@ def atomic_rebased_materialized_transition(
     current feed signatures. If a feed wins the lease, the caller must fetch,
     reauthenticate and invoke this function again with that exact new head.
     """
+    fixed_feed(feed)
     for value, label in ((source, "source"), (marker, "marker"), (ledger_old, "old ledger"),
                          (prepared_signed, "prepared signed"), (prepared_materialized, "prepared materialized"),
                          (authenticated_head, "authenticated head")):
         _require_sha(value, label)
-    if not re.fullmatch(r"refs/tags/directory-publication-schema-1-sequence-[0-9]{20}", sequence_tag):
+    if not re.fullmatch(re.escape(feed.sequence_ref_prefix) + r"[0-9]{20}", sequence_tag):
         raise CasError("sequence tag is outside the publication namespace")
     if not 1 <= attempts <= 3:
         raise CasError("attempt count must be between one and three")
     validate_marker(repo, marker, source, publication_id)
     main_ref = "refs/heads/main"
-    ledger_ref = "refs/heads/directory-publication-ledger"
+    ledger_ref = feed.ledger_ref
 
     def read() -> RefState:
         return read_ref_state(repo, remote, main_ref, ledger_ref, sequence_tag)
@@ -644,12 +688,12 @@ def atomic_rebased_materialized_transition(
         for oid in (state.sequence_tag, state.ledger):
             if _git(repo, ["fetch", "--no-tags", remote, oid], check=False).returncode != 0:
                 raise CasError("cannot acquire completed materialized publication")
-        materialized = validate_staged_lineage(repo, state.ledger, state.sequence_tag, remote=remote)
+        materialized = validate_staged_lineage(repo, state.ledger, state.sequence_tag, remote=remote, feed=feed)
         parent = _git(repo, ["rev-parse", f"{state.sequence_tag}^" ]).stdout.strip()
         expected_signed, expected_materialized = reassemble_materialization(
             repo, ledger_old=ledger_old, prepared_signed=prepared_signed,
             prepared_materialized=prepared_materialized, ledger_head=parent,
-            sequence_tag=sequence_tag, remote=remote,
+            sequence_tag=sequence_tag, remote=remote, feed=feed,
         )
         if (state.sequence_tag, materialized) != (expected_signed, expected_materialized):
             raise CasError("committed publication differs from prepared signed or site bytes")
@@ -672,7 +716,7 @@ def atomic_rebased_materialized_transition(
     signed, materialized = reassemble_materialization(
         repo, ledger_old=ledger_old, prepared_signed=prepared_signed,
         prepared_materialized=prepared_materialized, ledger_head=authenticated_head,
-        sequence_tag=sequence_tag, remote=remote,
+        sequence_tag=sequence_tag, remote=remote, feed=feed,
     )
     arguments = [
         "-c", "core.hooksPath=/dev/null", "push", "--atomic",
@@ -778,15 +822,37 @@ def evidence_transition(
 def production_transition(
     repo: Path, remote: str, *, production_new: str, production_tag: str,
     attempts: int = 3, push_runner: Callable[[Sequence[str]], bool] | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> str:
     """Select the exact tree deployed to Pages using a monotonic CAS tag."""
+    fixed_feed(feed)
     _require_sha(production_new, "new production commit")
-    if production_tag != "refs/tags/directory-publication-schema-1-production":
+    if production_tag != feed.production_ref:
         raise CasError("production tag is outside the fixed namespace")
     if not 1 <= attempts <= 3:
         raise CasError("attempt count must be between one and three")
     if _git(repo, ["cat-file", "-t", production_new]).stdout.strip() != "commit":
         raise CasError("new production object is not a commit")
+    if feed is MODERN_FEED:
+        signed = _git(repo, ["rev-parse", f"{production_new}^"]).stdout.strip()
+        validate_materialized_descendant(repo, production_new, signed, feed=feed)
+        latest = json.loads(_git(repo, ["show", f"{signed}:{feed.feed_path}/latest.json"]).stdout)
+        sequence = latest["sequence"]
+        tagged = read_ref_state(repo, remote, "refs/heads/__unused-main", feed.ledger_ref,
+                                f"{feed.sequence_ref_prefix}{sequence:020d}")
+        if tagged.sequence_tag != signed or tagged.ledger is None:
+            raise CasError("modern production requires its immutable sequence and ledger")
+        _git(repo, ["fetch", "--no-tags", remote, tagged.ledger])
+        if _git(repo, ["merge-base", "--is-ancestor", production_new, tagged.ledger], check=False).returncode != 0:
+            raise CasError("modern production target is outside its current ledger")
+        intent_ref = promotion_intent_ref(sequence, feed=feed)
+        intent_oid = read_ref_state(repo, remote, "refs/heads/__unused-main", feed.ledger_ref,
+                                    intent_ref).sequence_tag
+        if intent_oid is None:
+            raise CasError("modern production requires an approved immutable intent")
+        _git(repo, ["fetch", "--no-tags", remote, intent_oid])
+        if parse_promotion_intent(repo, intent_ref, intent_oid, feed=feed)["materialized"] != production_new:
+            raise CasError("modern production differs from its approved intent")
 
     def read() -> str | None:
         return read_ref_state(
@@ -827,14 +893,18 @@ def production_transition(
     raise CasError("production tag push failed with exact pre-state still present")
 
 
-def promotion_intent_ref(sequence: int) -> str:
+def promotion_intent_ref(sequence: int, *, feed: DirectoryFeedContract = LEGACY_FEED) -> str:
+    fixed_feed(feed)
     if not 1 <= sequence <= 9_007_199_254_740_991:
         raise CasError("promotion intent sequence is invalid")
-    return f"{PROMOTION_INTENT_PREFIX}{sequence:020d}"
+    return f"{feed.intent_ref_prefix}{sequence:020d}"
 
 
-def _snapshot_identity(repo: Path, signed: str, sequence: int) -> tuple[str, str]:
-    path = f"registry/schemas/1/snapshots/{sequence:020d}.json"
+def _snapshot_identity(
+    repo: Path, signed: str, sequence: int, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> tuple[str, str]:
+    fixed_feed(feed)
+    path = f"{feed.feed_path}/snapshots/{sequence:020d}.json"
     body = _git(repo, ["show", f"{signed}:{path}"]).stdout.encode("utf-8")
     snapshot = json.loads(body)
     if snapshot.get("sequence") != sequence or not isinstance(snapshot.get("publication_id"), str):
@@ -845,15 +915,17 @@ def _snapshot_identity(repo: Path, signed: str, sequence: int) -> tuple[str, str
 def create_promotion_intent(
     repo: Path, *, materialized: str, signed: str, sequence: int,
     publication_id: str, snapshot_digest: str, readiness_digest: str,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> str:
     """Create a deterministic annotated tag object binding owner approval to M."""
+    fixed_feed(feed)
     for value, label in ((materialized, "materialized"), (signed, "signed")):
         _require_sha(value, label)
-    ref = promotion_intent_ref(sequence)
+    ref = promotion_intent_ref(sequence, feed=feed)
     if _git(repo, ["show", "-s", "--format=%P", materialized]).stdout.strip().split() != [signed]:
         raise CasError("promotion intent M is not the exact signed child")
-    validate_materialized_descendant(repo, materialized, signed)
-    actual_id, actual_digest = _snapshot_identity(repo, signed, sequence)
+    validate_materialized_descendant(repo, materialized, signed, feed=feed)
+    actual_id, actual_digest = _snapshot_identity(repo, signed, sequence, feed=feed)
     if (publication_id, snapshot_digest) != (actual_id, actual_digest):
         raise CasError("promotion intent differs from signed snapshot identity")
     if re.fullmatch(r"sha256:[0-9a-f]{64}", readiness_digest) is None:
@@ -881,8 +953,11 @@ def create_promotion_intent(
     return tag
 
 
-def parse_promotion_intent(repo: Path, ref: str, tag: str) -> dict[str, str | int]:
-    if not re.fullmatch(r"refs/tags/directory-publication-schema-1-promotion-intent-[0-9]{20}", ref):
+def parse_promotion_intent(
+    repo: Path, ref: str, tag: str, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> dict[str, str | int]:
+    fixed_feed(feed)
+    if not re.fullmatch(re.escape(feed.intent_ref_prefix) + r"[0-9]{20}", ref):
         raise CasError("promotion intent is outside the protected namespace")
     _require_sha(tag, "promotion intent object")
     if _git(repo, ["cat-file", "-t", tag]).stdout.strip() != "tag":
@@ -901,15 +976,15 @@ def parse_promotion_intent(repo: Path, ref: str, tag: str) -> dict[str, str | in
         raise CasError("promotion intent object has invalid fields")
     materialized, tag_name, publication_id, raw_sequence, signed, advertised_materialized, digest, readiness = match.groups()
     sequence = int(raw_sequence)
-    if (ref != promotion_intent_ref(sequence) or tag_name != ref.removeprefix("refs/tags/")
+    if (ref != promotion_intent_ref(sequence, feed=feed) or tag_name != ref.removeprefix("refs/tags/")
             or advertised_materialized != materialized):
         raise CasError("promotion intent ref and target disagree")
     if _git(repo, ["show", "-s", "--format=%P", materialized]).stdout.strip().split() != [signed]:
         raise CasError("promotion intent target is not the exact signed child")
-    actual_id, actual_digest = _snapshot_identity(repo, signed, sequence)
+    actual_id, actual_digest = _snapshot_identity(repo, signed, sequence, feed=feed)
     if (publication_id, digest) != (actual_id, actual_digest):
         raise CasError("promotion intent differs from signed snapshot")
-    validate_materialized_descendant(repo, materialized, signed)
+    validate_materialized_descendant(repo, materialized, signed, feed=feed)
     return {"materialized": materialized, "signed": signed, "publication_id": publication_id,
             "sequence": sequence, "snapshot_digest": digest, "readiness_digest": readiness}
 
@@ -918,16 +993,18 @@ def publish_promotion_intent(
     repo: Path, remote: str, *, materialized: str, signed: str, sequence: int,
     publication_id: str, snapshot_digest: str, readiness_digest: str,
     attempts: int = 3, push_runner: Callable[[Sequence[str]], bool] | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> str:
     """Create-only protected intent, accepting only its exact persisted tag."""
-    ref = promotion_intent_ref(sequence)
+    fixed_feed(feed)
+    ref = promotion_intent_ref(sequence, feed=feed)
     expected = create_promotion_intent(
         repo, materialized=materialized, signed=signed, sequence=sequence,
         publication_id=publication_id, snapshot_digest=snapshot_digest,
-        readiness_digest=readiness_digest,
+        readiness_digest=readiness_digest, feed=feed,
     )
-    ledger_ref = "refs/heads/directory-publication-ledger"
-    sequence_ref = f"refs/tags/directory-publication-schema-1-sequence-{sequence:020d}"
+    ledger_ref = feed.ledger_ref
+    sequence_ref = f"{feed.sequence_ref_prefix}{sequence:020d}"
     tagged_signed = read_ref_state(
         repo, remote, "refs/heads/__unused-main", "refs/heads/__unused-ledger", sequence_ref,
     ).sequence_tag
@@ -959,7 +1036,8 @@ def publish_promotion_intent(
     raise CasError("promotion intent push failed with exact pre-state still present")
 
 
-def main() -> int:
+def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
+    fixed_feed(feed)
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     marker_parser = subparsers.add_parser("marker")
@@ -1013,7 +1091,7 @@ def main() -> int:
     evidence_parser.add_argument("--approval-target", required=True)
     evidence_parser.add_argument(
         "--approval-tag",
-        default="refs/tags/directory-publication-schema-1-launch-approved",
+        default=feed.approval_ref,
     )
     production_parser = subparsers.add_parser("production-publish")
     production_parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -1021,7 +1099,7 @@ def main() -> int:
     production_parser.add_argument("--production-new", required=True)
     production_parser.add_argument(
         "--production-tag",
-        default="refs/tags/directory-publication-schema-1-production",
+        default=feed.production_ref,
     )
     intent_parser = subparsers.add_parser("promotion-intent-publish")
     intent_parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -1042,6 +1120,25 @@ def main() -> int:
     staged_lineage_parser.add_argument("--current", required=True)
     args = parser.parse_args()
     try:
+        if feed is MODERN_FEED:
+            if __package__:
+                from .directory_deployment_contract import load_modern_deployment_contract
+                from .directory_publication import PublicationError
+            else:
+                from directory_deployment_contract import load_modern_deployment_contract
+                from directory_publication import PublicationError
+            try:
+                contract = load_modern_deployment_contract()
+            except PublicationError as error:
+                raise CasError(str(error)) from error
+            if args.command == "evidence-publish":
+                raise CasError("modern evidence must enter a new reviewed signed publication")
+            for name in ("ledger_old", "signed", "prepared_signed", "production_new", "current"):
+                commit = getattr(args, name, None)
+                if commit is not None:
+                    _require_sha(commit, name)
+                    if _git(args.repo, ["merge-base", "--is-ancestor", contract["bootstrap_ledger_commit"], commit], check=False).returncode != 0:
+                        raise CasError("modern publication is outside its reviewed ledger seed")
         if args.command == "marker":
             result = create_marker(args.repo, args.source, args.publication_id)
             if args.output:
@@ -1051,19 +1148,19 @@ def main() -> int:
                 args.repo, args.remote, source=args.source, marker=args.marker,
                 ledger_old=args.ledger_old, ledger_new=args.ledger_new,
                 sequence_tag=args.sequence_tag,
-                materialized_output=args.materialized_output,
+                materialized_output=args.materialized_output, feed=feed,
             )
         elif args.command == "materialize":
             result = materialize_transition(
                 args.repo, args.remote, ledger_old=args.ledger_old,
-                ledger_new=args.ledger_new,
+                ledger_new=args.ledger_new, feed=feed,
             )
         elif args.command == "materialize-publish":
             result = atomic_materialized_transition(
                 args.repo, args.remote, source=args.source, marker=args.marker,
                 ledger_old=args.ledger_old, signed=args.signed,
                 materialized=args.materialized, sequence_tag=args.sequence_tag,
-                publication_id=args.publication_id,
+                publication_id=args.publication_id, feed=feed,
             )
         elif args.command == "materialize-rebase-publish":
             published = atomic_rebased_materialized_transition(
@@ -1071,7 +1168,7 @@ def main() -> int:
                 ledger_old=args.ledger_old, prepared_signed=args.prepared_signed,
                 prepared_materialized=args.prepared_materialized,
                 authenticated_head=args.authenticated_head, sequence_tag=args.sequence_tag,
-                publication_id=args.publication_id,
+                publication_id=args.publication_id, feed=feed,
             )
             args.result.write_text(json.dumps({
                 "status": published.status, "signed": published.signed,
@@ -1087,7 +1184,7 @@ def main() -> int:
         elif args.command == "production-publish":
             result = production_transition(
                 args.repo, args.remote, production_new=args.production_new,
-                production_tag=args.production_tag,
+                production_tag=args.production_tag, feed=feed,
             )
         elif args.command == "promotion-intent-publish":
             result = publish_promotion_intent(
@@ -1095,14 +1192,14 @@ def main() -> int:
                 signed=args.signed, sequence=args.sequence,
                 publication_id=args.publication_id,
                 snapshot_digest=args.snapshot_digest,
-                readiness_digest=args.readiness_digest,
+                readiness_digest=args.readiness_digest, feed=feed,
             )
         elif args.command == "materialize-verify":
-            validate_materialized_descendant(args.repo, args.materialized, args.signed)
+            validate_materialized_descendant(args.repo, args.materialized, args.signed, feed=feed)
             result = "valid"
         else:
-            result = validate_staged_lineage(args.repo, args.current, args.signed)
-    except (CasError, OSError, subprocess.SubprocessError) as error:
+            result = validate_staged_lineage(args.repo, args.current, args.signed, feed=feed)
+    except (CasError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"directory-publication-cas: {error}", file=sys.stderr)
         return 1
     print(result)

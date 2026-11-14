@@ -8,35 +8,43 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from directory_publication import (
-    MAX_ENVELOPE_BYTES,
-    MAX_LATEST_BYTES,
-    MAX_SNAPSHOT_BYTES,
-    PublicationError,
-    canonical_json,
-    load_public_keys,
-    parse_json_bytes,
-    parse_timestamp,
-    read_bytes_bounded,
-    read_json,
-    require,
-    validate_latest,
-    validate_snapshot_semantics,
-    verify_envelope,
-)
-from sequence_boundaries import parse_public_sequence, require_public_sequence
+if __package__:
+    from .directory_publication import (
+        MAX_ENVELOPE_BYTES, MAX_LATEST_BYTES, MAX_SNAPSHOT_BYTES, PublicationError,
+        canonical_json, load_feed_trusted_keys, parse_json_bytes, parse_timestamp,
+        read_bytes_bounded, require, validate_latest, validate_snapshot_semantics, verify_envelope,
+    )
+    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed
+    from .directory_deployment_contract import ROOT, load_modern_deployment_contract
+    from .sequence_boundaries import parse_public_sequence, require_public_sequence
+else:
+    from directory_publication import (
+        MAX_ENVELOPE_BYTES, MAX_LATEST_BYTES, MAX_SNAPSHOT_BYTES, PublicationError,
+        canonical_json, load_feed_trusted_keys, parse_json_bytes, parse_timestamp,
+        read_bytes_bounded, require, validate_latest, validate_snapshot_semantics, verify_envelope,
+    )
+    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed
+    from directory_deployment_contract import ROOT, load_modern_deployment_contract
+    from sequence_boundaries import parse_public_sequence, require_public_sequence
 
 
-def main() -> int:
+def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
+    fixed_feed(feed)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--feed", type=Path, required=True, help="registry/schemas/1 directory")
-    parser.add_argument("--trusted-keys", type=Path, required=True)
+    if feed is LEGACY_FEED:
+        parser.add_argument("--trusted-keys", type=Path, required=True)
     parser.add_argument("--now", required=True)
     parser.add_argument("--minimum-sequence", type=parse_public_sequence, default=1)
     parser.add_argument("--allow-expired-ledger", action="store_true", help="publisher recovery only; never client eligibility")
     args = parser.parse_args()
     try:
         minimum_sequence = require_public_sequence(args.minimum_sequence, "minimum sequence")
+        if feed is MODERN_FEED:
+            load_modern_deployment_contract()
+            trusted_keys = ROOT / feed.trusted_keys_path
+        else:
+            trusted_keys = args.trusted_keys
         latest_body = read_bytes_bounded(args.feed / "latest.json", MAX_LATEST_BYTES)
         latest = parse_json_bytes(latest_body, "latest pointer", max_bytes=MAX_LATEST_BYTES)
         require(isinstance(latest, dict), "latest pointer must be an object")
@@ -55,10 +63,10 @@ def main() -> int:
         require(isinstance(envelope, dict), "envelope must be an object")
         require(len(envelope_body) <= latest["fetch_contract"]["envelope_max_bytes"], "envelope response exceeds contract")
         require(canonical_json(envelope) == envelope_body, "signature envelope is not canonical JSON")
-        verify_envelope(snapshot_body, envelope, load_public_keys(args.trusted_keys))
+        verify_envelope(snapshot_body, envelope, load_feed_trusted_keys(trusted_keys, feed))
         snapshot = parse_json_bytes(snapshot_body, "snapshot", max_bytes=MAX_SNAPSHOT_BYTES)
         require(isinstance(snapshot, dict), "snapshot must be an object")
-        validate_snapshot_semantics(snapshot)
+        validate_snapshot_semantics(snapshot, feed=feed)
         require(snapshot["sequence"] == envelope["sequence"] == latest["sequence"], "artifact sequence mismatch")
         require(snapshot["sequence"] >= minimum_sequence, f"snapshot sequence {snapshot['sequence']} is below local floor {minimum_sequence}")
         now = parse_timestamp(args.now, "now")
@@ -69,7 +77,7 @@ def main() -> int:
             require(now < expires, "snapshot is expired; short-name resolution is unavailable")
         print(f"valid directory snapshot sequence {snapshot['sequence']}")
         return 0
-    except (OSError, PublicationError, KeyError, TypeError) as error:
+    except (OSError, PublicationError, KeyError, TypeError, ValueError) as error:
         print(f"verify-directory-publication: {error}", file=sys.stderr)
         return 1
 
