@@ -133,11 +133,15 @@ def verify_checkout(root: Path) -> None:
     require(not status.stdout.strip(), "immutable report checkout has uncommitted changes")
 
 
-def external_output(root: Path, path: Path) -> Path:
-    """Refuse even a symlinked output alias into the immutable source reports."""
+def external_output(root: Path, path: Path, *, checkout_root: Path | None = None) -> Path:
+    """Never write anywhere in the original immutable Git checkout, even via symlinks."""
+    checkout = (checkout_root or root).resolve(strict=True)
+    source = root.resolve(strict=True)
+    require(source == checkout or checkout in source.parents,
+            "invalid immutable checkout boundary")
     output = path.resolve(strict=False)
-    require(output != root and root not in output.parents,
-            "read-only audit cannot write into immutable published reports")
+    require(output != checkout and checkout not in output.parents,
+            "read-only audit cannot write into immutable published checkout")
     return output
 
 
@@ -147,6 +151,10 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     root = args.published.resolve(strict=True)
+    require(tuple(part.name for part in (root.parent.parent, root.parent, root)) ==
+            ("reports", "skillspector", "v3"),
+            "immutable published path must end in reports/skillspector/v3")
+    checkout_root = root.parents[2]
     verify_checkout(root)
     # Existing v3 reader validates all immutable shards, records, attempt
     # histories, scanner policies, selection digest, and bounds.
@@ -155,7 +163,7 @@ def main() -> int:
     require((root / "index.json").read_bytes() == before,
             "published manifest changed during read-only audit")
     proof = qualify(bundle, report_commit=BASELINE_REPORT_COMMIT)
-    destination = external_output(root, args.output)
+    destination = external_output(root, args.output, checkout_root=checkout_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: proof[k] for k in proof if k != "receipts"}, sort_keys=True))
