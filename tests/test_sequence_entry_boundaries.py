@@ -154,13 +154,17 @@ class FloorBeforeIOTests(unittest.TestCase):
                 output.assert_not_called()
             with self.subTest(tool="sign", text=text), mock.patch.object(sys, "argv", [*sign_base, text]), mock.patch.object(
                 sign_directory_publication, "read_bytes_bounded",
-            ) as candidate, mock.patch.object(sign_directory_publication, "load_public_keys") as keys, mock.patch.object(
+            ) as candidate, mock.patch.object(sign_directory_publication, "load_feed_trusted_keys") as keys, mock.patch.object(
+                sign_directory_publication, "load_publication_trust_config",
+            ) as config, mock.patch.object(sign_directory_publication, "load_ledger_latest") as ledger, mock.patch.object(
                 sign_directory_publication, "atomic_write",
             ) as output:
                 with self.assertRaises(SystemExit):
                     sign_directory_publication.main()
                 candidate.assert_not_called()
                 keys.assert_not_called()
+                config.assert_not_called()
+                ledger.assert_not_called()
                 output.assert_not_called()
 
     def test_remaining_directory_flow_sequence_clis_reject_before_io(self) -> None:
