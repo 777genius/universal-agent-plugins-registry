@@ -109,9 +109,9 @@ class CanonicalAndSignatureTests(unittest.TestCase):
     def test_all_directory_client_enums_match_publication_and_reject_unknown_ids(self) -> None:
         import jsonschema
         import build_registry
+        from client_contract import load_client_ids
 
-        expected = ["codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
-                    "grok", "kimi", "qoder", "pi"]
+        expected = list(load_client_ids())
         self.assertEqual(list(build_registry.CLIENT_IDS), expected)
         self.assertEqual(publication.CLIENTS, set(expected))
 
@@ -137,7 +137,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
                     self.assertFalse(validator.is_valid("unknown"))
 
     def test_publication_target_and_evidence_contracts_accept_new_clients(self) -> None:
-        for client in ("claude", "gemini", "opencode", "cline", "windsurf", "grok", "kimi", "qoder", "pi"):
+        for client in sorted(publication.CLIENTS - {"chatgpt"}):
             with self.subTest(client=client):
                 candidate = fixture_json("candidate.json")
                 policy = candidate["distributions"][0]["release_policies"][0]

@@ -30,6 +30,7 @@ import jsonschema
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_agentplugins_catalog import package_tree_digest
+from client_contract import load_client_ids
 from portable_paths import (
     MAX_DEPTH as PORTABLE_MAX_DEPTH,
     MAX_FILES as PORTABLE_MAX_FILES,
@@ -78,8 +79,7 @@ MAX_FILE_BYTES = 16 << 20
 MAX_PATH_DEPTH = 32
 MAX_CATEGORIES = 8
 ICON_NAMES = {"chrome-devtools": "googlechrome.svg", "docker-hub": "docker.svg", "hubspot-crm": "hubspot.svg", "hubspot-developer": "hubspot.svg"}
-CLIENT_IDS = ("codex", "chatgpt", "cursor", "copilot", "vscode", "kiro", "claude", "gemini", "opencode", "cline", "windsurf",
-              "grok", "kimi", "qoder", "pi")
+CLIENT_IDS = load_client_ids()
 KIND_PRIORITY = {"upstream": 0, "community_bridge": 1, "community": 2}
 DIRECTORY_TREE_DIGEST_ALGORITHM = "agentplugins-tree-sha256-v1"
 DIRECTORY_TREE_DIGEST_DOMAIN = b"agentplugins.package-tree\x00sha256\x00v1"

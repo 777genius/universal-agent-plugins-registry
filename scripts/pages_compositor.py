@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 import re
@@ -15,13 +16,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
-from directory_publication_cas import (
-    CasError, PROMOTION_INTENT_PREFIX, _git, _require_sha,
-    _validate_feed_or_recovery, parse_promotion_intent,
-    promotion_intent_ref, read_ref_state, validate_materialized_descendant,
-    validate_signed_directory_append,
-)
-from directory_publication import PublicationError, parse_timestamp
+if __package__:
+    from . import directory_publication_cas as cas
+    from .directory_deployment_contract import ROOT, load_modern_deployment_contract
+    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed
+    from .directory_publication import PublicationError, parse_timestamp
+else:
+    import directory_publication_cas as cas
+    from directory_deployment_contract import ROOT, load_modern_deployment_contract
+    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed
+    from directory_publication import PublicationError, parse_timestamp
+
+CasError, PROMOTION_INTENT_PREFIX = cas.CasError, cas.PROMOTION_INTENT_PREFIX
+_git, _require_sha = cas._git, cas._require_sha
+_validate_feed_or_recovery, parse_promotion_intent = cas._validate_feed_or_recovery, cas.parse_promotion_intent
+promotion_intent_ref, read_ref_state = cas.promotion_intent_ref, cas.read_ref_state
+validate_materialized_descendant = cas.validate_materialized_descendant
+validate_signed_directory_append = cas.validate_signed_directory_append
 
 
 LEDGER_REF = "refs/heads/directory-publication-ledger"
@@ -41,12 +52,99 @@ class CompositionPlan:
     sequence: int
     intent_ref: str | None
     intent_oid: str | None
-    production_marker: str
+    production_marker: str | None
 
 
-def _remote_refs(repo: Path, remote: str) -> dict[str, str]:
-    result = _git(repo, ["ls-remote", "--refs", remote, LEDGER_REF, PRODUCTION_REF,
-                         f"{PROMOTION_INTENT_PREFIX}*"])
+@dataclass(frozen=True)
+class CombinedCompositionPlan:
+    legacy: CompositionPlan
+    modern: CompositionPlan
+    tree: str
+    references_digest: str
+
+
+def _combined_references(repo: Path, remote: str) -> dict[str, str]:
+    patterns = [ref for feed in (LEGACY_FEED, MODERN_FEED)
+                for ref in (feed.ledger_ref, feed.production_ref, feed.intent_ref_prefix + "*")]
+    result = _git(repo, ["ls-remote", "--refs", remote, *patterns])
+    references: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 2:
+            raise CasError("combined composition returned malformed refs")
+        oid, ref = fields
+        _require_sha(oid, ref)
+        if ref in references or not any(
+            ref in (feed.ledger_ref, feed.production_ref)
+            or re.fullmatch(re.escape(feed.intent_ref_prefix) + r"[0-9]{20}", ref)
+            for feed in (LEGACY_FEED, MODERN_FEED)
+        ):
+            raise CasError("combined composition returned duplicate or unexpected refs")
+        references[ref] = oid
+    return references
+
+
+def _overlay_modern_tree(repo: Path, base: str, modern: str) -> str:
+    """Replace exactly the modern feed subtree, preserving every sibling byte."""
+    donor = _git(repo, ["rev-parse", f"{modern}:{MODERN_FEED.feed_path}"]).stdout.strip()
+    if _git(repo, ["cat-file", "-t", donor]).stdout.strip() != "tree":
+        raise CasError("modern feed must be a real Git tree")
+    for entry in _git(repo, ["ls-tree", "-r", donor]).stdout.splitlines():
+        fields = entry.split(None, 3)
+        if (len(fields) != 4 or fields[0:2] != ["100644", "blob"]
+                or re.fullmatch(r"(?:latest\.json|ledger-contract\.json|snapshots/[0-9]{20}(?:\.envelope)?\.json)", fields[3]) is None):
+            raise CasError("modern feed contains a non-public or non-regular artifact")
+
+    def replace(tree: str | None, parts: list[bytes]) -> str:
+        entries = cas._root_entries(repo, tree) if tree is not None else {}
+        name = parts[0]
+        if len(parts) == 1:
+            child = donor
+        else:
+            previous = entries.get(name)
+            header = previous.partition(b"\t")[0].split() if previous is not None else []
+            if previous is not None and (len(header) != 3 or header[:2] != [b"040000", b"tree"]):
+                raise CasError("composition ancestor is not a regular Git tree")
+            child = replace(header[2].decode("ascii") if header else None, parts[1:])
+        entries[name] = b"040000 tree " + child.encode("ascii") + b"\t" + name
+        return cas._write_tree_entries(repo, entries)
+
+    return replace(base, [part.encode("ascii") for part in MODERN_FEED.feed_path.split("/")])
+
+
+def combine_composition(repo: Path, remote: str) -> CombinedCompositionPlan:
+    """Compose two fixed authorities; never deploy the modern ledger wholesale."""
+    load_modern_deployment_contract()  # No silent legacy-only fallback.
+    before = _combined_references(repo, remote)
+    legacy = select_composition(repo, remote, ROOT / LEGACY_FEED.deployment_contract_path)
+    modern = select_composition(repo, remote, feed=MODERN_FEED)
+    base = cas._replace_root_entries(repo, legacy.directory_commit, legacy.ledger_head,
+                                     {b"discovery", b"security"})
+    tree = _overlay_modern_tree(repo, base, modern.directory_commit)
+    after = _combined_references(repo, remote)
+    if before != after:
+        raise CasError("combined composition became stale during selection")
+    digest = "sha256:" + hashlib.sha256(json.dumps(after, sort_keys=True).encode("utf-8")).hexdigest()
+    return CombinedCompositionPlan(legacy, modern, tree, digest)
+
+
+def read_combined_plan(path: Path) -> CombinedCompositionPlan:
+    value = json.loads(path.read_bytes())
+    if not isinstance(value, dict) or set(value) != {"legacy", "modern", "tree", "references_digest"}:
+        raise CasError("combined composition plan has invalid fields")
+    return CombinedCompositionPlan(CompositionPlan(**value["legacy"]), CompositionPlan(**value["modern"]),
+                                   value["tree"], value["references_digest"])
+
+
+def require_current_combined_composition(repo: Path, remote: str, previous: CombinedCompositionPlan) -> None:
+    if combine_composition(repo, remote) != previous:
+        raise CasError("combined composition became stale before external deploy")
+
+
+def _remote_refs(repo: Path, remote: str, *, feed: DirectoryFeedContract = LEGACY_FEED) -> dict[str, str]:
+    fixed_feed(feed)
+    result = _git(repo, ["ls-remote", "--refs", remote, feed.ledger_ref, feed.production_ref,
+                         f"{feed.intent_ref_prefix}*"])
     refs: dict[str, str] = {}
     for line in result.stdout.splitlines():
         parts = line.split("\t")
@@ -56,10 +154,10 @@ def _remote_refs(repo: Path, remote: str) -> dict[str, str]:
         _require_sha(oid, ref)
         if ref in refs:
             raise CasError("remote returned a duplicate Pages ref")
-        if ref not in (LEDGER_REF, PRODUCTION_REF) and not ref.startswith(PROMOTION_INTENT_PREFIX):
+        if ref not in (feed.ledger_ref, feed.production_ref) and not ref.startswith(feed.intent_ref_prefix):
             raise CasError("remote returned an unexpected Pages ref")
         refs[ref] = oid
-    if LEDGER_REF not in refs:
+    if feed.ledger_ref not in refs:
         raise CasError("production ledger branch is absent")
     return refs
 
@@ -71,22 +169,29 @@ def _fetch_commit(repo: Path, remote: str, oid: str) -> None:
         raise CasError("remote Pages object is not a commit")
 
 
-def _sequence(repo: Path, signed: str) -> int:
-    latest = json.loads(_git(repo, ["show", f"{signed}:registry/schemas/1/latest.json"]).stdout)
+def _sequence(repo: Path, signed: str, *, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
+    fixed_feed(feed)
+    latest = json.loads(_git(repo, ["show", f"{signed}:{feed.feed_path}/latest.json"]).stdout)
     sequence = latest.get("sequence")
     if not isinstance(sequence, int) or isinstance(sequence, bool) or not 1 <= sequence <= 9_007_199_254_740_991:
         raise CasError("Directory sequence is invalid")
     return sequence
 
 
-def _require_sequence_tag(repo: Path, remote: str, signed: str, sequence: int) -> None:
-    tag = f"refs/tags/directory-publication-schema-1-sequence-{sequence:020d}"
+def _require_sequence_tag(
+    repo: Path, remote: str, signed: str, sequence: int, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> None:
+    fixed_feed(feed)
+    tag = f"{feed.sequence_ref_prefix}{sequence:020d}"
     observed = read_ref_state(repo, remote, "refs/heads/__unused-main", "refs/heads/__unused-ledger", tag).sequence_tag
     if observed != signed:
         raise CasError("Directory sequence tag does not name the signed commit")
 
 
-def _validate_later_ledger(repo: Path, remote: str, directory: str, head: str) -> None:
+def _validate_later_ledger(
+    repo: Path, remote: str, directory: str, head: str, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> None:
+    fixed_feed(feed)
     if _git(repo, ["merge-base", "--is-ancestor", directory, head], check=False).returncode != 0:
         raise CasError("approved Directory is not in the current ledger lineage")
     previous = directory
@@ -96,23 +201,25 @@ def _validate_later_ledger(repo: Path, remote: str, directory: str, head: str) -
             raise CasError("Pages ledger history is not linear")
         message = _git(repo, ["show", "-s", "--format=%B", descendant]).stdout
         if pending_signed:
-            validate_materialized_descendant(repo, descendant, previous)
+            validate_materialized_descendant(repo, descendant, previous, feed=feed)
             pending_signed = False
         elif message == "chore(directory): publish signed snapshot\n\n":
-            sequence = _sequence(repo, descendant)
-            _require_sequence_tag(repo, remote, descendant, sequence)
+            sequence = _sequence(repo, descendant, feed=feed)
+            _require_sequence_tag(repo, remote, descendant, sequence, feed=feed)
             validate_signed_directory_append(
                 repo, previous, descendant,
-                f"refs/tags/directory-publication-schema-1-sequence-{sequence:020d}",
+                f"{feed.sequence_ref_prefix}{sequence:020d}", feed=feed,
             )
             pending_signed = True
         else:
+            if feed is MODERN_FEED:
+                raise CasError("modern ledger contains a foreign feed append")
             match = re.fullmatch(r"chore\((discovery|security)\): publish sequence ([1-9][0-9]*)\n\n", message)
             if match is None:
                 raise CasError("Pages ledger contains an unsupported append")
             _validate_feed_or_recovery(repo, remote, previous, descendant)
-            feed, raw_sequence = match.groups()
-            tag = f"refs/tags/{feed}-index-sequence-{int(raw_sequence):020d}"
+            index_feed, raw_sequence = match.groups()
+            tag = f"refs/tags/{index_feed}-index-sequence-{int(raw_sequence):020d}"
             observed = read_ref_state(
                 repo, remote, "refs/heads/__unused-main", "refs/heads/__unused-ledger", tag,
             ).sequence_tag
@@ -123,69 +230,86 @@ def _validate_later_ledger(repo: Path, remote: str, directory: str, head: str) -
         raise CasError("Pages ledger ends at an unmaterialized signed commit")
 
 
-def select_composition(repo: Path, remote: str, contract: Path) -> CompositionPlan:
+def select_composition(
+    repo: Path, remote: str, contract: Path | None = None, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> CompositionPlan:
     """Re-read after the Pages lock; older queued callers never pin older bytes."""
-    config = json.loads(contract.read_text(encoding="utf-8"))
-    if config.get("marker_ref") != PRODUCTION_REF:
+    fixed_feed(feed)
+    if feed is MODERN_FEED:
+        if contract is not None:
+            raise CasError("modern composition uses only its fixed reviewed deployment contract")
+        config = load_modern_deployment_contract()
+    else:
+        config = json.loads(contract.read_text(encoding="utf-8"))
+    if config.get("marker_ref") != feed.production_ref:
         raise CasError("production marker contract differs from Pages compositor")
-    bootstrap = config.get("bootstrap_materialized_commit")
+    bootstrap = config.get("bootstrap_ledger_commit" if feed is MODERN_FEED else "bootstrap_materialized_commit")
     _require_sha(bootstrap, "bootstrap production commit")
-    refs = _remote_refs(repo, remote)
-    head = refs[LEDGER_REF]
-    marker = refs.get(PRODUCTION_REF, bootstrap)
+    refs = _remote_refs(repo, remote, feed=feed)
+    head = refs[feed.ledger_ref]
+    marker = refs.get(feed.production_ref, None if feed is MODERN_FEED else bootstrap)
     _fetch_commit(repo, remote, head)
-    _fetch_commit(repo, remote, marker)
+    if marker is not None:
+        _fetch_commit(repo, remote, marker)
     _fetch_commit(repo, remote, bootstrap)
-    if _git(repo, ["merge-base", "--is-ancestor", marker, head], check=False).returncode != 0:
+    if _git(repo, ["merge-base", "--is-ancestor", marker or bootstrap, head], check=False).returncode != 0:
         raise CasError("production marker is not in current ledger lineage")
     intents: list[tuple[int, str, str]] = []
     for ref, oid in refs.items():
-        if ref.startswith(PROMOTION_INTENT_PREFIX):
-            match = re.fullmatch(r"refs/tags/directory-publication-schema-1-promotion-intent-([0-9]{20})", ref)
+        if ref.startswith(feed.intent_ref_prefix):
+            match = re.fullmatch(re.escape(feed.intent_ref_prefix) + r"([0-9]{20})", ref)
             if match is None:
                 raise CasError("malformed protected promotion intent ref")
             intents.append((int(match.group(1)), ref, oid))
     intents.sort()
     selected = marker
-    signed = _git(repo, ["rev-parse", f"{marker}^"]).stdout.strip()
+    signed = _git(repo, ["rev-parse", f"{marker}^"]).stdout.strip() if marker is not None else None
     chosen_ref: str | None = None
     chosen_oid: str | None = None
     previous_intent = bootstrap
+    approved_targets: set[str] = set()
     for sequence, ref, oid in intents:
         _require_sha(oid, "remote promotion intent")
         _git(repo, ["fetch", "--no-tags", remote, oid])
-        intent = parse_promotion_intent(repo, ref, oid)
+        intent = parse_promotion_intent(repo, ref, oid, feed=feed)
         target = str(intent["materialized"])
         if intent["sequence"] != sequence:
             raise CasError("promotion intent sequence is inconsistent")
         if _git(repo, ["merge-base", "--is-ancestor", previous_intent, target], check=False).returncode != 0:
             raise CasError("promotion intents are not monotonic")
-        _require_sequence_tag(repo, remote, str(intent["signed"]), sequence)
+        _require_sequence_tag(repo, remote, str(intent["signed"]), sequence, feed=feed)
+        approved_targets.add(target)
         previous_intent = target
         selected = target
         signed = str(intent["signed"])
         chosen_ref = ref
         chosen_oid = oid
-    if intents and _git(repo, ["merge-base", "--is-ancestor", selected, marker], check=False).returncode == 0:
+    if feed is MODERN_FEED and (selected is None or not intents or (marker is not None and marker not in approved_targets)):
+        raise CasError("modern publication requires an approved immutable intent; a seed is not production")
+    if marker is not None and intents and _git(repo, ["merge-base", "--is-ancestor", selected, marker], check=False).returncode == 0:
         # Historical intents remain immutable after the production marker has
         # caught up. A late old tag cannot select an older site.
         selected = marker
         signed = _git(repo, ["rev-parse", f"{marker}^"]).stdout.strip()
         chosen_ref = None
         chosen_oid = None
-    elif _git(repo, ["merge-base", "--is-ancestor", marker, selected], check=False).returncode != 0:
+    elif marker is not None and _git(repo, ["merge-base", "--is-ancestor", marker, selected], check=False).returncode != 0:
         raise CasError("latest intent and production marker diverge")
     if _git(repo, ["merge-base", "--is-ancestor", selected, head], check=False).returncode != 0:
         raise CasError("selected Directory intent is outside current ledger")
-    sequence = _sequence(repo, signed)
-    _require_sequence_tag(repo, remote, signed, sequence)
-    validate_materialized_descendant(repo, selected, signed)
-    _validate_later_ledger(repo, remote, selected, head)
+    sequence = _sequence(repo, signed, feed=feed)
+    _require_sequence_tag(repo, remote, signed, sequence, feed=feed)
+    validate_materialized_descendant(repo, selected, signed, feed=feed)
+    lineage_start = bootstrap if feed is MODERN_FEED else selected
+    _validate_later_ledger(repo, remote, lineage_start, head, feed=feed)
     return CompositionPlan(head, selected, signed, sequence, chosen_ref, chosen_oid, marker)
 
 
-def require_current_composition(repo: Path, remote: str, contract: Path, previous: CompositionPlan) -> None:
-    current = select_composition(repo, remote, contract)
+def require_current_composition(
+    repo: Path, remote: str, contract: Path | None, previous: CompositionPlan,
+    *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> None:
+    current = select_composition(repo, remote, contract, feed=feed)
     if current != previous:
         raise CasError("Pages composition became stale before external deploy")
 
@@ -557,19 +681,26 @@ def require_successful_current_deployment(
 
 def require_protected_intent_policy(
     repository: str, token: str, *, fetch: Callable[[str, str], object] = _gh_json,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> None:
     """Treat intent tags as approval only while exact owner rulesets are active."""
+    fixed_feed(feed)
+    app_id = DIRECTORY_PUBLISHER_APP_ID
+    prefix = ""
+    if feed is MODERN_FEED:
+        app_id = load_modern_deployment_contract()["publisher_app_id"]
+        prefix = "Modern "
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None or not token:
         raise CasError("GitHub intent policy request is invalid")
     summaries = fetch(f"repos/{repository}/rulesets?includes_parents=false", token)
     if not isinstance(summaries, list):
         raise CasError("GitHub intent ruleset listing is invalid")
     required = {
-        INTENT_CREATION_RULESET: (
+        prefix + INTENT_CREATION_RULESET: (
             {"creation"},
-            [{"actor_id": DIRECTORY_PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "always"}],
+            [{"actor_id": app_id, "actor_type": "Integration", "bypass_mode": "always"}],
         ),
-        INTENT_IMMUTABLE_RULESET: ({"update", "deletion"}, []),
+        prefix + INTENT_IMMUTABLE_RULESET: ({"update", "deletion"}, []),
     }
     for name, (expected_rules, expected_bypass) in required.items():
         matching = [item for item in summaries if isinstance(item, dict) and item.get("name") == name]
@@ -585,7 +716,7 @@ def require_protected_intent_policy(
         if (detail.get("id") != matching[0]["id"] or detail.get("name") != name
                 or detail.get("source_type") != "Repository" or detail.get("source") != repository
                 or detail.get("target") != "tag" or detail.get("enforcement") != "active"
-                or ref_name != {"include": [f"{PROMOTION_INTENT_PREFIX}*"], "exclude": []}
+                or ref_name != {"include": [f"{feed.intent_ref_prefix}*"], "exclude": []}
                 or actual_rules != expected_rules):
             raise CasError(f"intent ruleset does not enforce the approved contract: {name}")
         # GitHub omits bypass_actors for a read-only token. The owner verifies
@@ -595,18 +726,21 @@ def require_protected_intent_policy(
             raise CasError(f"intent ruleset bypass policy differs from owner-approved contract: {name}")
 
 
-def main() -> int:
+def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
+    fixed_feed(feed)
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan")
     plan.add_argument("--repo", type=Path, default=Path.cwd())
     plan.add_argument("--remote", default="origin")
-    plan.add_argument("--contract", type=Path, required=True)
+    if feed is LEGACY_FEED:
+        plan.add_argument("--contract", type=Path, required=True)
     plan.add_argument("--output", type=Path, required=True)
     current = commands.add_parser("require-current")
     current.add_argument("--repo", type=Path, default=Path.cwd())
     current.add_argument("--remote", default="origin")
-    current.add_argument("--contract", type=Path, required=True)
+    if feed is LEGACY_FEED:
+        current.add_argument("--contract", type=Path, required=True)
     current.add_argument("--plan", type=Path, required=True)
     receipt = commands.add_parser("require-terminal-deployments")
     receipt.add_argument("--repository", required=True)
@@ -623,12 +757,18 @@ def main() -> int:
     freshness.add_argument("--minimum-validity-seconds", type=int, default=0)
     args = parser.parse_args()
     try:
+        if feed is MODERN_FEED:
+            load_modern_deployment_contract()
         if args.command == "plan":
-            selected = select_composition(args.repo, args.remote, args.contract)
+            selected = (combine_composition(args.repo, args.remote) if feed is MODERN_FEED
+                        else select_composition(args.repo, args.remote, args.contract))
             args.output.write_text(json.dumps(asdict(selected), sort_keys=True) + "\n", encoding="utf-8")
         elif args.command == "require-current":
-            previous = CompositionPlan(**json.loads(args.plan.read_text(encoding="utf-8")))
-            require_current_composition(args.repo, args.remote, args.contract, previous)
+            if feed is MODERN_FEED:
+                require_current_combined_composition(args.repo, args.remote, read_combined_plan(args.plan))
+            else:
+                previous = CompositionPlan(**json.loads(args.plan.read_text(encoding="utf-8")))
+                require_current_composition(args.repo, args.remote, args.contract, previous)
         elif args.command == "require-terminal-deployments":
             raw_run = os.environ.get("GITHUB_RUN_ID")
             raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT")
@@ -653,6 +793,8 @@ def main() -> int:
             ))
         else:
             require_protected_intent_policy(args.repository, os.environ.get("GH_TOKEN", ""))
+            if feed is MODERN_FEED:
+                require_protected_intent_policy(args.repository, os.environ.get("GH_TOKEN", ""), feed=feed)
     except (CasError, KeyError, OSError, ValueError, PublicationError, subprocess.SubprocessError) as error:
         print(f"pages-compositor: {error}", file=sys.stderr)
         return 1

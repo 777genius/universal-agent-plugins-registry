@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-plugins.org/schemas/directory-modern-snapshot.schema.json",
+  "title": "Universal Agent Plugins modern Directory schema-1 snapshot",
+  "allOf": [
+    {"$ref": "directory-snapshot-records.schema.json"},
+    {"properties": {"evidence": {"items": {"$ref": "directory-publication-candidate.schema.json#/$defs/wireEvidence"}}}}
+  ]
+}

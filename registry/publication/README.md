@@ -5,6 +5,96 @@ publication service, database, or transparency-log platform. Reviewed data on
 `main` is prepared without secrets; a protected environment signs one bounded
 canonical candidate and appends it to the protected publication branch.
 
+## Modern schema-1 foundation (not activated)
+
+`scripts/directory_feed_contract.py` defines two fixed publication lineages.
+Existing entrypoints still select the legacy contract. Its signed history,
+sequence namespace, signing identity and 14-client boundary remain unchanged.
+The modern entrypoints reuse preparation, evidence trust, signing, ledger
+validation and immutable append validation. They do not select a profile from
+candidate data, command-line options or environment variables.
+
+| Contract | Legacy | Modern reservation |
+| --- | --- | --- |
+| Artifact directory | `registry/schemas/1` | `registry/modern/schemas/1` |
+| Ledger ref | `refs/heads/directory-publication-ledger` | `refs/heads/directory-modern-publication-ledger` |
+| Sequence tag prefix | `directory-publication-schema-1-sequence-` | `directory-modern-publication-schema-1-sequence-` |
+| Reviewed trust files | `registry/publication/{config,trusted-keys}.json` | `registry/publication/modern/{config,trusted-keys}.json` |
+| Signing secret | `DIRECTORY_ED25519_PRIVATE_KEY` | `DIRECTORY_MODERN_ED25519_PRIVATE_KEY` |
+| Current evidence shape begins at | Sequence 15 | Sequence 1 |
+
+Both lineages use snapshot schema 1 and the same canonical bytes and signature
+framing. Their snapshot schemas reference shared record definitions; the legacy
+schema retains its exact historical evidence cutover. The modern publisher
+accepts the known IDs from the pinned client contract, without creating any
+target, scope, evidence or release-policy grants from those IDs.
+
+`prepare_modern_directory_publication.py` and
+`sign_modern_directory_publication.py` accept only the modern trust files at
+their fixed reviewed source paths. They reject symlink redirection and any key
+ID or public key reused from legacy trust. The modern files are deliberately
+absent, so the entrypoints fail before reading a candidate, using a signing
+secret or writing publication output. Tests provision existing fixture keys
+only in disposable source trees.
+
+This change does not connect modern publication to protected CAS mutation,
+promotion or Pages deployment. Before activation, a separate reviewed change
+must provision an independent protected signing key and evidence-trust policy;
+protect the modern ledger, immutable sequence tags and launch/promotion controls;
+bind the actual origin, bootstrap and cache namespace in each consumer; and
+connect those controls to the shared publication and deployment workflow. That
+change must verify exact-source compatibility evidence for each new signed
+target, old-client readability, cross-feed rejection, rollback protection,
+retry behavior and append-only history. No modern production origin, key,
+bootstrap, target grant or approval is established by this foundation.
+
+### Modern publication mechanics (still not activated)
+
+The [mechanics plan](../../docs/plans/2026-11-14-modern-publication-mechanics.md)
+extends the shared CAS, verifier, observer and compositor through the same fixed
+contract. `modern_directory_publication_cas.py` uses only the modern ledger,
+sequence tags, `directory-modern-publication-schema-1-promotion-intent-*` and
+`directory-modern-publication-schema-1-production`. Existing legacy commands and
+their Discovery/Security interleaving are unchanged. Modern rejects foreign
+ledger interleaving; its materialized commit is a single-parent, same-tree child
+of its signed commit. It never authorizes changes to site or sibling feed bytes.
+
+The fixed reviewed file `registry/publication/modern/production-marker.json`
+must contain exactly `contract_version` (1), `marker_ref`, `sequence_tag_prefix`,
+`bootstrap_ledger_commit`, `origin` and `publisher_app_id`. Ref values must match
+the fixed modern contract, the bootstrap must be an immutable full commit ID,
+and the HTTPS origin must use the fixed modern path and an authority independent
+of the existing legacy production origin (including hostname/port aliases).
+The file and modern public key remain absent. No command can substitute a
+different configuration, key file or origin through arguments or environment.
+The initial seed establishes ancestry only; the first composition requires an
+approved immutable intent and records no production marker until deployment.
+
+`modern_pages_compositor.py plan --repo REPO --output PLAN` selects the existing
+approved legacy site and current Discovery/Security feeds, then overlays only
+`registry/modern/schemas/1` from the approved modern publication. It records both
+plans, the exact combined Git tree and a digest of all relevant refs.
+`modern_pages_compositor.py require-current --repo REPO --plan PLAN` recomputes
+and compares that complete identity. Both legacy-triggered and modern-triggered
+deployments must use this combined path after activation: neither a historical
+legacy tree nor a whole modern ledger can be deployed on its own.
+
+`verify_modern_directory_publication.py` verifies a local `--feed` directory with
+the fixed modern public trust and sequence-1 evidence rules.
+`observe_modern_directory_publication.py --repo REPO --plan PLAN --output RECEIPT`
+rechecks the combined plan, verifies the bounded public response, compares its
+sequence, publication ID, source and digest to the selected signed Git object,
+then rechecks the refs again. The private receipt derives the modern ledger
+commit, legacy ledger commit and composition tree from that verified plan.
+This proves exact publication readback; it does not attest client runtime.
+
+The modern `evidence-publish` legacy bootstrap operation is intentionally
+refused. Modern evidence belongs in the reviewed source of a subsequent signed
+publication, rather than as an unrelated append to its isolated ledger.
+Protected App/ref/environment provisioning, actual public trust and origin,
+the existing serialized production workflow and external Pages success receipt
+remain separate activation gates. No production workflow is changed here.
+
 ## Artifact contract
 
 Schema 1 is served below `registry/schemas/1/`. Historical snapshot and

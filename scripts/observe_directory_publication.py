@@ -13,25 +13,25 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.directory_publication import (
-    MAX_ENVELOPE_BYTES,
-    MAX_LATEST_BYTES,
-    MAX_SNAPSHOT_BYTES,
-    PublicationError,
-    canonical_json,
-    format_timestamp,
-    load_public_keys,
-    parse_json_bytes,
-    parse_timestamp,
-    read_bytes_bounded,
-    require,
-    sha256_digest,
-    validate_latest,
-    validate_snapshot_semantics,
-    verify_envelope,
-)
-from scripts.sequence_boundaries import parse_public_sequence, require_public_sequence
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __package__:
+    from .directory_publication import (
+        MAX_ENVELOPE_BYTES, MAX_LATEST_BYTES, MAX_SNAPSHOT_BYTES, PublicationError,
+        canonical_json, format_timestamp, load_feed_trusted_keys, parse_json_bytes,
+        parse_timestamp, require, sha256_digest, validate_latest,
+        validate_snapshot_semantics, verify_envelope,
+    )
+    from .directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, fixed_feed
+    from .sequence_boundaries import parse_public_sequence, require_public_sequence
+else:
+    from directory_publication import (
+        MAX_ENVELOPE_BYTES, MAX_LATEST_BYTES, MAX_SNAPSHOT_BYTES, PublicationError,
+        canonical_json, format_timestamp, load_feed_trusted_keys, parse_json_bytes,
+        parse_timestamp, require, sha256_digest, validate_latest,
+        validate_snapshot_semantics, verify_envelope,
+    )
+    from directory_feed_contract import DirectoryFeedContract, LEGACY_FEED, fixed_feed
+    from sequence_boundaries import parse_public_sequence, require_public_sequence
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -71,7 +71,10 @@ def fetch(opener: urllib.request.OpenerDirector, url: str, maximum: int) -> byte
     return body
 
 
-def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict[str, object]:
+def observe_once(
+    origin: str, trusted_keys: Path, minimum_sequence: int, *, feed: DirectoryFeedContract = LEGACY_FEED,
+) -> dict[str, object]:
+    fixed_feed(feed)
     minimum_sequence = require_public_sequence(minimum_sequence, "minimum sequence")
     opener = urllib.request.build_opener(NoRedirect())
     origin = origin.rstrip("/")
@@ -83,9 +86,9 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
     require(latest["sequence"] >= minimum_sequence, "Directory production sequence is below the required floor")
 
     with tempfile.TemporaryDirectory(prefix="uap-directory-observe-") as temporary:
-        feed = Path(temporary)
-        snapshot_path = feed / latest["snapshot_path"]
-        envelope_path = feed / latest["envelope_path"]
+        local = Path(temporary)
+        snapshot_path = local / latest["snapshot_path"]
+        envelope_path = local / latest["envelope_path"]
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_body = fetch(
             opener, origin + "/" + latest["snapshot_path"],
@@ -99,13 +102,15 @@ def observe_once(origin: str, trusted_keys: Path, minimum_sequence: int) -> dict
         envelope_path.write_bytes(envelope_body)
         envelope = parse_json_bytes(envelope_body, "Directory envelope", max_bytes=MAX_ENVELOPE_BYTES)
         require(isinstance(envelope, dict), "Directory envelope must be an object")
+        if feed is not LEGACY_FEED:
+            require(canonical_json(envelope) == envelope_body, "Directory envelope is not canonical JSON")
         verify_envelope(
-            snapshot_body, envelope, load_public_keys(trusted_keys),
+            snapshot_body, envelope, load_feed_trusted_keys(trusted_keys, feed),
             signature_verifier=cryptography_ed25519_verify,
         )
         snapshot = parse_json_bytes(snapshot_body, "Directory snapshot", max_bytes=MAX_SNAPSHOT_BYTES)
         require(isinstance(snapshot, dict), "Directory snapshot must be an object")
-        validate_snapshot_semantics(snapshot)
+        validate_snapshot_semantics(snapshot, feed=feed)
         require(snapshot["sequence"] == envelope["sequence"] == latest["sequence"], "Directory artifact sequence mismatch")
         now = datetime.now(timezone.utc)
         require(now >= parse_timestamp(snapshot["generated_at"], "generated_at"), "Directory snapshot is not active yet")

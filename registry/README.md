@@ -7,6 +7,37 @@ including an external product, has at least one globally unique short-name
 alias for installation. An alias identifies the product; it does not identify
 who packaged a distribution or grant official upstream status.
 
+## Released client contract
+
+`client-capabilities.json` is an exact copy of the UAP generator output from
+the release pinned in `client-capabilities.lock.json`. It supplies client IDs
+and canonical order to the Directory validators; it does not grant package
+eligibility. Historical publication keeps its frozen client subset, including
+for evidence records. No signed source or release is changed by synchronization.
+
+Check the pin and generated schema enums offline:
+
+```bash
+python3 scripts/sync_client_contract.py --check
+```
+
+To update after reviewing a published CLI release, use its local UAP Git
+checkout, exact release tag and independently verified full release commit.
+The command refuses a moved local tag and reads the committed artifact from
+that tag, updates the immutable pin and regenerates the enums; it never reads
+the checkout's working copy or fetches mutable upstream content.
+
+```bash
+python3 scripts/sync_client_contract.py --from-uap ../universal-agent-plugins --release agentplugins-v0.1.108 --revision 8c3cfa28e332c533b0cc0845739c0275730a4285
+```
+
+The offline digest check proves integrity against the reviewed pin; it does
+not authenticate a local repository or prove GitHub publication. Verify the
+release and commit through the canonical UAP release before updating the pin.
+Review the pin and generated diff together. `--write` regenerates schemas from
+the already checked-in pin. Production rollout remains governed by the
+[agent support synchronization plan](https://github.com/777genius/universal-agent-plugins/blob/15ee08c04905b68cf0598fd5ed050f03cbd26383/docs/plans/2026-11-14-agent-support-synchronization.md).
+
 ## Submit an external package
 
 The review source is `registry/directory.json`. Before editing it, confirm that

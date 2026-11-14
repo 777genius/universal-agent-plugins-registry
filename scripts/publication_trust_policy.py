@@ -6,7 +6,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from directory_publication import DIGEST_RE, SHA_RE, read_json, require
+if __package__:
+    from .directory_publication import DIGEST_RE, SHA_RE, read_json, require
+else:
+    from directory_publication import DIGEST_RE, SHA_RE, read_json, require
 
 
 CONFIG_FIELDS = {"schema_version", "repository", "snapshot_lifetime_days"}

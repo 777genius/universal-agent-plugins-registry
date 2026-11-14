@@ -27,28 +27,43 @@ from build_registry import (
     validate_changed_external_releases,
     validate_release_package,
 )
-from directory_publication import (
-    CANDIDATE_SCHEMA,
-    PublicationError,
-    SHA_RE,
-    atomic_write,
-    candidate_digest,
-    canonical_json,
-    load_ledger_latest,
-    load_public_keys,
-    parse_json_bytes,
-    read_json,
-    require,
-    validate_with_schema,
-)
-from directory_publication_cas import CasError, validate_marker
-from sequence_boundaries import parse_public_sequence
-from legacy_directory_client_boundary import require_pi_free_legacy_distributions
+if __package__:
+    from .directory_publication import (
+        CANDIDATE_SCHEMA, PublicationError, SHA_RE, atomic_write, candidate_digest, canonical_json,
+        load_ledger_latest, load_feed_trusted_keys, parse_json_bytes, read_json, require,
+        require_feed_clients, validate_with_schema,
+    )
+    from .directory_publication_cas import (
+        CasError, validate_marker,
+    )
+    from .sequence_boundaries import (
+        parse_public_sequence,
+    )
+    from .directory_feed_contract import (
+        DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed, reviewed_source_path,
+    )
+    from .publication_trust_policy import (
+        load_publication_trust_config, validate_publication_eligibility_trust,
+    )
+else:
+    from directory_publication import (
+        CANDIDATE_SCHEMA, PublicationError, SHA_RE, atomic_write, candidate_digest, canonical_json,
+        load_ledger_latest, load_feed_trusted_keys, parse_json_bytes, read_json, require,
+        require_feed_clients, validate_with_schema,
+    )
+    from directory_publication_cas import (
+        CasError, validate_marker,
+    )
+    from sequence_boundaries import (
+        parse_public_sequence,
+    )
+    from directory_feed_contract import (
+        DirectoryFeedContract, LEGACY_FEED, MODERN_FEED, fixed_feed, reviewed_source_path,
+    )
+    from publication_trust_policy import (
+        load_publication_trust_config, validate_publication_eligibility_trust,
+    )
 from repository_identity import is_checkout_owned_repository
-from publication_trust_policy import (
-    load_publication_trust_config,
-    validate_publication_eligibility_trust,
-)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -727,12 +742,14 @@ def build_candidate(
     *, repository_root: Path = ROOT,
     external_overrides: dict[str, Path] | None = None,
     historical_evidence: dict[str, dict[str, Any]] | None = None,
+    feed: DirectoryFeedContract = LEGACY_FEED,
 ) -> dict[str, Any]:
-    # This path is permanently the *legacy* schema-1 signer. Refuse Pi
-    # independently of schema support, including before a future schema
-    # update could make the otherwise valid target parse successfully.
+    fixed_feed(feed)
+    # The default entrypoint remains historical. Only the fixed modern
+    # entrypoint may admit the newer known IDs; neither schema support nor
+    # candidate data can select that trust boundary.
     if isinstance(source, dict) and isinstance(source.get("distributions"), list):
-        require_pi_free_legacy_distributions(source["distributions"])
+        require_feed_clients(source, feed)
     validate_with_schema(source, SOURCE_SCHEMA)
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be a full lowercase SHA")
     try:
@@ -965,15 +982,20 @@ def parse_overrides(values: list[str]) -> dict[str, Path]:
     return result
 
 
-def main() -> int:
+def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
+    fixed_feed(feed)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--config", type=Path, required=True)
+    if feed is LEGACY_FEED:
+        parser.add_argument("--config", type=Path, required=True)
+        parser.add_argument("--trusted-keys", type=Path)
+    else:
+        parser.set_defaults(config=reviewed_source_path(ROOT, feed.trust_config_path),
+                            trusted_keys=ROOT / feed.trusted_keys_path)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--source-tree-commit")
     parser.add_argument("--publication-id", required=True)
     parser.add_argument("--ledger", type=Path)
-    parser.add_argument("--trusted-keys", type=Path)
     parser.add_argument("--initialize-ledger", action="store_true")
     parser.add_argument("--ledger-seed-commit")
     parser.add_argument("--ledger-sequence-floor", type=parse_public_sequence)
@@ -982,6 +1004,9 @@ def main() -> int:
     parser.add_argument("--digest-output", type=Path, required=True)
     args = parser.parse_args()
     try:
+        if feed is MODERN_FEED:
+            load_config(args.config)
+            load_feed_trusted_keys(args.trusted_keys, feed)
         resolved_head = subprocess.check_output([GIT, "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         checked_out_source = args.source_tree_commit or args.source_commit
         mismatch_label = "source tree commit" if args.source_tree_commit else "--source-commit"
@@ -993,11 +1018,12 @@ def main() -> int:
         if args.ledger:
             require(args.trusted_keys is not None, "--trusted-keys is required with --ledger")
             loaded = load_ledger_latest(
-                args.ledger, load_public_keys(args.trusted_keys),
+                args.ledger, load_feed_trusted_keys(args.trusted_keys, feed),
                 allow_initialization=args.initialize_ledger,
                 seed_commit=args.ledger_seed_commit,
                 minimum_sequence=args.ledger_sequence_floor,
                 require_external_floor=True,
+                feed=feed,
             )
             previous = loaded[0] if loaded else None
             historical_evidence = loaded[2] if loaded else {}
@@ -1006,6 +1032,7 @@ def main() -> int:
             args.publication_id, previous,
             external_overrides=parse_overrides(args.external_repository),
             historical_evidence=historical_evidence,
+            feed=feed,
         )
         validate_with_schema(candidate, CANDIDATE_SCHEMA)
         body = canonical_json(candidate)
