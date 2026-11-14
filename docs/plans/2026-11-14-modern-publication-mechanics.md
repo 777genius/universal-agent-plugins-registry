@@ -1,0 +1,113 @@
+# Modern schema-1 publication mechanics
+
+## Purpose and authorization boundary
+
+Continue the reviewed agent-support foundation in Registry PR #480, based on
+`ab62dcb893418ec478c6e0c297290bc1037f1fa7`, in a separate branch. The canonical
+cross-repository plan remains
+[agent support synchronization](https://github.com/777genius/universal-agent-plugins/blob/15ee08c04905b68cf0598fd5ed050f03cbd26383/docs/plans/2026-11-14-agent-support-synchronization.md).
+
+Complete reviewable, non-production publication mechanics after prepare/sign.
+Reuse the existing CAS, composition and verification authorities. This change
+does not provision a key, public issuer, protected ref, publisher App, environment
+or production workflow. It neither publishes evidence nor creates eligibility.
+The historical schema-1 feed and all existing production defaults stay intact.
+
+## Fixed contracts and transitions
+
+Extend the existing code-owned `DirectoryFeedContract` with production,
+launch-approval and promotion-intent namespaces and the fixed reviewed deployment
+contract location. The two singleton profiles remain the only accepted values;
+candidate JSON, environment variables and public CLI flags cannot select one.
+Modern commands require their reviewed public configuration at the fixed source
+path. Missing configuration fails before remote mutation or network observation.
+
+Thread the profile through existing CAS operations: atomic publication,
+materialization, deterministic reassembly, immutable intent, monotonic production
+marker and their exact readbacks. Preserve the existing source/main lease,
+one-parent signed/materialized pair, bounded retries, lost-response recovery,
+create-only sequence/intent tags and immutable prepared bytes.
+
+Legacy reassembly continues to admit only its authenticated Discovery/Security
+interleaving. The modern ledger does not own those feeds. It rejects their
+appends, an unrelated Directory lineage and a moved modern publication head;
+the caller must prepare again after a conflicting publication. It never reparents
+an already selected sequence over a competing modern Directory publication.
+
+## Composition and first publication
+
+Thread the fixed profile through existing composition selection and freshness
+rechecks. Modern production configuration pins its initial ledger seed. Before
+the first deployment there is no production marker: selection requires an
+approved immutable intent descended from that seed. A seed, prepared snapshot,
+or signed sequence is not a production receipt.
+
+The modern ledger is not a complete authoritative Pages tree. Deploying it
+wholesale could roll back the legacy Directory, Discovery or Security feed.
+Add a narrow composition operation that overlays only the fixed modern feed
+subtree onto the existing approved legacy composition. Bind the two selected
+plans and require both to remain current before a deployment handoff. Preserve
+every other byte and path from the existing composition. Do not add a generic
+multi-feed workflow framework or duplicate the production workflow.
+
+The existing external Pages deployment receipt/checkpoint authority stays shared.
+Actual protected workflow integration and modern marker advancement after a
+successful deployment are a separately reviewed activation change.
+
+## Verification and observation
+
+Reuse current pointer/envelope/snapshot verification with the fixed profile and
+current evidence from modern sequence 1. Modern verification and observation
+entrypoints load the public key and origin from the fixed reviewed source paths;
+they accept neither arbitrary key files nor arbitrary origins. Public issuer
+configuration is deliberately absent from this change.
+
+An exact observation compares the expected sequence, publication ID, source
+commit and signed snapshot digest and binds the caller's selected ledger commit
+in its receipt. Redirect refusal, byte bounds, canonical JSON, signature checks,
+expiry, sequence floor and lineage checks remain mandatory. Observations prove
+publication transport, not client installation, activation, OAuth or runtime.
+
+## Files and verification
+
+Implementation belongs in the existing feed contract, CAS, compositor,
+verification and observer modules, with small fixed modern entrypoints. Keep
+new deployment-contract validation separate only if needed to share the fixed
+public authority across those existing consumers. No production workflow is
+activated or copied.
+
+Use disposable local repositories/remotes and existing test-only Ed25519 keys
+for the complete prepare -> sign -> signed/materialized commits -> atomic CAS
+-> exact readback -> immutable intent -> composition -> verified observation
+receipt. Test the first publication and a subsequent monotonic publication.
+The test issuer and transport fixtures must never enter production trust files.
+
+Adversarial cases cover lost acknowledgments, exact reruns, conflicting refs,
+wrong namespaces, rollback, divergent intent, foreign feed appends, changed
+materialization bytes, stale composition, cross-key trust, missing fixed public
+configuration and receipt identity mismatch. Verify both package and direct
+script imports retain the same profile and error identities.
+
+Run focused new tests and the existing CAS, compositor, publication and sequence
+boundary suites unchanged. Then run the actual Python discovery command and
+contract generation check required by repository CI. Record environment blocks
+separately; do not substitute fake platform guards or treat queued CI as PASS.
+Independent review and hosted checks must cover the final commit.
+
+## Estimated size and remaining activation work
+
+| Area | Estimated added/changed lines |
+| --- | ---: |
+| Production mechanics and fixed entrypoints | 400-600 |
+| Disposable integration and adversarial tests | 650-900 |
+| Plan and operational contract documentation | 100-150 |
+
+Estimated complexity: 6/10. Target reliability after verification: 9/10.
+Implementation confidence before review: 8/10. These are planning estimates.
+
+After this mechanics change, activation still requires the real independently
+approved issuer/public key/origin, reviewed source and evidence pins, protected
+modern refs and publisher credentials, environment approvals, and wiring into
+the existing serialized Pages workflow and downstream readers. Genuine native
+evidence must authorize actual published targets; support metadata never creates
+those grants. The first live publication and readback need their own evidence.
