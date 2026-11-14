@@ -22,7 +22,9 @@ CLIENTS = ("hermes", "antigravity")
 SCOPES = ("user", "project")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?\Z")
+PACKAGE_PATH = re.compile(r"(?:\.|[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)\Z")
+MANIFEST_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 
 class AuditError(ValueError):
@@ -76,20 +78,22 @@ def committed_inputs(head: str) -> tuple[dict, list[dict]]:
 def source_identity(release: dict, head: str) -> dict:
     package = release["package_source"]
     repo, revision, path = package["repository"], package["revision"], package["path"]
-    require(isinstance(repo, str) and REPO.fullmatch(repo) is not None,
+    require(isinstance(repo, str) and REPO.fullmatch(repo) is not None
+            and not repo.endswith(".git"),
             "non-canonical package repository")
     require(revision is None or isinstance(revision, str) and SHA.fullmatch(revision),
             "package revision must be an immutable commit")
     require(revision is not None or repo == "777genius/universal-agent-plugins-registry",
             "unbound external package source")
-    require(isinstance(path, str) and re.fullmatch(r"[a-zA-Z0-9_./-]+", path) is not None
-            and not path.startswith("/") and ".." not in Path(path).parts and bool(path),
+    require(isinstance(path, str) and PACKAGE_PATH.fullmatch(path) is not None
+            and (path == "." or all(part not in {".", ".."} for part in path.split("/"))),
             "invalid package path")
     for key in ("tree_digest", "manifest_digest"):
         require(isinstance(release[key], str) and DIGEST.fullmatch(release[key]) is not None,
                 "missing exact pinned package digest")
-    require(isinstance(release.get("manifest_name"), str) and bool(release["manifest_name"]),
-            "missing manifest identity")
+    require(isinstance(release.get("manifest_name"), str)
+            and MANIFEST_NAME.fullmatch(release["manifest_name"]) is not None,
+            "non-canonical manifest identity")
     return {"repository": repo, "revision": revision or head, "path": path,
             "tree_digest": release["tree_digest"],
             "manifest_digest": release["manifest_digest"],

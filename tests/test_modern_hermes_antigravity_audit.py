@@ -89,7 +89,20 @@ class ModernSourceAuditTests(unittest.TestCase):
                       {"package_source": {"repository": "evil/repo", "revision": None,
                                           "path": "plugins/pkg"}},
                       {"package_source": {"repository": "example/source", "revision": "d" * 40,
-                                          "path": "../pkg"}}):
+                                          "path": "../pkg"}},
+                      {"package_source": {"repository": "../source", "revision": "d" * 40,
+                                          "path": "plugins/pkg"}},
+                      {"package_source": {"repository": "example/..", "revision": "d" * 40,
+                                          "path": "plugins/pkg"}},
+                      {"package_source": {"repository": "example/source.git", "revision": "d" * 40,
+                                          "path": "plugins/pkg"}},
+                      {"package_source": {"repository": "example/source", "revision": "d" * 40,
+                                          "path": "plugins//pkg"}},
+                      {"package_source": {"repository": "example/source", "revision": "d" * 40,
+                                          "path": "plugins/./pkg"}},
+                      {"package_source": {"repository": "example/source", "revision": "d" * 40,
+                                          "path": "plugins/pkg/"}},
+                      {"manifest_name": "pkg;unsafe"}):
             with self.subTest(patch=patch):
                 modified = copy.deepcopy(source)
                 modified["distributions"][0]["releases"][0].update(patch)
