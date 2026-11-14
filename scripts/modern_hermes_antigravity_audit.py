@@ -23,6 +23,11 @@ SCOPES = ("user", "project")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?\Z")
+# Immutable source-approved CLI: a modified lock plus modified JSON is not
+# an independently verified release (review a new release before upgrading).
+FROZEN_CLIENT_RELEASE = "agentplugins-v0.1.108"
+FROZEN_CLIENT_REVISION = "8c3cfa28e332c533b0cc0845739c0275730a4285"
+FROZEN_CLIENT_DIGEST = "sha256:57e78f6c8559c2e0367311dfeebc6f6148f2c1654b0e5d563b3670b163910c89"
 PACKAGE_PATH = re.compile(r"(?:\.|[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)\Z")
 MANIFEST_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
@@ -45,6 +50,15 @@ def committed_bytes(head: str, path: str) -> bytes:
                           capture_output=True, timeout=30, check=True).stdout
 
 
+def require_released_contract_pin(lock: dict) -> None:
+    """Refuse a self-consistent edited lock pointing at another CLI release."""
+    require(isinstance(lock, dict)
+            and lock.get("release") == FROZEN_CLIENT_RELEASE
+            and lock.get("revision") == FROZEN_CLIENT_REVISION
+            and lock.get("digest") == FROZEN_CLIENT_DIGEST,
+            "client contract pin differs from reviewed published CLI release")
+
+
 def committed_inputs(head: str) -> tuple[dict, list[dict]]:
     checkout = subprocess.run(["git", "rev-parse", "--verify", "HEAD"],
                               cwd=ROOT, capture_output=True, text=True,
@@ -59,6 +73,7 @@ def committed_inputs(head: str) -> tuple[dict, list[dict]]:
             and isinstance(lock["release"], str) and RELEASE_RE.fullmatch(lock["release"])
             and isinstance(lock["revision"], str) and SHA.fullmatch(lock["revision"]),
             "untrusted client contract provenance")
+    require_released_contract_pin(lock)
     raw_contract = committed_bytes(head, "registry/client-capabilities.json")
     require(lock["digest"] == "sha256:" + hashlib.sha256(raw_contract).hexdigest(),
             "committed client contract differs from frozen released pin")

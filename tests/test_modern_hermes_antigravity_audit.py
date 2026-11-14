@@ -10,7 +10,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from modern_hermes_antigravity_audit import (AuditError, audit,
-                                            committed_inputs, committed_local_dependencies)
+                                            committed_inputs, committed_local_dependencies,
+                                            require_released_contract_pin,
+                                            FROZEN_CLIENT_RELEASE, FROZEN_CLIENT_REVISION,
+                                            FROZEN_CLIENT_DIGEST)
 
 HEAD = "a" * 40
 
@@ -40,6 +43,18 @@ def fixture(component="mcp", mandatory="mcp", status="active"):
 
 
 class ModernSourceAuditTests(unittest.TestCase):
+    def test_reviewed_cli_contract_lock_cannot_self_repin_to_another_release(self):
+        pin = {"release": FROZEN_CLIENT_RELEASE,
+               "revision": FROZEN_CLIENT_REVISION,
+               "digest": FROZEN_CLIENT_DIGEST}
+        require_released_contract_pin(pin)
+        for key, wrong in (("release", "agentplugins-v0.1.109"),
+                           ("revision", "f" * 40),
+                           ("digest", "sha256:" + "f" * 64)):
+            with self.subTest(field=key):
+                with self.assertRaisesRegex(AuditError, "pin differs"):
+                    require_released_contract_pin({**pin, key: wrong})
+
     def test_hermes_project_mcp_is_incompatible_even_with_native_user_mcp(self):
         report = audit(*fixture(), HEAD)
         rows = {(r["client"], r["scope"]): r for r in report["rows"]}
