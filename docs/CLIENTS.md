@@ -18,6 +18,7 @@ was tested in that client.
 | OpenCode | Skills and MCP | OpenCode 1.18.25 | Managed package lifecycle and live Chrome DevTools model tool calls passed in an isolated profile |
 | Cline | Skills and MCP | Disposable product-shaped profile | Managed package lifecycle passed; live extension/model runtime remains untested |
 | Windsurf | Prepared skills and MCP package | Disposable product-shaped profile | Preparation, repair, and removal passed; manual activation and live model runtime remain untested |
+| Pi (CLI 0.1.102) | User/project extensions, Skills, stdio and Streamable HTTP MCP; not SSE or generic apps | Genuine Pi 1.5.0 tested in isolated native matrix | Native Pi project Skills/MCP and local scripted-model `tools/call` are qualified in UAP product CI; the Registry has **not yet signed Pi into any active package policy**. Use an exact pinned direct source only with independent installer validation. |
 
 The compatibility directory describes client support for the standard. It is
 not proof that this repository was installed in every listed client. Marketplace

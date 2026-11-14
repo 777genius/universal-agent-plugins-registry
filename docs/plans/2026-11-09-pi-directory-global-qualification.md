@@ -1,0 +1,145 @@
+# Pi global Directory compatibility: scoped qualification and safe publication
+
+Date: 2026-11-09. Status: Draft / qualification required. Owner goal: Pi Skills/MCP should work with compatible packages across the whole catalog, not just native-extension-only packages.
+
+## Findings (from source and pinned releases)
+
+- The published UAP CLI 0.1.102 has Pi user and project Skills, stdio/Streamable HTTP MCP, and native extension adapters. SSE and generic app components are **not** Pi-compatible.
+- Current `registry/directory.json`: 31 products, 37 active distribution/release policies, **0 of 37 include Pi**. All 37 have Skills or MCP (none is extension-only). Context7 has both `upstash/context7` (HTTP OAuth) and `777genius/context7` (local stdio) active, each missing Pi.
+- The registry source and generated snapshot schemas, builder's `CLIENT_IDS`, the publication validator, legacy mirror site, and CI's fixed catalog matrix also currently lack Pi.
+- **Compatibility blocker:** The existing release-readiness workflow pins CLI **0.1.89**. Its directory reader's `validClient` calls `domain.IsSupportedClient`; that binary has no Pi. Adding `pi` to a shared signed v1 snapshot would cause 0.1.89 clients to reject the entire snapshot, not merely skip Pi. Do not publish such a snapshot without an explicitly qualified compatibility/migration decision.
+
+## Intended behavior / strict scope
+
+1. Keep the unchanged Agent Plugins 1.0 manifest contract. Pi is a **target capability** for eligible Skills and supported MCP transports, not an all-packages success promise. Deny unsupported SSE/apps, missing mandatory components and client-native trust as before. Local and pinned Git installs remain independent of Directory.
+2. Qualify Pi **without model tokens** on real public 0.1.102 and the immutable active packages: representative stdio (community Context7), Streamable HTTP (upstream Context7 and a remote package), skills-only (Marketing Kit), and extension-only positive/negative controls. Check user/project isolation, add→info→update→repair→remove, idempotence, foreign-file preservation and expected auth_pending. Real model login/OAuth is not claimed.
+3. Produce source-based coverage for each of the **37 active release policies**. Only add a Pi target for a pinned package with verified compatible mandatory components and valid acquisition. Authentication must come from source/transport review; unknown is preferable to false `not_required`. Do not mutate historical policy bytes or revocation and never fabricate evidence.
+4. Before amending published target policies, verify old-reader compatibility with the **actual pinned 0.1.89 CLI**, newest public CLI, and site. Maintain signed immutability and anti-rollback. If compatibility cannot be preserved within Directory v1, do **not** silently force a breaking signed snapshot; document migration choices and expose safe exact-pinned-source Pi installation as an explicit separate user choice, not an alias policy bypass.
+5. Update the canonical client identifiers, Schema 1 allowlists, preview/builders, docs and publication acceptance matrix **together**; no stale positive `pi` badges in the website before the actual signed sequence has been published. Do not add Directory v2, alternate signature schemes, a second installer engine or feature flags.
+6. Run all existing builder unit/schema/static tests plus exact signed candidate readiness on published source and physical client tests. Keep PR Draft and protected signing/promotion approvals intact. After published sequence, verify CDN and product site mirror/selector against exact signed snapshot, with no invented activation.
+
+## Verified checkpoint (2026-11-09)
+
+- Published UAP 0.1.102 with native Pi 1.5.0 passed 18/18 representative user/project lifecycle cases on Linux/macOS/Windows: [GitHub Actions evidence](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42657104676).
+- Source inventory on Linux: **35 of 36 eligible active policies planned**, **one suspended distribution excluded**; `marketing-kit` **refused** because its `hubspot-crm@0.1.0` signed dependency is not admitted for Pi. Treat this as a failed catalog gate, not an install PASS. See [per-policy JSON artifact](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42661240785/artifacts/13694512188).
+- Exact HEAD `55eba54f9cfd0f307e40d9fd2aeb866932825e72` [3-OS run #42681753621](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42681753621) completed: **70/72 eligible pinned-source Pi planning cases on each of Linux, macOS and Windows**, with **2/72 real `marketing-kit` dependency refusals on each OS** (`hubspot-crm` signed Pi dependency closure unavailable); **2 suspended `agent-notifications` scope records on each OS were excluded, not passed**. All three inventory jobs remain **failed**. Each OS passed all six representative real direct-source lifecycle cases. [Linux inventory artifact](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42681753621/artifacts/13703682881), [macOS](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42681753621/artifacts/13704376367), [Windows](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42681753621/artifacts/13702789414).
+- **Exact checkout correction (2026-11-09):** GitHub Actions checkout previously used the synthetic PR merge commit `101bb073e9fea26a9c3bb11a68b4e43384081a25` in run [#42687338840](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42687338840), while the scripts were given branch SHA `3b90590421eb18deb262f0ccadf5b81457d48380` as the source identifier. The old reports correctly record the branch SHA used to pin local package sources, **but do not establish that the test scripts themselves came from that exact HEAD**. The CI checkout now explicitly selects the PR head SHA and verifies `git rev-parse HEAD` before running tests. Independent requalification on that exact tree is required; prior matrix results remain evidence for the tested PR merge tree, not a post-fix PASS.
+- The macOS `docker-hub` planning prerequisite was resolved by provisioning a real Docker CLI on the runner; this **does not** establish a Docker daemon, authenticated MCP transport, remote service execution or production-ready Pi package authorization. The CLI planning inventory must not be relabeled an actual package installation matrix.
+- **Actual branch-HEAD verification:** [run #42696266136](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42696266136) checked out and logged `git rev-parse HEAD = 26de77886ed5c5345ac10eb46be4930d3674d475` separately on **Linux, macOS and Windows**. Downloaded all six new JSON artifacts: each OS reports **6/6 native Pi 1.5.0 / public UAP 0.1.102 source lifecycle PASS**, **70/72 active eligible user/project dry-run plans** with both `marketing-kit` dependency refusals, and **2 excluded suspended-distribution records**. The inventory jobs are correctly **FAIL**; registry/validate/CodeQL/Pages/upstream-promotion checks passed. [Linux planning evidence](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42696266136/artifacts/13711195644), [macOS](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42696266136/artifacts/13710360841), [Windows](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42696266136/artifacts/13709847799). The independent three-OS runtime advisory audit remains red; see [#453](https://github.com/777genius/universal-agent-plugins-registry/issues/453). This is source-planning evidence, **not** a signed Pi install, OAuth verification, or functional MCP execution for all 36 packages.
+- The strict **0.1.89 signed Directory v1 reader** is still incompatible with any `pi` target in the shared snapshot; do not publish targets merely because 0.1.102 direct-source tests passed. Migration requires a separate documented, approved old-reader compatibility decision, signed candidate proof and proper publication.
+- Runtime remediation npm audits for Firebase/HubSpot remain genuine independent 3-OS security failures, tracked as [issue #453](https://github.com/777genius/universal-agent-plugins-registry/issues/453). No waiver, dependency override without validated lock provenance, or new signed target is authorized by this checkpoint.
+
+## Independent pinned-source transport and dependency audit (2026-11-10)
+
+Read the **actual `mcp.json` files at each active policy's `package_source` revision** (using the exact PR HEAD only where the registry-local source revision is intentionally `null`). All 37 source records were accessible. Of the 36 releases whose distributions are active: **29 Streamable HTTP MCP, six stdio MCP, and one Skills-component package**; the 37th is the **suspended**, stdio-based `agent-notifications`. **No observed active `mcp.json` uses legacy SSE.** This is static transport evidence only: it does not attest MCP initialization, upstream availability, credentials, user consent, live tool calls, or signed Pi authorization.
+
+The **existing, non-Pi target policies** label 29 of these 36 active distributions `authentication: required` and seven `not_required`. These pre-existing values must **not** be copied mechanically into Pi policies or interpreted as Pi OAuth/runtime certification. Client-native scopes, remote login and local-CLI auth still require individual review before signing. The existing signed target policies currently expose only `user` scope; successful **direct-source** `project` planning does not prove that a signed `project` target is authorized.
+
+**Marketing Kit is not standalone Skills installation**, despite release `components: ["skills"]`: its [pinned package manifest](../../plugins/marketing-kit/uap.toml) requires `777genius/notion@0.1.0`, `777genius/hubspot-crm@0.1.0`, and `777genius/playwright-bridge@0.0.80`. The active HubSpot CRM release has **no signed Pi target**. The published 0.1.102 saved-dependency planner correctly refuses Marketing Kit in both scopes. Do not reinterpret `--no-save` as equivalent; it bypasses this required saved closure.
+
+Exact-head [CI #42732521352](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42732521352) on `95af605911df6ac6fa7dc543afe6c2ab769edc1e` confirmed **6/6 native Pi lifecycle PASS and 70/72 eligible saved-source plans per OS** on Linux, macOS and Windows. The other two eligible cases per OS are genuine Marketing Kit dependency refusals; the suspended distribution is excluded. Independent security [PR #457](https://github.com/777genius/universal-agent-plugins-registry/pull/457) remains responsible for Firebase/HubSpot npm advisories. These qualifications are **not** a signed feed promotion.
+
+**Old-reader acceptance decision remains mandatory:** immutable 0.1.89 cannot recognize the new `pi` ID in the shared signed v1 snapshot. Neither a higher release minimum version nor successful 0.1.102 direct-source E2E fixes the snapshot-wide parsing failure. Retain the existing feed unchanged until editors approve and independently test a backward-compatible rollout path; a separate v1 feed would itself be a new distribution decision requiring explicit approval, not an implicit workaround. No Directory v2, signature bypass, anti-rollback weakening or automatic migration is proposed here.
+
+## Acceptance gates
+
+- Direct-source Pi representative lifecycle across three OS plus all source-policy user/project planning on each OS. Record each refusal (not a PASS), exact source pins and receipts, and deliberate suspended-distribution exclusion.
+- Registry generator can prepare only an **unsigned preproduction** modern-v1 Pi candidate. Legacy CLI **0.1.89 must continue to read the unchanged historical signed feed**; an independently trusted modern CLI **0.1.102+ cohort must validate only its isolated Pi test candidate**. Neither reader is required or permitted to accept the other's feed. Protected publication requires separately approved 72/72 real managed saved receipts and a released modern trusted routing contract; source planning is insufficient.
+- Exact head CI, independent review, protected candidate/signing/promotion workflow, signed sequence + Pages feed, UI and post-merge E2E successful. Merely passing schema tests is insufficient.
+
+## Estimates and risk
+
+| Workstream | Complexity /10 | Risk /10 | Approximate delta |
+| --- | ---: | ---: | ---: |
+| Direct pinned Pi lifecycle tests | 5 | 4 | 200–500 LOC |
+| Canonical schema/client list + builder | 3 | 5 | 50–160 LOC + generated data |
+| Readiness matrix + conservative policy | 7 | 8 | 250–700 LOC, up to 37 policy records |
+| Signed rollout and compatibility acceptance | 8 | 9 | Mostly evidence/CI, not novel product code |
+| Documentation/UI parity | 2 | 2 | 50–200 LOC |
+
+Clean Architecture / SOLID / DRY. The central invariant is that signed install authority never follows an unqualified UI label.
+
+## Owner rollout decision and v1 implementation boundary (2026-11-10)
+
+**Priority correction:** The owner requires working Pi on public UAP **0.1.102+**, not retrofitting immutable CLI 0.1.89 to recognize Pi. Do **not** interpret this as permission to break the existing shared v1 feed. Prefer a **separate, signed modern-client feed that still uses Directory schema 1**, with an explicit release/cutover policy; no Directory v2, public unsigned alias, fake version gate or feature flag.
+
+### Verified code-level constraints
+
+- Current UAP CLI source wires `defaultDirectoryOrigin` to `/registry/schemas/1/` and accepts the `AGENTPLUGINS_DIRECTORY_ORIGIN` HTTPS override. Its production v1 client uses an embedded, signature-verified bootstrap and a **fixed local cache filename** `directory-v1-cache.json`. An additional Pages directory **alone** does not redirect published 0.1.102 clients; no automatic modern-feed support may be claimed until an actual released CLI routes to it. The source inspection is of the contemporary UAP repository; repeat against the **exact released binary** before accepting behavior.
+- The released v1 contract accepts **only `scopes: ["user"]`**, even for new `pi` targets. UAP's `selectDirectorySourceForPlacement` has a separate project-placement path: it verifies the signed user-source eligibility, then independently checks native project capability. A direct-source `project` PASS is not a new wire-format project grant. Do not change v1 target scopes to `["project"]` or `["user","project"]`; the v1 reader rejects both.
+- An authenticated modern feed must not share the old feed's mutable `latest.json`, monotonic ledger/CAS, local rollback floor/cache or embedding as if the two were interchangeable. Neither a raised minimum installer version nor an environment-variable switch is a sufficient migration on its own. A distinct reviewed signing trust identity and isolated bootstrap/cache/routing protect against cross-feed signed snapshot substitution; preserve **Ed25519** and the existing signed v1 message framing. Key issuance/approval must use the protected editor-owned process, never a generated test key.
+- Keep `registry/directory.json` and the current shared feed **Pi-free** pending an explicit separate-source strategy. The regression guard `tests/test_pi_legacy_feed_boundary.py` fails if shared active release policies silently acquire Pi or if the v1 target scope contract is broadened.
+
+### Minimal safe delivery sequence
+
+1. **Independent 0.1.102+ runtime qualification:** finish all 37 source-policy cases in both scopes; obtain 72/72 true saved dependency eligibility for 36 active distributions, excluding two suspended-scope records. Resolve Marketing Kit's required signed `hubspot-crm` closure rather than using `--no-save`; capture auth-pending vs authenticated execution separately. Do not treat `--dry-run` as runtime execution.
+2. **Dedicated modern v1 candidate, not production:** design the new endpoint namespace, its separate signed publication ledger and protected authorization, exact trust key, bootstrap, cache and minimum client routing. Preserve immutable source release tuples, policy revocations and anti-rollback. Prove the existing old path is byte-identical before/after a candidate sign/promotion, and that **old CLI 0.1.89 can still load both its warm cache and the old live feed**.
+3. **New-client routing in the actual UAP CLI:** a subsequent released CLI may default to the modern v1 endpoint after a verified signed bootstrap exists; test origin pinning, trust separation and cache migration/rollback, including local legacy installs. Public 0.1.102 may be used for explicitly isolated compatibility tests; do not advertise an unimplemented automatic redirect for it. Changes in UAP require their own narrowly scoped PR, not conflicts with already merged UI PRs #807/#808.
+4. **Signed acceptance and independent review:** real modern-client signed short-name `add/info/update/repair/remove` with user/project placement on Linux/macOS/Windows, saved dependencies, foreign data and immutable-source refusal. Negative tests must cover old-feed compatibility, wrong-key/cross-feed bytes, tampering, rollback, same-sequence equivocation, revoked releases, missing OAuth, invalid minimum CLI and wrong source digest. Keep security #457's genuine Firebase/HubSpot npm advisory failures visible.
+5. **Protected promotion and production verification:** only after editor-approved signing and readiness, publish the separate v1 `latest.json`/snapshot/envelope, verify signature and monotonically advancing sequence at CDN, confirm released CLI resolution and production website mirror's **actual feed** (not merely a positive Pi badge). Explicitly disclose which installed CLI versions use which feed and what users must update.
+
+**Current acceptance state:** 18/18 native Pi lifecycle passes and 70/72 eligible saved source dry-runs on each OS in previous exact-head evidence. The two Marketing Kit failures remain real. Neither a modern-feed signed snapshot nor automatic modern-client feed routing nor a production Pi catalog has been established. The legacy reader is not a Pi client; safeguarding its original feed is still mandatory.
+
+## Unsigned modern-feed source staging (2026-11-10)
+
+A narrow **non-production** staging helper now exists at `scripts/pi_modern_feed_candidate.py`.
+It requires the exact PR HEAD, independent Linux/macOS/Windows source-planning JSON reports
+and a separately reviewed transport/authentication record for every active Pi target.
+Each reviewed record must match the immutable distribution/release/tree digest and cite
+public evidence; authentication is explicitly `required`, `not_required` or `unknown`.
+
+The helper refuses duplicate or missing cases, wrong source identity, suspended source
+eligibility, unexpected failures, absent reviews, and violations of ordinary Directory v1
+policy validation. The known Marketing Kit -> HubSpot signed Pi dependency may appear
+only as a real `refused` outcome, never a PASS. The helper does not convert 70/72 into
+72/72 and never manufactures positive upstream materialization evidence.
+
+The helper accepts **only explicit `--preproduction-only` mode**. Its input
+reports describe direct-source planning, not saved managed installations.
+Even an apparent 72/72 of successful source-plan/dry-run results cannot
+open a sign-ready path; the default/no-flag invocation fails closed before
+source acquisition or candidate output. Real 3-OS saved-install receipts
+and separate protected publication authorization require a different,
+independently reviewed acceptance pipeline.
+
+Output is **only an unsigned source candidate outside the repository**: no keys, Ed25519
+signature, protected promotion, production feed, source policy mutation or approval.
+The legacy shared signed Directory v1 feed is unchanged. A future modern-only signed
+v1 feed still needs separate origin/trust/cache/anti-rollback isolation, owner-approved
+signing, a released new CLI route, 72/72 genuine saved dependency eligibility,
+short-name lifecycle and production CDN/site post-merge E2E. This helper alone
+does not satisfy any of those gates.
+
+## 2026-11-11 signed v1 scope clarification (source verified)
+
+On CLI Draft #844 HEAD `936e9e82b72530c1ae54d8603ab6a1c348166df4`,
+`selectDirectorySourceForPlacement` calls `ResolveDirectoryV1ProjectSource`
+for explicit project placement. That resolver authenticates the signed **User**
+publication and independently verifies native **Project** client policy. It
+neither expects nor authorizes a signed `scopes: ["project"]` grant. The existing
+v1 publication schema explicitly requires `scopes: ["user"]`. An earlier
+unsigned candidate erroneously used `["user", "project"]`; this is corrected
+back to the actual v1 wire contract while preserving real project-native E2E.
+A separate modern-client feed is still necessary to isolate Pi from old 0.1.89;
+no signature, 72/72 status, production routing or project runtime assurance
+can be inferred from this correction.
+
+## 2026-11-11: separate real native direct-source evidence from managed dependency closure
+
+The nine-shard published-CLI materialization run on exact source HEAD
+`8b8ad395d9e626c5301bb9fad0296b2eb40e5043` exposed an incorrect harness
+assumption: all 36 active packages could be installed with `--no-save`.
+The released CLI correctly rejects Marketing Kit because its manifest declares
+mandatory saved dependencies. The new verification contract still runs the
+original add operation and requires the **exact actual refusal** in each scope,
+but records it as `requires_managed_saved_install`, **never as a native PASS**.
+It counts only the other 35 active distributions × two scopes as positive
+direct-source lifecycle evidence on each OS, with separately reported suspended
+exclusions. Missing Marketing Kit records, unexpected denials, or fake PASS
+still fail the entire native suite.
+
+This is a test-mode correction, **not a relaxation of signed eligibility**:
+the independent saved-dependency planner remains red at **70/72** per OS,
+and the two Marketing Kit cases remain mandatory for the subsequent
+editor-approved modern-v1 signed-feed managed-install E2E. No signed policy,
+source pin, public CLI, production origin or release was modified.

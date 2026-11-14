@@ -2051,6 +2051,30 @@ class DirectoryDomainTests(unittest.TestCase):
         with self.assertRaisesRegex(registry.RegistryError, r"evidence .* targets: codex$"):
             registry.validate_directory(fixture, verify_packages=False)
 
+    def test_unsigned_pi_review_exception_cannot_bypass_other_upstream_evidence(self) -> None:
+        fixture = self.fixture()
+        upstream = self.promote_upstream(fixture, ("codex", "cursor"))
+        upstream["release_policies"][0]["targets"].append({
+            "client": "pi", "scopes": ["user"], "delivery": "managed",
+            "authentication": "required",
+        })
+        # Normal source validation, including the protected signer, must fail.
+        with self.assertRaisesRegex(registry.RegistryError, r"targets: pi$"):
+            registry.validate_directory(fixture, verify_packages=False)
+        # This narrowly scoped validator relaxation is ONLY for an unsigned
+        # candidate kept outside the repository and publication tree.
+        registry.validate_directory(
+            fixture, verify_packages=False, allow_unsigned_pi_review_only=True
+        )
+        upstream["release_policies"][0]["current_evidence"] = [
+            evidence for evidence in upstream["release_policies"][0]["current_evidence"]
+            if not evidence.endswith("-codex")
+        ]
+        with self.assertRaisesRegex(registry.RegistryError, r"targets: codex$"):
+            registry.validate_directory(
+                fixture, verify_packages=False, allow_unsigned_pi_review_only=True
+            )
+
     def test_upstream_default_accepts_exact_current_static_compatibility_evidence(self) -> None:
         fixture = self.fixture()
         self.promote_upstream(fixture, ("codex", "cursor"))
@@ -2860,6 +2884,33 @@ class LockedRuntimeRecoveryTests(unittest.TestCase):
                 finally:
                     process.terminate()
                     process.communicate(timeout=5)
+
+
+class PiDirectoryTargetContractTests(unittest.TestCase):
+    """Admitting Pi as a schema/client ID never grants real package eligibility."""
+
+    def test_signed_source_can_describe_pi_user_only_without_new_manifest_fields(self):
+        self.assertIn("pi", registry.CLIENT_IDS)
+        source = copy.deepcopy(registry.load_directory_source())
+        distribution = next(item for item in source["distributions"]
+                            if item["id"] == "777genius/context7")
+        policy = next(item for item in distribution["release_policies"]
+                      if item["status"] == "active")
+        self.assertNotIn("pi", [target["client"] for target in policy["targets"]],
+                         "this fixture must not silently change public signed compatibility")
+        pi = {"client": "pi", "scopes": ["user"], "delivery": "managed",
+              "authentication": "unknown"}
+        policy["targets"].append(pi)
+        registry.validate_directory(source, verify_packages=False)
+        pi["scopes"] = ["project"]
+        with self.assertRaisesRegex(registry.RegistryError, r"schema error"):
+            registry.validate_directory(source, verify_packages=False)
+
+    def test_legacy_index_remains_unchanged_until_signed_publication(self):
+        # Allowing a new client ID in schema is NOT proof or a generated target.
+        index = json.loads((registry.ROOT / "registry/index.json").read_text())
+        self.assertFalse(any("pi" in p.get("client_support", {}).get("clients", [])
+                             for p in index["plugins"]))
 
 
 if __name__ == "__main__":

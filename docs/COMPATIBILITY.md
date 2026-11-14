@@ -13,6 +13,43 @@ labels the reviewed **Default source**, and links alternatives and immutable
 provenance. Existing installs stay on their recorded distribution during
 update; changing source is an explicit `switch`.
 
+## Pi target and Directory status
+
+The published installer 0.1.102 supports Pi Skills, stdio and Streamable HTTP MCP
+(and native extensions) for user and project profiles. It does **not** imply
+that a signed Directory release is already authorized for Pi. The current
+reviewed Directory has **37 active release policies and none names Pi**.
+These policies predate Pi's component support. A package with eligible Skills/MCP
+is a *candidate* for Pi qualification, not a proven signed installation.
+A read-only audit of all 37 active-policy source manifests found 29 eligible
+Streamable HTTP MCP distributions, six stdio MCP distributions, one
+Skills-component distribution and one suspended stdio distribution (excluded).
+This classifies transports, **not** login or tool execution.
+
+**Marketing Kit is not a dependency-free Skills install:** although its own
+release lists only Skills, its required `uap.toml` dependencies include Notion,
+HubSpot CRM and Playwright Bridge. With no signed Pi authorization for HubSpot
+CRM, the published 0.1.102 saved-source planner refuses Marketing Kit for
+both `user` and `project`; it must not be labelled Pi-installable merely
+because its Skills files can be planned independently. On each of Linux, macOS
+and Windows, the [exact-head E2E run](https://github.com/777genius/universal-agent-plugins-registry/actions/runs/42732521352)
+passed six native Pi lifecycle cases and planned 70 of 72 eligible source/scope
+cases; the two genuine dependency refusals are not PASS. A successful
+direct-source project dry-run is not itself a signed project-scope grant.
+
+For source-bound validation without silently broadening signed authority, first
+run an exact Git revision with `--dry-run` on a disposable Pi profile:
+
+```sh
+npx -y universal-agent-plugins@0.1.102 add github:upstash/context7@769c6cd22c3d95462d1f55d789e9532cabefa5a9//plugins/agent-plugins/context7 --target pi --scope user --dry-run
+```
+
+The same package's signed `context7` alias **does not yet authorize Pi**; a
+direct Git selector is a separate, explicit trust path and must be checked by
+the CLI. Do not conflate staged configuration, approved project trust, endpoint
+login, MCP tool execution, or a live provider account. See the
+[Pi Directory rollout qualification plan](../docs/plans/2026-11-09-pi-directory-global-qualification.md).
+
 ## Package matrix
 
 | Plugin | Component | Authentication and scope |

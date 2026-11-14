@@ -1,0 +1,107 @@
+name: Pi published CLI exact-source compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'registry/directory.json'
+      - 'scripts/pi_direct_source_e2e.py'
+      - 'scripts/pi_catalog_inventory_e2e.py'
+      - 'tests/test_pi_catalog_inventory.py'
+      - 'tests/test_pi_legacy_feed_boundary.py'
+      - '.github/workflows/pi-direct-source-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-direct-source-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  published-pi:
+    name: public CLI / native Pi / ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # On PR events, the default ref is a synthetic merge commit, not the declared source HEAD.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.21.1'
+          package-manager-cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Require exact PR branch HEAD (never synthetic merge checkout)
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git show -s --format='Verified source tree: %H' HEAD
+      - name: Verify published CLI and native Pi executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(npm view universal-agent-plugins@0.1.102 version)" = 0.1.102
+          npm install --global universal-agent-plugins@0.1.102
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.5.0
+          test "$(agentplugins version)" = "agentplugins 0.1.102"
+          command -v agentplugins
+          command -v pi
+          # A preinstalled/shadowing native Pi must not count as Pi 1.5.0.
+          test "$(pi --version)" = "1.5.0"
+      - name: Execute pinned exact-source user and project lifecycles
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/pi_direct_source_e2e.py --source-head "$SOURCE_HEAD" \
+            --report "$RUNNER_TEMP/pi-direct-source-${{ matrix.os }}.json"
+      # docker-hub's real stdio preflight requires the Docker executable.
+      # The macOS runner does not ship it; install only the native CLI.
+      # This is a dry-run prerequisite, not a Docker daemon or MCP runtime proof.
+      - name: Provide macOS Docker CLI prerequisite for source planning
+        if: matrix.os == 'macos-15'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v docker >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install docker
+          fi
+          docker --version
+      - name: Check every active source in user/project as an exact pinned Pi dry-run
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/pi_catalog_inventory_e2e.py --source-head "$SOURCE_HEAD" \
+            --report "$RUNNER_TEMP/pi-catalog-inventory-${{ matrix.os }}.json"
+      - name: Preserve full Pi catalog inventory
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-catalog-source-plans-${{ matrix.os }}
+          path: ${{ runner.temp }}/pi-catalog-inventory-${{ matrix.os }}.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve exact case evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-exact-source-${{ matrix.os }}
+          path: ${{ runner.temp }}/pi-direct-source-${{ matrix.os }}.json
+          if-no-files-found: warn
+          retention-days: 14
