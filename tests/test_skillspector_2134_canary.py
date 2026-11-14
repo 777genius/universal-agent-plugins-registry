@@ -1,5 +1,6 @@
 """Negative tests for immutable source-bound 2.13.4 pilot results."""
 import copy
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -32,6 +33,58 @@ class UpgradeCanaryTests(unittest.TestCase):
         self.assertEqual(len(cases), 7)
         self.assertEqual(len({case["id"] for case in cases}), 7)
         self.assertEqual(len({case["reason"] for case in cases}), 5)
+
+    def fake_published_baseline(self):
+        """Exact content-addressed fake represents a signed-run immutable shard."""
+        cases = copy.deepcopy(self.baseline)
+        cases["cases"] = cases["cases"][:1]
+        item = cases["cases"][0]
+        original = {
+            "id": item["id"], "kind": item["kind"], "plugin_path": item["plugin_path"],
+            "source": {key: item[key] for key in ("repository", "revision", "path", "content_digest")},
+            "status": "partial", "freshness": "current", "finding_count": item["finding_count"],
+            "scanner": {"id": "skillspector", "version": "2.13.1"},
+            "retry": {"reason": item["reason"]}, "findings": [], "report_digest": "sha256:" + "1" * 64,
+        }
+        shard_data = {"schema_version": 3, "repository": item["repository"], "records": [original]}
+        shard_bytes = (json.dumps(shard_data, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        shard_digest = "sha256:" + hashlib.sha256(shard_bytes).hexdigest()
+        path = "shards/" + shard_digest[7:] + ".json"
+        manifest = {"schema_version": 3, "source_commit": "a" * 40,
+                    "shards": [{"path": path, "digest": shard_digest, "repository": item["repository"],
+                                "bytes": len(shard_bytes), "record_count": 1}]}
+        index_bytes = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        cases["manifest_digest"] = "sha256:" + hashlib.sha256(index_bytes).hexdigest()
+        blobs = {"index.json": index_bytes, path: shard_bytes}
+        return cases, blobs
+
+    def test_baseline_reads_and_checks_original_publication_digest(self):
+        cases, blobs = self.fake_published_baseline()
+        proof = pilot.verify_published_baseline(cases, fetcher=lambda path, _: blobs[path])
+        self.assertEqual(len(proof), 1)
+        self.assertEqual(proof[0]["original_report_digest"], "sha256:" + "1" * 64)
+        self.assertEqual(proof[0]["original_finding_group_count"], None)
+        self.assertTrue(proof[0]["original_findings_sha256"].startswith("sha256:"))
+
+    def test_baseline_tamper_or_replay_is_rejected(self):
+        cases, blobs = self.fake_published_baseline()
+        cases_bad = copy.deepcopy(cases)
+        cases_bad["manifest_digest"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(ValueError, "manifest SHA-256"):
+            pilot.verify_published_baseline(cases_bad, fetcher=lambda path, _: blobs[path])
+        bad_fixture = copy.deepcopy(cases)
+        bad_fixture["cases"][0]["finding_count"] += 1
+        with self.assertRaisesRegex(ValueError, "identical"):
+            pilot.verify_published_baseline(bad_fixture, fetcher=lambda path, _: blobs[path])
+        poisoned = dict(blobs)
+        key = next(p for p in blobs if p != "index.json")
+        poisoned[key] = blobs[key] + b" "
+        with self.assertRaisesRegex(ValueError, "immutable digest"):
+            pilot.verify_published_baseline(cases, fetcher=lambda path, _: poisoned[path])
+        drifted = copy.deepcopy(cases)
+        drifted["cases"][0]["revision"] = "f" * 40
+        with self.assertRaisesRegex(ValueError, "identical"):
+            pilot.verify_published_baseline(drifted, fetcher=lambda path, _: blobs[path])
 
     def test_nonportable_or_untrusted_source_rejected(self):
         for changed in ({"path": "../SKILL.md"}, {"revision": "main"}, {"repository": "https://bad.example/a"},
