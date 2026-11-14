@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -167,6 +168,50 @@ class UpgradeCanaryTests(unittest.TestCase):
             mutate(record)
             with self.subTest(record=record), self.assertRaisesRegex(ValueError, "complete evidence"):
                 pilot.compare(old, record)
+
+    def test_deduplicated_security_occurrences_keep_raw_count(self):
+        record = self.record(findings=2)
+        record.update(finding_group_count=1, findings=[{
+            "id": "sha256:" + "a" * 64, "rule": "AE99", "severity": "HIGH",
+            "path": "SKILL.md", "raw_count": 2,
+            # The real v3 normalizer deduplicates positions across detections.
+            "occurrences": [{"path": "SKILL.md", "line": 12}],
+        }])
+        original = pilot.finding_group_evidence(record)
+        self.assertTrue(original["grouping_complete"])
+        self.assertEqual(original["groups"][0]["raw_count"], 2)
+        self.assertEqual(original["groups"][0]["occurrence_count"], 1)
+        record["findings"][0]["occurrences"] = []
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate"):
+            pilot.finding_group_evidence(record)
+        record["findings"][0]["occurrences"] = [
+            {"line": 1}, {"line": 2}, {"line": 3},
+        ]
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate"):
+            pilot.finding_group_evidence(record)
+
+    def test_interrupted_canary_receipt_retains_evidence_but_never_qualifies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "proof.json"
+            cases = {"source_report_commit": "a" * 40, "cases": [{}, {}]}
+            evidence = [{"original_finding_groups": {"groups": ["original"]}}]
+            completed = [{"id": "source-1", "new_status": "partial",
+                          "candidate_record": {"findings": [{"evidence": "visible"}]}}]
+            checkpoint = pilot.measurement_receipt(cases, evidence, completed, finished=False)
+            pilot.persist_receipt(output, checkpoint)
+            persisted = json.loads(output.read_text(encoding="utf-8"))
+            self.assertFalse(persisted["measurement_finished"])
+            self.assertFalse(persisted["safe_for_automatic_publication"])
+            self.assertEqual(persisted["cases_completed"], 1)
+            self.assertEqual(persisted["cases_expected"], 2)
+            self.assertEqual(persisted["results"][0]["candidate_record"]["findings"][0]["evidence"], "visible")
+            self.assertFalse(output.with_name("proof.json.tmp").exists())
+            complete = pilot.measurement_receipt(cases, evidence, completed * 2, finished=True)
+            pilot.persist_receipt(output, complete)
+            final = json.loads(output.read_text(encoding="utf-8"))
+            self.assertTrue(final["measurement_finished"])
+            self.assertFalse(final["safe_for_automatic_publication"])
+            self.assertEqual(final["cases_completed"], 2)
 
     def test_security_group_identity_loss_even_with_unchanged_count(self):
         original = self.record()
