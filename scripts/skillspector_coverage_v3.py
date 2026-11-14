@@ -993,7 +993,7 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
 # These are scanner-emitted, ephemeral correlation IDs, not security identities.
 # Normalize only for authenticated fork *comparison*. Original reports, risk
 # evidence, and signed digest bytes must never be rewritten.
-_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\\Z")
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\Z")
 
 
 def _recovery_groups_without_generated_ids(record):
@@ -1020,9 +1020,9 @@ def _recovery_groups_without_generated_ids(record):
                 not isinstance(occurrences, list) or
                 type(raw_count) is not int or
                 raw_count != len(occurrences) or
-                len(ids) != len(set(ids)) or
                 any(type(value) is not str or
-                    _GENERATED_FINDING_ID.fullmatch(value) is None for value in ids)):
+                    _GENERATED_FINDING_ID.fullmatch(value) is None for value in ids) or
+                len(ids) != len(set(ids))):
             return groups
         count += raw_count
         replacements = {value: "verified-generated-id-" + str(index)
