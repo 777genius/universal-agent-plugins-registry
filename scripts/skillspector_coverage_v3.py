@@ -6,6 +6,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -989,6 +990,64 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     return manifest
 
 
+# These are scanner-emitted, ephemeral correlation IDs, not security identities.
+# Normalize only for authenticated fork *comparison*. Original reports, risk
+# evidence, and signed digest bytes must never be rewritten.
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\\Z")
+
+
+def _recovery_groups_without_generated_ids(record):
+    """Compare stable finding evidence while preserving unknown/partial records."""
+    groups = record.get("findings")
+    coverage = record.get("coverage")
+    if (not isinstance(groups, list) or not isinstance(coverage, dict) or
+            coverage.get("grouping_complete") is not True or
+            record.get("findings_truncated") is not False or
+            record.get("recovery_witnesses") or
+            type(record.get("finding_group_count")) is not int or
+            len(groups) != record["finding_group_count"] or
+            type(record.get("finding_count")) is not int):
+        return groups
+    normalized = copy.deepcopy(groups)
+    count = 0
+    for group in normalized:
+        if not isinstance(group, dict):
+            return groups
+        ids = group.get("finding_ids")
+        occurrences = group.get("occurrences")
+        raw_count = group.get("raw_count")
+        if (not isinstance(ids, list) or
+                not isinstance(occurrences, list) or
+                type(raw_count) is not int or
+                raw_count != len(occurrences) or
+                len(ids) != len(set(ids)) or
+                any(type(value) is not str or
+                    _GENERATED_FINDING_ID.fullmatch(value) is None for value in ids)):
+            return groups
+        count += raw_count
+        replacements = {value: "verified-generated-id-" + str(index)
+                        for index, value in enumerate(ids)}
+        encountered = set()
+        for occurrence in occurrences:
+            if not isinstance(occurrence, dict):
+                return groups
+            finding_id = occurrence.get("finding_id")
+            if finding_id is None:
+                if ids:
+                    return groups
+            elif finding_id in replacements:
+                encountered.add(finding_id)
+                occurrence["finding_id"] = replacements[finding_id]
+            else:
+                return groups
+        if encountered != set(ids):
+            return groups
+        group["finding_ids"] = list(replacements.values())
+    if count != record["finding_count"]:
+        return groups
+    return normalized
+
+
 def recovery_analysis(record):
     """Analysis equality excludes provenance that naturally varies per execution.
 
@@ -1000,6 +1059,7 @@ def recovery_analysis(record):
     value = {key: copy.deepcopy(child) for key, child in record.items() if key not in volatile}
     value["execution"] = {key: child for key, child in value["execution"].items()
         if key not in {"started_at", "finished_at", "acquisition_seconds", "analysis_seconds"}}
+    value["findings"] = _recovery_groups_without_generated_ids(record)
     return report_json(value)
 
 
