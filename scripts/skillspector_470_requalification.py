@@ -107,6 +107,14 @@ def verify_checkout(root: Path) -> None:
     require(not status.stdout.strip(), "immutable report checkout has uncommitted changes")
 
 
+def external_output(root: Path, path: Path) -> Path:
+    """Refuse even a symlinked output alias into the immutable source reports."""
+    output = path.resolve(strict=False)
+    require(output != root and root not in output.parents,
+            "read-only audit cannot write into immutable published reports")
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--published", type=Path, required=True)
@@ -121,8 +129,9 @@ def main() -> int:
     require((root / "index.json").read_bytes() == before,
             "published manifest changed during read-only audit")
     proof = qualify(bundle, report_commit=BASELINE_REPORT_COMMIT)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    destination = external_output(root, args.output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: proof[k] for k in proof if k != "receipts"}, sort_keys=True))
     return 0
 

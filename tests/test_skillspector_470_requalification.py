@@ -54,6 +54,22 @@ class RequalificationBoundary(unittest.TestCase):
             "selection": {"sources": sources}, "records": records, "attempts": attempts,
         }
 
+    def test_output_cannot_overwrite_immutable_report_or_symlink_alias(self):
+        from scripts.directory_publication import PublicationError
+        import tempfile
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name) / "published"
+            root.mkdir()
+            self.assertEqual(proof.external_output(root, Path(name) / "outside.json"),
+                             Path(name) / "outside.json")
+            for target in (root / "index.json", root / "nested" / "new.json"):
+                with self.assertRaises(PublicationError):
+                    proof.external_output(root, target)
+            alias = Path(name) / "alias"
+            alias.symlink_to(root, target_is_directory=True)
+            with self.assertRaises(PublicationError):
+                proof.external_output(root, alias / "attempts.json")
+
     def test_checkout_must_be_clean_and_exact_immutable_git_head(self):
         from scripts.directory_publication import PublicationError
         good = type("Proc", (), {"stdout": proof.BASELINE_REPORT_COMMIT + "\n"})()
