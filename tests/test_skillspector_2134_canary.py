@@ -154,6 +154,8 @@ class UpgradeCanaryTests(unittest.TestCase):
         a = {"id": "sha256:" + "a" * 64, "rule": "S1", "severity": "HIGH", "path": "SKILL.md"}
         b = {"id": "sha256:" + "b" * 64, "rule": "S2", "severity": "LOW", "path": "src.py"}
         c = {"id": "sha256:" + "c" * 64, "rule": "S3", "severity": "LOW", "path": "SKILL.md"}
+        for group in (a, b, c):
+            group.update(raw_count=1, occurrences=[{"path": group["path"], "line": 1}])
         original.update(finding_group_count=2, findings=[a, b])
         original["coverage"]["original_findings"] = [{"id": "AE1", "reason": "missing"}]
         bound = {"original_finding_groups": pilot.finding_group_evidence(original)}
@@ -168,7 +170,8 @@ class UpgradeCanaryTests(unittest.TestCase):
 
     def test_group_delta_refuses_incomplete_or_changed_coverage_evidence(self):
         original = self.record()
-        group = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "CRITICAL", "path": "SKILL.md"}
+        group = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "CRITICAL", "path": "SKILL.md",
+                 "raw_count": 1, "occurrences": [{"path": "SKILL.md", "line": 3}]}
         original.update(finding_group_count=1, findings=[group])
         original["coverage"]["original_findings"] = [{"id": "AE1"}]
         bound = {"original_finding_groups": pilot.finding_group_evidence(original)}
@@ -183,12 +186,30 @@ class UpgradeCanaryTests(unittest.TestCase):
         changed["coverage"]["grouping_complete"] = False
         self.assertFalse(pilot.finding_group_delta(bound, changed)["eligible_for_no_loss_assertion"])
 
+    def test_group_id_match_must_not_hide_missing_occurrence(self):
+        original = self.record()
+        group = {"id": "sha256:" + "b" * 64, "rule": "S1", "severity": "HIGH",
+                 "path": "SKILL.md", "raw_count": 2,
+                 "occurrences": [{"path": "SKILL.md", "line": 5},
+                                 {"path": "SKILL.md", "line": 9}]}
+        original.update(finding_group_count=1, findings=[group])
+        bound = {"original_finding_groups": pilot.finding_group_evidence(original)}
+        changed = copy.deepcopy(original)
+        changed["findings"][0]["occurrences"].pop()
+        changed["findings"][0]["raw_count"] = 1
+        delta = pilot.finding_group_delta(bound, changed)
+        self.assertEqual(delta["old_groups_not_in_candidate"], [])
+        self.assertEqual(delta["matching_ids_with_changed_occurrences_or_evidence"],
+                         [group["id"]])
+        self.assertFalse(delta["eligible_for_no_loss_assertion"])
+
     def test_malformed_group_identity_or_incomplete_enumeration_rejected(self):
         original = self.record()
         original.update(finding_group_count=1, findings=[])
         with self.assertRaisesRegex(ValueError, "enumeration"):
             pilot.finding_group_evidence(original)
-        a = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "HIGH", "path": "SKILL.md"}
+        a = {"id": "sha256:" + "a" * 64, "rule": "SC1", "severity": "HIGH", "path": "SKILL.md",
+             "raw_count": 1, "occurrences": [{"path": "SKILL.md", "line": 3}]}
         original.update(finding_group_count=2, findings=[a, copy.deepcopy(a)])
         with self.assertRaisesRegex(ValueError, "duplicate"):
             pilot.finding_group_evidence(original)
