@@ -146,7 +146,7 @@ def verify_published_baseline(cases: dict, *, fetcher=None) -> list[dict]:
 # Scanner-emitted per-scan finding IDs are correlation tokens, not content evidence.
 # Retain the original full-group digest for fail-closed authorization, and
 # separately compare a strictly bounded semantic view to diagnose ID drift.
-_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\\Z")
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\Z")
 
 
 def semantic_group_digest(group: dict) -> str:
