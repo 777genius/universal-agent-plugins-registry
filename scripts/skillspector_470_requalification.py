@@ -19,9 +19,15 @@ BASELINE_REPORT_COMMIT = "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf"
 BASELINE_SOURCE_COMMIT = "a12bd3bdffab6991a2541220a16a0a9d6447e47e"
 # These exact source SHA pins have separately archived no-LLM acquisition proof.
 COHORT = (
-    ("alchaincyf/elon-musk-skill", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f", "elon-musk-perspective"),
+    # The human-facing name lives in selection.id; the actual source path is
+    # empty for the repository-root skill. Never infer a checkout path from ID.
+    ("alchaincyf/elon-musk-skill", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f", ""),
     ("gogf/skills", "c22b6e4115e1a3747676419bba98fee99af6beff", "skills/goframe-v2"),
 )
+COHORT_IDS = {
+    "alchaincyf/elon-musk-skill": "alchaincyf/elon-musk-skill/elon-musk-perspective",
+    "gogf/skills": "gogf/skills/goframe-v2",
+}
 
 
 def qualify(bundle: dict, *, report_commit: str) -> dict:
@@ -49,7 +55,8 @@ def qualify(bundle: dict, *, report_commit: str) -> dict:
     receipts = []
     for repository, revision, path in COHORT:
         item = index.get((repository, revision, path))
-        require(item is not None, "qualified immutable source no longer selected")
+        require(item is not None and item["id"] == COHORT_IDS[repository],
+                "qualified immutable source ID or checkout path no longer selected")
         record = bundle["records"].get(item["id"])
         attempt = bundle["attempts"].get(item["id"])
         require(record is not None and attempt is not None, "missing original report or attempt")
