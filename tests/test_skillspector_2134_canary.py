@@ -366,5 +366,60 @@ class UpgradeCanaryTests(unittest.TestCase):
         self.assertEqual(capture["exception_type"], "ValueError")
 
 
+    def test_exact_2134_parser_diagnostic_accepts_only_typed_bounded_metadata(self):
+        parser = {
+            "cause": "resource_limit", "check": "command_word_boundary",
+            "source_start_offset": 0, "source_end_offset": 8,
+            "start_line": 1, "end_line": 1, "unchecked_scope": "command_word",
+            "observed_is_lower_bound": True, "full_input_checked": False,
+            "location_precision": "source_span",
+            "observed_characters": 128, "limit_characters": 64,
+        }
+        report = {"analysis_completeness": {"ledger_exceptions": [
+            {"reason_code": "static_parse_limit", "parser_diagnostic": parser},
+        ]}}
+        payload = lambda value: json.dumps(value).encode()
+        self.assertEqual(pilot.validate_2134_parser_diagnostics(payload(report)), 1)
+        mutations = [
+            lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
+                source_end_offset=0),
+            lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
+                check="unknown_attacker_check"),
+            lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
+                observed_characters=-1),
+            lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
+                full_input_checked="yes"),
+            lambda v: v["analysis_completeness"]["ledger_exceptions"][0]["parser_diagnostic"].update(
+                untrusted_source_text="secret"),
+        ]
+        for mutate in mutations:
+            malformed = copy.deepcopy(report)
+            mutate(malformed)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                pilot.validate_2134_parser_diagnostics(payload(malformed))
+
+    def test_readonly_parser_adapter_restores_production_fields_on_both_paths(self):
+        from scripts import skillspector_reports as scanner
+        old_fields = scanner.LEDGER_FIELDS
+        report = {"analysis_completeness": {"ledger_exceptions": []}}
+        def inner(record, body, code, root):
+            self.assertIn("parser_diagnostic", scanner.LEDGER_FIELDS)
+            return {"qualifying": True}
+        result = pilot.normalize_readonly_2134_ledger(
+            inner, {"scanner": copy.deepcopy(pilot.SCANNER)}, json.dumps(report).encode(), 0, None)
+        self.assertEqual(result, {"qualifying": True})
+        self.assertEqual(scanner.LEDGER_FIELDS, old_fields)
+        def failure(*_args):
+            raise ValueError("original failure")
+        with self.assertRaisesRegex(ValueError, "original failure"):
+            pilot.normalize_readonly_2134_ledger(
+                failure, {"scanner": copy.deepcopy(pilot.SCANNER)}, json.dumps(report).encode(), 0, None)
+        self.assertEqual(scanner.LEDGER_FIELDS, old_fields)
+        with self.assertRaisesRegex(ValueError, "identity differs"):
+            pilot.normalize_readonly_2134_ledger(
+                inner, {"scanner": {"version": "unknown"}}, json.dumps(report).encode(), 0, None)
+        self.assertEqual(scanner.LEDGER_FIELDS, old_fields)
+
+
 if __name__ == "__main__":
     unittest.main()

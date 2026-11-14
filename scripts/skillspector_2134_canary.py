@@ -319,6 +319,7 @@ def candidate_profile(production_profile: dict) -> dict:
     document.pop("reference_inventory_patch", None)
     document["reference_analyzer_semantics"] = "unmodified-upstream-2.13.4"
     document["upgrade_canary_scanner_revision"] = SCANNER["revision"]
+    document["qualification_ledger_schema"] = "strict-parser-diagnostic-2.13.4"
     return document
 
 
@@ -346,6 +347,97 @@ def unexpected_ledger_key_probe(body: bytes) -> dict:
         }
     except (TypeError, KeyError, ValueError, AttributeError):
         return {"schema_probe": "unavailable"}
+
+
+# The exact pinned NVIDIA 2.13.4 release added bounded parser diagnostics
+# to exceptional ledger rows. This is a read-only normalization qualification,
+# not a change to published v2.13.1 report contracts or raw finding evidence.
+_PARSER_CAUSES = frozenset({"resource_limit", "boundary_unresolved",
+    "malformed_input", "unsupported_syntax", "runtime_dependent"})
+_PARSER_SCOPES = frozenset({"command_word", "command_arguments", "command_string",
+    "expression", "remaining_input"})
+_PARSER_CHECKS = frozenset((
+    "command_word_unquoted_characters", "command_argument_characters",
+    "command_word_boundary", "command_argument_boundary", "runtime_command_identity",
+    "printf_input_characters", "printf_argument_count", "printf_argument_characters",
+    "printf_output_characters", "printf_format", "printf_invocation",
+    "wrapper_depth", "wrapper_arguments", "wrapper_clause_steps",
+    "command_string_depth", "command_string_runtime", "command_string_effects",
+    "startup_proof_characters", "brace_characters", "brace_alternatives",
+    "brace_products", "brace_rounds", "brace_syntax", "markdown_literal_ownership",
+    "heredoc_header", "heredoc_count", "heredoc_body", "heredoc_grammar",
+    "expansion_boundary",
+))
+_PARSER_RESOURCE_FIELDS = frozenset(
+    prefix + unit for prefix in ("observed_", "limit_")
+    for unit in ("characters", "bytes", "findings", "artifacts", "depth",
+                 "records", "seconds")
+)
+_PARSER_FIELDS = frozenset({
+    "cause", "check", "source_start_offset", "source_end_offset", "start_line",
+    "end_line", "unchecked_scope", "observed_is_lower_bound",
+    "full_input_checked", "location_precision",
+})
+
+
+def validate_2134_parser_diagnostics(body: bytes) -> int:
+    """Validate every new nested field, preserving original rows and values."""
+    from scripts import skillspector_reports as scanner
+    if not isinstance(body, bytes) or not 0 < len(body) <= scanner.MAX_REPORT_BYTES:
+        raise ValueError("unsupported 2.13.4 parser evidence size")
+    report = json.loads(body)
+    if not isinstance(report, dict) or not isinstance(report.get("analysis_completeness"), dict):
+        raise ValueError("missing 2.13.4 analysis completeness")
+    rows = report["analysis_completeness"].get("ledger_exceptions")
+    if not isinstance(rows, list) or len(rows) > 100000:
+        raise ValueError("invalid 2.13.4 ledger exceptions")
+    count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("invalid 2.13.4 ledger row")
+        if "parser_diagnostic" not in row:
+            continue
+        value = row["parser_diagnostic"]
+        if not isinstance(value, dict) or not _PARSER_FIELDS <= value.keys() <= (
+            _PARSER_FIELDS | _PARSER_RESOURCE_FIELDS):
+            raise ValueError("unrecognized 2.13.4 parser diagnostic shape")
+        if (value["cause"] not in _PARSER_CAUSES or
+                value["check"] not in _PARSER_CHECKS or
+                value["unchecked_scope"] not in _PARSER_SCOPES or
+                value["location_precision"] not in {"source_span", "enclosing_expression"} or
+                type(value["observed_is_lower_bound"]) is not bool or
+                type(value["full_input_checked"]) is not bool):
+            raise ValueError("unrecognized 2.13.4 parser diagnostic semantics")
+        positions = [value[key] for key in ("source_start_offset", "source_end_offset",
+                                           "start_line", "end_line")]
+        if (any(type(n) is not int or n < 0 or n >= 2**63 for n in positions) or
+                not positions[0] < positions[1] or
+                positions[2] < 1 or positions[3] < positions[2]):
+            raise ValueError("invalid 2.13.4 parser source coordinates")
+        for key in value.keys() - _PARSER_FIELDS:
+            number = value[key]
+            if (type(number) is int and 0 <= number < 2**63):
+                continue
+            if (key.endswith("_seconds") and type(number) is float and
+                    number == number and 0 <= number <= 1e12):
+                continue
+            raise ValueError("invalid 2.13.4 bounded parser measurement")
+        count += 1
+    return count
+
+
+def normalize_readonly_2134_ledger(normalizer, *args, **kwargs):
+    """Apply a strictly typed release-specific ledger contract only in canary."""
+    from scripts import skillspector_reports as scanner
+    if len(args) < 2 or not isinstance(args[0], dict) or args[0].get("scanner") != SCANNER:
+        raise ValueError("candidate normalization identity differs")
+    validate_2134_parser_diagnostics(args[1])
+    original_fields = scanner.LEDGER_FIELDS
+    scanner.LEDGER_FIELDS = original_fields | frozenset({"parser_diagnostic"})
+    try:
+        return normalizer(*args, **kwargs)
+    finally:
+        scanner.LEDGER_FIELDS = original_fields
 
 
 def probe_normalization(normalizer, diagnostic: dict):
@@ -397,7 +489,10 @@ def scan(executable: Path, cases: dict) -> dict:
             github_token=os.environ.get("GITHUB_TOKEN"), work_budget=budget)
         diagnostic = {}
         original_normalizer = scanner.normalize_report_v3
-        scanner.normalize_report_v3 = probe_normalization(original_normalizer, diagnostic)
+        scanner.normalize_report_v3 = probe_normalization(
+            lambda *a, **k: normalize_readonly_2134_ledger(original_normalizer, *a, **k),
+            diagnostic,
+        )
         try:
             # Reuse the production acquisition, immutable byte digest and scanner limits.
             record = coverage.scan_selected(executable, subject, pin, budget,
