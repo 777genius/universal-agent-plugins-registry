@@ -466,6 +466,13 @@ def probe_normalization(normalizer, diagnostic: dict):
 
 def measurement_receipt(cases: dict, originals: list[dict], results: list[dict], *, finished: bool) -> dict:
     """Distinguish an interrupted diagnostic from a completed seven-case canary."""
+    expected_ids = [item["id"] for item in cases["cases"]]
+    measured_ids = [item["id"] for item in results]
+    if (len(originals) != len(expected_ids) or
+        measured_ids != expected_ids[:len(measured_ids)] or
+        len(measured_ids) > len(expected_ids) or
+        (finished and len(measured_ids) != len(expected_ids))):
+        raise ValueError("incomplete or out-of-order immutable canary receipt")
     counts = Counter(row["new_status"] for row in results)
     return {
         "schema_version": 1, "kind": "skillspector-upgrade-canary-readonly",
