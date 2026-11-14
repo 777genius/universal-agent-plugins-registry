@@ -151,6 +151,28 @@ class RequalificationBoundary(unittest.TestCase):
         with self.assertRaises(PublicationError):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
+    def test_acquisition_error_without_scanner_report_digest_is_not_synthetic(self):
+        bundle = self.fixture()
+        identifier = bundle["selection"]["sources"][0]["id"]
+        old = copy.deepcopy(bundle["records"][identifier])
+        del bundle["records"][identifier]["report_digest"]
+        proof_a = proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
+        receipt = next(r for r in proof_a["receipts"] if r["id"] == identifier)
+        self.assertFalse(receipt["old_report_digest_present"])
+        self.assertIsNone(receipt["old_report_digest"])
+        self.assertTrue(receipt["old_record_digest"].startswith("sha256:"))
+        self.assertEqual(receipt["old_history_entry_count"], 8)
+        self.assertFalse(receipt["new_attempt_authorized"])
+        self.assertFalse(receipt["candidate_complete"])
+        # Reintroducing a real old report digest changes the authenticated
+        # record hash. Neither form manufactures a scanner result.
+        bundle["records"][identifier] = old
+        proof_b = proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
+        receipt_b = next(r for r in proof_b["receipts"] if r["id"] == identifier)
+        self.assertTrue(receipt_b["old_report_digest_present"])
+        self.assertEqual(receipt_b["old_report_digest"], old["report_digest"])
+        self.assertNotEqual(receipt["old_record_digest"], receipt_b["old_record_digest"])
+
     def test_root_skill_path_is_empty_and_published_id_is_separate(self):
         bundle = self.fixture()
         source = bundle["selection"]["sources"][0]

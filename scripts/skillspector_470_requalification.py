@@ -97,7 +97,12 @@ def qualify(bundle: dict, *, report_commit: str) -> dict:
             "old_attempt_count": attempt["attempt_count"],
             "old_history_entry_count": len(attempt["history"]),
             "old_disposition": attempt["disposition"],
-            "old_report_digest": record["report_digest"],
+            # Acquisition errors can predate any normalized scanner report:
+            # absence of report_digest is genuine evidence, never a failure to
+            # report a source-bound digest. Hash the full authenticated record.
+            "old_report_digest_present": "report_digest" in record,
+            "old_report_digest": record.get("report_digest"),
+            "old_record_digest": sha256_digest(coverage.report_json(record)),
             "old_history_digest": sha256_digest(coverage.report_json(attempt["history"])),
             "old_findings_digest": sha256_digest(coverage.report_json(record["findings"])),
             "old_finding_count": record["finding_count"],
