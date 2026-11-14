@@ -1,0 +1,52 @@
+name: "SkillSpector #470 immutable exhausted-Error admission audit"
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/skillspector-470-requalification-e2e.yml'
+      - 'scripts/skillspector_470_requalification.py'
+      - 'tests/test_skillspector_470_requalification.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          sparse-checkout: reports/skillspector/v3
+          persist-credentials: false
+          path: published
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Pin original immutable report commit
+        run: test "$(git -C published rev-parse HEAD)" = '7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf'
+      - name: Install locked original report-reader dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Reject drift, policy resets, missing history, and false completion
+        working-directory: source
+        run: python3 -m unittest -v tests.test_skillspector_470_requalification
+      - name: Audit original immutable published v3 bundle without mutation
+        working-directory: source
+        run: |
+          python3 -m scripts.skillspector_470_requalification \
+            --published "$GITHUB_WORKSPACE/published/reports/skillspector/v3" \
+            --output "$RUNNER_TEMP/skillspector-470/eligibility.json"
+      - name: Preserve non-promotable source-bound receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-470-exhausted-unicode-readonly-qualification
+          path: ${{ runner.temp }}/skillspector-470/
+          if-no-files-found: warn
+          retention-days: 7
