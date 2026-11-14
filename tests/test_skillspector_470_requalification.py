@@ -7,6 +7,7 @@ import unittest
 from scripts import skillspector_470_requalification as proof
 from scripts import skillspector_coverage_v3 as coverage
 from scripts import skillspector_contract as contract
+from scripts.directory_publication import PublicationError
 
 
 class RequalificationBoundary(unittest.TestCase):
@@ -63,13 +64,13 @@ class RequalificationBoundary(unittest.TestCase):
         self.assertEqual(bundle, unchanged)
 
     def test_wrong_report_commit_scanner_or_policy_fails_closed(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PublicationError):
             proof.qualify(self.fixture(), report_commit="f" * 40)
         for field in ("source_commit", "profile", "scanner"):
             with self.subTest(field=field):
                 bundle = self.fixture()
                 bundle["manifest"][field] = "unreviewed"
-                with self.assertRaises(ValueError):
+                with self.assertRaises(PublicationError):
                     proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
     def test_selection_source_freshness_and_error_provenance_must_match(self):
@@ -87,7 +88,7 @@ class RequalificationBoundary(unittest.TestCase):
                           bundle["records"][source["id"]] if location == "record" else
                           bundle["records"][source["id"]]["source"])
                 target[field] = value
-                with self.assertRaises(ValueError):
+                with self.assertRaises(PublicationError):
                     proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
     def test_malformed_old_attempt_never_qualifies(self):
@@ -103,27 +104,27 @@ class RequalificationBoundary(unittest.TestCase):
                 bundle = self.fixture()
                 identifier = bundle["selection"]["sources"][0]["id"]
                 bundle["attempts"][identifier][field] = value
-                with self.assertRaises(ValueError):
+                with self.assertRaises(PublicationError):
                     proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
         bundle = self.fixture()
         identifier = bundle["selection"]["sources"][0]["id"]
         bundle["records"][identifier]["errors"] = [{"code": "input_limit_exceeded"}]
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PublicationError):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
     def test_missing_or_conflicting_history_and_duplicate_pin_fail(self):
         bundle = self.fixture()
         identifier = bundle["selection"]["sources"][0]["id"]
         bundle["attempts"][identifier]["history"].pop()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PublicationError):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
         bundle = self.fixture()
         del bundle["attempts"][identifier]
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PublicationError):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
         bundle = self.fixture()
         bundle["selection"]["sources"].append(copy.deepcopy(bundle["selection"]["sources"][0]))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PublicationError):
             proof.qualify(bundle, report_commit=proof.BASELINE_REPORT_COMMIT)
 
 
