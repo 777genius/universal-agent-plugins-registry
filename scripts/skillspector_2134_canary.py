@@ -201,7 +201,7 @@ def finding_group_evidence(record: dict) -> dict:
             not isinstance(group.get("path"), str) or
             type(group.get("raw_count")) is not int or group["raw_count"] <= 0 or
             not isinstance(group.get("occurrences"), list) or
-            len(group["occurrences"]) != group["raw_count"]):
+            not group["occurrences"] or len(group["occurrences"]) > group["raw_count"]):
             raise ValueError("invalid or duplicate normalized security finding group")
         ids.add(group["id"])
         normalized.append({**{key: group[key] for key in
@@ -464,7 +464,29 @@ def probe_normalization(normalizer, diagnostic: dict):
     return wrapped
 
 
-def scan(executable: Path, cases: dict) -> dict:
+def measurement_receipt(cases: dict, originals: list[dict], results: list[dict], *, finished: bool) -> dict:
+    """Distinguish an interrupted diagnostic from a completed seven-case canary."""
+    counts = Counter(row["new_status"] for row in results)
+    return {
+        "schema_version": 1, "kind": "skillspector-upgrade-canary-readonly",
+        "candidate_scanner": SCANNER, "base_report_commit": cases["source_report_commit"],
+        "result_counts": {key: counts[key] for key in ("complete", "partial", "error")},
+        "measurement_finished": finished, "cases_completed": len(results),
+        "cases_expected": len(cases["cases"]),
+        "safe_for_automatic_publication": False,
+        "original_evidence": originals, "results": copy.deepcopy(results),
+    }
+
+
+def persist_receipt(path: Path, receipt: dict) -> None:
+    """Replace a read-only proof atomically; incomplete evidence stays explicit."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(path.name + ".tmp")
+    staged.write_text(json.dumps(receipt, sort_keys=True, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    staged.replace(path)
+
+
+def scan(executable: Path, cases: dict, *, checkpoint=None) -> dict:
     from scripts import skillspector_reports as scanner
     from scripts import skillspector_coverage_v3 as coverage
     from scripts.build_bridges import PinnedRepository
@@ -508,14 +530,16 @@ def scan(executable: Path, cases: dict) -> dict:
         comparison["candidate_report_digest"] = record.get("report_digest")
         comparison["finding_group_delta"] = finding_group_delta(
             original_evidence[len(results)], record)
+        # Retain complete normalized evidence, not only its hashes. The
+        # production redactor fails closed on credential-shaped identity data.
+        # Never print untrusted source material in the CI log.
+        comparison["candidate_record"] = scanner.redact_public_record(record)
         results.append(comparison)
-    counts = Counter(row["new_status"] for row in results)
-    return {
-        "schema_version": 1, "kind": "skillspector-upgrade-canary-readonly",
-        "candidate_scanner": SCANNER, "base_report_commit": cases["source_report_commit"],
-        "result_counts": {key: counts[key] for key in ("complete", "partial", "error")},
-        "safe_for_automatic_publication": False, "original_evidence": original_evidence, "results": results,
-    }
+        # A later acquisition error may not erase earlier authenticated cases.
+        # This checkpoint explicitly NEVER authorizes production promotion.
+        if checkpoint is not None:
+            checkpoint(measurement_receipt(cases, original_evidence, results, finished=False))
+    return measurement_receipt(cases, original_evidence, results, finished=True)
 
 
 def main() -> int:
@@ -526,9 +550,9 @@ def main() -> int:
     args = p.parse_args()
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     validate_cases(cases)
-    result = scan(args.scanner.resolve(strict=True), cases)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, sort_keys=True, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    result = scan(args.scanner.resolve(strict=True), cases,
+                  checkpoint=lambda receipt: persist_receipt(args.output, receipt))
+    persist_receipt(args.output, result)
     # Source-bound and finding-group counts are safe to show in immutable CI logs.
     # Keep raw source content and raw findings in the proof artifact, never logs.
     source_by_id = {item["id"]: item for item in cases["cases"]}
