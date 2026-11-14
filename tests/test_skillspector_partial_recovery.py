@@ -648,6 +648,80 @@ class RecoveryTests(unittest.TestCase):
         batch["execution_origin"] = {"run_id": run_id, "run_attempt": 1}
         return batch
 
+    def test_independent_generated_finding_ids_keep_exact_security_evidence(self):
+        subject = item()
+        base = record(subject, "partial", "static_parse_limit")
+        old_id = "finding-" + "a" * 32
+        new_id = "finding-" + "b" * 32
+        group = {
+            "id": "sha256:" + "1" * 64, "rule": "RP1", "severity": "MEDIUM",
+            "path": "SKILL.md", "line": 5, "raw_count": 1,
+            "finding_ids": [old_id],
+            "occurrences": [{"path": "SKILL.md", "line": 5, "finding_id": old_id}],
+            "evidence": {"source": "original security risk"},
+        }
+        base.update(findings=[group], finding_count=1, finding_group_count=1)
+        candidate = copy.deepcopy(base)
+        candidate["report_digest"] = "sha256:" + "f" * 64
+        candidate["findings"][0]["finding_ids"] = [new_id]
+        candidate["findings"][0]["occurrences"][0]["finding_id"] = new_id
+        original = copy.deepcopy(base)
+        self.assertEqual(coverage.recovery_analysis(base), coverage.recovery_analysis(candidate))
+        self.assertEqual(base, original)  # Do not change the authenticated report.
+        self.assertNotEqual(base["findings"], candidate["findings"])
+
+        for mutate in (
+            lambda row: row["findings"][0].update(severity="HIGH"),
+            lambda row: row["findings"][0]["evidence"].update(source="different risk"),
+            lambda row: row["findings"][0]["occurrences"][0].update(line=7),
+            lambda row: row["findings"][0].update(id="sha256:" + "2" * 64),
+            lambda row: row["findings"][0].update(raw_count=2),
+            lambda row: row["coverage"].update(fully_inspected_files=1_000),
+            lambda row: row["execution"].update(exit_code=9),
+        ):
+            changed = copy.deepcopy(candidate)
+            mutate(changed)
+            self.assertNotEqual(coverage.recovery_analysis(base),
+                                coverage.recovery_analysis(changed))
+        for invalidate in (
+            lambda row: row["findings"][0]["finding_ids"].append(new_id),
+            lambda row: row["findings"][0]["finding_ids"].clear(),
+            lambda row: row["findings"][0]["finding_ids"].__setitem__(0, "custom-id"),
+            lambda row: row["findings"][0]["occurrences"][0].update(
+                finding_id="finding-" + "c" * 32),
+        ):
+            malformed = copy.deepcopy(candidate)
+            invalidate(malformed)
+            self.assertNotEqual(coverage.recovery_analysis(base),
+                                coverage.recovery_analysis(malformed))
+
+    def test_authenticated_generated_id_only_fork_does_not_create_conflict(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(selection, 2401, 0,
+            warning="Identical actual security finding.", pattern="same-risk")
+        second = self.authentic_batch(selection, 2402, 1,
+            warning="Identical actual security finding.", pattern="same-risk")
+        for batch, suffix in ((first, "a"), (second, "b")):
+            group = batch["workers"][0]["attempts"][0]["record"]["findings"][0]
+            identity = "finding-" + suffix * 32
+            group["finding_ids"] = [identity]
+            for occurrence in group["occurrences"]:
+                occurrence["finding_id"] = identity
+        second["workers"][0]["attempts"][0]["record"]["report_digest"] = (
+            "sha256:" + "b" * 64
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = self.recover(root / "published", selection, [first])
+            recovered = self.recover(root / "recovered", selection, [second], published)
+            self.assertEqual(recovered["records"], published["records"])
+            self.assertEqual(recovered["attempts"], published["attempts"])
+            self.assertEqual(recovered["queue_cursor"], published["queue_cursor"])
+            self.assertNotIn("recovery_conflict",
+                coverage.reason_codes(recovered["records"][subject["id"]]))
+
+
     def test_independent_equivalent_executions_preserve_published_evidence_and_counts(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}

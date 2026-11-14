@@ -6,6 +6,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -989,17 +990,65 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     return manifest
 
 
+
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\Z")
+
+
+def _canonicalize_recovery_correlation_ids(groups):
+    """Normalize verified per-scan identifiers, preserving security evidence.
+
+    Only a transient *comparison copy* is modified. All groups must be
+    structurally consistent, and non-generated or unpaired IDs fail closed.
+    """
+    if not isinstance(groups, list):
+        return False
+    seen = set()
+    aliases = []
+    for group in groups:
+        if not isinstance(group, dict):
+            return False
+        ids = group.get("finding_ids", [])
+        occurrences = group.get("occurrences", [])
+        if not isinstance(ids, list) or not isinstance(occurrences, list):
+            return False
+        if not ids:
+            if any(not isinstance(row, dict) or "finding_id" in row for row in occurrences):
+                return False
+            aliases.append({})
+            continue
+        if (
+            any(not isinstance(value, str) or not _GENERATED_FINDING_ID.fullmatch(value)
+                for value in ids)
+            or len(set(ids)) != len(ids)
+            or any(value in seen for value in ids)
+            or any(not isinstance(row, dict) or row.get("finding_id") not in ids
+                   for row in occurrences)
+            or set(ids) != {row["finding_id"] for row in occurrences}
+        ):
+            return False
+        seen.update(ids)
+        aliases.append({value: f"scan-finding-{index}" for index, value in enumerate(ids)})
+    for group, mapping in zip(groups, aliases):
+        if mapping:
+            group["finding_ids"] = [mapping[value] for value in group["finding_ids"]]
+            for row in group["occurrences"]:
+                row["finding_id"] = mapping[row["finding_id"]]
+    return True
+
+
 def recovery_analysis(record):
     """Analysis equality excludes provenance that naturally varies per execution.
 
-    The upstream report digest can change with raw execution metadata. Retain the
-    chosen original digest; never manufacture a new digest or ignore source bytes,
-    execution state/exit code, coverage, findings or any other analysis field.
+    The upstream report digest can change with raw execution metadata. Retain
+    the original digest; normalize only structurally verified generated finding
+    correlation IDs in the temporary equality projection. Security evidence,
+    occurrence locations, source bytes, coverage and exit codes stay strict.
     """
     volatile = {"scanned_at", "report_digest", "freshness", "target_revision", "retry", "attempt_history"}
     value = {key: copy.deepcopy(child) for key, child in record.items() if key not in volatile}
     value["execution"] = {key: child for key, child in value["execution"].items()
         if key not in {"started_at", "finished_at", "acquisition_seconds", "analysis_seconds"}}
+    _canonicalize_recovery_correlation_ids(value.get("findings"))
     return report_json(value)
 
 
