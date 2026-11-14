@@ -56,7 +56,7 @@ class RequalificationBoundary(unittest.TestCase):
 
     def test_checkout_must_be_clean_and_exact_immutable_git_head(self):
         from scripts.directory_publication import PublicationError
-        good = type("Proc", (), {"stdout": proof.BASELINE_REPORT_COMMIT + "\\n"})()
+        good = type("Proc", (), {"stdout": proof.BASELINE_REPORT_COMMIT + "\n"})()
         clean = type("Proc", (), {"stdout": ""})()
         wrong = type("Proc", (), {"stdout": "f" * 40})()
         dirty = type("Proc", (), {"stdout": " M reports/skillspector/v3/index.json"})()
