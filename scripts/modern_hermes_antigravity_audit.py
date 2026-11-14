@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tomllib
 
 from client_contract import (RELEASE_RE, REPOSITORY, SOURCE_PATH,
                              contract_client_ids, parse_json)
@@ -95,13 +96,72 @@ def source_identity(release: dict, head: str) -> dict:
             "manifest_name": release["manifest_name"]}
 
 
-def audit(source: dict, contract: list[dict], head: str) -> dict:
+def committed_local_dependencies(source: dict, head: str) -> dict[tuple[str, int], list[dict]]:
+    """Read exact-version local dependency declarations; these are not grants.
+
+    Remote dependency declarations and complete transitive closures still need
+    their own independent source review. No missing TOML implies proof of no deps.
+    """
+    distributions = {d["id"]: d for d in source["distributions"]}
+    products = {p["id"]: p for p in source["products"]}
+    result = {}
+    for distribution in source["distributions"]:
+        if distribution["status"] != "active":
+            continue
+        releases = {r["sequence"]: r for r in distribution["releases"]}
+        for policy in distribution["release_policies"]:
+            if policy["status"] != "active":
+                continue
+            release = releases[policy["release_sequence"]]
+            identity = source_identity(release, head)
+            if identity["repository"] != "777genius/universal-agent-plugins-registry" or (
+                    release["package_source"]["revision"] is not None):
+                continue
+            # Read the exact same commit as Directory. Missing optional TOML
+            # remains an unverified dependency closure, never positive evidence.
+            path = identity["path"] + "/uap.toml"
+            proc = subprocess.run(["git", "show", f"{head}:{path}"], cwd=ROOT,
+                                  capture_output=True, timeout=30, check=False)
+            if proc.returncode != 0:
+                continue
+            try:
+                data = tomllib.loads(proc.stdout.decode("utf-8"))
+            except (UnicodeError, tomllib.TOMLDecodeError) as error:
+                raise AuditError("invalid exact-source dependency TOML") from error
+            declared = data.get("dependencies", {})
+            require(isinstance(declared, dict), "dependency declaration must be a table")
+            rows = []
+            for child_id, version in sorted(declared.items()):
+                require(isinstance(child_id, str) and child_id in distributions
+                        and isinstance(version, str)
+                        and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is not None,
+                        "missing exact-version dependency source")
+                child = distributions[child_id]
+                require(child["status"] == "active", "required dependency is suspended")
+                matches = [r for r in child["releases"]
+                           if r["package_version"] == version and any(
+                               p["status"] == "active" and p["release_sequence"] == r["sequence"]
+                               for p in child["release_policies"])]
+                require(len(matches) == 1, "dependency has no unique active exact release")
+                child_release = matches[0]
+                minimum = products[child["product_id"]]["minimum_capabilities"]
+                rows.append({"distribution": child_id, "version": version,
+                             "required_mcp": minimum["mcp"] == "required",
+                             "required_skills": minimum["skills"] == "required",
+                             "source": source_identity(child_release, head)})
+            result[(distribution["id"], policy["release_sequence"])] = rows
+    return result
+
+
+def audit(source: dict, contract: list[dict], head: str,
+          dependency_rows: dict[tuple[str, int], list[dict]] | None = None) -> dict:
     require(SHA.fullmatch(head) is not None, "source HEAD must be a full SHA")
     contract_map = {row["id"]: row for row in contract}
     require(all(c in contract_map for c in CLIENTS), "missing native client capabilities")
     products = {p["id"]: p for p in source["products"]}
     rows = []
     seen = set()
+    dependency_rows = dependency_rows or {}
     for distribution in source["distributions"]:
         releases = {r["sequence"]: r for r in distribution["releases"]}
         require(distribution["product_id"] in products, "unknown product")
@@ -116,6 +176,7 @@ def audit(source: dict, contract: list[dict], head: str) -> dict:
             require(type(sequence) is int and sequence in releases,
                     "policy has no exact release")
             identity = source_identity(releases[sequence], head)
+            children = dependency_rows.get((distribution["id"], sequence), [])
             components = releases[sequence]["components"]
             require(isinstance(components, list) and bool(components)
                     and set(components) <= {"skills", "mcp", "extensions"},
@@ -144,6 +205,13 @@ def audit(source: dict, contract: list[dict], head: str) -> dict:
                             # of the release's transport, authentication or dependencies.
                             if not any(transports[t] == "native" for t in ("stdio", "streamable-http")):
                                 unsupported.append("mandatory_mcp_unsupported")
+                    if any(child["required_mcp"] for child in children) and not any(
+                            selection["mcp_transports"][t] == "native"
+                            for t in ("stdio", "streamable-http")):
+                        unsupported.append("mandatory_mcp_dependency_unsupported")
+                    if any(child["required_skills"] for child in children) and (
+                            selection["skill_support"] == "unsupported"):
+                        unsupported.append("mandatory_skills_dependency_unsupported")
                     if distribution["status"] != "active":
                         status, blockers = "excluded", ["distribution_suspended"]
                     elif unsupported:
@@ -159,6 +227,7 @@ def audit(source: dict, contract: list[dict], head: str) -> dict:
                                  "distribution": distribution["id"],
                                  "release_sequence": sequence,
                                  "source": identity,
+                                 "declared_local_dependencies": children,
                                  "mandatory": dict(mandatory),
                                  "components": list(components),
                                  "status": status, "blockers": blockers})
@@ -180,7 +249,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     source, contract = committed_inputs(args.source_head)
-    result = audit(source, contract, args.source_head)
+    dependencies = committed_local_dependencies(source, args.source_head)
+    result = audit(source, contract, args.source_head, dependencies)
     # Review artifact only: never write into source or publication trees.
     require(not args.output.resolve().is_relative_to(ROOT.resolve()),
             "review report must not enter registry or published feed")

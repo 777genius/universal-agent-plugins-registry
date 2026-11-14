@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from modern_hermes_antigravity_audit import (AuditError, audit,
-                                            committed_inputs)
+                                            committed_inputs, committed_local_dependencies)
 
 HEAD = "a" * 40
 
@@ -60,6 +60,18 @@ class ModernSourceAuditTests(unittest.TestCase):
         self.assertTrue(all("transitive_dependency_closure_not_verified" in r["blockers"]
                             for r in report["rows"]))
 
+    def test_mandatory_mcp_child_blocks_hermes_project_skills_root(self):
+        source, contract = fixture(component="skills", mandatory="skills")
+        deps = {("example/pkg", 1): [{"distribution": "example/child",
+                                      "required_mcp": True, "required_skills": False}]}
+        report = audit(source, contract, HEAD, deps)
+        rows = {(r["client"], r["scope"]): r for r in report["rows"]}
+        self.assertEqual(rows["hermes", "project"]["status"], "native_incompatible")
+        self.assertIn("mandatory_mcp_dependency_unsupported",
+                      rows["hermes", "project"]["blockers"])
+        self.assertEqual(rows["antigravity", "project"]["status"], "review_required")
+        self.assertEqual(report["summary"]["hermes"]["project"]["review_required"], 0)
+
     def test_suspension_excludes_every_scope_even_if_otherwise_compatible(self):
         report = audit(*fixture(status="suspended"), HEAD)
         self.assertTrue(all(r["status"] == "excluded" for r in report["rows"]))
@@ -99,7 +111,11 @@ class ModernSourceAuditTests(unittest.TestCase):
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                               text=True, capture_output=True, check=True).stdout.strip()
         source, contract = committed_inputs(head)
-        report = audit(source, contract, head)
+        report = audit(source, contract, head, committed_local_dependencies(source, head))
+        kit = next(r for r in report["rows"] if r["distribution"] == "777genius/marketing-kit"
+                   and r["client"] == "hermes" and r["scope"] == "project")
+        self.assertEqual(kit["status"], "native_incompatible")
+        self.assertEqual(len(kit["declared_local_dependencies"]), 3)
         policies = sum(p["status"] == "active" for d in source["distributions"]
                        for p in d["release_policies"])
         self.assertEqual(len(report["rows"]), 4 * policies)
