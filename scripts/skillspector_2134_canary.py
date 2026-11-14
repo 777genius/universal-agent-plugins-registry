@@ -322,6 +322,32 @@ def candidate_profile(production_profile: dict) -> dict:
     return document
 
 
+def unexpected_ledger_key_probe(body: bytes) -> dict:
+    """Expose only bounded, sanitized schema key names, never ledger values."""
+    from scripts import skillspector_reports as scanner
+    try:
+        if not 0 < len(body) <= scanner.MAX_REPORT_BYTES:
+            return {"schema_probe": "unavailable"}
+        report = json.loads(body)
+        rows = report["analysis_completeness"]["ledger_exceptions"]
+        if not isinstance(rows, list):
+            return {"schema_probe": "invalid"}
+        missing = {field for row in rows if isinstance(row, dict)
+                   for field in row if field not in scanner.LEDGER_FIELDS}
+        if any(not isinstance(field, str) for field in missing):
+            return {"schema_probe": "unsafe"}
+        labels = sorted(missing)
+        return {
+            "unexpected_ledger_field_count": len(labels),
+            "unexpected_ledger_fields": [
+                field if re.fullmatch(r"[a-z_]{1,48}", field) else "[unsafe-key]"
+                for field in labels[:12]
+            ],
+        }
+    except (TypeError, KeyError, ValueError, AttributeError):
+        return {"schema_probe": "unavailable"}
+
+
 def probe_normalization(normalizer, diagnostic: dict):
     """Record a redacted exception identity without changing scanner semantics.
 
@@ -338,6 +364,8 @@ def probe_normalization(normalizer, diagnostic: dict):
                 "message_sha256": "sha256:" + hashlib.sha256(
                     str(error).encode("utf-8", "replace")[:2048]).hexdigest(),
             })
+            if str(error) == "SkillSpector ledger fields are invalid" and len(args) >= 2:
+                diagnostic.update(unexpected_ledger_key_probe(args[1]))
             raise
     return wrapped
 

@@ -338,5 +338,33 @@ class UpgradeCanaryTests(unittest.TestCase):
                             pilot.semantic_group_digest(changed))
 
 
+    def test_unexpected_ledger_probe_reports_only_bounded_key_names(self):
+        body = json.dumps({"analysis_completeness": {"ledger_exceptions": [
+            {"reason_code": "static_parse_limit",
+             "parser_diagnostic": {"source_path": "PRIVATE-DO-NOT-LOG"},
+             "observed_records": 200, "path": "PRIVATE-DO-NOT-LOG"},
+            {"limit_records": 100, "PRIVATE-KEY-NAME!": "PRIVATE-DO-NOT-LOG"},
+        ]}}).encode()
+        result = pilot.unexpected_ledger_key_probe(body)
+        self.assertEqual(result["unexpected_ledger_field_count"], 4)
+        self.assertEqual(result["unexpected_ledger_fields"], [
+            "[unsafe-key]", "limit_records", "observed_records", "parser_diagnostic"])
+        self.assertNotIn("PRIVATE-DO-NOT-LOG", json.dumps(result))
+        self.assertEqual(pilot.unexpected_ledger_key_probe(b"not-json"),
+                         {"schema_probe": "unavailable"})
+
+    def test_probed_ledger_failure_still_propagates_original_exception(self):
+        capture = {}
+        report = json.dumps({"analysis_completeness": {"ledger_exceptions": [
+            {"reason_code": "static_parse_limit", "observed_records": 43},
+        ]}}).encode()
+        def fails(record, body, code, root):
+            raise ValueError("SkillSpector ledger fields are invalid")
+        with self.assertRaisesRegex(ValueError, "ledger fields"):
+            pilot.probe_normalization(fails, capture)({}, report, 1, None)
+        self.assertEqual(capture["unexpected_ledger_fields"], ["observed_records"])
+        self.assertEqual(capture["exception_type"], "ValueError")
+
+
 if __name__ == "__main__":
     unittest.main()
