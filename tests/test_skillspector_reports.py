@@ -91,13 +91,15 @@ class NormalizationTests(unittest.TestCase):
         raw = upstream_report()
         raw["issues"] = [{"id": "PI1", "severity": "HIGH", "explanation": "Review this warning.",
                           "location": {"file": "SKILL.md", "start_line": n + 1}} for n in range(40)]
-        result = self.normalize(raw, 1)
+        input_record = record()
+        scanned_at = input_record["scanned_at"]
+        result = reports.normalize_report(input_record, json.dumps(raw).encode(), 1, Path('/tmp/content'))
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["finding_count"], 40)
         self.assertEqual(len(result["findings"]), 32)
         self.assertTrue(result["findings_truncated"])
         self.assertNotIn("safe", result)
-        self.assertEqual(result["scanned_at"], record()["scanned_at"])
+        self.assertEqual(result["scanned_at"], scanned_at)
 
     def test_truncation_preserves_highest_severity_findings(self):
         raw=upstream_report()

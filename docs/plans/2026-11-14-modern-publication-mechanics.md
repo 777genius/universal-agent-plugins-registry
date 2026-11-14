@@ -142,3 +142,23 @@ latest signed/materialized pair remains valid. Existing clean publication and
 both-direction composition cases remain positive controls. Renew independent
 review and execute the final focused/full hosted gates before merge; prior green
 checks do not close these newly identified gaps.
+
+## Final portable gate correction
+
+Final head `031ee717` passed the focused publication suite and full Pages gate,
+including the two review regressions above. Its required portable-catalog job
+`132493871456` failed in one existing SkillSpector normalization assertion:
+the fixture sampled wall time twice and compared adjacent seconds. The other
+nine applicable jobs completed successfully; the portable observer step was
+not reached and is not counted as passing.
+
+Reproducing the original test with `reports.now` returning 16:17:39Z and then
+16:17:40Z produces the same assertion failure. The test now creates one input
+record and captures its timestamp before the real normalizer mutates that
+record. It checks that this actual input timestamp is preserved, alongside all
+existing coverage, finding-count, truncation and no-safety-claim assertions.
+No production logic, clock tolerance, retry or cleanup suppression is added.
+The same deterministic probe changes from one failure/two clock samples to
+one pass/one sample; the affected module passes all 15 tests. Independent
+review approved the exact test-only diff. The final corrected head must pass
+all applicable hosted gates, including portable observation, before merge.
