@@ -1,0 +1,66 @@
+name: SkillSpector 2.13.4 JSON VERSION native source E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/skillspector-2134-json-version-e2e.yml'
+      - 'scripts/skillspector_2134_json_version_e2e.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: 54824463814a0be01360792523ec7245a69190fc # upstream v2.13.4
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: bb2b4c23cfa54d40e09a97882d8bae34b941a6af # reviewed fork PR #9
+          persist-credentials: false
+          path: candidate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: rorkai/app-store-connect-cli-skills
+          ref: 7de1ef7cc831f62d205dfa589063f3831f66391b
+          sparse-checkout: skills/asc-workflow
+          persist-credentials: false
+          path: real
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install both immutable locked no-provider scanners
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory baseline --frozen --no-dev --python 3.12
+          uv sync --directory candidate --frozen --python 3.12
+      - name: Exact candidate negative and real CLI fixtures
+        run: candidate/.venv/bin/python -m pytest -q candidate/tests/test_json_version_reference_scope.py
+      - name: Compare immutable real source and preserve original content findings
+        run: |
+          python3 source/scripts/skillspector_2134_json_version_e2e.py \
+            --baseline "$GITHUB_WORKSPACE/baseline" \
+            --candidate "$GITHUB_WORKSPACE/candidate" \
+            --source "$GITHUB_WORKSPACE/real" \
+            --output "$RUNNER_TEMP/skillspector-2134-json-version/proof.json"
+      - name: Retain read-only qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-json-version-real-source-proof
+          path: ${{ runner.temp }}/skillspector-2134-json-version/
+          if-no-files-found: warn
+          retention-days: 7
