@@ -344,6 +344,9 @@ def atomic_transition(
     ledger_ref = feed.ledger_ref
     if feed is MODERN_FEED:
         validate_signed_directory_append(repo, ledger_old, ledger_new, sequence_tag, feed=feed)
+        sequence = int(sequence_tag.rsplit("-", 1)[1])
+        publication_id, _digest = _snapshot_identity(repo, ledger_new, sequence, feed=feed)
+        validate_marker(repo, marker, source, publication_id)
     before = RefState(source, ledger_old, None)
     committed = RefState(marker, ledger_new, ledger_new)
     if materialized_output is not None:

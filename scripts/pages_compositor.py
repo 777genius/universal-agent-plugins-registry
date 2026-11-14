@@ -300,7 +300,8 @@ def select_composition(
     sequence = _sequence(repo, signed, feed=feed)
     _require_sequence_tag(repo, remote, signed, sequence, feed=feed)
     validate_materialized_descendant(repo, selected, signed, feed=feed)
-    _validate_later_ledger(repo, remote, selected, head, feed=feed)
+    lineage_start = bootstrap if feed is MODERN_FEED else selected
+    _validate_later_ledger(repo, remote, lineage_start, head, feed=feed)
     return CompositionPlan(head, selected, signed, sequence, chosen_ref, chosen_oid, marker)
 
 

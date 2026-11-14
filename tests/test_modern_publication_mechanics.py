@@ -368,6 +368,34 @@ class ModernPublicationMechanicsTests(unittest.TestCase):
         with self.assertRaisesRegex(cas.CasError, "foreign feed append"):
             pages.select_composition(self.repo, "origin", feed=MODERN_FEED)
 
+    def test_modern_selection_rejects_foreign_history_between_approved_targets(self) -> None:
+        self.publish()
+        first_materialized = self.materialized
+        original_signed, original_materialized, _marker, _parent = self.prepare_pair()
+        old_snapshot = MODERN_FEED.feed_path + f"/snapshots/{1:020d}.json"
+        foreign = self.commit(first_materialized, old_snapshot, "changed historical snapshot\n",
+                              "foreign history replacement")
+        # Preserve the genuine signed sequence-2 bytes. Only the older snapshot
+        # is replaced, so validating the newest S/M pair alone cannot catch X.
+        git(self.repo, "read-tree", original_signed)
+        old_blob = git(self.repo, "rev-parse", f"{foreign}:{old_snapshot}")
+        git(self.repo, "update-index", "--cacheinfo", "100644", old_blob, old_snapshot)
+        tree = git(self.repo, "write-tree")
+        signed = cas._commit_like(self.repo, original_signed, tree, foreign)
+        materialized = cas._commit_like(self.repo, original_materialized, tree, signed)
+        tag = MODERN_FEED.sequence_ref_prefix + f"{2:020d}"
+        cas.validate_signed_directory_append(self.repo, foreign, signed, tag, feed=MODERN_FEED)
+        cas.validate_materialized_descendant(self.repo, materialized, signed, feed=MODERN_FEED)
+        git(self.repo, "push", "-q", "origin", f"{materialized}:{MODERN_FEED.ledger_ref}",
+            f"{signed}:{tag}")
+        self.approve(signed, materialized, 2)
+        before = self.refs()
+        with self.assertRaisesRegex(cas.CasError, "foreign feed append"):
+            pages.select_composition(self.repo, "origin", feed=MODERN_FEED)
+        with self.assertRaisesRegex(cas.CasError, "foreign feed append"):
+            pages.combine_composition(self.repo, "origin")
+        self.assertEqual(self.refs(), before)
+
     def test_rebased_entrypoint_keeps_exact_modern_objects_and_resolves_lost_ack(self) -> None:
         signed, materialized, marker, parent = self.prepare_pair()
         options = dict(source=self.main, marker=marker, ledger_old=parent, prepared_signed=signed,
@@ -392,6 +420,23 @@ class ModernPublicationMechanicsTests(unittest.TestCase):
                          ledger_new=materialized, feed=MODERN_FEED), "published")
         self.assertEqual(cas.atomic_transition(self.repo, "origin", **options), "materialized")
         self.assertEqual(git(self.repo, "ls-remote", "--refs", "origin", LEGACY_FEED.ledger_ref).split()[0], self.seed)
+
+    def test_modern_split_publish_rejects_invalid_marker_before_remote_io(self) -> None:
+        signed, _materialized, _marker, parent = self.prepare_pair()
+        changed_tree = self.commit(self.main, "unrelated-marker.txt", "foreign\n", "unrelated marker")
+        wrong_publication = cas.create_marker(self.repo, self.main, "wrong-publication")
+        before = self.refs()
+        for marker in (changed_tree, wrong_publication):
+            with self.subTest(marker=marker), mock.patch.object(cas, "read_ref_state") as readback:
+                push = mock.Mock()
+                with self.assertRaisesRegex(cas.CasError, "marker commit"):
+                    cas.atomic_transition(self.repo, "origin", source=self.main, marker=marker,
+                        ledger_old=parent, ledger_new=signed,
+                        sequence_tag=MODERN_FEED.sequence_ref_prefix + f"{1:020d}",
+                        feed=MODERN_FEED, push_runner=push)
+                readback.assert_not_called()
+                push.assert_not_called()
+            self.assertEqual(self.refs(), before)
 
     def test_conflicting_main_ledger_or_sequence_never_updates_other_refs(self) -> None:
         signed, materialized, marker, parent = self.prepare_pair()

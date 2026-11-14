@@ -122,3 +122,23 @@ modern refs and publisher credentials, environment approvals, and wiring into
 the existing serialized Pages workflow and downstream readers. Genuine native
 evidence must authorize actual published targets; support metadata never creates
 those grants. The first live publication and readback need their own evidence.
+
+## Corrections from implementation review
+
+An additional review found two publication boundaries that the initial focused
+suite did not cover. Before the modern split publication performs any remote
+read or push, derive the publication identity from the already validated signed
+append and reuse the existing deterministic marker validator. A valid append
+cannot authorize an unrelated commit to replace main.
+
+Modern composition must inspect the complete ledger from the reviewed bootstrap,
+including intervals between approved targets. Starting at the newest selected
+target could miss an earlier foreign append that changed historical snapshot
+bytes. Keep the legacy traversal boundary and permitted interleaving unchanged.
+
+Add regressions for a changed-tree marker, a marker for the wrong publication,
+and a foreign historical-snapshot replacement between two approved targets whose
+latest signed/materialized pair remains valid. Existing clean publication and
+both-direction composition cases remain positive controls. Renew independent
+review and execute the final focused/full hosted gates before merge; prior green
+checks do not close these newly identified gaps.
