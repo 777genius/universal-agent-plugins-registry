@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
+import urllib.request
 import re
 import sys
 import tempfile
@@ -23,10 +25,12 @@ REASONS = {"reference_missing", "static_parse_limit", "opaque_content", "obfusca
 
 
 def validate_cases(cases: dict) -> list[dict]:
-    if type(cases) is not dict or set(cases) != {"schema_version", "source_report_commit", "cases"}:
+    if type(cases) is not dict or set(cases) != {"schema_version", "source_report_commit", "manifest_digest", "cases"}:
         raise ValueError("invalid canary manifest")
     if type(cases["schema_version"]) is not int or cases["schema_version"] != 1 or not isinstance(cases["source_report_commit"], str) or not SHA.fullmatch(cases["source_report_commit"]):
         raise ValueError("invalid immutable baseline commit")
+    if not isinstance(cases["manifest_digest"], str) or not DIGEST.fullmatch(cases["manifest_digest"]):
+        raise ValueError("invalid immutable manifest digest")
     entries = cases["cases"]
     if not isinstance(entries, list) or not 1 <= len(entries) <= 12:
         raise ValueError("invalid bounded canary selection")
@@ -53,6 +57,89 @@ def validate_cases(cases: dict) -> list[dict]:
            type(item["finding_count"]) is not int or not 0 <= item["finding_count"] <= 1_000_000:
             raise ValueError("invalid baseline evidence")
     return entries
+
+
+
+def _fetch_published(commit: str, relative_path: str, maximum: int) -> bytes:
+    # Every path is an exact manifest member under an immutable 40-hex Git SHA.
+    # No caller-controlled host, branch or redirect target is accepted.
+    import urllib.parse
+    url = ("https://raw.githubusercontent.com/777genius/universal-agent-plugins-registry/"
+           + commit + "/reports/skillspector/v3/" + relative_path)
+    request = urllib.request.Request(url, headers={"User-Agent": "uap-skillspector-readonly-qualification"})
+    with urllib.request.urlopen(request, timeout=45) as result:
+        if urllib.parse.urlsplit(result.geturl()).hostname != "raw.githubusercontent.com":
+            raise ValueError("immutable GitHub content redirected to an unexpected host")
+        body = result.read(maximum + 1)
+    if not body or len(body) > maximum:
+        raise ValueError("published baseline exceeds its strict byte limit")
+    return body
+
+
+def verify_published_baseline(cases: dict, *, fetcher=None) -> list[dict]:
+    """Re-read the *original* immutable Git publication, not a user fixture claim.
+
+    Only matching source, original normalized findings and signed/publication-era
+    record identity can be compared. No change to history, retries or status.
+    """
+    entries = validate_cases(cases)
+    commit = cases["source_report_commit"]
+    get = fetcher or (lambda relative, maximum: _fetch_published(commit, relative, maximum))
+    manifest_body = get("index.json", 16 << 20)
+    if "sha256:" + hashlib.sha256(manifest_body).hexdigest() != cases["manifest_digest"]:
+        raise ValueError("published v3 manifest SHA-256 differs from immutable baseline")
+    manifest = json.loads(manifest_body)
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 3 or not SHA.fullmatch(str(manifest.get("source_commit", ""))):
+        raise ValueError("invalid published v3 manifest identity")
+    shards = manifest.get("shards")
+    if not isinstance(shards, list) or not shards:
+        raise ValueError("missing published v3 shard inventory")
+    by_repository = {}
+    for descriptor in shards:
+        if not isinstance(descriptor, dict) or not isinstance(descriptor.get("repository"), str):
+            raise ValueError("invalid published shard identity")
+        by_repository.setdefault(descriptor["repository"].lower(), []).append(descriptor)
+    evidence, fetched = [], {}
+    for entry in entries:
+        repo = entry["repository"].lower()
+        candidates = by_repository.get(repo, [])
+        if len(candidates) != 1:
+            raise ValueError("pinned baseline repository is missing or ambiguous")
+        shard = candidates[0]
+        path, digest, size = shard.get("path"), shard.get("digest"), shard.get("bytes")
+        if (not isinstance(path, str) or not re.fullmatch(r"shards/[0-9a-f]{64}\.json", path) or
+            not isinstance(digest, str) or not DIGEST.fullmatch(digest) or
+            path != "shards/" + digest[7:] + ".json" or type(size) is not int or not 0 < size <= 8 << 20):
+            raise ValueError("invalid published content-addressed shard")
+        if path not in fetched:
+            body = get(path, 8 << 20)
+            if len(body) != size or "sha256:" + hashlib.sha256(body).hexdigest() != digest:
+                raise ValueError("published v3 shard violates its immutable digest")
+            published = json.loads(body)
+            if (not isinstance(published, dict) or published.get("schema_version") != 3 or
+                published.get("repository", "").lower() != repo or
+                not isinstance(published.get("records"), list) or
+                len(published["records"]) != shard.get("record_count")):
+                raise ValueError("published v3 shard contents differ from manifest")
+            fetched[path] = published["records"]
+        records = [r for r in fetched[path] if r.get("id") == entry["id"]]
+        if len(records) != 1:
+            raise ValueError("canary selection has no unique published baseline")
+        original = records[0]
+        if (original.get("kind") != entry["kind"] or original.get("plugin_path") != entry["plugin_path"] or
+            original.get("source", {}).get("repository", "").lower() != repo or
+            any(original.get("source", {}).get(k) != entry[k] for k in ("revision", "path", "content_digest")) or
+            original.get("freshness") != "current" or original.get("status") != "partial" or
+            original.get("finding_count") != entry["finding_count"] or
+            original.get("retry", {}).get("reason") != entry["reason"] or
+            original.get("scanner", {}).get("version") != "2.13.1"):
+            raise ValueError("canary fixture is not identical to immutable published source evidence")
+        evidence.append({"id": entry["id"], "original_report_digest": original.get("report_digest"),
+                         "original_finding_group_count": original.get("finding_group_count"),
+                         "original_findings_sha256": "sha256:" + hashlib.sha256(json.dumps(original.get("findings", []),
+                             ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+                         "original_shard_digest": digest})
+    return evidence
 
 
 def compare(item: dict, record: dict) -> dict:
@@ -108,6 +195,7 @@ def scan(executable: Path, cases: dict) -> dict:
     scanner.PROFILES["static-standard-v3"] = {
         "id": "static-standard-v3", "digest": sha256_digest(canonical_json(standard))}
 
+    original_evidence = verify_published_baseline(cases)
     results = []
     for item in validate_cases(cases):
         subject = {key: item[key] for key in ("id", "kind", "plugin_path", "repository", "revision", "path")}
@@ -126,7 +214,7 @@ def scan(executable: Path, cases: dict) -> dict:
         "schema_version": 1, "kind": "skillspector-upgrade-canary-readonly",
         "candidate_scanner": SCANNER, "base_report_commit": cases["source_report_commit"],
         "result_counts": {key: counts[key] for key in ("complete", "partial", "error")},
-        "safe_for_automatic_publication": False, "results": results,
+        "safe_for_automatic_publication": False, "original_evidence": original_evidence, "results": results,
     }
 
 
