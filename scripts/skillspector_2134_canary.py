@@ -345,8 +345,28 @@ def main() -> int:
     result = scan(args.scanner.resolve(strict=True), cases)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Source-bound and finding-group counts are safe to show in immutable CI logs.
+    # Keep raw source content and raw findings in the proof artifact, never logs.
+    source_by_id = {item["id"]: item for item in cases["cases"]}
+    rows = []
+    for row in result["results"]:
+        change = row["finding_group_delta"]
+        source = source_by_id[row["id"]]
+        rows.append({
+            "id": row["id"], "revision": source["revision"],
+            "content_digest": source["content_digest"],
+            "old_status": row["old_status"], "new_status": row["new_status"],
+            "coverage_reasons": row["coverage_reasons"], "error_codes": row["error_codes"],
+            "old_findings": row["old_findings"], "new_findings": row["new_findings"],
+            "old_groups": change["old_group_count"], "new_groups": change["new_group_count"],
+            "removed_groups": len(change["old_groups_not_in_candidate"]),
+            "changed_group_evidence": len(change["matching_ids_with_changed_occurrences_or_evidence"]),
+            "finding_review_required": change["independent_review_required"],
+            "no_loss_proven": change["eligible_for_no_loss_assertion"],
+            "same_immutable_source": row["same_source"],
+        })
     print(json.dumps({"status": "measurement_only", "result_counts": result["result_counts"],
-                      "promotion_authorized": False}, sort_keys=True))
+                      "promotion_authorized": False, "case_evidence": rows}, sort_keys=True))
     return 0
 
 
