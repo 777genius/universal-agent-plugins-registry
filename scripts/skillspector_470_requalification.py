@@ -80,7 +80,12 @@ def qualify(bundle: dict, *, report_commit: str) -> dict:
                 attempt["disposition"] == "exhausted" and
                 attempt["reason"] == "transient_retry_limit" and
                 attempt["next_attempt_at"] is None and attempt["next_profile"] is None and
-                len(attempt["history"]) == 4 and
+                # The current retry epoch has four attempts, but these two
+                # immutable roots retain four earlier attempts as well.
+                # Never truncate or reset their eight-entry forensic history.
+                len(attempt["history"]) == 8 and
+                all(event["status"] == "error" for event in attempt["history"]) and
+                attempt["history"][-1]["reason"] == "transient_retry_limit" and
                 record["attempt_history"] == attempt["history"] and
                 record["retry"] == coverage.retry_summary(attempt),
                 "not an intact exhausted four-attempt immutable ledger")
@@ -90,6 +95,7 @@ def qualify(bundle: dict, *, report_commit: str) -> dict:
             "source_digest": attempt["source_digest"],
             "old_policy_digest": attempt["policy_digest"],
             "old_attempt_count": attempt["attempt_count"],
+            "old_history_entry_count": len(attempt["history"]),
             "old_disposition": attempt["disposition"],
             "old_report_digest": record["report_digest"],
             "old_history_digest": sha256_digest(coverage.report_json(attempt["history"])),
