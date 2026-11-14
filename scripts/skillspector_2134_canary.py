@@ -160,6 +160,8 @@ def finding_group_evidence(record: dict) -> dict:
                 record.get("findings_truncated") is False)
     if complete and len(groups) != total:
         raise ValueError("finding-group enumeration contradicts complete grouping")
+    if type(record.get("finding_count")) is not int or record["finding_count"] < 0:
+        raise ValueError("invalid normalized finding count")
     def content_digest(value):
         return "sha256:" + hashlib.sha256(json.dumps(
             value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -171,8 +173,9 @@ def finding_group_evidence(record: dict) -> dict:
             not isinstance(group.get("rule"), str) or
             group.get("severity") not in {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"} or
             not isinstance(group.get("path"), str) or
-            type(group.get("raw_count")) is not int or group["raw_count"] < 0 or
-            not isinstance(group.get("occurrences"), list)):
+            type(group.get("raw_count")) is not int or group["raw_count"] <= 0 or
+            not isinstance(group.get("occurrences"), list) or
+            len(group["occurrences"]) != group["raw_count"]):
             raise ValueError("invalid or duplicate normalized security finding group")
         ids.add(group["id"])
         normalized.append({**{key: group[key] for key in
@@ -180,6 +183,8 @@ def finding_group_evidence(record: dict) -> dict:
                            "raw_count": group["raw_count"],
                            "occurrence_count": len(group["occurrences"]),
                            "normalized_group_sha256": content_digest(group)})
+    if complete and sum(group["raw_count"] for group in groups) != record["finding_count"]:
+        raise ValueError("normalized finding count contradicts complete grouping")
     coverage_findings = coverage.get("original_findings", [])
     if not isinstance(coverage_findings, list):
         raise ValueError("invalid original coverage finding evidence")
@@ -220,6 +225,15 @@ def finding_group_delta(original: dict, candidate: dict) -> dict:
     }
 
 
+def candidate_profile_identity() -> dict:
+    """Bind the measured report to the exact unpatched 2.13.4 scanner profile."""
+    from scripts import skillspector_reports as scanner
+    from scripts.directory_publication import canonical_json, sha256_digest
+
+    document = candidate_profile(scanner.STANDARD_PROFILE_DOCUMENT)
+    return {"id": document["id"], "digest": sha256_digest(canonical_json(document))}
+
+
 def compare(item: dict, record: dict) -> dict:
     """Neither scanner status nor fewer findings constitutes a safe migration."""
     if record["source"]["repository"] != item["repository"] or \
@@ -229,6 +243,8 @@ def compare(item: dict, record: dict) -> dict:
         raise ValueError("rescan source differs from immutable baseline")
     if record["scanner"] != SCANNER or record["status"] not in {"complete", "partial", "error"}:
         raise ValueError("untrusted scanner identity or status")
+    if record.get("profile") != candidate_profile_identity():
+        raise ValueError("candidate profile identity does not match the exact 2.13.4 scan policy")
     if record["status"] == "complete":
         coverage = record["coverage"]
         analyzers = coverage.get("analyzers", [])
@@ -289,8 +305,7 @@ def scan(executable: Path, cases: dict) -> dict:
     scanner.SCANNER = copy.deepcopy(SCANNER)
     standard = candidate_profile(scanner.STANDARD_PROFILE_DOCUMENT)
     scanner.PROFILE_DOCUMENTS["static-standard-v3"] = standard
-    scanner.PROFILES["static-standard-v3"] = {
-        "id": "static-standard-v3", "digest": sha256_digest(canonical_json(standard))}
+    scanner.PROFILES["static-standard-v3"] = candidate_profile_identity()
 
     original_evidence = verify_published_baseline(cases)
     results = []
