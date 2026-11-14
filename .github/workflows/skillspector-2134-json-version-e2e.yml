@@ -51,6 +51,9 @@ jobs:
           python3 -m pip install --disable-pip-version-check uv==0.13.4
           uv sync --directory baseline --frozen --no-dev --python 3.12
           uv sync --directory candidate --frozen --python 3.12
+          # Dev pytest is not part of the pinned scanner runtime lock's default group.
+          # Add only the fixed test runner to the isolated candidate venv.
+          uv pip install --python candidate/.venv/bin/python pytest==8.4.2
       - name: Exact candidate negative and real CLI fixtures
         run: candidate/.venv/bin/python -m pytest -q candidate/tests/test_json_version_reference_scope.py
       - name: Compare immutable real source and preserve original content findings
