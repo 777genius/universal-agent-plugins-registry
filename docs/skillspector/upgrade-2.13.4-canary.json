@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "source_report_commit": "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf",
+  "cases": [
+    {
+      "id": "plugin:community:8f0d7c5e1a41635ac687a376b7b5ab47/gmail-auth",
+      "kind": "plugin_skill",
+      "plugin_path": "",
+      "repository": "0xplayerone/pi-browser-use",
+      "revision": "1d6e542adaa488c4c773c3c4a60823059d7da568",
+      "path": "skills/gmail-auth",
+      "content_digest": "sha256:72138d1a12d60760a369a5c5af6c562631a701ac7090e46e0da5cb01a58fc368",
+      "status": "partial",
+      "reason": "reference_missing",
+      "finding_count": 0
+    },
+    {
+      "id": "plugin:community:8f0d7c5e1a41635ac687a376b7b5ab47/playwright-handoff",
+      "kind": "plugin_skill",
+      "plugin_path": "",
+      "repository": "0xplayerone/pi-browser-use",
+      "revision": "1d6e542adaa488c4c773c3c4a60823059d7da568",
+      "path": "skills/playwright-handoff",
+      "content_digest": "sha256:70ff1a940a47bf330eb3ec0bddded8a5f5a0119dcdc436ee1218bb6f60cda828",
+      "status": "partial",
+      "reason": "reference_missing",
+      "finding_count": 2
+    },
+    {
+      "id": "2dmurali/review-loop-skill/review-loop",
+      "kind": "standalone_skill",
+      "plugin_path": null,
+      "repository": "2dmurali/review-loop-skill",
+      "revision": "0980fb7430997f7c8b26c694c9ff797ce7602378",
+      "path": "review-loop",
+      "content_digest": "sha256:fe498bd278491bc283d907fa169c4745803e95b4d276fc6f443223eaa6ec063c",
+      "status": "partial",
+      "reason": "static_parse_limit",
+      "finding_count": 0
+    },
+    {
+      "id": "addyosmani/agent-skills/code-review-and-quality",
+      "kind": "standalone_skill",
+      "plugin_path": null,
+      "repository": "addyosmani/agent-skills",
+      "revision": "39b723ceebf81474d0557c1fecd01eddab585563",
+      "path": "skills/code-review-and-quality",
+      "content_digest": "sha256:c528a0789ff8778a6eba2188ebb5c3300ba00f24695e061bde2257c63b15ffcf",
+      "status": "partial",
+      "reason": "obfuscated_instruction_text",
+      "finding_count": 0
+    },
+    {
+      "id": "anthropics/skills/theme-factory",
+      "kind": "standalone_skill",
+      "plugin_path": null,
+      "repository": "anthropics/skills",
+      "revision": "2c5958ecac7cee2b583967a2c4981d0f4a75c579",
+      "path": "skills/theme-factory",
+      "content_digest": "sha256:2d0ae372d236b9ce478b8be7a9e984d176b34a44b54fa4e4f0ca2832d5667191",
+      "status": "partial",
+      "reason": "opaque_content",
+      "finding_count": 0
+    },
+    {
+      "id": "101-skills/superpowers/gpt-image",
+      "kind": "standalone_skill",
+      "plugin_path": null,
+      "repository": "101-skills/superpowers",
+      "revision": "becc25649700d5457772a00e5143e28ccf9e5afa",
+      "path": "tools/image/gpt-image",
+      "content_digest": "sha256:d77f5b60a7b0d8c1e1624bf61178e548be9c5d7213c3ceca2599f08fb2ea17e4",
+      "status": "partial",
+      "reason": "recovery_conflict_attempt_limit",
+      "finding_count": 5
+    },
+    {
+      "id": "plugin:community:4bcbfff2a5b5d1ccbc2b5aca817ecfc8/reddit-seo",
+      "kind": "plugin_skill",
+      "plugin_path": "",
+      "repository": "8trafficai/reddit-skills",
+      "revision": "39f249bf022f76fe391e0beb3be666f760c09801",
+      "path": "skills/reddit-seo",
+      "content_digest": "sha256:497f2561e54b0e2e6dfe9b591596c589d9b303e9ceca0cd4e7c22bccb7fca1ec",
+      "status": "partial",
+      "reason": "static_parse_limit",
+      "finding_count": 4
+    }
+  ]
+}
