@@ -282,10 +282,18 @@ class UpgradeCanaryTests(unittest.TestCase):
                                  {"path": "SKILL.md", "line": 9}]}
         record.update(finding_group_count=1, finding_count=2, findings=[group])
         self.assertEqual(pilot.finding_group_evidence(record)["group_count"], 1)
+        # The v3 normalizer can legitimately collapse duplicate raw detections
+        # onto one location. A standalone raw_count > occurrences count is not
+        # proof of corruption, but losing an old location MUST fail no-loss review.
+        baseline = {"original_finding_groups": pilot.finding_group_evidence(record)}
         missing_occurrence = copy.deepcopy(record)
         missing_occurrence["findings"][0]["occurrences"].pop()
-        with self.assertRaisesRegex(ValueError, "normalized security finding group"):
-            pilot.finding_group_evidence(missing_occurrence)
+        observed = pilot.finding_group_evidence(missing_occurrence)
+        self.assertEqual(observed["groups"][0]["raw_count"], 2)
+        self.assertEqual(observed["groups"][0]["occurrence_count"], 1)
+        delta = pilot.finding_group_delta(baseline, missing_occurrence)
+        self.assertEqual(delta["matching_ids_with_semantic_evidence_change"], [group["id"]])
+        self.assertFalse(delta["eligible_for_no_loss_assertion"])
         missing_total = copy.deepcopy(record)
         missing_total["finding_count"] = 1
         with self.assertRaisesRegex(ValueError, "count contradicts"):
