@@ -18,7 +18,7 @@ from prepare_directory_publication import build_candidate
 from sign_directory_publication import validate_bound_candidate
 
 
-NEW_CLIENTS = ("hermes", "antigravity", "future-agent")
+NEW_CLIENTS = ("future-agent", "unknown-client")
 
 
 def new_distribution(client: str = "pi", *, distribution_status: str = "active",
@@ -43,7 +43,7 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
             for distribution_status in ("active", "suspended"):
                 for policy_status in ("active", "superseded", "revoked"):
                     with self.subTest(client=client, distribution=distribution_status, policy=policy_status):
-                        with self.assertRaisesRegex(PublicationError, "historical Directory v1 publisher"):
+                        with self.assertRaisesRegex(PublicationError, "unknown client target"):
                             require_legacy_directory_clients([
                                 new_distribution(client, distribution_status=distribution_status,
                                                  policy_status=policy_status),
@@ -54,15 +54,16 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
             require_legacy_directory_clients([new_distribution(client)], [{"client": client}])
         require_legacy_directory_clients([], [{"level": "schema"}])
 
-    def test_pi_target_and_evidence_are_admitted_for_all_policy_states(self) -> None:
-        for distribution_status in ("active", "suspended"):
-            for policy_status in ("active", "superseded", "revoked"):
-                with self.subTest(distribution=distribution_status, policy=policy_status):
-                    require_legacy_directory_clients(
-                        [new_distribution("pi", distribution_status=distribution_status,
-                                          policy_status=policy_status)],
-                        [{"client": "pi"}],
-                    )
+    def test_released_clients_are_admitted_for_all_policy_states(self) -> None:
+        for client in ("pi", "hermes", "antigravity"):
+            for distribution_status in ("active", "suspended"):
+                for policy_status in ("active", "superseded", "revoked"):
+                    with self.subTest(client=client, distribution=distribution_status, policy=policy_status):
+                        require_legacy_directory_clients(
+                            [new_distribution(client, distribution_status=distribution_status,
+                                              policy_status=policy_status)],
+                            [{"client": client}],
+                        )
 
     def test_preparer_rejects_new_clients_before_building_any_candidate(self) -> None:
         source = json.loads((ROOT / "registry" / "directory.json").read_text(encoding="utf-8"))
@@ -76,7 +77,7 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
         # this test proves the frozen legacy boundary executes first.
         for client in NEW_CLIENTS:
             policy["targets"][-1]["client"] = client
-            with self.subTest(client=client), self.assertRaisesRegex(PublicationError, "historical Directory v1 publisher"):
+            with self.subTest(client=client), self.assertRaisesRegex(PublicationError, "unknown client target"):
                 build_candidate(source, {}, "a" * 40, "test-run", None)
 
     def test_signer_rejects_a_bypassed_preparer(self) -> None:
@@ -91,7 +92,7 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
         }
         for client in NEW_CLIENTS:
             candidate["distributions"] = [new_distribution(client)]
-            with self.subTest(client=client), self.assertRaisesRegex(PublicationError, "historical Directory v1 publisher"):
+            with self.subTest(client=client), self.assertRaisesRegex(PublicationError, "unknown client target"):
                 validate_bound_candidate(candidate)
 
     def test_unreferenced_new_client_evidence_cannot_break_legacy_readers(self) -> None:
@@ -105,11 +106,12 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
         # No target refers to this evidence. Old clients still parse its ID.
         for client in NEW_CLIENTS:
             source["evidence"] = candidate["evidence"] = [{"client": client}]
-            with self.subTest(client=client, gate="prepare"), self.assertRaisesRegex(PublicationError, "new-client evidence"):
+            with self.subTest(client=client, gate="prepare"), self.assertRaisesRegex(PublicationError, "unknown-client evidence"):
                 build_candidate(source, {}, "a" * 40, "test-run", None)
-            with self.subTest(client=client, gate="sign"), self.assertRaisesRegex(PublicationError, "new-client evidence"):
+            with self.subTest(client=client, gate="sign"), self.assertRaisesRegex(PublicationError, "unknown-client evidence"):
                 validate_bound_candidate(candidate)
 
 
 if __name__ == "__main__":
     unittest.main()
+

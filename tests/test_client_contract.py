@@ -105,7 +105,7 @@ class ClientContractTests(unittest.TestCase):
                 for part in pointer.split("/"):
                     value = value[part]
                 self.assertEqual(tuple(value), load_client_ids(self.root))
-        with self.assertRaisesRegex(PublicationError, "historical Directory v1 publisher"):
+        with self.assertRaisesRegex(PublicationError, "unknown-client evidence"):
             require_legacy_directory_clients([], [{"client": "future-agent"}])
 
     def test_schema_generation_refuses_to_modify_an_unrelated_matching_enum(self) -> None:
