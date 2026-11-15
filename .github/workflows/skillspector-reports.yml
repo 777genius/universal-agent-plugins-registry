@@ -58,8 +58,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: skillspector-static-reports-${{ github.event_name == 'pull_request' && github.sha || github.ref }}
-  # Current-source reports supersede *pending* old-main runs only.
+  group: skillspector-static-reports-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  # Main and same-PR runs coalesce only superseded PENDING siblings.
   # Preserve running scans and their authenticated remote checkpoints.
   queue: single
   cancel-in-progress: false

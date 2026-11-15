@@ -231,7 +231,7 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
         publish = self.workflow['jobs']['publish']
         self.assertIn("github.ref == 'refs/heads/main'", publish['if'])
         self.assertIn("needs.prepare.outputs.corpus != 'controlled'", publish['if'])
-        # Superseded pending main scans must not consume hours ahead of latest
+        # Superseded pending main scans and same-PR canaries must not consume stale runner time
         # source; running jobs retain checkpoint acknowledgements and finish.
         self.assertEqual(self.workflow['on']['schedule'], [{'cron': '19 * * * *'}])
         self.assertEqual(self.workflow['on']['workflow_dispatch']['inputs']['maximum_attempts']['default'], '256')
@@ -240,7 +240,8 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
             self.assertEqual(recovery.execution_config(event)['scan_budget_seconds'], '2100')
         self.assertEqual(recovery.execution_config('workflow_dispatch', maximum_attempts='512')['scan_budget_seconds'], '2100')
         self.assertEqual(self.workflow['concurrency']['group'],
-            "skillspector-static-reports-${{ github.event_name == 'pull_request' && github.sha || github.ref }}")
+            "skillspector-static-reports-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}")
+        self.assertNotIn('github.sha', self.workflow['concurrency']['group'])
         self.assertEqual(self.workflow['concurrency']['queue'], 'single')
         self.assertEqual(self.workflow['concurrency']['cancel-in-progress'], 'false')
 
