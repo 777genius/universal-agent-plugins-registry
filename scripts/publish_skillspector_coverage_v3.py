@@ -91,6 +91,31 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
     raise AssertionError("unreachable public read retry loop")
 
 
+
+def verified_shard_read(fetch, commit, descriptor, *, version):
+    """Retry only a short/mismatched 200 response for the SAME immutable shard.
+
+    A valid manifest already binds path, size and SHA-256. Never parse or
+    publish a response that differs; permanent HTTP errors propagate unchanged.
+    """
+    path, size, digest = descriptor["path"], descriptor["bytes"], descriptor["digest"]
+    require(coverage.SHARD_PATH.fullmatch(path) is not None
+            and type(size) is int and size > 0
+            and isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest),
+            "invalid immutable shard descriptor")
+    for attempt in range(3):
+        body = fetch(commit, path, size, version=version)
+        require(isinstance(body, bytes) and len(body) <= size,
+                "previous immutable shard response is not bounded bytes")
+        if len(body) == size and sha256_digest(body) == digest:
+            return body
+        if attempt == 2:
+            raise PublicationError("previous immutable shard differs from manifest")
+        # Only re-fetch the same pinned commit/path. Discard the entire bad read.
+        time.sleep(attempt + 1)
+    raise AssertionError("unreachable immutable shard read loop")
+
+
 def previous(github, output_dir, *, fetch=raw_file):
     ref = github.request("GET", f"git/ref/heads/{BRANCH}")
     head = ref["object"]["sha"] if ref else None
@@ -113,11 +138,16 @@ def previous(github, output_dir, *, fetch=raw_file):
     coverage.write_bounded(output_dir / "index.json", manifest, coverage.MAX_MANIFEST_BYTES)
     files = [(name, maximum) for name, maximum in CONTROL_FILES.items() if name not in {"index.json", "publication-base.json"}]
     files.extend((part["path"], part["bytes"]) for part in manifest["shards"])
+    shard_by_path = {part["path"]: part for part in manifest["shards"]}
 
     def download(item):
         relative, maximum = item
         read_maximum = maximum * 2 if relative == "recovery.json" else maximum
-        contents = fetch(head, relative, read_maximum, optional=relative in {"coverage.json", "recovery.json"}, version=version)
+        if relative in shard_by_path:
+            contents = verified_shard_read(fetch, head, shard_by_path[relative], version=version)
+        else:
+            contents = fetch(head, relative, read_maximum,
+                             optional=relative in {"coverage.json", "recovery.json"}, version=version)
         if contents is not None:
             document = parse_report(contents, "previous " + relative, max_bytes=read_maximum)
             if relative == "recovery.json":
