@@ -63,6 +63,11 @@ class ModernSourceAuditTests(unittest.TestCase):
         self.assertEqual(rows["antigravity", "user"]["status"], "review_required")
         self.assertEqual(rows["antigravity", "project"]["status"], "review_required")
         self.assertIn("mandatory_mcp_unsupported", rows["hermes", "project"]["blockers"])
+        self.assertEqual(report["client_contract"], {
+            "release": FROZEN_CLIENT_RELEASE,
+            "revision": FROZEN_CLIENT_REVISION,
+            "digest": FROZEN_CLIENT_DIGEST,
+        })
         self.assertFalse(report["sign_ready"])
         self.assertFalse(report["verified_signed_grants"])
         self.assertFalse(report["saved_lifecycle_evidence"])

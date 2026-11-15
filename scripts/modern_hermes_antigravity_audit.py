@@ -256,7 +256,11 @@ def audit(source: dict, contract: list[dict], head: str,
         for row in rows) for state in ("review_required", "native_incompatible", "excluded")}
         for scope in SCOPES} for client in CLIENTS}
     return {"schema_version": 1, "kind": "unsigned-source-compatibility-review-only",
-            "source_commit": head, "verified_signed_grants": False,
+            "source_commit": head,
+            "client_contract": {"release": FROZEN_CLIENT_RELEASE,
+                                "revision": FROZEN_CLIENT_REVISION,
+                                "digest": FROZEN_CLIENT_DIGEST},
+            "verified_signed_grants": False,
             "saved_lifecycle_evidence": False, "sign_ready": False,
             "note": "Source contract is not a reviewed policy, signed grant, dependency closure or saved E2E.",
             "summary": summary, "rows": rows}
