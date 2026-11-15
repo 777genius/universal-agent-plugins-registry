@@ -304,6 +304,11 @@ class CohortProductionTriggerTests(unittest.TestCase):
             },
         )
         self.assertEqual(workflow["on"]["schedule"], [{"cron": "13 0 * * *"}])
+        self.assertEqual(workflow["concurrency"], {
+            "group": "skillspector-signed-cohort-v1-production",
+            "cancel-in-progress": "false",
+            "queue": "single",
+        })
         self.assertEqual(
             workflow["jobs"]["qualify"]["uses"],
             "./.github/workflows/skillspector-candidate-cohort.yml",

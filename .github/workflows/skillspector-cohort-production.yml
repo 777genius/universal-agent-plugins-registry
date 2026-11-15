@@ -20,7 +20,9 @@ permissions:
 concurrency:
   group: skillspector-signed-cohort-v1-production
   cancel-in-progress: false
-  queue: max
+  # Replace redundant queued runs after prior full-scan runs are cancelled.
+  # Never interrupt an active signer, its key access, or its CAS publication.
+  queue: single
 
 jobs:
   qualify:
