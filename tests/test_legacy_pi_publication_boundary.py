@@ -18,7 +18,7 @@ from prepare_directory_publication import build_candidate
 from sign_directory_publication import validate_bound_candidate
 
 
-NEW_CLIENTS = ("hermes", "antigravity", "pi", "future-agent")
+NEW_CLIENTS = ("hermes", "antigravity", "future-agent")
 
 
 def new_distribution(client: str = "pi", *, distribution_status: str = "active",
@@ -53,6 +53,16 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
         for client in LEGACY_DIRECTORY_CLIENT_IDS:
             require_legacy_directory_clients([new_distribution(client)], [{"client": client}])
         require_legacy_directory_clients([], [{"level": "schema"}])
+
+    def test_pi_target_and_evidence_are_admitted_for_all_policy_states(self) -> None:
+        for distribution_status in ("active", "suspended"):
+            for policy_status in ("active", "superseded", "revoked"):
+                with self.subTest(distribution=distribution_status, policy=policy_status):
+                    require_legacy_directory_clients(
+                        [new_distribution("pi", distribution_status=distribution_status,
+                                          policy_status=policy_status)],
+                        [{"client": "pi"}],
+                    )
 
     def test_preparer_rejects_new_clients_before_building_any_candidate(self) -> None:
         source = json.loads((ROOT / "registry" / "directory.json").read_text(encoding="utf-8"))
