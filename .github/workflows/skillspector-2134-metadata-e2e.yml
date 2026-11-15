@@ -1,0 +1,89 @@
+name: SkillSpector 2.13.4 inert metadata native E2E
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/skillspector-2134-metadata-e2e.yml'
+      - 'scripts/skillspector_2134_metadata_e2e.py'
+      - 'tests/test_skillspector_2134_metadata_e2e.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: 54824463814a0be01360792523ec7245a69190fc
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 48d33b55bf7ea6a7147e735932eeeda3f7cd7914
+          persist-credentials: false
+          path: candidate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lucas-magalhaes1/keycloak-power
+          ref: 48e99e74110629f4fae7990a663e5ac1f2bcc24d
+          sparse-checkout: skills/
+          persist-credentials: false
+          path: real-license
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nomadamas/k-skill
+          ref: 9766d20fb1fe1a5eb1d10ef5ff9872c8d6fc4985
+          sparse-checkout: boim-business-search
+          persist-credentials: false
+          path: real-generator
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          sparse-checkout: reports/skillspector/v3/shards/94ad631f1a0469e38f17ed1144ef995f18a6929a3f0af8afa75d01a731f3d6d2.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: original-v3
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Test immutable candidate comparator negative boundaries
+        working-directory: source
+        run: python3 -m unittest -v tests.test_skillspector_2134_metadata_e2e
+      - name: Install exact locked no-provider scanners and test runner
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory baseline --frozen --no-dev --python 3.12
+          uv sync --directory candidate --frozen --extra dev --python 3.12
+      - name: Candidate Ruff and source-bound no-provider tests
+        working-directory: candidate
+        run: |
+          .venv/bin/ruff check src/skillspector/references.py tests/test_inert_metadata_references.py
+          .venv/bin/ruff format --check src/skillspector/references.py tests/test_inert_metadata_references.py
+          .venv/bin/python -m pytest -q tests/test_inert_metadata_references.py
+      - name: Compare two pinned real Skills, all references and security findings
+        working-directory: source
+        run: |
+          python3 -m scripts.skillspector_2134_metadata_e2e \
+            --baseline "$GITHUB_WORKSPACE/baseline" \
+            --candidate "$GITHUB_WORKSPACE/candidate" \
+            --license "$GITHUB_WORKSPACE/real-license" \
+            --generator "$GITHUB_WORKSPACE/real-generator" \
+            --published "$GITHUB_WORKSPACE/original-v3" \
+            --output "$RUNNER_TEMP/skillspector-metadata/proof.json"
+      - name: Preserve exact-source proof without publication
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-2134-two-source-metadata-proof
+          path: ${{ runner.temp }}/skillspector-metadata/
+          if-no-files-found: warn
+          retention-days: 7
