@@ -30,6 +30,14 @@ on:
         type: choice
         options: [refresh, discover, reconcile]
 
+# Coalesce only scheduled six-hour refresh before scans consume a runner.
+# Push, daily/weekly discovery and manual runs retain exact publication evidence.
+# Running scans retain checkpoints; only superseded PENDING refreshes drop.
+concurrency:
+  group: discovery-current-${{ github.event_name == 'schedule' && github.event.schedule == '17 */6 * * *' && 'refresh' || github.run_id }}
+  queue: single
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

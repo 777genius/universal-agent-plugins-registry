@@ -16,6 +16,14 @@ on:
         description: Monotonic production marker outcome, or unchanged when already current
         value: ${{ jobs.record_production_marker.outputs.status || 'unchanged' }}
 
+# Only standalone scheduled composition is replaceable before costly jobs.
+# Called workflows inherit their caller's github.workflow and use unique run IDs.
+# Preserve job-level FIFO locks for deploy -> terminal checkpoint -> marker.
+concurrency:
+  group: pages-current-${{ github.workflow == 'Compose current production Pages' && github.event_name == 'schedule' && 'scheduled' || github.run_id }}
+  queue: single
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
