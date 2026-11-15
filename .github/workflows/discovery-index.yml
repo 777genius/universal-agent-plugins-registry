@@ -30,6 +30,14 @@ on:
         type: choice
         options: [refresh, discover, reconcile]
 
+# Coalesce only scheduled six-hour refresh and main pushes: both scan the latest
+# catalog state. Keep daily/weekly discovery and manual runs exact and independent.
+# Running scans retain all checkpoint artifacts; only superseded PENDING refreshes drop.
+concurrency:
+  group: discovery-current-${{ (github.event_name == 'push' || github.event.schedule == '17 */6 * * *') && 'refresh' || github.run_id }}
+  queue: single
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
