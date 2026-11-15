@@ -18,10 +18,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: skillspector-signed-cohort-v1-production
+  # A cancelled/failed full-scan event must never displace a pending VALID signer.
+  # The original job guards still require exact-main success before key access.
+  group: skillspector-signed-cohort-v1-production-${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success' && 'unqualified' || 'candidate' }}
   cancel-in-progress: false
-  # Replace redundant queued runs after prior full-scan runs are cancelled.
-  # Never interrupt an active signer, its key access, or its CAS publication.
+  # Coalesce same-class pending events; NEVER cancel active CAS signers.
   queue: single
 
 jobs:
