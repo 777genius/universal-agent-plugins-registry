@@ -1591,7 +1591,11 @@ sys.modules['catalog_process_isolation']=module
 
     def test_discovery_index_is_lkg_protected_and_preserves_promoted_directory(self) -> None:
         workflow = load(DISCOVERY_INDEX)
-        self.assertNotIn("concurrency", workflow)
+        # Only the six-hour scheduled refresh coalesces; all signing-capable
+        # push, daily/weekly and manual runs retain their own identity.
+        self.assertEqual(workflow["concurrency"]["queue"], "single")
+        self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "false")
+        self.assertIn("github.run_id", workflow["concurrency"]["group"])
         self.assertEqual(
             {entry["cron"] for entry in workflow["on"]["schedule"]},
             {"17 */6 * * *", "43 2 * * *", "11 3 * * 0"},
