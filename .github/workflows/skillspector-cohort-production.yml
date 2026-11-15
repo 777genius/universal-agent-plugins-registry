@@ -18,9 +18,9 @@ permissions:
   actions: read
 
 concurrency:
-  # A cancelled/failed full-scan event must never displace a pending VALID signer.
-  # The original job guards still require exact-main success before key access.
-  group: skillspector-signed-cohort-v1-production-${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success' && 'unqualified' || 'candidate' }}
+  # Only events meeting the exact signer guard may replace an eligible pending
+  # signer. Even a SUCCESS from a PR/fork/non-main source is unqualified.
+  group: skillspector-signed-cohort-v1-production-${{ (github.repository == '777genius/universal-agent-plugins-registry' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event != 'pull_request'))) && 'candidate' || 'unqualified' }}
   cancel-in-progress: false
   # Coalesce same-class pending events; NEVER cancel active CAS signers.
   queue: single

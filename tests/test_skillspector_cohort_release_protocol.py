@@ -304,15 +304,8 @@ class CohortProductionTriggerTests(unittest.TestCase):
             },
         )
         self.assertEqual(workflow["on"]["schedule"], [{"cron": "13 0 * * *"}])
-        self.assertEqual(workflow["concurrency"], {
-            "group": "skillspector-signed-cohort-v1-production-${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success' && 'unqualified' || 'candidate' }}",
-            "cancel-in-progress": "false",
-            "queue": "single",
-        })
-        # The current signer must never be displaced by a later cancellation:
-        # the non-success event class has a different concurrency group.
-        self.assertIn("conclusion != 'success'", workflow["concurrency"]["group"])
-        self.assertIn("'unqualified' || 'candidate'", workflow["concurrency"]["group"])
+        # Every ineligible event (including a successful PR/fork or a manual
+        # non-main dispatch) must be isolated from a pending valid signer.
         self.assertEqual(
             workflow["jobs"]["qualify"]["uses"],
             "./.github/workflows/skillspector-candidate-cohort.yml",
@@ -328,6 +321,18 @@ class CohortProductionTriggerTests(unittest.TestCase):
             "github.event.workflow_run.head_repository.full_name == github.repository && "
             "github.event.workflow_run.head_branch == 'main' && "
             "github.event.workflow_run.event != 'pull_request'))"
+        )
+        self.assertEqual(
+            workflow["concurrency"],
+            {
+                "group": (
+                    "skillspector-signed-cohort-v1-production-${{ ("
+                    + expected_guard
+                    + ") && 'candidate' || 'unqualified' }}"
+                ),
+                "cancel-in-progress": "false",
+                "queue": "single",
+            },
         )
         for job in ("qualify", "sign-and-publish"):
             with self.subTest(job=job):
