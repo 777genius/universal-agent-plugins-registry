@@ -17,7 +17,7 @@ class CurrentStateConcurrencyTests(unittest.TestCase):
     def test_discovery_coalesces_only_refresh_before_expensive_jobs(self):
         workflow = self.read('discovery-index.yml')
         self.assertEqual(workflow['concurrency'], {
-            'group': "discovery-current-${{ (github.event_name == 'push' || github.event.schedule == '17 */6 * * *') && 'refresh' || github.run_id }}",
+            'group': "discovery-current-${{ github.event_name == 'schedule' && github.event.schedule == '17 */6 * * *' && 'refresh' || github.run_id }}",
             'queue': 'single',
             'cancel-in-progress': 'false',
         })
