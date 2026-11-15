@@ -90,8 +90,6 @@ def raw_file(commit, relative, maximum, *, optional=False, version=3):
         time.sleep(delay)
     raise AssertionError("unreachable public read retry loop")
 
-
-
 def verified_shard_read(fetch, commit, descriptor, *, version):
     """Retry only a short/mismatched 200 response for the SAME immutable shard.
 
