@@ -728,5 +728,108 @@ class ImmutablePublicSnapshotReadTests(unittest.TestCase):
         sleeper.assert_not_called()
 
 
+
+class VerifiedImmutableShardReadTests(unittest.TestCase):
+    """A syntactically truncated HTTP 200 cannot poison a signed cohort read."""
+
+    @staticmethod
+    def descriptor(body):
+        return {
+            "path": "shards/" + hashlib.sha256(body).hexdigest() + ".json",
+            "bytes": len(body),
+            "digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+        }
+
+    def test_truncated_http_200_is_discarded_and_exact_immutable_body_retried(self):
+        from scripts import publish_skillspector_coverage_v3 as publisher
+        body = b'{"records":[]}'
+        part = self.descriptor(body)
+        calls = []
+        responses = [body[:8], body]
+
+        def fetch(commit, path, maximum, *, version):
+            calls.append((commit, path, maximum, version))
+            return responses.pop(0)
+
+        with mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(publisher.verified_shard_read(
+                fetch, "a" * 40, part, version=3), body)
+        self.assertEqual(calls, [("a" * 40, part["path"], part["bytes"], 3)] * 2)
+        sleeper.assert_called_once_with(1)
+
+    def test_wrong_digest_same_length_never_becomes_verified_evidence(self):
+        from scripts import publish_skillspector_coverage_v3 as publisher
+        body = b'{"ok":true}'
+        corruption = b'{"ok":null}'
+        self.assertEqual(len(body), len(corruption))
+        part = self.descriptor(body)
+        calls = []
+
+        def fetch(commit, path, maximum, *, version):
+            calls.append((commit, path, maximum, version))
+            return corruption
+
+        with mock.patch.object(publisher.time, "sleep") as sleeper:
+            with self.assertRaisesRegex(PublicationError, "differs from manifest"):
+                publisher.verified_shard_read(fetch, "b" * 40, part, version=3)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(set(calls)), 1)
+        self.assertEqual(sleeper.call_args_list, [mock.call(1), mock.call(2)])
+
+    def test_wrong_digest_can_only_recover_with_exact_pinned_bytes(self):
+        from scripts import publish_skillspector_coverage_v3 as publisher
+        body = b'{"ok":true}'
+        responses = [b'{"ok":null}', body]
+        part = self.descriptor(body)
+
+        def fetch(commit, path, maximum, *, version):
+            return responses.pop(0)
+
+        with mock.patch.object(publisher.time, "sleep") as sleeper:
+            self.assertEqual(
+                publisher.verified_shard_read(fetch, "c" * 40, part, version=3), body)
+        sleeper.assert_called_once_with(1)
+
+    def test_oversize_nonbytes_and_permanent_http_error_are_not_retried(self):
+        from scripts import publish_skillspector_coverage_v3 as publisher
+        body = b'{"ok":true}'
+        part = self.descriptor(body)
+        for bad in (body + b"x", None, "not bytes"):
+            calls = []
+            def fetch(commit, path, maximum, *, version):
+                calls.append(1)
+                return bad
+            with self.subTest(bad=repr(bad)), \
+                 mock.patch.object(publisher.time, "sleep") as sleeper:
+                with self.assertRaisesRegex(PublicationError, "not bounded bytes"):
+                    publisher.verified_shard_read(fetch, "d" * 40, part, version=3)
+                self.assertEqual(len(calls), 1)
+                sleeper.assert_not_called()
+
+        calls = []
+        def reject(commit, path, maximum, *, version):
+            calls.append(1)
+            raise PublicationError("Public coverage read failed (HTTP 404)")
+        with mock.patch.object(publisher.time, "sleep") as sleeper:
+            with self.assertRaisesRegex(PublicationError, "HTTP 404"):
+                publisher.verified_shard_read(reject, "e" * 40, part, version=3)
+        self.assertEqual(len(calls), 1)
+        sleeper.assert_not_called()
+
+    def test_invalid_shard_descriptor_is_permanent_without_network(self):
+        from scripts import publish_skillspector_coverage_v3 as publisher
+        valid = self.descriptor(b"{}")
+        for broken in ({**valid, "path": "../index.json"},
+                       {**valid, "bytes": 0},
+                       {**valid, "digest": "sha256:" + "0" * 63}):
+            def unreachable(*args, **kwargs):
+                self.fail("invalid descriptor triggered network request")
+            with self.subTest(broken=broken), self.assertRaisesRegex(
+                PublicationError, "invalid immutable shard descriptor"
+            ):
+                publisher.verified_shard_read(
+                    unreachable, "f" * 40, broken, version=3)
+
+
 if __name__ == "__main__":
     unittest.main()
