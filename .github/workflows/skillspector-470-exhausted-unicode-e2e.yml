@@ -30,6 +30,21 @@ jobs:
           ref: f3b25697d76256998ca9d42c198d256258d4c035
           path: scanner
           persist-credentials: false
+      - name: Checkout immutable published v3 status and retry ledger
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          path: original-v3
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            reports/skillspector/v3/index.json
+            reports/skillspector/v3/selection.json
+            reports/skillspector/v3/attempts.json
+            reports/skillspector/v3/shards/37b5c59d6045b9de65157c28c02bf69440311a443584b1ec183401f973905076.json
+            reports/skillspector/v3/shards/f56a7a84af239d9de0018abed24f063d6ff11c56ce41c9e89295a88fe30f6aa1.json
+            reports/skillspector/v3/shards/39ff47bde08293830da21750e8bf01eb88507f2e8151e9d38860b689a9972426.json
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -48,6 +63,7 @@ jobs:
           python3 - <<'PY'
           import hashlib
           import json
+          import subprocess
           import tempfile
           from pathlib import Path
 
@@ -82,9 +98,59 @@ jobs:
                    "published_reports_mutated": False,
                    "production_error_reduction": 0}, sort_keys=True, indent=2))
           persist()
+          # Bind every acquisition experiment to the *original* authenticated
+          # exhausted Error identity. This never schedules a new production
+          # attempt or rewrites its eight retained history events.
+          root_v3 = Path("original-v3/reports/skillspector/v3")
+          original_head = subprocess.check_output(
+              ["git", "-C", "original-v3", "rev-parse", "HEAD"], text=True).strip()
+          assert original_head == "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf"
+          manifest = json.loads((root_v3 / "index.json").read_bytes())
+          assert manifest["schema_version"] == 3
+          assert manifest["source_commit"] == "a12bd3bdffab6991a2541220a16a0a9d6447e47e"
+          assert manifest["scanner"] == {"id": "skillspector", "version": "2.13.1",
+              "revision": "f3b25697d76256998ca9d42c198d256258d4c035"}
+          selected = json.loads((root_v3 / "selection.json").read_bytes())["sources"]
+          retained = json.loads((root_v3 / "attempts.json").read_bytes())["attempts"]
+          shard_index = {s["repository"]: s for s in manifest["shards"]
+              if s["repository"] in {v[0] for v in sources}}
+          verified_original = {}
+          assert len(shard_index) == len(sources)
+          for repository, revision, selected_root, *_ in sources:
+              subject = [v for v in selected if v["repository"] == repository
+                  and v["revision"] == revision and v["path"] == selected_root]
+              assert len(subject) == 1, f"{repository}: ambiguous original identity"
+              item = subject[0]
+              descriptor = shard_index[repository]
+              raw = (root_v3 / descriptor["path"]).read_bytes()
+              assert len(raw) == descriptor["bytes"]
+              assert "sha256:" + hashlib.sha256(raw).hexdigest() == descriptor["digest"]
+              shard = json.loads(raw)
+              assert shard["repository"] == repository
+              assert shard["schema_version"] == 3 and shard["scanner"] == manifest["scanner"]
+              records = [v for v in shard["records"] if v["id"] == item["id"]]
+              attempts = [v for v in retained if v["id"] == item["id"]]
+              assert len(records) == len(attempts) == descriptor["record_count"] == 1
+              record, attempt = records[0], attempts[0]
+              assert record["status"] == "error" and record["freshness"] == "current"
+              assert record["source"]["revision"] == revision
+              assert record["source"]["path"] == selected_root
+              assert record["source"]["content_digest"] is None
+              assert {v["code"] for v in record["coverage"]["reasons"]} == {"acquisition_failed"}
+              assert attempt["status"] == "error" and attempt["attempt_count"] == 4
+              assert attempt["disposition"] == "exhausted"
+              assert attempt["reason"] == "transient_retry_limit"
+              assert attempt["next_attempt_at"] is None and attempt["next_profile"] is None
+              assert attempt["policy_digest"] == manifest["profile"]["digest"]
+              assert len(attempt["history"]) == 8
+              assert record["attempt_history"] == attempt["history"]
+              assert record["retry"]["attempt_count"] == 4
+              verified_original[repository] = {"source_id": item["id"],
+                  "original_shard_digest": descriptor["digest"],
+                  "original_retry_history_count": len(attempt["history"])}
           for repository, revision, selected_root, count, total_bytes, unicode_count, skill_blob in sources:
               entry = {"repository": repository, "revision": revision, "selected_root": selected_root,
-                       "status": "in_progress"}
+                       "status": "in_progress", **verified_original[repository]}
               try:
                   pinned = PinnedRepository(repository, revision, None, work_budget=WorkBudget(120))
                   try:
