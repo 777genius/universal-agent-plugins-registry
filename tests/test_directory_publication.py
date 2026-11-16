@@ -182,7 +182,12 @@ class CanonicalAndSignatureTests(unittest.TestCase):
             candidate = prepare.build_candidate(source, config, revision, "new-client-policy", None, repository_root=repository)
             publication.validate_with_schema(candidate, publication.CANDIDATE_SCHEMA)
             publication.validate_directory_records(candidate, snapshot=False)
-            self.assertEqual(candidate["distributions"][0]["release_policies"], [policy])
+            # The publisher intentionally derives Pi, but never fabricates materialization evidence.
+            expected = prepare.with_derived_pi_targets(source)["distributions"][0]["release_policies"]
+            self.assertEqual(candidate["distributions"][0]["release_policies"], expected)
+            self.assertEqual(
+                [target["client"] for target in expected[0]["targets"]].count("pi"), 1,
+            )
             self.assertEqual(candidate["evidence"], [])
             self.assertEqual(candidate["distributions"][0]["releases"][0]["package_source"]["revision"], revision)
             policy["targets"][0]["client"] = "unknown"
@@ -1485,9 +1490,19 @@ class PublicationLifecycleTests(unittest.TestCase):
                     source, config, current_revision, "local-capability-offline",
                     previous, repository_root=unavailable,
                 )
+            # A newly derived Pi grant broadens a previously Pi-free signed policy:
+            # the immutable source MUST be reacquired, even if authored input is unchanged.
+            with self.assertRaisesRegex(publication.PublicationError, "reacquisition failed"):
+                prepare.build_candidate(
+                    source, config, current_revision, "local-first-pi-offline",
+                    copy.deepcopy(source), repository_root=unavailable,
+                )
+            # Once the same derived policy has itself been signed, a refresh
+            # with unchanged eligibility must still work offline.
+            signed_pi = prepare.with_derived_pi_targets(copy.deepcopy(source))
             unchanged = prepare.build_candidate(
                 source, config, current_revision, "local-emergency-offline",
-                copy.deepcopy(source), repository_root=unavailable,
+                signed_pi, repository_root=unavailable,
             )
             self.assertEqual(
                 unchanged["distributions"][0]["releases"][0]["package_source"]["revision"],
