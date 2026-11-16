@@ -641,7 +641,8 @@ class PublicationLifecycleTests(unittest.TestCase):
                     if release["package_source"]["revision"] is None:
                         release["package_source"]["revision"] = "a" * 40
                     release.setdefault("published_at", "2026-08-20T00:00:00Z")
-        previous = copy.deepcopy(source)
+        # The previous snapshot came from this publisher, so it already has Pi.
+        previous = prepare.with_derived_pi_targets(source)
         previous["revocations"] = []
         for distribution in previous["distributions"]:
             policies = {

@@ -10,6 +10,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from build_registry import (
+    RegistryError, load_directory_source, resolve_directory, validate_directory,
+    with_derived_pi_targets,
+)
 from directory_publication import PublicationError
 from legacy_directory_client_boundary import (
     LEGACY_DIRECTORY_CLIENT_IDS, require_legacy_directory_clients,
@@ -110,6 +114,66 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
                 build_candidate(source, {}, "a" * 40, "test-run", None)
             with self.subTest(client=client, gate="sign"), self.assertRaisesRegex(PublicationError, "unknown-client evidence"):
                 validate_bound_candidate(candidate)
+
+
+class DerivedPiTargetTests(unittest.TestCase):
+    PI = {"client": "pi", "scopes": ["user"], "delivery": "managed"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = load_directory_source()
+        cls.derived = with_derived_pi_targets(cls.source)
+
+    @staticmethod
+    def policy(source: dict, distribution_id: str, sequence: int) -> dict:
+        distribution = next(item for item in source["distributions"] if item["id"] == distribution_id)
+        return next(item for item in distribution["release_policies"] if item["release_sequence"] == sequence)
+
+    def pi_target(self, source: dict, distribution_id: str, sequence: int) -> dict | None:
+        targets = self.policy(source, distribution_id, sequence)["targets"]
+        return next((target for target in targets if target["client"] == "pi"), None)
+
+    def test_only_active_releases_of_active_distributions_get_pi(self) -> None:
+        for distribution in self.derived["distributions"]:
+            for policy in distribution["release_policies"]:
+                if distribution["status"] != "active" or policy["status"] != "active":
+                    self.assertNotIn("pi", [target["client"] for target in policy["targets"]],
+                                     f"{distribution['id']}@{policy['release_sequence']}")
+        self.assertEqual(self.pi_target(self.derived, "777genius/context7", 7),
+                         {**self.PI, "authentication": "not_required"})
+        self.assertEqual(self.policy(self.derived, "777genius/context7", 7)["minimum_installer_version"], "0.1.102")
+        revoked = copy.deepcopy(self.source)
+        self.policy(revoked, "777genius/context7", 7)["status"] = "revoked"
+        self.assertIsNone(self.pi_target(with_derived_pi_targets(revoked), "777genius/context7", 7))
+
+    def test_marketing_kit_and_its_saved_dependencies_get_pi(self) -> None:
+        for distribution_id, sequence in (
+            ("777genius/marketing-kit", 1), ("777genius/hubspot-crm", 1),
+            ("777genius/notion", 1), ("777genius/playwright-bridge", 2),
+        ):
+            with self.subTest(distribution=distribution_id):
+                self.assertIsNotNone(self.pi_target(self.derived, distribution_id, sequence))
+
+    def test_mcp_release_that_may_require_sse_does_not_get_pi(self) -> None:
+        source = copy.deepcopy(self.source)
+        policy = self.policy(source, "777genius/notion", 1)
+        # Every remaining target supports SSE, so nothing bounds the transport.
+        policy["targets"] = [item for item in policy["targets"] if item["client"] in {"cursor", "copilot"}]
+        self.assertIsNone(self.pi_target(with_derived_pi_targets(source), "777genius/notion", 1))
+        policy["targets"].insert(0, {**self.PI, "client": "codex", "authentication": "required"})
+        self.assertIsNotNone(self.pi_target(with_derived_pi_targets(source), "777genius/notion", 1))
+
+    def test_derived_targets_validate_without_pi_evidence_but_upstream_rule_stays(self) -> None:
+        self.assertFalse(any(item.get("client") == "pi" for item in self.derived["evidence"]))
+        validate_directory(self.derived, verify_packages=False)
+        # Upstream defaults keep their evidence rule; Pi falls back to community.
+        self.assertIsNone(self.pi_target(self.derived, "github/github", 1))
+        self.assertEqual(resolve_directory(self.derived, "github", ["pi"])["distribution_id"],
+                         "777genius/github-bridge")
+        forged = copy.deepcopy(self.derived)
+        self.policy(forged, "github/github", 1)["targets"].append({**self.PI, "authentication": "required"})
+        with self.assertRaisesRegex(RegistryError, "lacks current positive package compatibility evidence"):
+            validate_directory(forged, verify_packages=False)
 
 
 if __name__ == "__main__":

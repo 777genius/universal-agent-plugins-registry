@@ -62,7 +62,7 @@ def contract_client_ids(body: bytes) -> tuple[str, ...]:
     return tuple(clients)
 
 
-def load_client_ids(root: Path = ROOT) -> tuple[str, ...]:
+def _pinned_contract_body(root: Path) -> bytes:
     try:
         lock_body = (root / LOCK_PATH).read_bytes()
         require(len(lock_body) <= 4096, "client contract pin exceeds size limit")
@@ -83,4 +83,15 @@ def load_client_ids(root: Path = ROOT) -> tuple[str, ...]:
         raise ClientContractError(f"cannot read pinned client contract: {error}") from error
     require(lock["digest"] == "sha256:" + hashlib.sha256(body).hexdigest(),
             "client contract digest differs from its reviewed pin")
-    return contract_client_ids(body)
+    return body
+
+
+def load_client_ids(root: Path = ROOT) -> tuple[str, ...]:
+    return contract_client_ids(_pinned_contract_body(root))
+
+
+def load_client_capabilities(root: Path = ROOT) -> dict[str, dict[str, Any]]:
+    """Return the pinned released client capability rows keyed by client ID."""
+    body = _pinned_contract_body(root)
+    contract_client_ids(body)
+    return {row["id"]: row for row in parse_json(body, "client contract")}
