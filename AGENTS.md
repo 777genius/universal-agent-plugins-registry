@@ -34,3 +34,13 @@ In particular:
   installs take exact Skill names; repeat `--skill` for several Skills, and
   `*` is not supported). Verify against that release's help before relying on
   it for a newer version.
+
+## Keep the Directory simple (owner, 2026-11-16)
+
+The owner wants every plugin and Skill to work with every supported agent,
+easily, for users and for maintainers. Do not over-engineer the Directory: one
+feed, one signer and one implementation; no extra rules, flags, modes,
+per-package gates or client-specific paths without a clear user benefit. Treat
+a new client like the existing ones, derive its support from the client's
+capabilities, and let the installer refuse clearly at install time. Keep at
+most a tiny data list for known exclusions. Propose the simplest option first.
