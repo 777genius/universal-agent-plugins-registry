@@ -28,6 +28,18 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Checkout immutable published v3 error receipts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            reports/skillspector/v3/index.json
+            reports/skillspector/v3/shards/71db2a5fd1f185dd071272dfdc55332405c40a8b9f0d597277b031832901f3f3.json
+            reports/skillspector/v3/shards/888ac8fe47e347c526fa77737ffb9d3bbe26782c7e5cbc025afc9f8e527c9efd.json
+          path: signed-baseline
       - name: Checkout exact production-pinned SkillSpector 2.13.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -47,7 +59,126 @@ jobs:
           python3 scripts/patch_skillspector_directory_references.py scanner --verify
       - name: Run integration acquisition and negative safety tests
         run: python3 -m unittest tests.test_skillspector_acquisition.ColdAcquisitionTests -v
-      - name: Acquire and statically scan five real immutable Error roots
+      - name: Pin and audit two genuinely exhausted signed Error identities (no retry)
+        run: |
+          python3 - <<'PY'
+          import copy
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("signed-baseline/reports/skillspector/v3")
+          index = json.loads((root / "index.json").read_bytes())
+          assert index["schema_version"] == 3
+          assert index["source_commit"] == "a12bd3bdffab6991a2541220a16a0a9d6447e47e"
+          assert index["generated_at"] == "2026-11-14T07:12:39Z"
+          assert index["coverage"]["error"] == 39
+          assert index["scanner"] == {
+              "id": "skillspector",
+              "version": "2.13.1",
+              "revision": "f3b25697d76256998ca9d42c198d256258d4c035",
+          }
+          assert index["profile"]["digest"] == (
+              "sha256:acf4ec4bbeafc4bb6814745eb1411324f627b6924b40b8436d17e9dd2aad18ec"
+          )
+          pinned = (
+              ("alchaincyf/elon-musk-skill", "alchaincyf/elon-musk-skill/elon-musk-perspective",
+               "", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f",
+               "71db2a5fd1f185dd071272dfdc55332405c40a8b9f0d597277b031832901f3f3", 4523),
+              ("gogf/skills", "gogf/skills/goframe-v2",
+               "skills/goframe-v2", "c22b6e4115e1a3747676419bba98fee99af6beff",
+               "888ac8fe47e347c526fa77737ffb9d3bbe26782c7e5cbc025afc9f8e527c9efd", 4486),
+          )
+
+          def verify(record, source_id, selected_root, revision):
+              assert record["id"] == source_id
+              assert record["status"] == "error" and record["freshness"] == "current"
+              assert record["source"]["revision"] == revision
+              assert record["source"]["path"] == selected_root
+              # Failed acquisition has NO scanned package content identity.
+              assert record["source"].get("content_digest") is None
+              assert {x["code"] for x in record["errors"]} == {"acquisition_failed"}
+              assert {x["code"] for x in record["coverage"]["reasons"]} == {"acquisition_failed"}
+              retry = record["retry"]
+              assert retry["attempt_count"] == 4
+              assert retry["disposition"] == "exhausted"
+              assert retry["reason"] == "transient_retry_limit"
+              assert retry["latest_status"] == "error"
+              assert retry["next_attempt_at"] is None and retry["next_profile"] is None
+              history = record["attempt_history"]
+              assert len(history) == 8
+              assert all(x["status"] == "error" for x in history)
+              assert history[-1]["reason"] == "transient_retry_limit"
+              assert not record["findings"]
+              return {
+                  "source_id": source_id, "revision": revision,
+                  "selected_root": selected_root, "status": "error",
+                  "attempt_count": 4, "history_entries": len(history),
+                  "history_sha256": "sha256:" + hashlib.sha256(
+                      json.dumps(history, sort_keys=True, ensure_ascii=False,
+                                 separators=(",", ":")).encode("utf-8")
+                  ).hexdigest(),
+                  "source_content_digest": None, "exhausted": True,
+                  "eligible_for_unsigned_replay": False,
+                  "new_epoch_attempts_consumed": 0,
+              }
+
+          results = []
+          for repository, source_id, selected_root, revision, shard_digest, expected_bytes in pinned:
+              descriptor = next(x for x in index["shards"] if x["repository"] == repository)
+              assert descriptor["path"] == f"shards/{shard_digest}.json"
+              raw = (root / descriptor["path"]).read_bytes()
+              assert len(raw) == descriptor["bytes"] == expected_bytes
+              assert descriptor["digest"] == "sha256:" + shard_digest
+              assert hashlib.sha256(raw).hexdigest() == shard_digest
+              shard = json.loads(raw)
+              assert shard["schema_version"] == 3
+              assert shard["repository"] == repository
+              assert len(shard["records"]) == descriptor["record_count"] == 1
+              record = shard["records"][0]
+              receipt = verify(record, source_id, selected_root, revision)
+              # Adversarial controls: no status, identity, budget or history substitution.
+              for mutation in ("identity", "revision", "status", "count", "history"):
+                  changed = copy.deepcopy(record)
+                  if mutation == "identity":
+                      changed["id"] += "-forged"
+                  elif mutation == "revision":
+                      changed["source"]["revision"] = "0" * 40
+                  elif mutation == "status":
+                      changed["status"] = "complete"
+                  elif mutation == "count":
+                      changed["retry"]["attempt_count"] = 1
+                  else:
+                      changed["attempt_history"] = changed["attempt_history"][:-1]
+                  try:
+                      verify(changed, source_id, selected_root, revision)
+                  except AssertionError:
+                      pass
+                  else:
+                      raise AssertionError(f"{source_id}: accepted forged {mutation}")
+              receipt["signed_shard_digest"] = descriptor["digest"]
+              results.append(receipt)
+          assert len(results) == 2
+          proof = {
+              "schema_version": 1,
+              "kind": "skillspector-exhausted-acquisition-preflight-readonly",
+              "report_commit": "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf",
+              "source_commit": index["source_commit"],
+              "old_policy_digest": index["profile"]["digest"],
+              "new_policy_epoch": None,
+              "production_modified": False,
+              "signed_errors_reclassified": 0,
+              "migration_authorized": False,
+              "qualification_scope": "2 of 39 current Errors; not all 39",
+              "results": results,
+          }
+          Path("/tmp/skillspector-unicode-baseline.json").write_text(
+              json.dumps(proof, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps({"verified_old_errors": 2, "published_error_reduction": 0,
+                            "replay_authorized": False}, sort_keys=True))
+          PY
+      - name: Acquire and scan five pinned Unicode roots (two current signed Errors)
         timeout-minutes: 27
         run: |
           python3 - <<'PY'
@@ -133,6 +264,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: skillspector-five-unicode-root-static-acceptance
-          path: /tmp/skillspector-unicode-acceptance.json
+          path: |
+            /tmp/skillspector-unicode-acceptance.json
+            /tmp/skillspector-unicode-baseline.json
           if-no-files-found: warn
           retention-days: 7
