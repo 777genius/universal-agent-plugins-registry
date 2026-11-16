@@ -22,12 +22,13 @@ publication completes. Its immutable snapshots, trust key, publication
 ledger/sequence, protected promotion, revocations, expiry, rollback floor
 and historical installation state must remain valid and unmodified.
 
-**Never add `pi` to the shared legacy feed.** The released UAP CLI
-0.1.89 does not recognize that client ID and would reject an entire
-snapshot, including otherwise compatible packages. A minimum-version
-field on a release does not solve snapshot-wide parsing. Do not require
-old clients to understand Pi, do not revoke their feed, and do not
-reinterpret historical signed policies or evidence.
+**Pi is derived, not authored (owner decision 2026-11-16).** Publication
+adds a managed user-scope Pi target, from the pinned client capabilities,
+to every active release of an active non-upstream distribution whose
+components Pi supports; it reuses the policy's authentication and raises the
+installer floor to 0.1.102. No per-package Pi evidence is required; the
+installer checks each package. Upstream defaults keep per-target evidence,
+so Pi resolves to their community fallback. Pi gates below do not apply here.
 
 ## Approved direction, but NOT approved for publication: modern v1
 
@@ -82,8 +83,8 @@ the v1 reader rejects.
    production UI against the published sequence. No positive Pi
    catalog claim before this completes and post-merge E2E passes.
 
-The legacy publisher `.github/workflows/directory-publication.yml`
-and `registry/directory.json` must stay Pi-free. A separate protected
+`registry/directory.json` carries no authored Pi target; the publisher
+derives Pi as described above. A separate protected
 modern-feed implementation can reuse audited v1 serializer/validation
 primitives, but must never silently repurpose legacy signing identity
 or weaken anti-rollback. This document is a contract, not a claim that
