@@ -1801,7 +1801,9 @@ def _mcp_transports(client: str) -> set[str]:
 
 
 def with_derived_pi_targets(source: dict[str, object]) -> dict[str, object]:
-    """Return a copy in which every Pi-compatible active release also targets Pi.
+    """Return a copy in which every Pi-compatible active or superseded release also targets Pi.
+
+    Superseded releases stay usable for repair and lock restoration, so they keep Pi too.
 
     Pi compatibility comes only from the pinned client capabilities, never from
     per-package Pi evidence. The installer still checks each package it installs.
@@ -1819,7 +1821,7 @@ def with_derived_pi_targets(source: dict[str, object]) -> dict[str, object]:
             clients = {target["client"] for target in policy["targets"]}
             authentication = {target["authentication"] for target in policy["targets"]}
             if (
-                parts is None or policy["status"] != "active" or "pi" in clients
+                parts is None or policy["status"] not in ("active", "superseded") or "pi" in clients
                 or len(authentication) != 1
                 or ("skills" in parts and pi["skill_support"] != "native")
                 or ("extensions" in parts and pi["extension_support"] != "native")

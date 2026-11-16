@@ -133,10 +133,10 @@ class DerivedPiTargetTests(unittest.TestCase):
         targets = self.policy(source, distribution_id, sequence)["targets"]
         return next((target for target in targets if target["client"] == "pi"), None)
 
-    def test_only_active_releases_of_active_distributions_get_pi(self) -> None:
+    def test_only_active_or_superseded_releases_of_active_distributions_get_pi(self) -> None:
         for distribution in self.derived["distributions"]:
             for policy in distribution["release_policies"]:
-                if distribution["status"] != "active" or policy["status"] != "active":
+                if distribution["status"] != "active" or policy["status"] not in ("active", "superseded"):
                     self.assertNotIn("pi", [target["client"] for target in policy["targets"]],
                                      f"{distribution['id']}@{policy['release_sequence']}")
         self.assertEqual(self.pi_target(self.derived, "777genius/context7", 7),
