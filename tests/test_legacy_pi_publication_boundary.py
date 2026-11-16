@@ -124,7 +124,7 @@ class HistoricalSignerReuseTests(unittest.TestCase):
         )["keys"][0]
         self.assertEqual(old_key["key_id"], "uap-directory-2026-01")
         historical_public = base64.b64decode(old_key["public_key"])
-        fresh_synthetic_public = b"\\x11" * 32
+        fresh_synthetic_public = bytes([0x11]) * 32
         for client in ("pi", "hermes", "antigravity"):
             for state in ("active", "superseded", "revoked"):
                 candidate = {"distributions": [new_distribution(client, policy_status=state)], "evidence": []}
