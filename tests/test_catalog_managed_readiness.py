@@ -100,6 +100,27 @@ class ManagedReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered target policy"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
 
+    def test_unreviewed_pi_signed_target_fails_legacy_readiness(self):
+        # This protects the existing 0.1.89 publication gate, NOT proof that
+        # its strict Directory v1 parser can understand a future Pi snapshot.
+        self.assertEqual(gate.CLI["version"], "0.1.89")
+        self.assertNotIn("pi", gate.CATALOG_CLIENTS)
+        baseline = copy.deepcopy(self.snapshot)
+        for floor in ("0.1.89", "0.1.102"):
+            candidate = copy.deepcopy(baseline)
+            distribution = next(item for item in candidate["distributions"]
+                                if item["id"] == "777genius/atlassian")
+            policy = next(item for item in distribution["release_policies"]
+                          if item["status"] == "active")
+            old_target = next(item for item in policy["targets"]
+                              if item["client"] == "codex")
+            policy["targets"].append({**copy.deepcopy(old_target), "client": "pi"})
+            policy["minimum_installer_version"] = floor
+            with self.subTest(floor=floor), self.assertRaisesRegex(
+                ValueError, "uncovered target policy change|requires newer CLI"
+            ):
+                gate.policy_scope(baseline, candidate, gate.plan(candidate))
+
     def test_release_user_requires_fixed_authority_and_preserves_historical_case(self):
         with patch.object(gate.project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
             managed.release_expected(self.snapshot, gate.selected)
