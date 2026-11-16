@@ -15,7 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import PublicationError
-from pi_modern_feed_candidate import (derived_pi_candidate, main, read_evidence_object,
+from pi_modern_feed_candidate import (derived_pi_candidate, main, publication_trusted,
+                                      read_evidence_object,
                                       require_plain_windows_ancestry,
                                       require_committed_directory_source,
                                       require_complete_source_eligibility,
@@ -645,6 +646,20 @@ class ModernPiCandidateTests(unittest.TestCase):
             derived_pi_candidate(source, facts)
         # The evidence gate runs before any package bytes are acquired.
         facts.assert_not_called()
+
+
+    def test_derived_evidence_must_pass_the_signer_trust_allowlist(self) -> None:
+        # A declared trust kind is not enough: staging uses the signer's
+        # code-owned workflow and external-artifact allowlists.
+        artifact = {"repository": "owner/evidence", "revision": HEAD,
+                    "path": "pi.json", "digest": DIGEST}
+        observation = {"id": "pi/linux", "artifact": artifact, "trust": {"kind": "reviewed_external"}}
+        self.assertFalse(publication_trusted({"trusted_external_evidence": []})(observation))
+        self.assertTrue(publication_trusted({"trusted_external_evidence": [artifact]})(observation))
+        workflow = {**observation, "trust": {
+            "kind": "github_actions", "workflow": "owner/evidence/.github/workflows/pi.yml",
+            "source_ref": "refs/heads/main", "source_digest": HEAD}}
+        self.assertFalse(publication_trusted({"trusted_evidence_workflows": []})(workflow))
 
 
 if __name__ == "__main__":

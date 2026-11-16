@@ -28,20 +28,29 @@ of these hold:
 - its components are Skills and/or MCP, every component and MCP transport is
   `native` in the digest-pinned released client capability contract, and the
   package source is a full immutable revision;
-- every declared `uap.toml` dependency resolves to exactly one release that
-  is itself Pi-eligible;
+- every `uap.toml` dependency is an exact version that resolves to exactly
+  one active release which is itself Pi-eligible. Ranges, source tables and
+  unknown keys exclude the release instead of being ignored;
 - the existing targets share one known authentication value (`required` or
   `not_required`), which the Pi target reuses; `unknown` or mixed values are
-  excluded;
+  excluded. This replaces the 2026-11-10 "no mechanical copy" rule only once
+  the owner confirms it;
 - trusted, passed Pi materialization evidence bound to the exact release
   covers Linux, macOS and Windows at the policy minimum installer, and no
-  trusted Pi failure exists for those bytes. The policy minimum is raised to
-  the qualified Pi installer (0.1.102), except where that would orphan
-  existing exact-version evidence; such policies are excluded.
+  failed Pi materialization, discovery or runtime evidence exists for those
+  bytes at any installer. Unsigned staging also requires the signer's
+  workflow/artifact trust allowlist. One current observation is kept per
+  applicability tuple. The policy minimum is raised to the qualified Pi
+  installer (0.1.102) for every client of that policy, except where that
+  would orphan existing exact-version evidence; such policies are excluded.
 
-`build_registry.validate_directory` applies the same denial and evidence gate
-to every active Pi target, including hand-written ones. Derivation is used
-only by the unsigned review candidate; it does not modify
+`build_registry.validate_directory` applies the denial, release-shape,
+authentication, installer and evidence gate to every active Pi target,
+including hand-written ones, and requires the target to equal its derived
+form. Transport and dependency checks need package bytes and run during
+derivation, which fails closed when an authored Pi target would not be
+derived. The signer does not yet repeat this gate. Derivation is used only
+by the unsigned review candidate; it does not modify
 `registry/directory.json`, sign, or publish.
 
 ## Currently published: legacy v1
@@ -93,9 +102,12 @@ the v1 reader rejects.
    releases × user/project on Linux/macOS/Windows, including Marketing
    Kit → signed HubSpot CRM. Keep two suspended scope cases excluded,
    not passed. Direct `--no-save` and `--dry-run` are not substitutes
-   for a managed signed dependency installation.
+   for a managed signed dependency installation. Update 2026-11-16:
+   Marketing Kit is excluded by explicit denial instead of repaired, so
+   its two scope cases are excluded, not passed.
 3. Validate positive Pi materialization evidence independently from
-   source planning; fail closed for absent reviews, stale source HEADs,
+   source planning; fail closed for absent evidence (per-release reviews
+   are replaced by derivation), stale source HEADs,
    unresolved dependencies, incorrect receipts or unsupported clients.
 4. Qualify a dedicated protected modern signer and bootstrap, separate
    origin/key/ledger/cache/rollback and signed-v1 parity with the

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -20,7 +22,7 @@ from client_eligibility import (  # noqa: E402
 ATLASSIAN = "777genius/atlassian"
 NOTION = "777genius/notion"
 HUBSPOT = "777genius/hubspot-crm"
-HTTP_FACTS = {"mcp_transports": ["streamable-http"], "dependencies": {}}
+HTTP_FACTS = {"mcp_transports": ["streamable-http"], "dependencies": {}, "unsupported_requirements": []}
 
 
 def release_of(source: dict, distribution_id: str, sequence: int = 1) -> tuple[dict, dict]:
@@ -32,12 +34,13 @@ def release_of(source: dict, distribution_id: str, sequence: int = 1) -> tuple[d
 def add_pi_evidence(source: dict, distribution_id: str, sequence: int = 1, *,
                     systems=("linux", "macos", "windows"), outcome: str = "passed",
                     level: str = "materialization", installer: str = "0.1.102",
-                    trusted: bool = True, tree_digest: str | None = None) -> list[str]:
+                    trusted: bool = True, tree_digest: str | None = None,
+                    observed_at: str = "2026-11-16T00:00:00Z", suffix: str = "") -> list[str]:
     distribution, release = release_of(source, distribution_id, sequence)
     package_source = release["package_source"]
     identifiers = []
     for system in systems:
-        identifier = f"pi/{distribution_id}/{sequence}/{level}/{outcome}/{system}"
+        identifier = f"pi/{distribution_id}/{sequence}/{level}/{outcome}/{system}{suffix}"
         record = {
             "schema_version": 1, "id": identifier,
             "product_id": distribution["product_id"], "distribution_id": distribution_id,
@@ -49,7 +52,7 @@ def add_pi_evidence(source: dict, distribution_id: str, sequence: int = 1, *,
             "source_path": package_source["path"],
             "level": level, "outcome": outcome, "client": "pi", "client_version": "1.5.0",
             "installer_version": installer, "os": system, "architecture": "amd64",
-            "observed_at": "2026-11-16T00:00:00Z",
+            "observed_at": observed_at,
             "artifact": {"repository": "777genius/universal-agent-plugins-registry",
                          "revision": "e" * 40, "path": f"evidence/{system}.json",
                          "digest": "sha256:" + "e" * 64},
@@ -81,7 +84,7 @@ class DerivedPiEligibilityTests(unittest.TestCase):
         candidate, decisions = derive_client_targets(source, "pi", self.capability, self.provider)
         return candidate, {(item["distribution_id"], item["release_sequence"]): item for item in decisions}
 
-    def test_compatible_release_with_three_os_evidence_derives_a_valid_signed_shape(self) -> None:
+    def test_compatible_release_with_three_os_evidence_derives_a_valid_source_target(self) -> None:
         identifiers = add_pi_evidence(self.source, ATLASSIAN)
         original = copy.deepcopy(self.source)
         candidate, decisions = self.derive(self.source)
@@ -124,7 +127,7 @@ class DerivedPiEligibilityTests(unittest.TestCase):
         add_pi_evidence(source, ATLASSIAN)
         add_pi_evidence(source, ATLASSIAN, systems=("windows",), outcome="failed", level="runtime")
         _, decisions = self.derive(source)
-        self.assertIn("trusted failed pi evidence", decisions[(ATLASSIAN, 1)]["reason"])
+        self.assertIn("failed pi evidence (runtime)", decisions[(ATLASSIAN, 1)]["reason"])
         # An authored target cannot bypass the same gate on any distribution kind.
         source = copy.deepcopy(self.source)
         policy = release_of(source, ATLASSIAN)[0]["release_policies"][0]
@@ -155,20 +158,20 @@ class DerivedPiEligibilityTests(unittest.TestCase):
                                       "delivery": "managed", "authentication": "required"})
             with self.assertRaisesRegex(registry.RegistryError, "explicit pi denial"):
                 registry.validate_directory(source, verify_packages=False)
-            with self.assertRaisesRegex(EligibilityError, "conflicts with its denial"):
+            with self.assertRaisesRegex(EligibilityError, "authored pi target is inadmissible: explicit pi denial"):
                 self.derive(source)
 
     def test_marketing_kit_stays_excluded_even_when_hubspot_dependency_qualifies(self) -> None:
         add_pi_evidence(self.source, HUBSPOT)
         add_pi_evidence(self.source, MARKETING_KIT)
-        self.facts[MARKETING_KIT] = {"mcp_transports": [], "dependencies": {HUBSPOT: "0.1.0"}}
+        self.facts[MARKETING_KIT] = {**HTTP_FACTS, "mcp_transports": [], "dependencies": {HUBSPOT: "0.1.0"}}
         _, decisions = self.derive(self.source)
         self.assertEqual(decisions[(HUBSPOT, 1)]["outcome"], DERIVED)
         self.assertEqual(decisions[(MARKETING_KIT, 1)]["outcome"], EXCLUDED)
         self.assertIn("explicit pi denial", decisions[(MARKETING_KIT, 1)]["reason"])
         self.assertNotIn(MARKETING_KIT, self.fetched)
         # The generic saved-dependency check keeps any other root fail-closed.
-        self.facts[ATLASSIAN] = {"mcp_transports": ["streamable-http"], "dependencies": {NOTION: "0.1.0"}}
+        self.facts[ATLASSIAN] = {**HTTP_FACTS, "dependencies": {NOTION: "0.1.0"}}
         add_pi_evidence(self.source, ATLASSIAN)
         _, decisions = self.derive(self.source)
         self.assertEqual(decisions[(ATLASSIAN, 1)]["outcome"], EXCLUDED)
@@ -183,7 +186,7 @@ class DerivedPiEligibilityTests(unittest.TestCase):
         ):
             add_pi_evidence(self.source, distribution_id, sequence)
         add_pi_evidence(self.source, "777genius/cloudflare")
-        self.facts["777genius/cloudflare"] = {"mcp_transports": ["sse"], "dependencies": {}}
+        self.facts["777genius/cloudflare"] = {**HTTP_FACTS, "mcp_transports": ["sse"]}
         add_pi_evidence(self.source, "github/github")
         _, decisions = self.derive(self.source)
         expected = {
@@ -200,6 +203,112 @@ class DerivedPiEligibilityTests(unittest.TestCase):
             with self.subTest(release=key):
                 self.assertEqual(decisions[key]["outcome"], EXCLUDED)
                 self.assertIn(reason, decisions[key]["reason"])
+
+
+    def test_guard_branches_exclude_instead_of_deriving(self) -> None:
+        def unknown_auth(source):
+            release_of(source, ATLASSIAN)[0]["release_policies"][0]["targets"][0]["authentication"] = "unknown"
+
+        def mixed_auth(source):
+            release_of(source, ATLASSIAN)[0]["release_policies"][0]["targets"][0]["authentication"] = "not_required"
+
+        def extension_component(source):
+            release_of(source, ATLASSIAN)[1]["components"] = ["extensions", "mcp"]
+
+        cases = {
+            "unknown-auth": (unknown_auth, {}, "one known authentication"),
+            "mixed-auth": (mixed_auth, {}, "one known authentication"),
+            "extension": (extension_component, {}, "component kinds extensions"),
+            "missing-dependency": (None, {"dependencies": {"owner/missing": "1.0.0"}}, "is not in the Directory"),
+            "suspended-dependency": (
+                None, {"dependencies": {"777genius/agent-notifications": "0.1.0"}}, "is suspended"),
+            "unsupported-requirement": (
+                None, {"unsupported_requirements": ["dependencies.x"]}, "requirement forms are not derivable"),
+        }
+        for name, (mutate, facts, reason) in cases.items():
+            with self.subTest(case=name):
+                source = copy.deepcopy(self.source)
+                add_pi_evidence(source, ATLASSIAN)
+                if mutate is not None:
+                    mutate(source)
+                self.facts = {ATLASSIAN: {**HTTP_FACTS, **facts}}
+                _, decisions = self.derive(source)
+                self.assertEqual(decisions[(ATLASSIAN, 1)]["outcome"], EXCLUDED)
+                self.assertIn(reason, decisions[(ATLASSIAN, 1)]["reason"])
+        source = copy.deepcopy(self.source)
+        add_pi_evidence(source, ATLASSIAN)
+        add_pi_evidence(source, NOTION)
+        self.facts = {ATLASSIAN: {**HTTP_FACTS, "dependencies": {NOTION: "0.1.0"}},
+                      NOTION: {**HTTP_FACTS, "dependencies": {"777genius/atlassian": "0.1.0"}}}
+        _, decisions = self.derive(source)
+        for key in ((ATLASSIAN, 1), (NOTION, 1)):
+            self.assertEqual(decisions[key]["outcome"], EXCLUDED)
+            self.assertIn("dependency cycle", decisions[key]["reason"])
+
+    def test_authored_target_must_equal_its_derived_form(self) -> None:
+        identifiers = add_pi_evidence(self.source, ATLASSIAN)
+        policy = release_of(self.source, ATLASSIAN)[0]["release_policies"][0]
+        policy["current_evidence"] = sorted(identifiers)
+        pi = {"client": "pi", "scopes": ["user"], "delivery": "managed", "authentication": "required"}
+        policy["targets"].append(pi)
+        with self.assertRaisesRegex(registry.RegistryError, "below the qualified pi installer"):
+            registry.validate_directory(self.source, verify_packages=False)
+        policy["minimum_installer_version"] = "0.1.102"
+        registry.validate_directory(self.source, verify_packages=False)
+        _, decisions = self.derive(self.source)
+        self.assertEqual(decisions[(ATLASSIAN, 1)]["outcome"], "explicit")
+        pi["authentication"] = "unknown"
+        with self.assertRaisesRegex(registry.RegistryError, "target must be exactly"):
+            registry.validate_directory(self.source, verify_packages=False)
+        with self.assertRaisesRegex(EligibilityError, "authored pi target is inadmissible"):
+            self.derive(self.source)
+        pi["authentication"] = "required"
+        self.facts[ATLASSIAN] = {**HTTP_FACTS, "mcp_transports": ["sse"]}
+        with self.assertRaisesRegex(EligibilityError, "MCP transport sse"):
+            self.derive(self.source)
+
+    def test_evidence_rerun_keeps_one_current_pointer_per_applicability(self) -> None:
+        add_pi_evidence(self.source, ATLASSIAN)
+        rerun = add_pi_evidence(self.source, ATLASSIAN, systems=("linux",),
+                                observed_at="2026-11-17T00:00:00Z", suffix="-rerun")
+        candidate, decisions = self.derive(self.source)
+        self.assertEqual(decisions[(ATLASSIAN, 1)]["outcome"], DERIVED)
+        current = release_of(candidate, ATLASSIAN)[0]["release_policies"][0]["current_evidence"]
+        self.assertIn(rerun[0], current)
+        self.assertNotIn(f"pi/{ATLASSIAN}/1/materialization/passed/linux", current)
+        registry.validate_directory(candidate, verify_packages=False)
+
+    def test_uap_requirements_are_read_from_bound_bytes_and_never_dropped(self) -> None:
+        distribution, release = release_of(self.source, MARKETING_KIT)
+        policy = distribution["release_policies"][0]
+        cases = {
+            "exact": ('[dependencies]\n"777genius/notion" = "0.1.0"\n[targets]\ncodex = ["a"]\n',
+                      {"777genius/notion": "0.1.0"}, []),
+            "range": ('[dependencies]\n"777genius/notion" = "^0.1"\n', {}, ["dependencies.777genius/notion"]),
+            "table": ('[dependencies.notion]\nregistry = "uap"\ndistribution = "777genius/notion"\nrelease = 1\n',
+                      {}, ["dependencies.notion"]),
+            "unknown-key": ('[profiles]\nx = 1\n', {}, ["top-level profiles"]),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for name, (body, dependencies, unsupported) in cases.items():
+                with self.subTest(case=name):
+                    root = Path(directory) / name
+                    shutil.copytree(ROOT / "plugins" / "marketing-kit", root)
+                    (root / "uap.toml").write_text("schema_version = 1\n" + body, encoding="utf-8")
+                    bound = copy.deepcopy(release)
+                    bound["package_source"]["revision"] = "a" * 40
+                    bound["tree_digest"] = registry.directory_tree_digest(root)
+                    facts = registry.release_package_facts(root, bound, label=name, runtime_policy=policy)
+                    self.assertEqual(facts["dependencies"], dependencies)
+                    self.assertEqual(facts["unsupported_requirements"], unsupported)
+            root = Path(directory) / "schema"
+            shutil.copytree(ROOT / "plugins" / "marketing-kit", root)
+            (root / "uap.toml").write_text("schema_version = 2\n", encoding="utf-8")
+            bound = copy.deepcopy(release)
+            bound["package_source"]["revision"] = "a" * 40
+            bound["tree_digest"] = registry.directory_tree_digest(root)
+            with self.assertRaisesRegex(registry.RegistryError, "schema_version must be integer 1"):
+                registry.release_package_facts(root, bound, label="schema", runtime_policy=policy)
 
 
 if __name__ == "__main__":

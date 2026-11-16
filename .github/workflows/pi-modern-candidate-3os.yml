@@ -6,6 +6,9 @@ on:
       - 'scripts/pi_modern_feed_candidate.py'
       - 'scripts/client_eligibility.py'
       - 'scripts/client_contract.py'
+      - 'registry/directory.json'
+      - 'registry/client-capabilities.json'
+      - 'registry/client-capabilities.lock.json'
       - 'tests/test_pi_modern_feed_candidate.py'
       - '.github/workflows/pi-modern-candidate-3os.yml'
   push:
@@ -14,6 +17,9 @@ on:
       - 'scripts/pi_modern_feed_candidate.py'
       - 'scripts/client_eligibility.py'
       - 'scripts/client_contract.py'
+      - 'registry/directory.json'
+      - 'registry/client-capabilities.json'
+      - 'registry/client-capabilities.lock.json'
       - 'tests/test_pi_modern_feed_candidate.py'
       - '.github/workflows/pi-modern-candidate-3os.yml'
 

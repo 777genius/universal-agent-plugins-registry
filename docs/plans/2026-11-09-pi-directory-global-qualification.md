@@ -153,3 +153,8 @@ and refuses to write a candidate when no Pi target is derivable. The derivation
 contract is in [DIRECTORY_SINGLE_PROTOCOL.md](../DIRECTORY_SINGLE_PROTOCOL.md).
 No Pi evidence in Directory form exists yet, so no candidate can be staged
 until trusted Pi materialization evidence is recorded for exact releases.
+
+Derivation reuses the existing targets' shared authentication value for Pi.
+That conflicts with the 2026-11-10 note above against mechanical copying
+and needs explicit owner confirmation before any signed Pi target. Marketing
+Kit is excluded by explicit denial rather than resolved through HubSpot CRM.

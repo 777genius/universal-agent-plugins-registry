@@ -35,7 +35,7 @@ KNOWN_MARKETING_REFUSAL = (
 
 
 def read_evidence_object(path: Path) -> dict:
-    """Reject ambiguous JSON before interpreting source, reviews or CI reports."""
+    """Reject ambiguous JSON before interpreting source or CI reports."""
     value = read_json(path)
     require(isinstance(value, dict), f"{path}: expected a JSON object")
     return value
@@ -182,14 +182,33 @@ def verified_package_facts(repository_root: Path = ROOT):
     return facts
 
 
-def derived_pi_candidate(source: dict, facts) -> tuple[dict, list[dict]]:
+def publication_trusted(config: dict):
+    """Admit evidence only through the signer's workflow/artifact allowlist."""
+    from publication_trust_policy import (
+        trusted_external_artifact_policy, trusted_workflow_policy,
+    )
+
+    def trusted(observation: dict) -> bool:
+        try:
+            if observation["trust"]["kind"] == "github_actions":
+                trusted_workflow_policy(observation, config, observation["id"])
+            else:
+                trusted_external_artifact_policy(observation, config, observation["id"])
+        except (KeyError, PublicationError):
+            return False
+        return True
+
+    return trusted
+
+
+def derived_pi_candidate(source: dict, facts, trust_check=None) -> tuple[dict, list[dict]]:
     """Derive Pi targets without opt-in and refuse an empty Pi proposal.
 
     v1 grants stay User-scoped. Released CLI 0.1.102 selects a signed v1 User
     source for explicit Project placement and checks native Project policy.
     """
     candidate, decisions = derive_client_targets(
-        source, "pi", load_client_capabilities()["pi"], facts,
+        source, "pi", load_client_capabilities()["pi"], facts, trust_check=trust_check,
     )
     require(any(item["outcome"] == DERIVED for item in decisions),
             "no Pi target is derivable: capability-compatible releases need trusted "
@@ -427,7 +446,10 @@ def main() -> int:
     source = read_evidence_object(source_path)
     try:
         validate_directory(source, verify_packages=False)
-        candidate, decisions = derived_pi_candidate(source, verified_package_facts())
+        from publication_trust_policy import load_publication_trust_config
+        trust = publication_trusted(
+            load_publication_trust_config(ROOT / "registry" / "publication" / "config.json"))
+        candidate, decisions = derived_pi_candidate(source, verified_package_facts(), trust)
         validate_directory(candidate, verify_packages=False)
     except RegistryError as error:
         raise RuntimeError(str(error)) from error

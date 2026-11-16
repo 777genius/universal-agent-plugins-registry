@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_agentplugins_catalog import package_tree_digest
 from client_contract import load_client_ids
 from client_eligibility import (
-    DERIVED_CLIENT_MINIMUM_INSTALLER, binds_positive_materialization, client_target_gate,
+    DERIVED_CLIENT_MINIMUM_INSTALLER, admitted_target_reason, binds_positive_materialization,
 )
 from portable_paths import (
     MAX_DEPTH as PORTABLE_MAX_DEPTH,
@@ -63,6 +63,8 @@ LEGACY_CATALOG_DIGESTS = {
 REPOSITORY_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# A uap.toml version shortcut without "^" selects one exact package version.
+UAP_EXACT_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 CATEGORY_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 DEFAULT_REPOSITORY = active_registry_repository()
 REGISTRY_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -1620,6 +1622,7 @@ def release_package_facts(
         server["type"] for server in read_object(mcp_path)["mcpServers"].values()
     }) if mcp_path.is_file() else []
     dependencies: dict[str, str] = {}
+    unsupported: list[str] = []
     manifest = package_root / "uap.toml"
     if manifest.is_symlink() or manifest.exists():
         require(manifest.is_file() and not manifest.is_symlink(), f"{label}: uap.toml must be a regular file")
@@ -1627,21 +1630,27 @@ def release_package_facts(
             document = tomllib.loads(manifest.read_bytes().decode("utf-8"))
         except (UnicodeError, tomllib.TOMLDecodeError) as error:
             raise RegistryError(f"{label}: invalid uap.toml: {error}") from error
-        # Unknown requirement forms are never interpreted as "no dependencies".
         require(
-            set(document) <= {"schema_version", "dependencies"}
-            and type(document.get("schema_version")) is int and document["schema_version"] == 1,
-            f"{label}: unsupported uap.toml requirement form",
+            type(document.get("schema_version")) is int and document["schema_version"] == 1,
+            f"{label}: uap.toml schema_version must be integer 1",
         )
         declared = document.get("dependencies", {})
-        require(
-            isinstance(declared, dict) and all(
-                isinstance(key, str) and isinstance(value, str) for key, value in declared.items()
-            ),
-            f"{label}: uap.toml dependencies must map distribution IDs to exact versions",
+        require(isinstance(declared, dict), f"{label}: uap.toml dependencies must be a table")
+        # Author targets never bind consumers. Any other form the installer may
+        # accept is recorded, never read as "no dependencies", and excludes
+        # only this release from derivation.
+        unsupported.extend(
+            f"top-level {key}" for key in sorted(set(document) - {"schema_version", "dependencies", "targets"})
         )
-        dependencies = dict(sorted(declared.items()))
-    return {"mcp_transports": transports, "dependencies": dependencies}
+        for alias, value in sorted(declared.items()):
+            if isinstance(value, str) and UAP_EXACT_VERSION_RE.fullmatch(value) is not None:
+                dependencies[alias] = value
+            else:
+                unsupported.append(f"dependencies.{alias}")
+    return {
+        "mcp_transports": transports, "dependencies": dependencies,
+        "unsupported_requirements": unsupported,
+    }
 
 
 def validate_active_local_runtime_closures(
@@ -1882,12 +1891,12 @@ def validate_directory(
                 current_tuples.add(evidence_tuple)
             if distribution["status"] == "active" and policy["status"] == "active":
                 # Derived clients never trust an authored target alone: every
-                # kind needs the same denial and exact-release evidence gate.
+                # kind needs the same shape, denial and exact-release evidence gate.
                 for client in target_ids:
                     if client not in DERIVED_CLIENT_MINIMUM_INSTALLER:
                         continue
-                    reason = client_target_gate(
-                        client, distribution, release, policy,
+                    reason = admitted_target_reason(
+                        client, products_by_id[product_id], distribution, release, policy,
                         [evidence_by_id[item] for item in policy["current_evidence"]], evidence,
                     )
                     require(reason is None, f"{distribution['id']}@{sequence}: {client} target is inadmissible: {reason}")
