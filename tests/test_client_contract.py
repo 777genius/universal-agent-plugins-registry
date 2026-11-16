@@ -49,6 +49,21 @@ class ClientContractTests(unittest.TestCase):
             self.assertTrue({"hermes", "antigravity", "pi"}.issubset(clients))
             self.assertEqual(sync_schemas(self.root), [])
 
+    def test_pinned_client_contract_checkout_preserves_lf_bytes(self) -> None:
+        # On Windows, core.autocrlf may otherwise rewrite the exact published
+        # JSON bytes. The released SHA-256 pin must remain authoritative.
+        for relative in (CONTRACT_PATH, LOCK_PATH):
+            with self.subTest(path=relative.as_posix()):
+                check = subprocess.run(
+                    ["git", "check-attr", "eol", "--", relative.as_posix()],
+                    cwd=ROOT, capture_output=True, check=True, text=True,
+                )
+                self.assertEqual(
+                    check.stdout.strip(),
+                    f"{relative.as_posix()}: eol: lf",
+                    "pinned contract checkout must preserve raw LF bytes",
+                )
+
     def test_changed_artifact_bytes_cannot_silently_change_client_admission(self) -> None:
         with (self.root / CONTRACT_PATH).open("ab") as output:
             output.write(b" ")

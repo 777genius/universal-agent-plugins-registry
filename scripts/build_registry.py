@@ -1797,6 +1797,7 @@ def validate_directory(
     repository_root: Path = ROOT,
     repository: str = DEFAULT_REPOSITORY,
     bridge_build_reports: list[dict[str, object]] | None = None,
+    allow_unsigned_pi_review_only: bool = False,
 ) -> None:
     _validate_source_schema(source)
     products = source["products"]
@@ -1925,9 +1926,13 @@ def validate_directory(
             candidate = eligible[-1]
             policy = _policy_for(default, candidate["sequence"])
             passed_targets = _positive_materialization_clients(default, candidate, policy, evidence_by_id)
+            # Only an explicit OUT-OF-REPO, unsigned Pi review candidate may
+            # omit Pi materialization evidence. The signer and normal validators
+            # retain the default fail-closed requirement for every target.
             missing_targets = sorted(
                 target["client"] for target in policy["targets"]
                 if target["client"] not in passed_targets
+                and not (allow_unsigned_pi_review_only and target["client"] == "pi")
             )
             require(
                 not missing_targets,
