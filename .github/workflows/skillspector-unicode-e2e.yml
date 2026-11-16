@@ -59,7 +59,7 @@ jobs:
           python3 scripts/patch_skillspector_directory_references.py scanner --verify
       - name: Run integration acquisition and negative safety tests
         run: python3 -m unittest tests.test_skillspector_acquisition.ColdAcquisitionTests -v
-      - name: Pin and audit two genuinely exhausted signed Error identities (no retry)
+      - name: Pin and audit two genuinely exhausted published Error identities (no retry)
         run: |
           python3 - <<'PY'
           import copy
@@ -156,7 +156,7 @@ jobs:
                       pass
                   else:
                       raise AssertionError(f"{source_id}: accepted forged {mutation}")
-              receipt["signed_shard_digest"] = descriptor["digest"]
+              receipt["published_shard_digest"] = descriptor["digest"]
               results.append(receipt)
           assert len(results) == 2
           proof = {
@@ -167,8 +167,9 @@ jobs:
               "old_policy_digest": index["profile"]["digest"],
               "new_policy_epoch": None,
               "production_modified": False,
-              "signed_errors_reclassified": 0,
+              "published_errors_reclassified": 0,
               "migration_authorized": False,
+              "safe_for_automatic_publication": False,
               "qualification_scope": "2 of 39 current Errors; not all 39",
               "results": results,
           }
@@ -178,7 +179,7 @@ jobs:
           print(json.dumps({"verified_old_errors": 2, "published_error_reduction": 0,
                             "replay_authorized": False}, sort_keys=True))
           PY
-      - name: Acquire and scan five pinned Unicode roots (two current signed Errors)
+      - name: Acquire and scan five pinned Unicode roots (two current published Errors)
         timeout-minutes: 27
         run: |
           python3 - <<'PY'
