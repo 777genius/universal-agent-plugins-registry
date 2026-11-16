@@ -65,8 +65,12 @@ jobs:
           import copy
           import hashlib
           import json
+          import subprocess
           from pathlib import Path
 
+          assert subprocess.check_output(
+              ["git", "-C", "signed-baseline", "rev-parse", "HEAD"], text=True
+          ).strip() == "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf"
           root = Path("signed-baseline/reports/skillspector/v3")
           index = json.loads((root / "index.json").read_bytes())
           assert index["schema_version"] == 3
@@ -156,6 +160,7 @@ jobs:
                       pass
                   else:
                       raise AssertionError(f"{source_id}: accepted forged {mutation}")
+              receipt["repository"] = repository
               receipt["published_shard_digest"] = descriptor["digest"]
               results.append(receipt)
           assert len(results) == 2
@@ -260,6 +265,71 @@ jobs:
                   persist()
           print(json.dumps(evidence, sort_keys=True))
           PY
+      - name: Bind immutable exhausted provenance to real newly acquired bytes (no publish)
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          historical = json.loads(Path("/tmp/skillspector-unicode-baseline.json").read_bytes())
+          scanned = json.loads(Path("/tmp/skillspector-unicode-acceptance.json").read_bytes())
+          assert historical["migration_authorized"] is False
+          assert historical["safe_for_automatic_publication"] is False
+          assert historical["published_errors_reclassified"] == 0
+          assert scanned["schema_version"] == 1 and scanned["status"] == "passed"
+          assert len(scanned["sources"]) == 5 and len(historical["results"]) == 2
+          assert all(x["status"] == "complete_acquisition" for x in scanned["sources"])
+
+          joined = []
+          for old in historical["results"]:
+              matches = [x for x in scanned["sources"]
+                         if (x["repository"], x["revision"], x["selected_root"]) ==
+                         (old["repository"], old["revision"], old["selected_root"])]
+              assert len(matches) == 1, "acquisition proof is missing or ambiguous"
+              new = matches[0]
+              assert old["status"] == "error" and old["exhausted"] is True
+              assert old["source_content_digest"] is None and old["attempt_count"] == 4
+              assert old["history_entries"] == 8
+              assert new["file_count"] > 0 and new["total_bytes"] > 0
+              assert new["tree_digest"].startswith("sha256:")
+              assert new["scan_status"] in ("complete", "partial")
+              joined.append({
+                  "source_id": old["source_id"],
+                  "source_revision": old["revision"],
+                  "published_error": True,
+                  "old_attempt_count": old["attempt_count"],
+                  "old_history_sha256": old["history_sha256"],
+                  "published_shard_digest": old["published_shard_digest"],
+                  "newly_acquired_tree_digest": new["tree_digest"],
+                  "newly_acquired_files": new["file_count"],
+                  "new_cli_coverage_status": new["scan_status"],
+                  "new_cli_issue_count": new["scan_issue_count"],
+                  "status": "source_acquired_without_retry_epoch",
+                  "production_error_reduction": 0,
+                  "new_epoch_attempts_consumed": 0,
+                  "automatic_publication_allowed": False,
+              })
+          assert len({x["source_id"] for x in joined}) == len(joined) == 2
+          proof = {
+              "schema_version": 1,
+              "kind": "skillspector-exhausted-acquisition-linked-proof-readonly",
+              "published_report_commit": historical["report_commit"],
+              "original_source_commit": historical["source_commit"],
+              "old_policy_digest": historical["old_policy_digest"],
+              "new_policy_epoch": None,
+              "production_modified": False,
+              "migration_authorized": False,
+              "automatic_publication_allowed": False,
+              "production_error_reduction": 0,
+              "results": joined,
+          }
+          Path("/tmp/skillspector-unicode-linked-proof.json").write_text(
+              json.dumps(proof, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps({"historical_errors_bound_to_real_acquisition": len(joined),
+                            "production_error_reduction": 0, "retry_authorized": False},
+                           sort_keys=True))
+          PY
       - name: Retain original independent E2E evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -268,5 +338,6 @@ jobs:
           path: |
             /tmp/skillspector-unicode-acceptance.json
             /tmp/skillspector-unicode-baseline.json
+            /tmp/skillspector-unicode-linked-proof.json
           if-no-files-found: warn
           retention-days: 7
