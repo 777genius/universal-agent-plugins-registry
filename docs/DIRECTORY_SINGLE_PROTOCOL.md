@@ -14,6 +14,36 @@ Owner decisions: 2026-11-06 (original legacy-only publication) and
 2026-11-10 (narrow modern-client-only exception). A design decision is
 **not** permission to sign or publish an unqualified release.
 
+## Derived Pi eligibility (generation and validation only)
+
+Pi targets are derived by `scripts/client_eligibility.py`; authors and
+reviewers do not opt packages in per release. A release receives
+`{"client": "pi", "scopes": ["user"], "delivery": "managed"}` only when all
+of these hold:
+
+- its distribution and release policy are `active` (never `revoked`,
+  `superseded`, `suspended` or `candidate`), and no explicit denial in
+  `EXPLICIT_DENIALS` names the distribution. Marketing Kit is denied: its
+  saved closure through HubSpot CRM is excluded, not repaired;
+- its components are Skills and/or MCP, every component and MCP transport is
+  `native` in the digest-pinned released client capability contract, and the
+  package source is a full immutable revision;
+- every declared `uap.toml` dependency resolves to exactly one release that
+  is itself Pi-eligible;
+- the existing targets share one known authentication value (`required` or
+  `not_required`), which the Pi target reuses; `unknown` or mixed values are
+  excluded;
+- trusted, passed Pi materialization evidence bound to the exact release
+  covers Linux, macOS and Windows at the policy minimum installer, and no
+  trusted Pi failure exists for those bytes. The policy minimum is raised to
+  the qualified Pi installer (0.1.102), except where that would orphan
+  existing exact-version evidence; such policies are excluded.
+
+`build_registry.validate_directory` applies the same denial and evidence gate
+to every active Pi target, including hand-written ones. Derivation is used
+only by the unsigned review candidate; it does not modify
+`registry/directory.json`, sign, or publish.
+
 ## Currently published: legacy v1
 
 The existing Ed25519-signed Directory at `registry/schemas/1/` remains

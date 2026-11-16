@@ -12,6 +12,7 @@ on:
       - "schemas/promotion-candidate.schema.json"
       - "scripts/build_registry.py"
       - "scripts/client_contract.py"
+      - "scripts/client_eligibility.py"
       - "scripts/sync_client_contract.py"
       - "scripts/legacy_directory_client_boundary.py"
       - "scripts/directory_publication.py"
@@ -36,6 +37,7 @@ on:
       - "scripts/repository_identity.py"
       - "tests/test_build_registry.py"
       - "tests/test_client_contract.py"
+      - "tests/test_client_eligibility.py"
       - "tests/test_directory_feed_contract.py"
       - "tests/test_modern_publication_mechanics.py"
       - "tests/test_legacy_pi_publication_boundary.py"
@@ -53,6 +55,7 @@ on:
       - "schemas/promotion-candidate.schema.json"
       - "scripts/build_registry.py"
       - "scripts/client_contract.py"
+      - "scripts/client_eligibility.py"
       - "scripts/sync_client_contract.py"
       - "scripts/legacy_directory_client_boundary.py"
       - "scripts/directory_publication.py"
@@ -77,6 +80,7 @@ on:
       - "scripts/repository_identity.py"
       - "tests/test_build_registry.py"
       - "tests/test_client_contract.py"
+      - "tests/test_client_eligibility.py"
       - "tests/test_directory_feed_contract.py"
       - "tests/test_modern_publication_mechanics.py"
       - "tests/test_legacy_pi_publication_boundary.py"
@@ -102,7 +106,7 @@ jobs:
           python-version: "3.13"
       - run: python3 -m pip install check-jsonschema==0.37.4 PyYAML==6.0.3 cryptography==46.0.3
       - run: python3 scripts/sync_client_contract.py --check
-      - run: python3 -m unittest tests.test_client_contract tests.test_legacy_pi_publication_boundary tests.test_directory_feed_contract
+      - run: python3 -m unittest tests.test_client_contract tests.test_client_eligibility tests.test_legacy_pi_publication_boundary tests.test_directory_feed_contract
       - run: python3 -m unittest tests.test_modern_publication_mechanics tests.test_directory_publication_cas tests.test_pages_compositor tests.test_sequence_entry_boundaries
       - run: python3 -m unittest tests.test_build_registry
       - run: python3 scripts/build_registry.py --check

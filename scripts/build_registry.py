@@ -20,6 +20,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 import unicodedata
 import urllib.error
 import urllib.request
@@ -31,6 +32,9 @@ import jsonschema
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_agentplugins_catalog import package_tree_digest
 from client_contract import load_client_ids
+from client_eligibility import (
+    DERIVED_CLIENT_MINIMUM_INSTALLER, binds_positive_materialization, client_target_gate,
+)
 from portable_paths import (
     MAX_DEPTH as PORTABLE_MAX_DEPTH,
     MAX_FILES as PORTABLE_MAX_FILES,
@@ -1602,6 +1606,44 @@ def validate_release_package(
 validate_external_release_package = validate_release_package
 
 
+def release_package_facts(
+    package_root: Path, release: dict[str, object], *, label: str,
+    runtime_policy: dict[str, object], require_readme: bool = True,
+) -> dict[str, object]:
+    """Return capability facts only from bytes bound to an eligible release."""
+    validate_release_package(
+        package_root, release, label=label, runtime_policy=runtime_policy,
+        require_readme=require_readme,
+    )
+    mcp_path = package_root / "mcp.json"
+    transports = sorted({
+        server["type"] for server in read_object(mcp_path)["mcpServers"].values()
+    }) if mcp_path.is_file() else []
+    dependencies: dict[str, str] = {}
+    manifest = package_root / "uap.toml"
+    if manifest.is_symlink() or manifest.exists():
+        require(manifest.is_file() and not manifest.is_symlink(), f"{label}: uap.toml must be a regular file")
+        try:
+            document = tomllib.loads(manifest.read_bytes().decode("utf-8"))
+        except (UnicodeError, tomllib.TOMLDecodeError) as error:
+            raise RegistryError(f"{label}: invalid uap.toml: {error}") from error
+        # Unknown requirement forms are never interpreted as "no dependencies".
+        require(
+            set(document) <= {"schema_version", "dependencies"}
+            and type(document.get("schema_version")) is int and document["schema_version"] == 1,
+            f"{label}: unsupported uap.toml requirement form",
+        )
+        declared = document.get("dependencies", {})
+        require(
+            isinstance(declared, dict) and all(
+                isinstance(key, str) and isinstance(value, str) for key, value in declared.items()
+            ),
+            f"{label}: uap.toml dependencies must map distribution IDs to exact versions",
+        )
+        dependencies = dict(sorted(declared.items()))
+    return {"mcp_transports": transports, "dependencies": dependencies}
+
+
 def validate_active_local_runtime_closures(
     source: dict[str, object], *, repository_root: Path = ROOT,
     repository: str = DEFAULT_REPOSITORY,
@@ -1747,48 +1789,12 @@ def _positive_materialization_clients(
     distribution: dict[str, object], release: dict[str, object], policy: dict[str, object],
     evidence: dict[str, dict[str, object]],
 ) -> set[object]:
-    internal_identity = {
-        "manifest_digest": release["manifest_digest"],
-        "source_repository": release["package_source"]["repository"],
-        "source_revision": release["package_source"]["revision"],
-        "source_path": release["package_source"]["path"],
-    }
-
-    def release_binding_matches(observation: dict[str, object]) -> bool:
-        present = internal_identity.keys() & observation.keys()
-        if present:
-            # Source-registry evidence is the stronger internal form. Never
-            # accept a partial tuple or silently downgrade it to wire evidence.
-            return present == internal_identity.keys() and all(
-                observation.get(field) == value for field, value in internal_identity.items()
-            )
-        # Signed public snapshots intentionally omit the internal source tuple.
-        # Their wire evidence remains release-bound by the signed distribution,
-        # sequence and package tree digest, matching the released CLI contract.
-        trust = observation.get("trust")
-        if not isinstance(trust, dict):
-            return False
-        if trust == {"kind": "reviewed_external"}:
-            return True
-        artifact = observation.get("artifact")
-        return (
-            trust.keys() == {"kind", "workflow", "source_ref", "source_digest"}
-            and trust.get("kind") == "github_actions"
-            and isinstance(artifact, dict)
-            and trust.get("source_digest") == artifact.get("revision")
-        )
-
     return {
-        observation.get("client")
+        evidence[evidence_id].get("client")
         for evidence_id in policy["current_evidence"]
-        for observation in [evidence[evidence_id]]
-        if observation.get("distribution_id") == distribution["id"]
-        and observation.get("release_sequence") == release["sequence"]
-        and observation.get("package_tree_digest") == release["tree_digest"]
-        and release_binding_matches(observation)
-        and observation.get("installer_version") == policy["minimum_installer_version"]
-        and observation.get("level") == "materialization"
-        and observation.get("outcome") == "passed"
+        if binds_positive_materialization(
+            evidence[evidence_id], distribution, release, policy["minimum_installer_version"],
+        )
     }
 
 
@@ -1797,7 +1803,6 @@ def validate_directory(
     repository_root: Path = ROOT,
     repository: str = DEFAULT_REPOSITORY,
     bridge_build_reports: list[dict[str, object]] | None = None,
-    allow_unsigned_pi_review_only: bool = False,
 ) -> None:
     _validate_source_schema(source)
     products = source["products"]
@@ -1875,6 +1880,17 @@ def validate_directory(
                 ))
                 require(evidence_tuple not in current_tuples, f"{distribution['id']}@{sequence}: multiple current evidence pointers for one applicability tuple")
                 current_tuples.add(evidence_tuple)
+            if distribution["status"] == "active" and policy["status"] == "active":
+                # Derived clients never trust an authored target alone: every
+                # kind needs the same denial and exact-release evidence gate.
+                for client in target_ids:
+                    if client not in DERIVED_CLIENT_MINIMUM_INSTALLER:
+                        continue
+                    reason = client_target_gate(
+                        client, distribution, release, policy,
+                        [evidence_by_id[item] for item in policy["current_evidence"]], evidence,
+                    )
+                    require(reason is None, f"{distribution['id']}@{sequence}: {client} target is inadmissible: {reason}")
             package_source = release["package_source"]
             if package_source["revision"] is None:
                 require(is_checkout_owned_repository(package_source["repository"], repository), f"{distribution['id']}@{sequence}: only an in-repository release may await post-merge revision binding")
@@ -1926,13 +1942,9 @@ def validate_directory(
             candidate = eligible[-1]
             policy = _policy_for(default, candidate["sequence"])
             passed_targets = _positive_materialization_clients(default, candidate, policy, evidence_by_id)
-            # Only an explicit OUT-OF-REPO, unsigned Pi review candidate may
-            # omit Pi materialization evidence. The signer and normal validators
-            # retain the default fail-closed requirement for every target.
             missing_targets = sorted(
                 target["client"] for target in policy["targets"]
                 if target["client"] not in passed_targets
-                and not (allow_unsigned_pi_review_only and target["client"] == "pi")
             )
             require(
                 not missing_targets,

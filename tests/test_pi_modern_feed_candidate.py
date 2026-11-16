@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import PublicationError
-from pi_modern_feed_candidate import (main, proposed_source, read_evidence_object,
+from pi_modern_feed_candidate import (derived_pi_candidate, main, read_evidence_object,
                                       require_plain_windows_ancestry,
                                       require_committed_directory_source,
                                       require_complete_source_eligibility,
@@ -75,10 +75,10 @@ class ModernPiEvidenceTests(unittest.TestCase):
     def test_source_plans_cannot_open_nonpreproduction_path_even_if_all_planned(self) -> None:
         # An all-green dry-run/planning report is never a signed managed
         # install receipt. Refuse the no-flag path *before* Git, file writes,
-        # source reviews, or policy validation can run.
+        # target derivation, or policy validation can run.
         arguments = [
             "pi_modern_feed_candidate.py", "--source-head", HEAD,
-            "--review", "unused-review.json", "--report", "linux=unused.json",
+            "--report", "linux=unused.json",
             "--report", "macos=unused.json", "--report", "windows=unused.json",
             "--output", "unused-candidate.json",
         ]
@@ -634,97 +634,17 @@ class ModernPiEvidenceTests(unittest.TestCase):
 
 
 class ModernPiCandidateTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tool = source_case("owner/tool")
-        self.source = {
-            "schema_version": 1,
-            "distributions": [
-                {"id": "owner/tool", "status": "active",
-                 "release_policies": [
-                     {"release_sequence": 1, "status": "active",
-                      "minimum_installer_version": "0.1.26",
-                      "targets": [{"client": "codex", "authentication": "required",
-                                   "scopes": ["user"], "delivery": "managed"}]},
-                     {"release_sequence": 0, "status": "revoked",
-                      "minimum_installer_version": "0.1.8", "targets": []}]},
-                {"id": "owner/suspended", "status": "suspended",
-                 "release_policies": [{"release_sequence": 1, "status": "active",
-                                       "minimum_installer_version": "0.1.26", "targets": []}]},
-            ],
-        }
-        self.review = {"schema_version": 1, "source_commit": HEAD, "reviews": [{
-            "distribution": "owner/tool", "release_sequence": 1,
-            "tree_digest": DIGEST, "authentication": "required",
-            "transport": "streamable-http",
-            "evidence_url": "https://github.com/owner/repo/actions/runs/123",
-        }]}
-
-    def test_only_active_candidate_changes_and_original_is_immutable(self) -> None:
-        original = copy.deepcopy(self.source)
-        candidate = proposed_source(self.source, [self.tool], self.review)
-        self.assertEqual(self.source, original)
-        active = candidate["distributions"][0]["release_policies"][0]
-        self.assertEqual(active["minimum_installer_version"], "0.1.102")
-        self.assertEqual(active["targets"][-1], {
-            "client": "pi", "scopes": ["user"], "delivery": "managed",
-            "authentication": "required",
-        })
-        self.assertEqual(candidate["distributions"][0]["release_policies"][1],
-                         self.source["distributions"][0]["release_policies"][1])
-        self.assertEqual(candidate["distributions"][1], self.source["distributions"][1])
-
-    def test_project_planning_does_not_fabricate_a_signed_v1_project_grant(self) -> None:
-        # E2E user/project placements do not change v1's User-only wire grant.
-        candidate = proposed_source(self.source, [self.tool], self.review)
-        targets = candidate["distributions"][0]["release_policies"][0]["targets"]
-        self.assertEqual([target["scopes"] for target in targets if target["client"] == "pi"],
-                         [["user"]])
-
-
-    def test_without_explicit_review_candidate_cannot_be_generated(self) -> None:
-        review = copy.deepcopy(self.review)
-        review["reviews"] = []
-        with self.assertRaisesRegex(RuntimeError, "all active Pi targets"):
-            proposed_source(self.source, [self.tool], review)
-
-    def test_boolean_review_schema_version_cannot_impersonate_v1(self) -> None:
-        review = copy.deepcopy(self.review)
-        review["schema_version"] = True
-        with self.assertRaisesRegex(RuntimeError, "review document contract"):
-            proposed_source(self.source, [self.tool], review)
-
-    def test_boolean_review_release_sequence_cannot_impersonate_one(self) -> None:
-        review = copy.deepcopy(self.review)
-        review["reviews"][0]["release_sequence"] = True
-        with self.assertRaisesRegex(RuntimeError, "must be an integer"):
-            proposed_source(self.source, [self.tool], review)
-
-    def test_review_digest_mismatch_is_rejected(self) -> None:
-        review = copy.deepcopy(self.review)
-        review["reviews"][0]["tree_digest"] = "sha256:" + "c" * 64
-        with self.assertRaisesRegex(RuntimeError, "not pinned"):
-            proposed_source(self.source, [self.tool], review)
-
-    def test_review_may_not_redefine_signed_policy(self) -> None:
-        source = copy.deepcopy(self.source)
-        source["distributions"][0]["release_policies"][0]["targets"].append({
-            "client": "pi", "scopes": ["user"], "delivery": "managed",
-            "authentication": "required",
-        })
-        with self.assertRaisesRegex(RuntimeError, "overlaps a legacy Pi policy"):
-            proposed_source(source, [self.tool], self.review)
-
-    def test_unknown_authentication_does_not_become_a_signed_pi_target(self) -> None:
-        review = copy.deepcopy(self.review)
-        review["reviews"][0]["authentication"] = "unknown"
-        with self.assertRaisesRegex(RuntimeError, "Pi authentication is unresolved"):
-            proposed_source(self.source, [self.tool], review)
-
-    def test_only_skills_may_use_skills_transport(self) -> None:
-        review = copy.deepcopy(self.review)
-        review["reviews"][0]["transport"] = "skills"
-        with self.assertRaisesRegex(RuntimeError, "component/transport"):
-            proposed_source(self.source, [self.tool], review)
+    def test_source_without_pi_evidence_cannot_stage_a_candidate(self) -> None:
+        # Derivation replaces per-release opt-in, so an empty Pi proposal must
+        # fail instead of producing an apparently qualified Pi-free candidate.
+        root = Path(__file__).resolve().parents[1]
+        source = json.loads((root / "registry" / "directory.json").read_text(encoding="utf-8"))
+        source["evidence"] = [item for item in source["evidence"] if item.get("client") != "pi"]
+        facts = mock.Mock(return_value={"mcp_transports": ["stdio"], "dependencies": {}})
+        with self.assertRaisesRegex(RuntimeError, "no Pi target is derivable"):
+            derived_pi_candidate(source, facts)
+        # The evidence gate runs before any package bytes are acquired.
+        facts.assert_not_called()
 
 
 if __name__ == "__main__":

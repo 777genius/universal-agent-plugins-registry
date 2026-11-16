@@ -1,34 +1,31 @@
 #!/usr/bin/env python3
 """Prepare an UNSIGNED, isolated Directory v1 Pi source candidate for review.
 
-This is not a signing, approval, feed promotion, or evidence of signed Pi installs.
-The existing registry/directory.json and historical signed feed stay untouched.
+Pi targets are derived automatically from the released client capabilities,
+verified package facts and positive exact-release evidence; there is no
+per-package author or reviewer opt-in. This is not a signing, approval, feed
+promotion, or evidence of signed Pi installs. The existing
+registry/directory.json and historical signed feed stay untouched.
 """
 from __future__ import annotations
 
 import argparse
-import copy
-import hashlib
 import os
 import stat
 import tempfile
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 
+from client_contract import load_client_capabilities
+from client_eligibility import DERIVED, MARKETING_KIT, derive_client_targets
 from directory_publication import PublicationError, read_json
 from pi_catalog_inventory_e2e import ROOT, SHA, active_sources, require, require_exact_checkout
 
-REVIEW_FIELDS = {"distribution", "release_sequence", "tree_digest", "transport",
-                 "authentication", "evidence_url"}
-TRANSPORTS = {"stdio", "streamable-http", "skills"}
-AUTHENTICATION = {"required", "not_required", "unknown"}
 RUNNER_OS = {"linux": "Linux", "macos": "macOS", "windows": "Windows"}
 PLATFORMS = set(RUNNER_OS)
 SCOPES = ("user", "project")
-MARKETING_KIT = "777genius/marketing-kit"
 # Exact published CLI 0.1.102 stderr confirmed on Linux, macOS and Windows.
 # Any different nonzero exit is an unexpected failure, not the known policy block.
 KNOWN_MARKETING_REFUSAL = (
@@ -156,65 +153,48 @@ def require_unsigned_preproduction_eligibility(counts: dict[str, tuple[int, int]
             "preproduction requires complete consistent 3-OS source plans with only known refusals")
 
 
-def proposed_source(source: dict, sources: list[dict], reviews: dict) -> dict:
-    """Add reviewed Pi targets to a separate, unsigned modern-feed proposal.
+def verified_package_facts(repository_root: Path = ROOT):
+    """Read capability facts only from reacquired bytes bound to each release.
 
-    Keep v1 signed grants User-scoped on both feeds. Released CLI 0.1.102
-    selects a signed v1 User source for explicit local Project placement,
-    while independently checking the native Project client policy.
+    In-repository pins are fetched from the local Git object store; external
+    pins from their public repository. Digest, manifest, component and
+    closed-runtime checks run before any transport or dependency fact is used.
     """
-    require(isinstance(reviews, dict) and set(reviews) == {"schema_version", "source_commit", "reviews"}
-            and type(reviews["schema_version"]) is int and reviews["schema_version"] == 1
-            and isinstance(reviews["reviews"], list),
-            "review document contract is invalid")
-    source_map = {(item["distribution"], item["release_sequence"]): item
-                  for item in sources if item["distribution_status"] == "active"}
-    review_map: dict[tuple[str, int], dict] = {}
-    for record in reviews["reviews"]:
-        require(isinstance(record, dict) and set(record) == REVIEW_FIELDS,
-                "Pi transport/auth review has missing or extra fields")
-        require(type(record["release_sequence"]) is int,
-                "Pi review release sequence must be an integer, never bool")
-        key = (record["distribution"], record["release_sequence"])
-        require(key in source_map and key not in review_map,
-                "unqualified or duplicate Pi target review")
-        reviewed = source_map[key]
-        require(record["tree_digest"] == reviewed["tree_digest"]
-                and record["transport"] in TRANSPORTS
-                and record["authentication"] in AUTHENTICATION
-                and isinstance(record["evidence_url"], str)
-                and record["evidence_url"].startswith("https://")
-                and len(record["evidence_url"]) > len("https://"),
-                "Pi review is not pinned to the exact source and public evidence")
-        # "unknown" is valid registry metadata but not reviewed Pi signing authority.
-        require(record["authentication"] != "unknown",
-                "Pi authentication is unresolved; do not propose a signed Pi target")
-        require((record["transport"] == "skills") == (reviewed["components"] == ["skills"]),
-                "Pi component/transport classification mismatches reviewed source")
-        review_map[key] = record
-    require(set(review_map) == set(source_map), "all active Pi targets require explicit reviews")
+    from build_registry import DEFAULT_REPOSITORY, release_package_facts
+    from prepare_directory_publication import acquire_external
+    from repository_identity import is_checkout_owned_repository
 
-    result = copy.deepcopy(source)
-    for distribution in result["distributions"]:
-        if distribution["status"] != "active":
-            continue
-        for policy in distribution["release_policies"]:
-            key = (distribution["id"], policy["release_sequence"])
-            if policy["status"] != "active":
-                continue
-            require(key in review_map and not any(t["client"] == "pi" for t in policy["targets"]),
-                    "modern candidate overlaps a legacy Pi policy")
-            # Project placement is independently qualified by the CLI's
-            # native client policy, not by a fabricated v1 project grant.
-            policy["targets"].append({
-                "client": "pi", "scopes": ["user"], "delivery": "managed",
-                "authentication": review_map[key]["authentication"],
-            })
-            version = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
-            require(len(version) == 3, "invalid installer version")
-            if version < (0, 1, 102):
-                policy["minimum_installer_version"] = "0.1.102"
-    return result
+    def facts(distribution: dict, release: dict, policy: dict) -> dict:
+        package_source = release["package_source"]
+        override = (repository_root if is_checkout_owned_repository(
+            package_source["repository"], DEFAULT_REPOSITORY) else None)
+        temporary = acquire_external(package_source["repository"], package_source["revision"],
+                                     package_source["path"], override)
+        try:
+            return release_package_facts(
+                Path(temporary.name) / "checkout" / package_source["path"], release,
+                label=f"{distribution['id']}@{release['sequence']}", runtime_policy=policy,
+                require_readme=distribution["kind"] != "upstream",
+            )
+        finally:
+            temporary.cleanup()
+
+    return facts
+
+
+def derived_pi_candidate(source: dict, facts) -> tuple[dict, list[dict]]:
+    """Derive Pi targets without opt-in and refuse an empty Pi proposal.
+
+    v1 grants stay User-scoped. Released CLI 0.1.102 selects a signed v1 User
+    source for explicit Project placement and checks native Project policy.
+    """
+    candidate, decisions = derive_client_targets(
+        source, "pi", load_client_capabilities()["pi"], facts,
+    )
+    require(any(item["outcome"] == DERIVED for item in decisions),
+            "no Pi target is derivable: capability-compatible releases need trusted "
+            "passed Pi materialization evidence on linux, macos and windows")
+    return candidate, decisions
 
 
 def require_committed_directory_source(source_head: str, actual: bytes) -> None:
@@ -410,7 +390,6 @@ def main() -> int:
         "--preproduction-only", action="store_true",
         help="prepare an UNSIGNED review candidate with known legacy Marketing Kit refusals; never sign-ready",
     )
-    parser.add_argument("--review", required=True, type=Path)
     parser.add_argument("--report", required=True, action="append", help="linux=PATH, macos=PATH or windows=PATH")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -441,21 +420,25 @@ def main() -> int:
     require(len(set(counts.values())) == 1, "cross-OS outcomes differ")
     require_unsigned_preproduction_eligibility(counts, expected_eligible)
 
-    reviews = read_evidence_object(args.review)
-    require(reviews.get("source_commit") == args.source_head, "review source HEAD differs")
-    candidate = proposed_source(read_evidence_object(source_path), sources, reviews)
-    # The ordinary v1 validator also enforces canonical client order, signed
-    # source constraints and positive upstream materialization evidence.
-    # Never emit an apparently ready modern feed when those checks fail.
-    from build_registry import validate_directory
-    validate_directory(
-        candidate, verify_packages=False,
-        allow_unsigned_pi_review_only=True,
-    )
+    # The ordinary v1 validator enforces canonical client order, signed source
+    # constraints, upstream evidence and the derived-client evidence gate for
+    # both the input and the candidate. There is no review-only relaxation.
+    from build_registry import RegistryError, validate_directory
+    source = read_evidence_object(source_path)
+    try:
+        validate_directory(source, verify_packages=False)
+        candidate, decisions = derived_pi_candidate(source, verified_package_facts())
+        validate_directory(candidate, verify_packages=False)
+    except RegistryError as error:
+        raise RuntimeError(str(error)) from error
+    for decision in decisions:
+        print(f"{decision['distribution_id']}@{decision['release_sequence']}: "
+              f"{decision['outcome']} - {decision['reason']}")
     require(source_path.read_bytes() == original, "legacy Directory source changed")
     write_unsigned_candidate(args.output, candidate)
+    derived = sum(item["outcome"] == DERIVED for item in decisions)
     print(f"PREPRODUCTION UNSIGNED REVIEW modern v1 candidate only: "
-          f"OS source-plan coverage={counts}; "
+          f"{derived} derived Pi targets; OS source-plan coverage={counts}; "
           "not actual saved installs, not sign-ready, no Ed25519 signature, approval, "
           "production feed or 72/72 signed eligibility")
     return 0

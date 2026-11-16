@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - 'scripts/pi_modern_feed_candidate.py'
+      - 'scripts/client_eligibility.py'
+      - 'scripts/client_contract.py'
       - 'tests/test_pi_modern_feed_candidate.py'
       - '.github/workflows/pi-modern-candidate-3os.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/pi_modern_feed_candidate.py'
+      - 'scripts/client_eligibility.py'
+      - 'scripts/client_contract.py'
       - 'tests/test_pi_modern_feed_candidate.py'
       - '.github/workflows/pi-modern-candidate-3os.yml'
 

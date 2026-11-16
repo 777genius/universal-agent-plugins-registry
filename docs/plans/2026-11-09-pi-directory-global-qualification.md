@@ -143,3 +143,13 @@ the independent saved-dependency planner remains red at **70/72** per OS,
 and the two Marketing Kit cases remain mandatory for the subsequent
 editor-approved modern-v1 signed-feed managed-install E2E. No signed policy,
 source pin, public CLI, production origin or release was modified.
+
+## 2026-11-16: derived eligibility replaces per-release review records
+
+The unsigned staging helper no longer takes a transport/authentication review
+file. It derives Pi targets from released capabilities, verified package
+facts and trusted 3-OS exact-release evidence, keeps the planning-report gate,
+and refuses to write a candidate when no Pi target is derivable. The derivation
+contract is in [DIRECTORY_SINGLE_PROTOCOL.md](../DIRECTORY_SINGLE_PROTOCOL.md).
+No Pi evidence in Directory form exists yet, so no candidate can be staged
+until trusted Pi materialization evidence is recorded for exact releases.
