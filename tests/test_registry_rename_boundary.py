@@ -55,6 +55,14 @@ class RegistryRenameBoundaryTests(unittest.TestCase):
             signed = previous["distributions"][0]["releases"][0]
             signed["package_source"]["revision"] = "b" * 40
             signed["published_at"] = "2026-08-20T00:00:00Z"
+            # New Pi eligibility on top of a Pi-free signed policy is a real
+            # broadening and MUST reacquire the original immutable package.
+            with mock.patch.object(prepare, "acquire_external", side_effect=AssertionError("Pi broadening needs reacquisition")):
+                with self.assertRaisesRegex(AssertionError, "Pi broadening needs reacquisition"):
+                    self.candidate(source, root, previous)
+            # Once the policy has already been signed with the same Pi target,
+            # the historical source identity remains reusable offline.
+            previous["distributions"][0]["release_policies"] = prepare.with_derived_pi_targets(source)["distributions"][0]["release_policies"]
             with mock.patch.object(prepare, "acquire_external", side_effect=AssertionError("must remain offline")):
                 candidate = self.candidate(source, root, previous)
             self.assertEqual(candidate["distributions"][0]["releases"][0], signed)

@@ -60,8 +60,7 @@ class FixedFeedContractTests(unittest.TestCase):
         candidate = fixture("candidate.json")
         candidate["distributions"][0]["release_policies"][0]["targets"][0]["client"] = "hermes"
         package_sign.validate_bound_candidate(candidate, feed=feeds.MODERN_FEED)
-        with self.assertRaises(package_publication.PublicationError):
-            package_sign.validate_bound_candidate(candidate)
+        package_sign.validate_bound_candidate(candidate)
         # An invalid source must reach the schema gate, not reject the fixed
         # modern profile because a sibling imported a second module identity.
         with self.assertRaises(package_publication.PublicationError):
@@ -106,18 +105,19 @@ class FixedFeedContractTests(unittest.TestCase):
                       "trust_config_path", "private_key_environment"):
             self.assertNotEqual(getattr(LEGACY_FEED, field), getattr(MODERN_FEED, field))
 
-    def test_modern_known_clients_do_not_expand_legacy_or_allow_unknown_ids(self) -> None:
+    def test_both_feeds_accept_released_clients_but_reject_unknown_ids(self) -> None:
         for client in ("hermes", "antigravity", "pi"):
             candidate = fixture("candidate.json")
             candidate["distributions"][0]["release_policies"][0]["targets"][0]["client"] = client
             candidate["evidence"][0]["client"] = client
             with self.subTest(client=client):
                 signer.validate_bound_candidate(candidate, feed=MODERN_FEED)
-                with self.assertRaisesRegex(publication.PublicationError, "historical Directory"):
-                    signer.validate_bound_candidate(candidate)
+                signer.validate_bound_candidate(candidate)
                 candidate["evidence"][0]["client"] = "future-agent"
                 with self.assertRaises(publication.PublicationError):
                     signer.validate_bound_candidate(candidate, feed=MODERN_FEED)
+                with self.assertRaises(publication.PublicationError):
+                    signer.validate_bound_candidate(candidate)
 
     def test_evidence_cutover_is_per_lineage_with_shared_schema_one_records(self) -> None:
         modern = fixture("snapshot.json")

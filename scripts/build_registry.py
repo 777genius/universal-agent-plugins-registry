@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import gzip
 import hashlib
 import json
@@ -30,7 +31,7 @@ import jsonschema
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_agentplugins_catalog import package_tree_digest
-from client_contract import load_client_ids
+from client_contract import load_client_capabilities, load_client_ids
 from portable_paths import (
     MAX_DEPTH as PORTABLE_MAX_DEPTH,
     MAX_FILES as PORTABLE_MAX_FILES,
@@ -80,6 +81,8 @@ MAX_PATH_DEPTH = 32
 MAX_CATEGORIES = 8
 ICON_NAMES = {"chrome-devtools": "googlechrome.svg", "docker-hub": "docker.svg", "hubspot-crm": "hubspot.svg", "hubspot-developer": "hubspot.svg"}
 CLIENT_IDS = load_client_ids()
+CLIENT_CAPABILITIES = load_client_capabilities()
+PI_MINIMUM_INSTALLER_VERSION = "0.1.102"
 KIND_PRIORITY = {"upstream": 0, "community_bridge": 1, "community": 2}
 DIRECTORY_TREE_DIGEST_ALGORITHM = "agentplugins-tree-sha256-v1"
 DIRECTORY_TREE_DIGEST_DOMAIN = b"agentplugins.package-tree\x00sha256\x00v1"
@@ -1792,6 +1795,55 @@ def _positive_materialization_clients(
     }
 
 
+def _mcp_transports(client: str) -> set[str]:
+    states = CLIENT_CAPABILITIES[client]["mcp_transports"]
+    return {transport for transport, state in states.items() if state != "unsupported"}
+
+
+def with_derived_pi_targets(source: dict[str, object]) -> dict[str, object]:
+    """Return a copy in which every Pi-compatible active or superseded release also targets Pi.
+
+    Superseded releases stay usable for repair and lock restoration, so they keep Pi too.
+
+    Pi compatibility comes only from the pinned client capabilities, never from
+    per-package Pi evidence. The installer still checks each package it installs.
+    """
+    pi = CLIENT_CAPABILITIES["pi"]
+    result = copy.deepcopy(source)
+    for distribution in result["distributions"]:
+        # Upstream releases require passed materialization evidence for every
+        # target (signer and released CLI); Pi resolves to a community fallback.
+        if distribution["status"] != "active" or distribution["kind"] == "upstream":
+            continue
+        components = {release["sequence"]: set(release["components"]) for release in distribution["releases"]}
+        for policy in distribution["release_policies"]:
+            parts = components.get(policy["release_sequence"])
+            clients = {target["client"] for target in policy["targets"]}
+            authentication = {target["authentication"] for target in policy["targets"]}
+            if (
+                parts is None or policy["status"] not in ("active", "superseded") or "pi" in clients
+                or len(authentication) != 1
+                or ("skills" in parts and pi["skill_support"] != "native")
+                or ("extensions" in parts and pi["extension_support"] != "native")
+                # Release metadata does not name MCP transports. An existing
+                # target limited to transports Pi also supports bounds them.
+                or ("mcp" in parts and not any(
+                    _mcp_transports(client) and _mcp_transports(client) <= _mcp_transports("pi")
+                    for client in clients
+                ))
+            ):
+                continue
+            policy["targets"].append({
+                "client": "pi", "scopes": ["user"], "delivery": "managed",
+                "authentication": authentication.pop(),
+            })
+            policy["targets"].sort(key=lambda target: CLIENT_IDS.index(target["client"]))
+            minimum = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
+            if minimum < tuple(int(part) for part in PI_MINIMUM_INSTALLER_VERSION.split(".")):
+                policy["minimum_installer_version"] = PI_MINIMUM_INSTALLER_VERSION
+    return result
+
+
 def validate_directory(
     source: dict[str, object], *, verify_packages: bool = True,
     repository_root: Path = ROOT,
@@ -2191,6 +2243,8 @@ def main() -> int:
             DIRECTORY_SOURCE.write_bytes(encoded(migrated_directory_source()))
         source = load_directory_source()
         validate_directory(source)
+        # The signer publishes the derived Pi targets; they need no Pi evidence.
+        validate_directory(with_derived_pi_targets(source), verify_packages=False)
         if args.external_release_check:
             base_source = load_directory_source_at_revision(args.base_revision) if args.external_release_check == "changed" else None
             validate_changed_external_releases(source, base_source)
