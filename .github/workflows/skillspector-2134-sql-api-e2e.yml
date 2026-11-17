@@ -60,6 +60,9 @@ jobs:
         working-directory: candidate
         run: |
           .venv/bin/ruff check src/skillspector/references.py tests/test_documented_api_lookup_references.py
+          # Diagnostic only: exact pinned Ruff formatter diff, without changing source.
+          # Preserve the following mandatory format --check failure gate.
+          .venv/bin/ruff format --diff src/skillspector/references.py tests/test_documented_api_lookup_references.py || test "$?" -eq 1
           .venv/bin/ruff format --check src/skillspector/references.py tests/test_documented_api_lookup_references.py
           .venv/bin/python -m pytest -q tests/test_documented_api_lookup_references.py
       - name: Compare immutable real CLI outputs and security evidence
