@@ -372,6 +372,32 @@ def fair_lane(entries, previous, lane_budget):
     return result
 
 
+
+def requires_versioned_retry_epoch(item, previous_attempt, previous_record):
+    """Refuse same-pin retry lineage without an authenticated policy epoch.
+
+    A policy/scanner change makes the old attempt incompatible, but must not
+    turn its verified history into a new attempt_count=1 with lost entries.
+    An actual source revision change is a new identity and remains schedulable.
+    """
+    if previous_attempt is not None or not isinstance(previous_record, dict):
+        return False
+    source = previous_record.get("source")
+    retry = previous_record.get("retry")
+    if not isinstance(source, dict) or not isinstance(retry, dict):
+        return False
+    return (
+        type(retry.get("attempt_count")) is int
+        and retry["attempt_count"] > 0
+        and previous_record.get("kind") == item["kind"]
+        and previous_record.get("plugin_path") == item["plugin_path"]
+        # A verified repository rename may rebind this old record to a new
+        # repository name. Path + immutable revision still require an epoch.
+        and source.get("path") == item["path"]
+        and source.get("revision") == item["revision"]
+    )
+
+
 def plan_attempts(selection, previous, partition_index, partition_count, maximum_attempts, *, current=None, excluded_ids=(),
                   repository_aliases=None):
     require(type(partition_count) is int and 1 <= partition_count <= MAX_PARTITIONS, "invalid partition count")
@@ -384,6 +410,10 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         if item["id"] in excluded_ids or partition_for(item["repository"], partition_count) != partition_index:
             continue
         attempt, record = attempts.get(item["id"]), records.get(item["id"])
+        # A mismatch is an explicit migration gate, not silently skipped work.
+        # Refuse before acquiring source bytes or writing a partial new report.
+        require(not requires_versioned_retry_epoch(item, attempt, record),
+                "prior same-source retry history requires explicit versioned epoch")
         if attempt:
             if attempt["disposition"] != "scheduled" or parse_timestamp(attempt["next_attempt_at"], "next_attempt_at") > current:
                 continue
@@ -435,6 +465,18 @@ def attempt_fingerprint(item, record):
 
 
 def make_attempt(item, record, previous_attempt=None, previous_record=None, *, at=None):
+    require(not requires_versioned_retry_epoch(item, previous_attempt, previous_record),
+            "prior same-source retry history requires explicit versioned epoch")
+    # A direct caller must not smuggle an old-policy or foreign-source
+    # attempt past the None-only migration check above. scan_partition passes
+    # only compatible_attempts(), but this lower-level boundary must stand on
+    # its own before it can append or truncate an authenticated history.
+    if previous_attempt is not None:
+        require(isinstance(previous_attempt, dict)
+                and previous_attempt.get("source_digest") == source_digest(item)
+                and previous_attempt.get("scanner") == SCANNER
+                and previous_attempt.get("policy_digest") == PROFILE["digest"],
+                "prior attempt provenance requires explicit versioned epoch")
     at = at or scanner.now()
     count = (previous_attempt["attempt_count"] if previous_attempt else 0) + 1
     require(count <= contract.RETRY_POLICY["maximum_attempts_per_identity"], "attempt limit exhausted")
@@ -1228,7 +1270,17 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                         all(left["at"] <= right["at"] for left, right in zip(attempt["history"], attempt["history"][1:])),
                         "recovered attempt history is incomplete or regresses")
                     prefix = attempt["history"][:-1]
-                    parent = {"attempt_count": attempt["attempt_count"] - 1, "history": prefix} if attempt["attempt_count"] > 1 else None
+                    # A recovered predecessor is reconstructed from an already
+                    # validated authenticated worker outcome, not from the
+                    # persisted previous policy epoch. Bind its source/scanner/
+                    # policy before replaying the canonical attempt.
+                    parent = ({
+                        "attempt_count": attempt["attempt_count"] - 1,
+                        "history": prefix,
+                        "source_digest": attempt["source_digest"],
+                        "scanner": copy.deepcopy(attempt["scanner"]),
+                        "policy_digest": attempt["policy_digest"],
+                    } if attempt["attempt_count"] > 1 else None)
                     require(attempt == make_attempt(target, outcome["record"], parent,
                         {"attempt_history": prefix}, at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                     outcomes.append((target, outcome, origin))
