@@ -95,6 +95,24 @@ class SqlSourceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exception ledger"):
             compare(old, changed)
 
+    def test_remaining_partial_rejects_unrelated_analyzer_drift(self):
+        old = report([TARGET, OTHER], [SECURITY])
+        new = report([OTHER], [SECURITY])
+        new["analysis_completeness"]["analyzer_statuses"] = [
+            {"analyzer_id": "static_parse", "status": "skipped"}
+        ]
+        with self.assertRaisesRegex(ValueError, "evidence drift"):
+            compare(old, new)
+
+    def test_remaining_partial_rejects_new_source_limitation(self):
+        old = report([TARGET, OTHER], [SECURITY])
+        new = report([OTHER], [SECURITY])
+        new["analysis_completeness"]["ledger_exceptions"] = [
+            {"reason_code": "static_parse_limit", "path": "SKILL.md"}
+        ]
+        with self.assertRaisesRegex(ValueError, "evidence drift"):
+            compare(old, new)
+
     def test_incomplete_file_count_drift_fails(self):
         new = report([])
         new["analysis_completeness"]["entirely_uninspected_files"] = 1
