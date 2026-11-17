@@ -105,17 +105,24 @@ class RetryEpochGuardTests(unittest.TestCase):
         old["retry"]["attempt_count"] = 0
         self.assertFalse(coverage.requires_versioned_retry_epoch(self.subject, None, old))
 
-    def test_no_identical_pin_from_unrelated_repository_or_path(self):
-        for field in ("repository", "revision", "path"):
+    def test_verified_repository_alias_must_not_reset_old_attempts(self):
+        # previous_records may rebind a verified renamed repository. Never
+        # allow an unchanged revision and root to bypass the epoch boundary.
+        aliased = copy.deepcopy(self.prior)
+        aliased["source"]["repository"] = "renamed-owner/renamed-repository"
+        self.assertTrue(coverage.requires_versioned_retry_epoch(self.subject, None, aliased))
+
+    def test_changed_immutable_pin_or_source_type_is_not_blocked(self):
+        for field, value in (("revision", "e" * 40), ("path", "other/SKILL.md")):
             previous = copy.deepcopy(self.prior)
-            previous["source"][field] = (
-                "other-owner/other-repository" if field == "repository" else
-                "e" * 40 if field == "revision" else "other/SKILL.md"
-            )
+            previous["source"][field] = value
             with self.subTest(field=field):
                 self.assertFalse(coverage.requires_versioned_retry_epoch(
                     self.subject, None, previous
                 ))
+        changed = copy.deepcopy(self.prior)
+        changed["kind"] = "different_kind"
+        self.assertFalse(coverage.requires_versioned_retry_epoch(self.subject, None, changed))
 
 
 if __name__ == "__main__":
