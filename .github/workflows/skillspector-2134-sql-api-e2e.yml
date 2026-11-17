@@ -37,6 +37,14 @@ jobs:
           sparse-checkout: plugins/cloudflare/skills/durable-objects
           persist-credentials: false
           path: original-skill
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          sparse-checkout: reports/skillspector/v3/shards/32d0ccd64b2cea5366d73bc9856ffd628c92af340e5e90d0d0f55c9b1bd7dd02.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: published-v3
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
@@ -61,6 +69,7 @@ jobs:
             --baseline "$GITHUB_WORKSPACE/baseline" \
             --candidate "$GITHUB_WORKSPACE/candidate" \
             --source "$GITHUB_WORKSPACE/original-skill" \
+            --published "$GITHUB_WORKSPACE/published-v3" \
             --output "$RUNNER_TEMP/skillspector-sql-api/proof.json"
       - name: Preserve exact source-bound proof without publication
         if: always()

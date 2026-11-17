@@ -76,16 +76,101 @@ def compare(old: dict, new: dict) -> dict:
         "false_sql_reference_removed": 1,
         "other_references_unchanged": True,
         "independent_candidate_security_findings_unchanged": True,
-        "original_published_v3_security_parity": "not_yet_proved",
+        "original_published_v3_security_parity": "requires_signed_group_and_occurrence_checks",
         "prior_published_partial_remains_uncertified": True,
         "production_partial_reduction": 0, "production_error_reduction": 0,
         "safe_for_automatic_publication": False,
     }
 
 
+PUBLISHED_REF = "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf"
+PUBLISHED_SHARD = (
+    "reports/skillspector/v3/shards/"
+    "32d0ccd64b2cea5366d73bc9856ffd628c92af340e5e90d0d0f55c9b1bd7dd02.json"
+)
+PUBLISHED_DIGEST = "32d0ccd64b2cea5366d73bc9856ffd628c92af340e5e90d0d0f55c9b1bd7dd02"
+PUBLISHED_RECORD_ID = "plugin:777genius/cloudflare-bridge/durable-objects"
+PUBLISHED_SOURCE_DIGEST = "sha256:62934e1b8e470a7e2588aaafc7d3bc07251b313f4ef6c5948f47f962119fcc80"
+
+
+def published_source_risks(original: dict, candidate: dict) -> dict:
+    """Reject loss of any independently attested, untruncated signed finding.
+
+    Raw scanner issues and v3 grouped findings have different wrappers; compare
+    exact source line, risk rule, severity, and stable match fingerprint, with
+    multiplicity. Never treat identical generated finding IDs as security proof.
+    """
+    if (
+        original.get("id") != PUBLISHED_RECORD_ID
+        or original.get("status") != "partial"
+        or original.get("freshness") != "current"
+        or original.get("findings_truncated") is not False
+        or original.get("coverage", {}).get("grouping_complete") is not True
+        or original.get("source", {}).get("revision") != SOURCE_COMMIT
+        or original.get("source", {}).get("path") != SOURCE_ROOT
+        or original.get("source", {}).get("content_digest") != PUBLISHED_SOURCE_DIGEST
+    ):
+        raise ValueError("original published v3 source identity/status cannot be authenticated")
+    groups = original.get("findings")
+    issues = candidate.get("issues")
+    if not isinstance(groups, list) or not isinstance(issues, list):
+        raise ValueError("missing signed finding groups or candidate raw issues")
+    required = collections.Counter()
+    for item in groups:
+        if not isinstance(item, dict) or type(item.get("raw_count")) is not int or item["raw_count"] < 1:
+            raise ValueError("malformed signed risk finding")
+        fingerprint = item.get("match_fingerprint")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("invalid signed risk fingerprint")
+        required[(item.get("rule"), item.get("severity"),
+                  item.get("path"), item.get("line"), fingerprint)] += item["raw_count"]
+    actual = collections.Counter()
+    for item in issues:
+        if not isinstance(item, dict):
+            raise ValueError("malformed candidate issue")
+        if item.get("id") in {"AE1", "AE7"} and item.get("tags") == ["coverage"]:
+            continue
+        location = item.get("location")
+        if not isinstance(location, dict):
+            raise ValueError("candidate issue has no source location")
+        fingerprint = item.get("match_fingerprint")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("candidate lost issue fingerprint")
+        actual[(item.get("id"), item.get("severity"),
+                location.get("file"), location.get("start_line"), fingerprint)] += 1
+    if required - actual:
+        raise ValueError("candidate lost a source-bound original signed security finding")
+    raw = original.get("raw_finding_count")
+    if type(raw) is not int or raw < sum(required.values()):
+        raise ValueError("signed original raw findings are inconsistent")
+    return {
+        "published_signed_risk_groups_preserved": len(groups),
+        "published_signed_grouped_occurrences_preserved": sum(required.values()),
+        "published_raw_finding_count": raw,
+        "published_unattributed_raw_count": raw - sum(required.values()),
+        "published_original_remains_partial": True,
+    }
+
+
+def load_published(path: Path) -> dict:
+    if git_head(path) != PUBLISHED_REF:
+        raise ValueError("published signed report checkout is not pinned")
+    raw = (path / PUBLISHED_SHARD).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != PUBLISHED_DIGEST:
+        raise ValueError("published signed source shard SHA-256 changed")
+    shard = json.loads(raw)
+    if shard.get("repository") != "777genius/universal-agent-plugins-registry":
+        raise ValueError("published report shard has wrong repository")
+    matches = [r for r in shard.get("records", []) if r.get("id") == PUBLISHED_RECORD_ID]
+    if len(matches) != 1:
+        raise ValueError("published source identity missing or ambiguous")
+    return matches[0]
+
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    for name in ("baseline", "candidate", "source", "output"):
+    for name in ("baseline", "candidate", "source", "published", "output"):
         ap.add_argument("--" + name, required=True, type=Path)
     args = ap.parse_args()
     for path, expected in ((args.baseline, BASE), (args.candidate, CANDIDATE),
@@ -114,6 +199,7 @@ def main() -> int:
         "baseline_scanner_commit": BASE, "candidate_scanner_commit": CANDIDATE,
         "baseline_exit": old_exit, "candidate_exit": new_exit,
         **compare(old, new),
+        **published_source_risks(load_published(args.published), new),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
