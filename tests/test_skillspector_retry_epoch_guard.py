@@ -132,5 +132,29 @@ class RetryEpochGuardTests(unittest.TestCase):
         self.assertFalse(coverage.requires_versioned_retry_epoch(self.subject, None, changed))
 
 
+    def test_direct_make_attempt_cannot_smuggle_incompatible_prior_identity(self):
+        # A caller bypassing compatible_attempts() must not append/truncate a
+        # foreign or old-policy history, even with a syntactically valid count.
+        current = self.previous(policy=coverage.PROFILE["digest"])["attempts"][self.subject["id"]]
+        current["attempt_count"] = 1
+        old_policy = copy.deepcopy(current)
+        old_policy["policy_digest"] = contract.LEGACY_POLICY["digest"]
+        foreign_source = copy.deepcopy(current)
+        foreign_source["source_digest"] = "sha256:" + "0" * 64
+        foreign_scanner = copy.deepcopy(current)
+        foreign_scanner["scanner"]["revision"] = "f" * 40
+        for label, incompatible in (
+            ("old_policy", old_policy),
+            ("foreign_source", foreign_source),
+            ("foreign_scanner", foreign_scanner),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(PublicationError, "explicit versioned epoch"):
+                    coverage.make_attempt(
+                        self.subject, record(self.subject, status="partial"),
+                        previous_attempt=incompatible, previous_record=self.prior,
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

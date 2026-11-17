@@ -467,6 +467,16 @@ def attempt_fingerprint(item, record):
 def make_attempt(item, record, previous_attempt=None, previous_record=None, *, at=None):
     require(not requires_versioned_retry_epoch(item, previous_attempt, previous_record),
             "prior same-source retry history requires explicit versioned epoch")
+    # A direct caller must not smuggle an old-policy or foreign-source
+    # attempt past the None-only migration check above. scan_partition passes
+    # only compatible_attempts(), but this lower-level boundary must stand on
+    # its own before it can append or truncate an authenticated history.
+    if previous_attempt is not None:
+        require(isinstance(previous_attempt, dict)
+                and previous_attempt.get("source_digest") == source_digest(item)
+                and previous_attempt.get("scanner") == SCANNER
+                and previous_attempt.get("policy_digest") == PROFILE["digest"],
+                "prior attempt provenance requires explicit versioned epoch")
     at = at or scanner.now()
     count = (previous_attempt["attempt_count"] if previous_attempt else 0) + 1
     require(count <= contract.RETRY_POLICY["maximum_attempts_per_identity"], "attempt limit exhausted")
