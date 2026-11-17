@@ -1,6 +1,7 @@
 """Regression tests for BOTH protected historical Directory v1 publication gates."""
 from __future__ import annotations
 
+import base64
 import copy
 import json
 from pathlib import Path
@@ -19,7 +20,7 @@ from legacy_directory_client_boundary import (
     LEGACY_DIRECTORY_CLIENT_IDS, require_legacy_directory_clients,
 )
 from prepare_directory_publication import build_candidate
-from sign_directory_publication import validate_bound_candidate
+from sign_directory_publication import validate_bound_candidate, require_new_key_for_new_clients
 
 
 NEW_CLIENTS = ("future-agent", "unknown-client")
@@ -114,6 +115,41 @@ class LegacyClientPublicationBoundaryTests(unittest.TestCase):
                 build_candidate(source, {}, "a" * 40, "test-run", None)
             with self.subTest(client=client, gate="sign"), self.assertRaisesRegex(PublicationError, "unknown-client evidence"):
                 validate_bound_candidate(candidate)
+
+
+class HistoricalSignerReuseTests(unittest.TestCase):
+    def test_new_clients_cannot_use_original_key_even_if_key_id_is_renamed(self) -> None:
+        old_key = json.loads(
+            (ROOT / "registry" / "publication" / "trusted-keys.json").read_text(encoding="utf-8")
+        )["keys"][0]
+        self.assertEqual(old_key["key_id"], "uap-directory-2026-01")
+        historical_public = base64.b64decode(old_key["public_key"])
+        fresh_synthetic_public = bytes([0x11]) * 32
+        for client in ("pi", "hermes", "antigravity"):
+            for state in ("active", "superseded", "revoked"):
+                candidate = {"distributions": [new_distribution(client, policy_status=state)], "evidence": []}
+                with self.subTest(client=client, state=state):
+                    with self.assertRaisesRegex(PublicationError, "historical Directory signing key"):
+                        require_new_key_for_new_clients(candidate, historical_public)
+                    # Distinct bytes only pass this narrow no-reuse check; they
+                    # never imply a production key, signer grant or approval.
+                    require_new_key_for_new_clients(candidate, fresh_synthetic_public)
+
+    def test_unreferenced_new_client_evidence_cannot_use_historical_key(self) -> None:
+        old_key = json.loads(
+            (ROOT / "registry" / "publication" / "trusted-keys.json").read_text(encoding="utf-8")
+        )["keys"][0]
+        historical_public = base64.b64decode(old_key["public_key"])
+        for client in ("pi", "hermes", "antigravity"):
+            with self.subTest(client=client), self.assertRaisesRegex(
+                PublicationError, "historical Directory signing key"
+            ):
+                require_new_key_for_new_clients(
+                    {"distributions": [], "evidence": [{"client": client}]}, historical_public,
+                )
+        require_new_key_for_new_clients(
+            {"distributions": [new_distribution("codex")], "evidence": []}, historical_public,
+        )
 
 
 class DerivedPiTargetTests(unittest.TestCase):

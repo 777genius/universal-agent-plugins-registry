@@ -55,6 +55,25 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 TRUST_CONFIG = ROOT / "registry" / "publication" / "config.json"
+# Immutable historical public key: changing a key ID must not bypass the no-reuse gate.
+HISTORICAL_PUBLIC_KEY = base64.b64decode("HalXARjat+v3ylTPLMAnvuavRo4ZfrF+DbWwsjlp2bI=")
+NEW_CLIENT_IDS = frozenset({"pi", "hermes", "antigravity"})
+
+
+def require_new_key_for_new_clients(candidate: dict[str, object], active_public_key: bytes) -> None:
+    """Never use the already-published historical Ed25519 key for new clients."""
+    has_new_target = any(
+        target["client"] in NEW_CLIENT_IDS
+        for distribution in candidate["distributions"]
+        for policy in distribution["release_policies"]
+        for target in policy["targets"]
+    )
+    has_new_evidence = any(record.get("client") in NEW_CLIENT_IDS for record in candidate["evidence"])
+    require(
+        not (has_new_target or has_new_evidence) or active_public_key != HISTORICAL_PUBLIC_KEY,
+        "historical Directory signing key cannot sign new-client targets or evidence; "
+        "owner-approved protected key rotation is required",
+    )
 
 
 def snapshot_evidence_for_sequence(
@@ -220,6 +239,7 @@ def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
         now = parse_timestamp(args.now, "now")
         trusted = load_feed_trusted_keys(args.trusted_keys, feed)
         require(args.key_id in trusted, f"active key ID {args.key_id!r} is not trusted")
+        require_new_key_for_new_clients(candidate, trusted[args.key_id])
         encoded_private = os.environ.get(feed.private_key_environment)
         require(encoded_private is not None, f"{feed.private_key_environment} is not set")
         private_key = ed25519_private_key(encoded_private)
