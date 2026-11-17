@@ -98,7 +98,7 @@ class SqlSourceEvidenceTests(unittest.TestCase):
     def test_incomplete_file_count_drift_fails(self):
         new = report([])
         new["analysis_completeness"]["entirely_uninspected_files"] = 1
-        with self.assertRaisesRegex(ValueError, "inspection"):
+        with self.assertRaisesRegex(ValueError, "inspected-file count drift"):
             compare(report([TARGET]), new)
 
     def test_incomplete_risk_location_change_fails(self):
