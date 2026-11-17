@@ -132,6 +132,34 @@ class RetryEpochGuardTests(unittest.TestCase):
         self.assertFalse(coverage.requires_versioned_retry_epoch(self.subject, None, changed))
 
 
+    def test_reconstructed_recovery_parent_is_current_epoch_bound(self):
+        # Authenticated recovery rebuilds the predecessor from its worker's
+        # cumulative attempt, preserving source and policy identity. A bare
+        # history/count is intentionally no longer enough for make_attempt.
+        first = coverage.make_attempt(
+            self.subject, record(self.subject, status="partial"),
+            at="2026-11-14T00:00:00Z",
+        )
+        parent = {key: copy.deepcopy(first[key]) for key in (
+            "attempt_count", "history", "source_digest", "scanner", "policy_digest"
+        )}
+        second = coverage.make_attempt(
+            self.subject, record(self.subject, status="partial"),
+            previous_attempt=parent,
+            previous_record={"attempt_history": copy.deepcopy(first["history"])},
+            at="2026-11-14T00:00:01Z",
+        )
+        self.assertEqual(second["attempt_count"], 2)
+        self.assertEqual(second["history"][:1], first["history"])
+        bare_parent = {"attempt_count": 1, "history": copy.deepcopy(first["history"])}
+        with self.assertRaisesRegex(PublicationError, "explicit versioned epoch"):
+            coverage.make_attempt(
+                self.subject, record(self.subject, status="partial"),
+                previous_attempt=bare_parent,
+                previous_record={"attempt_history": copy.deepcopy(first["history"])},
+                at="2026-11-14T00:00:01Z",
+            )
+
     def test_direct_make_attempt_cannot_smuggle_incompatible_prior_identity(self):
         # A caller bypassing compatible_attempts() must not append/truncate a
         # foreign or old-policy history, even with a syntactically valid count.

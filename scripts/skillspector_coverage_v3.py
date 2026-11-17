@@ -1270,7 +1270,17 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                         all(left["at"] <= right["at"] for left, right in zip(attempt["history"], attempt["history"][1:])),
                         "recovered attempt history is incomplete or regresses")
                     prefix = attempt["history"][:-1]
-                    parent = {"attempt_count": attempt["attempt_count"] - 1, "history": prefix} if attempt["attempt_count"] > 1 else None
+                    # A recovered predecessor is reconstructed from an already
+                    # validated authenticated worker outcome, not from the
+                    # persisted previous policy epoch. Bind its source/scanner/
+                    # policy before replaying the canonical attempt.
+                    parent = ({
+                        "attempt_count": attempt["attempt_count"] - 1,
+                        "history": prefix,
+                        "source_digest": attempt["source_digest"],
+                        "scanner": copy.deepcopy(attempt["scanner"]),
+                        "policy_digest": attempt["policy_digest"],
+                    } if attempt["attempt_count"] > 1 else None)
                     require(attempt == make_attempt(target, outcome["record"], parent,
                         {"attempt_history": prefix}, at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                     outcomes.append((target, outcome, origin))
