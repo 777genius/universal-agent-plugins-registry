@@ -60,6 +60,41 @@ class SqlSourceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Partial/Complete"):
             compare(report([TARGET]), new)
 
+    def test_actual_2134_status_transition_is_only_readonly_observation(self):
+        old = report([TARGET, OTHER], [SECURITY])
+        new = report([OTHER], [SECURITY])
+        old["analysis_completeness"].update(
+            status="complete_with_caveats", is_complete=True,
+            ledger_exceptions=[{
+                "reason_code": "reference_missing", "path": "SKILL.md",
+                "start_line": 38, "phase": "reference_resolution",
+            }],
+        )
+        new["analysis_completeness"].update(
+            status="complete", is_complete=True, ledger_exceptions=[]
+        )
+        for raw, stamp in ((old, "2026-11-17T21:00:22Z"), (new, "2026-11-17T21:00:25Z")):
+            raw["skill"] = {"scanned_at": stamp}
+            raw["issues"][0]["finding_id"] = "finding-" + ("a" if raw is old else "b") * 32
+        proof = compare(old, new)
+        self.assertTrue(proof["candidate_scanner_complete_is_not_certification"])
+        self.assertFalse(proof["safe_for_automatic_publication"])
+        self.assertEqual(proof["production_partial_reduction"], 0)
+        changed = copy.deepcopy(new)
+        changed["issues"][0]["severity"] = "CRITICAL"
+        with self.assertRaisesRegex(ValueError, "security"):
+            compare(old, changed)
+        changed = copy.deepcopy(new)
+        changed["analysis_completeness"]["coverage_percent"] = 80
+        with self.assertRaisesRegex(ValueError, "evidence drift"):
+            compare(old, changed)
+        changed = copy.deepcopy(new)
+        changed["analysis_completeness"]["ledger_exceptions"] = [{
+            "reason_code": "static_parse_limit",
+        }]
+        with self.assertRaisesRegex(ValueError, "exception ledger"):
+            compare(old, changed)
+
     def test_incomplete_file_count_drift_fails(self):
         new = report([])
         new["analysis_completeness"]["entirely_uninspected_files"] = 1
@@ -75,7 +110,15 @@ class SqlSourceEvidenceTests(unittest.TestCase):
     def test_original_signed_finding_absence_fails(self):
         original = {
             "id": PUBLISHED_RECORD_ID, "status": "partial", "freshness": "current",
-            "findings_truncated": False, "coverage": {"grouping_complete": True},
+            "findings_truncated": False, "coverage": {
+                "grouping_complete": True,
+                "status": "partial",
+                "ledger_exceptions": [
+                    {"reason_code": "reference_missing", "path": "SKILL.md"},
+                    {"reason_code": "static_parse_limit", "path": "references/workers.md"},
+                ],
+                "original_findings": [{"id": "AE1"}],
+            },
             "source": {"revision": SOURCE_COMMIT, "path": SOURCE_ROOT,
                        "content_digest": PUBLISHED_SOURCE_DIGEST},
             "findings": [{"rule": "RP1", "severity": "MEDIUM", "path": "references/testing.md",

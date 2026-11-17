@@ -62,20 +62,67 @@ def compare(old: dict, new: dict) -> dict:
         raise ValueError("exact one-row documented SQL lookup difference is not proved")
     if security(old) != security(new):
         raise ValueError("independent security findings are not preserved")
-    # The source also has static_parse_limit/analyzer_incomplete. Removing one
-    # false missing-reference row must not certify the remaining limitations.
-    if (
-        a.get("status") != "partial" or a.get("is_complete") is not False
-        or b.get("status") != "partial" or b.get("is_complete") is not False
-        or any(b.get(field) != a.get(field) for field in
-               ("partially_inspected_files", "entirely_uninspected_files"))
-    ):
+    # A real 2.13.4 no-LLM scan reports complete_with_caveats -> complete
+    # after removing this one false reference. This is a scanner observation,
+    # NOT publication clearance: the pinned signed v3 source independently has
+    # static_parse_limit, analyzer_incomplete and an unattributed raw finding.
+    unchanged_partial = (
+        a.get("status") == b.get("status") == "partial"
+        and a.get("is_complete") is b.get("is_complete") is False
+    )
+    exact_scanner_transition = (
+        a.get("status") == "complete_with_caveats"
+        and b.get("status") == "complete"
+        and a.get("is_complete") is b.get("is_complete") is True
+    )
+    if not (unchanged_partial or exact_scanner_transition):
         raise ValueError("unexpected Partial/Complete promotion or inspection change")
+    if any(
+        b.get(field) != a.get(field)
+        for field in ("partially_inspected_files", "entirely_uninspected_files")
+    ):
+        raise ValueError("unexpected inspected-file count drift")
+
+    if exact_scanner_transition:
+        old_exceptions = a.get("ledger_exceptions")
+        new_exceptions = b.get("ledger_exceptions")
+        if (
+            not isinstance(old_exceptions, list)
+            or len(old_exceptions) != 1
+            or old_exceptions[0].get("reason_code") != "reference_missing"
+            or old_exceptions[0].get("path") != "SKILL.md"
+            or old_exceptions[0].get("start_line") != 38
+            or old_exceptions[0].get("phase") != "reference_resolution"
+            or new_exceptions != []
+        ):
+            raise ValueError("unexpected scanner exception ledger drift")
+        # Normalize only the single evidenced reference, its exception, the
+        # consequent status, volatile scan time and generated finding IDs.
+        # All other analyzers, components, risk text, evidence and fingerprints
+        # must remain byte-for-byte equal in the parsed JSON values.
+        before = json.loads(json.dumps(old))
+        after = json.loads(json.dumps(new))
+        before["analysis_completeness"].update(
+            references=new_refs, ledger_exceptions=[], status="complete"
+        )
+        for item in (before, after):
+            skill = item.get("skill")
+            if not isinstance(skill, dict) or not isinstance(skill.get("scanned_at"), str):
+                raise ValueError("missing scanner execution timestamp")
+            skill.pop("scanned_at")
+            for issue in item.get("issues", []):
+                generated = issue.get("finding_id")
+                if not isinstance(generated, str) or not generated.startswith("finding-"):
+                    raise ValueError("missing generated finding identity")
+                issue.pop("finding_id")
+        if before != after:
+            raise ValueError("unexpected non-reference scanner evidence drift")
     return {
         "baseline_status": a["status"], "candidate_status": b["status"],
         "false_sql_reference_removed": 1,
         "other_references_unchanged": True,
         "independent_candidate_security_findings_unchanged": True,
+        "candidate_scanner_complete_is_not_certification": exact_scanner_transition,
         "original_published_v3_security_parity": "requires_signed_group_and_occurrence_checks",
         "prior_published_partial_remains_uncertified": True,
         "production_partial_reduction": 0, "production_error_reduction": 0,
@@ -111,6 +158,28 @@ def published_source_risks(original: dict, candidate: dict) -> dict:
         or original.get("source", {}).get("content_digest") != PUBLISHED_SOURCE_DIGEST
     ):
         raise ValueError("original published v3 source identity/status cannot be authenticated")
+    signed_coverage = original.get("coverage", {})
+    signed_exceptions = signed_coverage.get("ledger_exceptions")
+    if (
+        signed_coverage.get("status") != "partial"
+        or not isinstance(signed_exceptions, list)
+        or not any(
+            entry.get("reason_code") == "static_parse_limit"
+            and entry.get("path") == "references/workers.md"
+            for entry in signed_exceptions if isinstance(entry, dict)
+        )
+        or not any(
+            entry.get("reason_code") == "reference_missing"
+            and entry.get("path") == "SKILL.md"
+            for entry in signed_exceptions if isinstance(entry, dict)
+        )
+        or not any(
+            item.get("id") == "AE1"
+            for item in signed_coverage.get("original_findings", [])
+            if isinstance(item, dict)
+        )
+    ):
+        raise ValueError("original signed coverage limitations were concealed")
     groups = original.get("findings")
     issues = candidate.get("issues")
     if not isinstance(groups, list) or not isinstance(issues, list):
@@ -148,7 +217,9 @@ def published_source_risks(original: dict, candidate: dict) -> dict:
         "published_signed_grouped_occurrences_preserved": sum(required.values()),
         "published_raw_finding_count": raw,
         "published_unattributed_raw_count": raw - sum(required.values()),
+        "signed_static_parse_limit_and_AE1_retained": True,
         "published_original_remains_partial": True,
+        "candidate_not_certified": True,
     }
 
 
