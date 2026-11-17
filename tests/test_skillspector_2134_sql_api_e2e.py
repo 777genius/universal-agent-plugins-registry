@@ -122,7 +122,11 @@ class SqlSourceEvidenceTests(unittest.TestCase):
             "source": {"revision": SOURCE_COMMIT, "path": SOURCE_ROOT,
                        "content_digest": PUBLISHED_SOURCE_DIGEST},
             "findings": [{"rule": "RP1", "severity": "MEDIUM", "path": "references/testing.md",
-                          "line": 253, "raw_count": 2, "match_fingerprint": "a" * 64}],
+                          "line": 253, "raw_count": 2, "match_fingerprint": "a" * 64,
+                          "occurrences": [
+                              {"path": "references/testing.md", "line": 253},
+                              {"path": "references/testing.md", "line": 254},
+                          ]}],
             "raw_finding_count": 3,
         }
         report_issues = [{
@@ -132,7 +136,15 @@ class SqlSourceEvidenceTests(unittest.TestCase):
         }]
         with self.assertRaisesRegex(ValueError, "lost a source-bound"):
             published_source_risks(original, {"issues": report_issues})
-        good = published_source_risks(original, {"issues": report_issues * 2})
+        wrong_line = copy.deepcopy(report_issues[0])
+        wrong_line["location"]["start_line"] = 254
+        good = published_source_risks(original, {"issues": report_issues + [wrong_line]})
+        with self.assertRaisesRegex(ValueError, "lost a source-bound"):
+            published_source_risks(original, {"issues": report_issues * 2})
+        incomplete = copy.deepcopy(original)
+        incomplete["findings"][0].pop("occurrences")
+        with self.assertRaisesRegex(ValueError, "occurrence list"):
+            published_source_risks(incomplete, {"issues": report_issues + [wrong_line]})
         self.assertEqual(good["published_signed_grouped_occurrences_preserved"], 2)
         self.assertEqual(good["published_unattributed_raw_count"], 1)
 

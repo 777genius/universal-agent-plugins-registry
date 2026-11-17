@@ -191,8 +191,26 @@ def published_source_risks(original: dict, candidate: dict) -> dict:
         fingerprint = item.get("match_fingerprint")
         if not isinstance(fingerprint, str) or len(fingerprint) != 64:
             raise ValueError("invalid signed risk fingerprint")
-        required[(item.get("rule"), item.get("severity"),
-                  item.get("path"), item.get("line"), fingerprint)] += item["raw_count"]
+        occurrences = item.get("occurrences")
+        if not isinstance(occurrences, list) or len(occurrences) != item["raw_count"]:
+            raise ValueError("signed finding occurrence list does not match raw count")
+        if not any(
+            isinstance(occ, dict)
+            and occ.get("path") == item.get("path")
+            and occ.get("line") == item.get("line")
+            for occ in occurrences
+        ):
+            raise ValueError("signed grouped finding anchor is absent from occurrences")
+        for occ in occurrences:
+            if (
+                not isinstance(occ, dict)
+                or not isinstance(occ.get("path"), str)
+                or type(occ.get("line")) is not int
+                or occ["line"] < 1
+            ):
+                raise ValueError("malformed signed finding occurrence")
+            required[(item.get("rule"), item.get("severity"),
+                      occ["path"], occ["line"], fingerprint)] += 1
     actual = collections.Counter()
     for item in issues:
         if not isinstance(item, dict):
