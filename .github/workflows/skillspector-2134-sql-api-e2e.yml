@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: 777genius/SkillSpector
-          ref: 4f525770bc5db8f2e9276a36b3ad4612a7e82344
+          ref: d80ef6f73cd89df1625bb99cc008b196a1a1b716
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
