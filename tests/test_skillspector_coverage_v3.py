@@ -1041,7 +1041,7 @@ class QueueTests(unittest.TestCase):
                 with self.assertRaisesRegex(PublicationError, "unsupported report policy generation"):
                     coverage.read_bundle(root / "before")
 
-    def test_scanner_upgrade_requeues_complete_and_blocked_sources_without_old_retry_state(self):
+    def test_scanner_upgrade_requires_explicit_epoch_before_same_pin_replay(self):
         complete = item(id="fixture/complete", path="skills/complete")
         limited = item(id="fixture/limited", path="skills/limited")
         selection = {"schema_version": 1, "sources": [complete, limited]}
@@ -1050,14 +1050,18 @@ class QueueTests(unittest.TestCase):
             prior = bundle(root / "before", selection, [record(complete), record(limited, "partial", "reference_missing")])
             with mock.patch.dict(coverage.SCANNER, {"revision": "f" * 40}):
                 self.assertEqual(coverage.compatible_attempts(prior, selection), {})
-                self.assertEqual({source["id"] for source in coverage.plan_attempts(selection, prior, 0, 1, 128)},
-                    {complete["id"], limited["id"]})
+                old_records = coverage.previous_records(prior, selection)
+                self.assertTrue(all(coverage.requires_versioned_retry_epoch(
+                    source, None, old_records[source["id"]]) for source in selection["sources"]))
+                # Even a previously Complete source has signed attempt history.
+                # A scanner upgrade cannot reset it to attempt_count=1, nor
+                # silently treat a blocked reference as newly verified.
+                with self.assertRaisesRegex(PublicationError, "explicit versioned epoch"):
+                    coverage.plan_attempts(selection, prior, 0, 1, 128)
                 historical = bundle(root / "pending", selection, previous=prior)
                 self.assertEqual(historical["manifest"]["coverage"]["stale"], 2)
                 self.assertEqual(historical["attempts"], {})
-                refreshed = bundle(root / "refreshed", selection, [record(complete), record(limited)], historical)
-                self.assertEqual(refreshed["manifest"]["coverage"]["complete"], 2)
-                self.assertTrue(all(attempt["attempt_count"] == 1 for attempt in refreshed["attempts"].values()))
+                self.assertEqual(set(historical["records"]), {complete["id"], limited["id"]})
 
     def test_actual_scan_worker_measures_timings_and_keeps_credentials_out(self):
         with tempfile.TemporaryDirectory() as directory:
