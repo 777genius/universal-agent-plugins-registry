@@ -53,8 +53,9 @@ class RetryEpochGuardTests(unittest.TestCase):
         self.assertEqual(coverage.compatible_attempts(old, self.selection), {})
         self.assertTrue(coverage.requires_versioned_retry_epoch(self.subject, None, self.prior))
         before = copy.deepcopy(self.prior)
-        # The old record must remain visible; a new attempt must not be issued.
-        self.assertEqual(coverage.plan_attempts(self.selection, old, 0, 1, 1), [])
+        # Fail visibly instead of silently skipping an exhausted old source.
+        with self.assertRaisesRegex(PublicationError, "explicit versioned epoch"):
+            coverage.plan_attempts(self.selection, old, 0, 1, 1)
         with self.assertRaisesRegex(PublicationError, "explicit versioned epoch"):
             coverage.make_attempt(
                 self.subject, record(self.subject, status="partial"),
