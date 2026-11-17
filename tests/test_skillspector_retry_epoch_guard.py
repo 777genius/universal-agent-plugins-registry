@@ -17,10 +17,16 @@ class RetryEpochGuardTests(unittest.TestCase):
         self.subject = item()
         self.selection = {"schema_version": 1, "sources": [self.subject]}
         self.prior = record(self.subject, status="error")
-        self.prior["retry"].update(
-            attempt_count=4, disposition="exhausted", reason="transient_retry_limit",
-            next_attempt_at=None, next_profile=None, latest_status="error",
-        )
+        # Bare scanner failure fixtures have no persisted retry summary.
+        # Construct the same six-field shape as retry_summary() explicitly.
+        self.prior["retry"] = {
+            "attempt_count": 4,
+            "disposition": "exhausted",
+            "reason": "transient_retry_limit",
+            "next_attempt_at": None,
+            "next_profile": None,
+            "latest_status": "error",
+        }
         self.prior["attempt_history"] = [
             {"old_signed_event": index} for index in range(8)
         ]
