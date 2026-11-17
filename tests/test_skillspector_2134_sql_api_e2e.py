@@ -61,8 +61,8 @@ class SqlSourceEvidenceTests(unittest.TestCase):
             compare(report([TARGET]), new)
 
     def test_actual_2134_status_transition_is_only_readonly_observation(self):
-        old = report([TARGET, OTHER], [SECURITY])
-        new = report([OTHER], [SECURITY])
+        old = report([TARGET, OTHER], [copy.deepcopy(SECURITY)])
+        new = report([OTHER], [copy.deepcopy(SECURITY)])
         old["analysis_completeness"].update(
             status="complete_with_caveats", is_complete=True,
             ledger_exceptions=[{
