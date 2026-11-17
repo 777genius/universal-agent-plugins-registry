@@ -20,7 +20,7 @@ SOURCE_COMMIT = "4d7d8e075e1b0d899965496bacf2811be5d94091"
 SOURCE_ROOT = "plugins/cloudflare/skills/durable-objects"
 SOURCE_BLOB = "b595f1c2182f3b7d6f944d7ba0ac59667fba78aa"
 BASE = "1f563af2e4f10e28145792d6549bcff564cd8a00"
-CANDIDATE = "6a0618cb55b61ff9a4b86285feb4ab72be62c6d4"
+CANDIDATE = "4f525770bc5db8f2e9276a36b3ad4612a7e82344"
 TARGET_LINE = "Search: `blockConcurrencyWhile`, `idFromName`, `getByName`, `setAlarm`, `sql.exec`"
 
 
