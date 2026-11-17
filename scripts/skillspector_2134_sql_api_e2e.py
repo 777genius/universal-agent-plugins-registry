@@ -83,6 +83,15 @@ def compare(old: dict, new: dict) -> dict:
     ):
         raise ValueError("unexpected inspected-file count drift")
 
+    # A remaining Partial is not proof that other analyzer or scope evidence
+    # stayed unchanged. Reject every non-target change, including exceptions,
+    # components and analyzer statuses, instead of green-lighting lost coverage.
+    if unchanged_partial:
+        before_partial = json.loads(json.dumps(old))
+        before_partial["analysis_completeness"]["references"] = new_refs
+        if before_partial != new:
+            raise ValueError("unexpected non-reference scanner evidence drift")
+
     if exact_scanner_transition:
         old_exceptions = a.get("ledger_exceptions")
         new_exceptions = b.get("ledger_exceptions")
