@@ -391,7 +391,8 @@ def requires_versioned_retry_epoch(item, previous_attempt, previous_record):
         and retry["attempt_count"] > 0
         and previous_record.get("kind") == item["kind"]
         and previous_record.get("plugin_path") == item["plugin_path"]
-        and source.get("repository", "").casefold() == item["repository"].casefold()
+        # A verified repository rename may rebind this old record to a new
+        # repository name. Path + immutable revision still require an epoch.
         and source.get("path") == item["path"]
         and source.get("revision") == item["revision"]
     )
