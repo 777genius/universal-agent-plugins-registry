@@ -47,7 +47,44 @@ def scan_tree(root: Path) -> str:
     return digest(json.dumps(hashes, separators=(",", ":"), ensure_ascii=False).encode())
 
 
-def run(scanner: Path, skill: Path) -> tuple[int, dict]:
+def public_risk_score(report: dict) -> int | float:
+    """Read the independent score from the public --format json report.
+
+    Internal node risk_score is *not* a top-level key of the public JSON.
+    Never default a missing or malformed risk verdict to zero.
+    """
+    assessment = report.get("risk_assessment")
+    if not isinstance(assessment, dict):
+        raise ValueError("missing public risk assessment")
+    score = assessment.get("score")
+    if type(score) not in (int, float) or not (0 <= score <= 100):
+        raise ValueError("invalid public risk assessment score")
+    return score
+
+
+def expected_cli_exit(coverage: dict, risk_score: object, *, allow_risk_exit: bool = False) -> int:
+    """Coverage failure and high-risk detection independently trigger exit 1.
+
+    Pinned SkillSpector 2.13.4 cli.py also exits 1 for risk_score > 50.
+    The default remains strict for the earlier JSON VERSION qualification.
+    """
+    if not isinstance(coverage, dict):
+        raise ValueError("missing scanner coverage result")
+    status, is_complete = coverage.get("status"), coverage.get("is_complete")
+    if not (
+        (status == "partial" and is_complete is False)
+        or (status in {"complete", "complete_with_caveats"} and is_complete is True)
+    ):
+        raise ValueError("inconsistent no-LLM coverage status")
+    high_risk = False
+    if allow_risk_exit:
+        if type(risk_score) not in (int, float) or not (0 <= risk_score <= 100):
+            raise ValueError("invalid independently retained risk score")
+        high_risk = risk_score > 50
+    return int(not is_complete or high_risk)
+
+
+def run(scanner: Path, skill: Path, *, allow_risk_exit: bool = False) -> tuple[int, dict]:
     with tempfile.TemporaryDirectory(prefix="uap-json-version-e2e-") as home:
         env = {"HOME": home, "PATH": os.defpath, "LANG": "C.UTF-8",
                "PYTHONNOUSERSITE": "1", "LANGCHAIN_TRACING_V2": "false",
@@ -70,14 +107,12 @@ def run(scanner: Path, skill: Path) -> tuple[int, dict]:
         result.get("execution_successful") is not True):
         raise ValueError("scanner provenance or execution differs")
     coverage = result.get("analysis_completeness")
-    if not isinstance(coverage, dict):
-        raise ValueError("missing scanner coverage result")
-    status = coverage.get("status")
-    is_complete = coverage.get("is_complete")
-    if (status == "partial" and (is_complete is not False or completed.returncode != 1)
-        or status in {"complete", "complete_with_caveats"}
-        and (is_complete is not True or completed.returncode != 0)
-        or status not in {"partial", "complete", "complete_with_caveats"}):
+    expected = expected_cli_exit(
+        coverage,
+        public_risk_score(result) if allow_risk_exit else None,
+        allow_risk_exit=allow_risk_exit,
+    )
+    if completed.returncode != expected:
         raise ValueError("inconsistent no-LLM coverage status and CLI exit")
     return completed.returncode, result
 
