@@ -410,9 +410,10 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         if item["id"] in excluded_ids or partition_for(item["repository"], partition_count) != partition_index:
             continue
         attempt, record = attempts.get(item["id"]), records.get(item["id"])
-        if requires_versioned_retry_epoch(item, attempt, record):
-            # No implicit reset on a policy change; retain the original state.
-            continue
+        # A mismatch is an explicit migration gate, not silently skipped work.
+        # Refuse before acquiring source bytes or writing a partial new report.
+        require(not requires_versioned_retry_epoch(item, attempt, record),
+                "prior same-source retry history requires explicit versioned epoch")
         if attempt:
             if attempt["disposition"] != "scheduled" or parse_timestamp(attempt["next_attempt_at"], "next_attempt_at") > current:
                 continue
