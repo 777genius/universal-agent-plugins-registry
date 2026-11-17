@@ -372,6 +372,31 @@ def fair_lane(entries, previous, lane_budget):
     return result
 
 
+
+def requires_versioned_retry_epoch(item, previous_attempt, previous_record):
+    """Refuse same-pin retry lineage without an authenticated policy epoch.
+
+    A policy/scanner change makes the old attempt incompatible, but must not
+    turn its verified history into a new attempt_count=1 with lost entries.
+    An actual source revision change is a new identity and remains schedulable.
+    """
+    if previous_attempt is not None or not isinstance(previous_record, dict):
+        return False
+    source = previous_record.get("source")
+    retry = previous_record.get("retry")
+    if not isinstance(source, dict) or not isinstance(retry, dict):
+        return False
+    return (
+        type(retry.get("attempt_count")) is int
+        and retry["attempt_count"] > 0
+        and previous_record.get("kind") == item["kind"]
+        and previous_record.get("plugin_path") == item["plugin_path"]
+        and source.get("repository", "").casefold() == item["repository"].casefold()
+        and source.get("path") == item["path"]
+        and source.get("revision") == item["revision"]
+    )
+
+
 def plan_attempts(selection, previous, partition_index, partition_count, maximum_attempts, *, current=None, excluded_ids=(),
                   repository_aliases=None):
     require(type(partition_count) is int and 1 <= partition_count <= MAX_PARTITIONS, "invalid partition count")
@@ -384,6 +409,9 @@ def plan_attempts(selection, previous, partition_index, partition_count, maximum
         if item["id"] in excluded_ids or partition_for(item["repository"], partition_count) != partition_index:
             continue
         attempt, record = attempts.get(item["id"]), records.get(item["id"])
+        if requires_versioned_retry_epoch(item, attempt, record):
+            # No implicit reset on a policy change; retain the original state.
+            continue
         if attempt:
             if attempt["disposition"] != "scheduled" or parse_timestamp(attempt["next_attempt_at"], "next_attempt_at") > current:
                 continue
@@ -435,6 +463,8 @@ def attempt_fingerprint(item, record):
 
 
 def make_attempt(item, record, previous_attempt=None, previous_record=None, *, at=None):
+    require(not requires_versioned_retry_epoch(item, previous_attempt, previous_record),
+            "prior same-source retry history requires explicit versioned epoch")
     at = at or scanner.now()
     count = (previous_attempt["attempt_count"] if previous_attempt else 0) + 1
     require(count <= contract.RETRY_POLICY["maximum_attempts_per_identity"], "attempt limit exhausted")
