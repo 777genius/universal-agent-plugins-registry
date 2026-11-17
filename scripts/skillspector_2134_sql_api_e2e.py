@@ -189,6 +189,35 @@ def main() -> int:
     new_exit, new = run(args.candidate / ".venv/bin/skillspector", skill, allow_risk_exit=True)
     if scan_tree(skill) != snapshot:
         raise ValueError("candidate scanner modified immutable source")
+    # Preserve the full immutable-source scanner outputs even when a later
+    # fail-closed qualification rejects the candidate. A FAIL is never a PASS.
+    # Both JSON files are from --no-llm scans of this public, pinned tree.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    for label, result in (("baseline", old), ("candidate", new)):
+        (args.output.parent / f"{label}-raw.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    diagnostics = {
+        "kind": "skillspector-sql-api-qualification-diagnostics-v1",
+        "source_commit": SOURCE_COMMIT,
+        "source_skill_git_blob": SOURCE_BLOB,
+        "full_acquired_tree_digest": snapshot,
+        "baseline_scanner_commit": BASE,
+        "candidate_scanner_commit": CANDIDATE,
+        "baseline_exit": old_exit,
+        "candidate_exit": new_exit,
+        "baseline_coverage": old.get("analysis_completeness"),
+        "candidate_coverage": new.get("analysis_completeness"),
+        "qualification_result": "not_yet_verified",
+        "safe_for_automatic_publication": False,
+        "production_partial_reduction": 0,
+        "production_error_reduction": 0,
+    }
+    (args.output.parent / "diagnostic.json").write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     proof = {
         "kind": "skillspector-sql-api-source-readonly-v1",
         "source_repository": "777genius/universal-agent-plugins-registry",
