@@ -61,6 +61,11 @@
       "tar@<=7.5.20": "7.5.22",
       "readdir-glob>minimatch": "11.0.4"
     },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-fc5q-39xc-vjpf"
+      ]
+    },
     "packageExtensions": {
       "listhen@1.10.1": {
         "dependencies": {
