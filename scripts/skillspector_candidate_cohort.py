@@ -10,6 +10,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -51,12 +52,42 @@ def require(condition: bool, message: str) -> None:
         raise admission.CohortRejected(message)
 
 
-def finding_signature(record: dict) -> list[tuple]:
-    return sorted(
-        (row["rule"], row["severity"], row["path"], row.get("line", 0),
-         tuple(sorted(scanner.report_json(position) for position in row.get("occurrences", []))))
-        for row in record["findings"]
-    )
+def finding_signature(record: dict) -> list[str]:
+    """Compare every signed security group field, except generated finding IDs.
+
+    IDs are randomized by each real CLI scan; group fingerprints, locations,
+    evidence, risk text and individual occurrence coordinates must not drift.
+    """
+    signatures = []
+    for group in record["findings"]:
+        require(isinstance(group, dict), "malformed original security finding group")
+        stable = copy.deepcopy(group)
+        rows = stable.get("occurrences", [])
+        require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows),
+                "malformed signed security occurrences")
+        group_ids = stable.pop("finding_ids", None)
+        if group_ids is not None:
+            require(isinstance(group_ids, list) and len(group_ids) == len(rows)
+                    and all(isinstance(v, str)
+                            and re.fullmatch(r"finding-[0-9a-f]{32}", v) is not None
+                            for v in group_ids),
+                    "malformed generated finding identities")
+        found_ids, normalized_rows = [], []
+        for row in rows:
+            one = copy.deepcopy(row)
+            generated = one.pop("finding_id", None)
+            if generated is not None:
+                require(isinstance(generated, str)
+                        and re.fullmatch(r"finding-[0-9a-f]{32}", generated) is not None,
+                        "malformed occurrence finding identity")
+                found_ids.append(generated)
+            normalized_rows.append(one)
+        require((group_ids is None and not found_ids)
+                or (group_ids is not None and sorted(group_ids) == sorted(found_ids)),
+                "generated group and occurrence identities disagree")
+        stable["occurrences"] = sorted(normalized_rows, key=scanner.report_json)
+        signatures.append(scanner.report_json(stable))
+    return sorted(signatures)
 
 
 def verify_candidate(item: dict, old: dict, new: dict) -> dict:
@@ -104,15 +135,19 @@ def verify_candidate(item: dict, old: dict, new: dict) -> dict:
             and new["raw_finding_count"] >= new["finding_count"] >= new["finding_group_count"]
             and new["finding_group_count"] == len(new["findings"]),
             "candidate finding groups are omitted or malformed")
+    # Signing a Complete cohort must never erase or rewrite independent signed
+    # security evidence. Additional findings need an explicit reviewed policy,
+    # not a merely equal count or an informational findings_changed=True flag.
+    require(old["finding_count"] == new["finding_count"]
+            and len(old["findings"]) == len(new["findings"])
+            and finding_signature(old) == finding_signature(new),
+            "candidate changed signed security finding groups or occurrences")
     return {
         "id": item["id"],
         "source_digest": new["source"]["content_digest"],
         "old_findings": old["finding_count"],
         "candidate_findings": new["finding_count"],
-        "findings_changed": (
-            old["finding_count"] != new["finding_count"] or
-            finding_signature(old) != finding_signature(new)
-        ),
+        "findings_changed": False,
         "candidate_exit_code": new["execution"]["exit_code"],
     }
 
