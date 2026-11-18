@@ -53,10 +53,12 @@ def require(condition: bool, message: str) -> None:
 
 
 def finding_signature(record: dict) -> list[str]:
-    """Compare every signed security group field, except generated finding IDs.
+    """Compare signed security evidence and generated-ID *associations*.
 
-    IDs are randomized by each real CLI scan; group fingerprints, locations,
-    evidence, risk text and individual occurrence coordinates must not drift.
+    Finding IDs can change between scans and one upstream ID may cover several
+    locations. The partition of occurrences into independent ID identities must
+    nevertheless stay the same; losing IDs or combining two identities is not
+    just harmless UUID rotation.
     """
     signatures = []
     for group in record["findings"]:
@@ -65,31 +67,44 @@ def finding_signature(record: dict) -> list[str]:
         rows = stable.get("occurrences", [])
         require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows),
                 "malformed signed security occurrences")
+        has_ids = "finding_ids" in stable
         group_ids = stable.pop("finding_ids", None)
-        if group_ids is not None:
-            require(isinstance(group_ids, list) and len(group_ids) == len(rows)
+        associations = None
+        if has_ids:
+            require(isinstance(group_ids, list)
                     and all(isinstance(v, str)
                             and re.fullmatch(r"finding-[0-9a-f]{32}", v) is not None
                             for v in group_ids)
                     and len(set(group_ids)) == len(group_ids),
                     "malformed generated finding identities")
-        found_ids, normalized_rows = [], []
+            associations = {value: [] for value in group_ids}
+        normalized_rows = []
         for row in rows:
             one = copy.deepcopy(row)
+            has_row_id = "finding_id" in one
             generated = one.pop("finding_id", None)
-            if generated is not None:
-                require(isinstance(generated, str)
-                        and re.fullmatch(r"finding-[0-9a-f]{32}", generated) is not None,
-                        "malformed occurrence finding identity")
-                found_ids.append(generated)
+            if associations is None:
+                require(not has_row_id, "generated group and occurrence identities disagree")
+            else:
+                require(has_row_id and isinstance(generated, str)
+                        and generated in associations,
+                        "generated group and occurrence identities disagree")
+                associations[generated].append(scanner.report_json(one))
             normalized_rows.append(one)
-        require((group_ids is None and not found_ids)
-                or (group_ids is not None and sorted(group_ids) == sorted(found_ids)),
-                "generated group and occurrence identities disagree")
+        if associations is not None:
+            require(all(associations.values()),
+                    "generated group and occurrence identities disagree")
+            # IDs are volatile, but the one-to-many partition and every stable
+            # occurrence coordinate are part of the signed risk evidence.
+            partitions = sorted(tuple(sorted(members)) for members in associations.values())
+        else:
+            partitions = None
         stable["occurrences"] = sorted(normalized_rows, key=scanner.report_json)
-        signatures.append(scanner.report_json(stable))
+        signatures.append(scanner.report_json({
+            "security_group": stable,
+            "generated_id_partitions": partitions,
+        }))
     return sorted(signatures)
-
 
 def legacy_v1_finding_signature(record: dict) -> list[tuple]:
     """Preserve the existing signed-v1 volatile-ID comparison contract.
