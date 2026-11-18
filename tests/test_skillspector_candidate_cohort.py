@@ -205,6 +205,34 @@ class CandidateCohortTests(unittest.TestCase):
             ):
                 candidate.verify_candidate(item, historical, proposed)
 
+    def test_generated_id_reuse_between_independent_groups_is_rejected(self):
+        item, old, new = self.fixture()
+        first, second = "finding-" + "a" * 32, "finding-" + "b" * 32
+        def group(path, line, generated):
+            return {
+                "id": "sha256:" + ("a" if line == 8 else "b") * 64,
+                "rule": "E2", "severity": "HIGH", "path": path,
+                "finding_ids": [generated],
+                "occurrences": [
+                    {"path": path, "line": line, "finding_id": generated}
+                ],
+            }
+        originals = [group("SKILL.md", 8, first), group("scripts/run.py", 18, second)]
+        for record in (old, new):
+            record.update(findings=copy.deepcopy(originals), finding_count=2,
+                          raw_finding_count=2, finding_group_count=2)
+        self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
+
+        for side in ("old", "new"):
+            historical, proposed = copy.deepcopy((old, new))
+            corrupted = historical if side == "old" else proposed
+            corrupted["findings"][1]["finding_ids"] = [first]
+            corrupted["findings"][1]["occurrences"][0]["finding_id"] = first
+            with self.subTest(side=side), self.assertRaisesRegex(
+                candidate.admission.CohortRejected, "reused across security groups"
+            ):
+                candidate.verify_candidate(item, historical, proposed)
+
     def test_one_id_can_cover_multiple_occurrences_without_losing_identity(self):
         item, old, new = self.fixture()
         original_id = "finding-" + "a" * 32

@@ -61,6 +61,7 @@ def finding_signature(record: dict) -> list[str]:
     just harmless UUID rotation.
     """
     signatures = []
+    seen_generated_ids: set[str] = set()
     for group in record["findings"]:
         require(isinstance(group, dict), "malformed original security finding group")
         stable = copy.deepcopy(group)
@@ -77,6 +78,9 @@ def finding_signature(record: dict) -> list[str]:
                             for v in group_ids)
                     and len(set(group_ids)) == len(group_ids),
                     "malformed generated finding identities")
+            require(not seen_generated_ids.intersection(group_ids),
+                    "generated finding identities reused across security groups")
+            seen_generated_ids.update(group_ids)
             associations = {value: [] for value in group_ids}
         normalized_rows = []
         for row in rows:
