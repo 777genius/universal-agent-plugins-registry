@@ -158,10 +158,16 @@ def record_shadow_observation(epoch: dict, *, source_id: str, revision: str,
         }]
         return result
     completeness = scan.get("analysis_completeness") if isinstance(scan, dict) else None
+    metadata = scan.get("metadata") if isinstance(scan, dict) else None
     require(isinstance(completeness, dict)
             and (completeness.get("status"), completeness.get("is_complete")) in (
                 ("partial", False), ("complete", True), ("complete_with_caveats", True))
             and scan.get("execution_successful") is True
+            and completeness.get("execution_successful") is True
+            and isinstance(metadata, dict)
+            and metadata.get("skillspector_version") == "2.13.1"
+            and metadata.get("llm_requested") is False
+            and metadata.get("inference_usage") == []
             and isinstance(scan.get("issues"), list),
             "not a real successful scan observation")
     result = copy.deepcopy(epoch)
