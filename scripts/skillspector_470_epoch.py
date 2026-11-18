@@ -110,8 +110,12 @@ def start_epoch(*, source_id: str, published_record: dict, signed_manifest: dict
 
 
 def record_shadow_observation(epoch: dict, *, source_id: str, revision: str,
-                              tree_digest: str, scan: dict) -> dict:
-    """Record at most one observation, retaining old Error and all old history."""
+                              tree_digest: str, scan: dict | None = None,
+                              failed_acquisition: dict | None = None) -> dict:
+    """Consume one shadow attempt whether scan succeeds or acquisition fails.
+
+    This remains an unsigned observation, NEVER a production retry grant.
+    """
     require(epoch.get("kind") == "skillspector-470-versioned-shadow-epoch"
             and epoch.get("epoch_id") == EPOCH_ID
             and epoch.get("new_policy_digest") == NEW_POLICY_DIGEST
@@ -135,6 +139,23 @@ def record_shadow_observation(epoch: dict, *, source_id: str, revision: str,
     attempts = epoch.get("new_epoch_attempts")
     require(isinstance(attempts, list) and len(attempts) == 0,
             "epoch already consumed or replayed")
+    # An acquisition failure also consumes the sole new-epoch observation.
+    # Otherwise a failed fifth attempt could be silently retried indefinitely.
+    if failed_acquisition is not None:
+        require(scan is None and isinstance(failed_acquisition, dict)
+                and failed_acquisition.get("status") == "error"
+                and failed_acquisition.get("reason_code") == "acquisition_failed"
+                and failed_acquisition.get("source_id") == source_id
+                and failed_acquisition.get("source_revision") == revision,
+                "invalid failed-acquisition observation")
+        result = copy.deepcopy(epoch)
+        result["new_epoch_attempts"] = [{
+            "attempt_number_within_epoch": 1,
+            "actual_scanner_status": "error",
+            "failed_acquisition_digest": digest(failed_acquisition),
+            "certified_complete": False,
+        }]
+        return result
     completeness = scan.get("analysis_completeness") if isinstance(scan, dict) else None
     require(isinstance(completeness, dict)
             and (completeness.get("status"), completeness.get("is_complete")) in (
