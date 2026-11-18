@@ -96,7 +96,7 @@ def finding_signature(record: dict) -> list[str]:
                     "generated group and occurrence identities disagree")
             # IDs are volatile, but the one-to-many partition and every stable
             # occurrence coordinate are part of the signed risk evidence.
-            partitions = sorted(tuple(sorted(members)) for members in associations.values())
+            partitions = sorted(sorted(members) for members in associations.values())
         else:
             partitions = None
         stable["occurrences"] = sorted(normalized_rows, key=scanner.report_json)
