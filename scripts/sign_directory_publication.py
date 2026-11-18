@@ -108,12 +108,15 @@ def require_pi_release_materialization(candidate: dict[str, object]) -> None:
                     record["distribution_id"] == distribution["id"]
                     and record["release_sequence"] == release["sequence"]
                     and record["package_tree_digest"] == release["tree_digest"]
-                    and record["client"] == "pi"
-                    and record["level"] == "materialization"
-                    and record["outcome"] == "passed"
+                    and record.get("client") == "pi"
+                    and record.get("level") == "materialization"
+                    and record.get("outcome") == "passed"
                 ):
                     continue
-                platform = record["os"].lower()
+                platform = record.get("os")
+                if not isinstance(platform, str):
+                    continue
+                platform = platform.lower()
                 observed.add("macos" if platform == "darwin" else platform)
             missing = sorted(PI_MATERIALIZATION_OSES - observed)
             require(
