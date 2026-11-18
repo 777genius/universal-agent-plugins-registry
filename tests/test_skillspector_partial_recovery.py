@@ -709,6 +709,46 @@ class RecoveryTests(unittest.TestCase):
                                     coverage.recovery_analysis(candidate))
 
 
+    def test_repeated_generated_ids_across_distinct_groups_or_occurrences_rejected(self):
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        batch = self.authentic_batch(selection, 303, 0, warning="Evidence must survive.")
+        original = batch["workers"][0]["attempts"][0]["record"]
+        group = original["findings"][0]
+        finding_id = "finding-" + "a" * 32
+        group["finding_ids"] = [finding_id]
+        group["occurrences"][0]["finding_id"] = finding_id
+        group["raw_count"] = 1
+        original["finding_count"] = 1
+        original["finding_group_count"] = 1
+        original["coverage"]["grouping_complete"] = True
+        original["findings_truncated"] = False
+        self.assertIsNot(
+            coverage._recovery_groups_without_generated_ids(original), original["findings"]
+        )
+
+        two_occurrences = copy.deepcopy(original)
+        two_occurrences["findings"][0]["occurrences"].append(
+            copy.deepcopy(two_occurrences["findings"][0]["occurrences"][0])
+        )
+        two_occurrences["findings"][0]["raw_count"] = 2
+        two_occurrences["finding_count"] = 2
+        self.assertIs(
+            coverage._recovery_groups_without_generated_ids(two_occurrences),
+            two_occurrences["findings"],
+        )
+
+        two_groups = copy.deepcopy(original)
+        other = copy.deepcopy(two_groups["findings"][0])
+        other["id"] = "sha256:" + "f" * 64
+        two_groups["findings"].append(other)
+        two_groups["finding_group_count"] = 2
+        two_groups["finding_count"] = 2
+        self.assertIs(
+            coverage._recovery_groups_without_generated_ids(two_groups),
+            two_groups["findings"],
+        )
+
     def test_independent_equivalent_executions_preserve_published_evidence_and_counts(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}

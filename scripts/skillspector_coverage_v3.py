@@ -1009,7 +1009,7 @@ def _recovery_groups_without_generated_ids(record):
             type(record.get("finding_count")) is not int):
         return groups
     normalized = copy.deepcopy(groups)
-    count = 0
+    count, seen_ids = 0, set()
     for group in normalized:
         if not isinstance(group, dict):
             return groups
@@ -1020,10 +1020,16 @@ def _recovery_groups_without_generated_ids(record):
                 not isinstance(occurrences, list) or
                 type(raw_count) is not int or
                 raw_count != len(occurrences) or
+                len(ids) != len(occurrences) or
                 any(type(value) is not str or
                     _GENERATED_FINDING_ID.fullmatch(value) is None for value in ids) or
                 len(ids) != len(set(ids))):
             return groups
+        # Generated occurrence IDs must be one-to-one across the whole record,
+        # not just inside a finding group. Cross-group reuse is ambiguous.
+        if any(value in seen_ids for value in ids):
+            return groups
+        seen_ids.update(ids)
         count += raw_count
         replacements = {value: "verified-generated-id-" + str(index)
                         for index, value in enumerate(ids)}
