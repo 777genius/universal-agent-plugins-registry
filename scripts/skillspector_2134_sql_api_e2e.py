@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""Fail-closed, immutable no-LLM comparison of a documented SQL API lookup.
+
+This is a read-only maintenance qualification, not a report publisher.
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+from scripts.skillspector_2134_json_version_e2e import run, scan_tree
+from scripts.skillspector_2134_metadata_e2e import security
+
+SOURCE_COMMIT = "4d7d8e075e1b0d899965496bacf2811be5d94091"
+SOURCE_ROOT = "plugins/cloudflare/skills/durable-objects"
+SOURCE_BLOB = "b595f1c2182f3b7d6f944d7ba0ac59667fba78aa"
+BASE = "1f563af2e4f10e28145792d6549bcff564cd8a00"
+CANDIDATE = "f4b58c0a6acfb6a18aee95e66dd6d95063b40f7e"
+TARGET_LINE = "Search: `blockConcurrencyWhile`, `idFromName`, `getByName`, `setAlarm`, `sql.exec`"
+
+
+def git_head(path: Path) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, timeout=15
+    ).strip()
+
+
+def identity(ref: dict) -> str:
+    if not isinstance(ref, dict):
+        raise ValueError("non-object reference evidence")
+    return json.dumps(ref, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def target(ref: dict) -> bool:
+    return (
+        ref.get("source_path") == "SKILL.md"
+        and ref.get("line") == 38
+        and ref.get("reference_kind") == "quoted_or_code"
+        and ref.get("status") == "missing"
+        and ref.get("target_path") is None
+        and ref.get("evidence") == TARGET_LINE
+    )
+
+
+def compare(old: dict, new: dict) -> dict:
+    a = old.get("analysis_completeness")
+    b = new.get("analysis_completeness")
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        raise ValueError("missing analysis coverage evidence")
+    old_refs, new_refs = a.get("references"), b.get("references")
+    if not isinstance(old_refs, list) or not isinstance(new_refs, list):
+        raise ValueError("missing reference ledger")
+    known = [row for row in old_refs if target(row)]
+    deleted = collections.Counter(map(identity, old_refs)) - collections.Counter(map(identity, new_refs))
+    added = collections.Counter(map(identity, new_refs)) - collections.Counter(map(identity, old_refs))
+    if len(known) != 1 or deleted != collections.Counter([identity(known[0])]) or added:
+        raise ValueError("exact one-row documented SQL lookup difference is not proved")
+    if security(old) != security(new):
+        raise ValueError("independent security findings are not preserved")
+    # A real 2.13.4 no-LLM scan reports complete_with_caveats -> complete
+    # after removing this one false reference. This is a scanner observation,
+    # NOT publication clearance: the pinned signed v3 source independently has
+    # static_parse_limit, analyzer_incomplete and an unattributed raw finding.
+    unchanged_partial = (
+        a.get("status") == b.get("status") == "partial"
+        and a.get("is_complete") is b.get("is_complete") is False
+    )
+    exact_scanner_transition = (
+        a.get("status") == "complete_with_caveats"
+        and b.get("status") == "complete"
+        and a.get("is_complete") is b.get("is_complete") is True
+    )
+    if not (unchanged_partial or exact_scanner_transition):
+        raise ValueError("unexpected Partial/Complete promotion or inspection change")
+    if any(
+        b.get(field) != a.get(field)
+        for field in ("partially_inspected_files", "entirely_uninspected_files")
+    ):
+        raise ValueError("unexpected inspected-file count drift")
+
+    # A remaining Partial is not proof that other analyzer or scope evidence
+    # stayed unchanged. Reject every non-target change, including exceptions,
+    # components and analyzer statuses, instead of green-lighting lost coverage.
+    if unchanged_partial:
+        before_partial = json.loads(json.dumps(old))
+        before_partial["analysis_completeness"]["references"] = new_refs
+        if before_partial != new:
+            raise ValueError("unexpected non-reference scanner evidence drift")
+
+    if exact_scanner_transition:
+        old_exceptions = a.get("ledger_exceptions")
+        new_exceptions = b.get("ledger_exceptions")
+        if (
+            not isinstance(old_exceptions, list)
+            or len(old_exceptions) != 1
+            or old_exceptions[0].get("reason_code") != "reference_missing"
+            or old_exceptions[0].get("path") != "SKILL.md"
+            or old_exceptions[0].get("start_line") != 38
+            or old_exceptions[0].get("phase") != "reference_resolution"
+            or new_exceptions != []
+        ):
+            raise ValueError("unexpected scanner exception ledger drift")
+        # Normalize only the single evidenced reference, its exception, the
+        # consequent status, volatile scan time and generated finding IDs.
+        # All other analyzers, components, risk text, evidence and fingerprints
+        # must remain byte-for-byte equal in the parsed JSON values.
+        before = json.loads(json.dumps(old))
+        after = json.loads(json.dumps(new))
+        before["analysis_completeness"].update(
+            references=new_refs, ledger_exceptions=[], status="complete"
+        )
+        for item in (before, after):
+            skill = item.get("skill")
+            if not isinstance(skill, dict) or not isinstance(skill.get("scanned_at"), str):
+                raise ValueError("missing scanner execution timestamp")
+            skill.pop("scanned_at")
+            for issue in item.get("issues", []):
+                generated = issue.get("finding_id")
+                if not isinstance(generated, str) or not generated.startswith("finding-"):
+                    raise ValueError("missing generated finding identity")
+                issue.pop("finding_id")
+        if before != after:
+            raise ValueError("unexpected non-reference scanner evidence drift")
+    return {
+        "baseline_status": a["status"], "candidate_status": b["status"],
+        "false_sql_reference_removed": 1,
+        "other_references_unchanged": True,
+        "independent_candidate_security_findings_unchanged": True,
+        "candidate_scanner_complete_is_not_certification": exact_scanner_transition,
+        "original_published_v3_security_parity": "requires_signed_group_and_occurrence_checks",
+        "prior_published_partial_remains_uncertified": True,
+        "production_partial_reduction": 0, "production_error_reduction": 0,
+        "safe_for_automatic_publication": False,
+    }
+
+
+PUBLISHED_REF = "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf"
+PUBLISHED_SHARD = (
+    "reports/skillspector/v3/shards/"
+    "32d0ccd64b2cea5366d73bc9856ffd628c92af340e5e90d0d0f55c9b1bd7dd02.json"
+)
+PUBLISHED_DIGEST = "32d0ccd64b2cea5366d73bc9856ffd628c92af340e5e90d0d0f55c9b1bd7dd02"
+PUBLISHED_RECORD_ID = "plugin:777genius/cloudflare-bridge/durable-objects"
+PUBLISHED_SOURCE_DIGEST = "sha256:62934e1b8e470a7e2588aaafc7d3bc07251b313f4ef6c5948f47f962119fcc80"
+
+
+def published_source_risks(original: dict, candidate: dict) -> dict:
+    """Reject loss of any independently attested, untruncated signed finding.
+
+    Raw scanner issues and v3 grouped findings have different wrappers; compare
+    exact source line, risk rule, severity, and stable match fingerprint, with
+    multiplicity. Never treat identical generated finding IDs as security proof.
+    """
+    if (
+        original.get("id") != PUBLISHED_RECORD_ID
+        or original.get("status") != "partial"
+        or original.get("freshness") != "current"
+        or original.get("findings_truncated") is not False
+        or original.get("coverage", {}).get("grouping_complete") is not True
+        or original.get("source", {}).get("revision") != SOURCE_COMMIT
+        or original.get("source", {}).get("path") != SOURCE_ROOT
+        or original.get("source", {}).get("content_digest") != PUBLISHED_SOURCE_DIGEST
+    ):
+        raise ValueError("original published v3 source identity/status cannot be authenticated")
+    signed_coverage = original.get("coverage", {})
+    signed_exceptions = signed_coverage.get("ledger_exceptions")
+    if (
+        signed_coverage.get("status") != "partial"
+        or not isinstance(signed_exceptions, list)
+        or not any(
+            entry.get("reason_code") == "static_parse_limit"
+            and entry.get("path") == "references/workers.md"
+            for entry in signed_exceptions if isinstance(entry, dict)
+        )
+        or not any(
+            entry.get("reason_code") == "reference_missing"
+            and entry.get("path") == "SKILL.md"
+            for entry in signed_exceptions if isinstance(entry, dict)
+        )
+        or not any(
+            item.get("id") == "AE1"
+            for item in signed_coverage.get("original_findings", [])
+            if isinstance(item, dict)
+        )
+    ):
+        raise ValueError("original signed coverage limitations were concealed")
+    groups = original.get("findings")
+    issues = candidate.get("issues")
+    if not isinstance(groups, list) or not isinstance(issues, list):
+        raise ValueError("missing signed finding groups or candidate raw issues")
+    required = collections.Counter()
+    for item in groups:
+        if not isinstance(item, dict) or type(item.get("raw_count")) is not int or item["raw_count"] < 1:
+            raise ValueError("malformed signed risk finding")
+        fingerprint = item.get("match_fingerprint")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("invalid signed risk fingerprint")
+        occurrences = item.get("occurrences")
+        if not isinstance(occurrences, list) or len(occurrences) != item["raw_count"]:
+            raise ValueError("signed finding occurrence list does not match raw count")
+        if not any(
+            isinstance(occ, dict)
+            and occ.get("path") == item.get("path")
+            and occ.get("line") == item.get("line")
+            for occ in occurrences
+        ):
+            raise ValueError("signed grouped finding anchor is absent from occurrences")
+        for occ in occurrences:
+            if (
+                not isinstance(occ, dict)
+                or not isinstance(occ.get("path"), str)
+                or type(occ.get("line")) is not int
+                or occ["line"] < 1
+            ):
+                raise ValueError("malformed signed finding occurrence")
+            required[(item.get("rule"), item.get("severity"),
+                      occ["path"], occ["line"], fingerprint)] += 1
+    actual = collections.Counter()
+    for item in issues:
+        if not isinstance(item, dict):
+            raise ValueError("malformed candidate issue")
+        if item.get("id") in {"AE1", "AE7"} and item.get("tags") == ["coverage"]:
+            continue
+        location = item.get("location")
+        if not isinstance(location, dict):
+            raise ValueError("candidate issue has no source location")
+        fingerprint = item.get("match_fingerprint")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("candidate lost issue fingerprint")
+        actual[(item.get("id"), item.get("severity"),
+                location.get("file"), location.get("start_line"), fingerprint)] += 1
+    if required - actual:
+        raise ValueError("candidate lost a source-bound original signed security finding")
+    # v3 raw_finding_count includes coverage signals; finding_count counts
+    # only content occurrences (REPORT_V3.md and skillspector_reports.py).
+    # On this exact signed source the seventh raw finding is the separately
+    # preserved AE1 static-parse coverage signal, NOT a hidden security group.
+    coverage_findings = signed_coverage.get("original_findings")
+    if not isinstance(coverage_findings, list) or len(coverage_findings) != 1:
+        raise ValueError("signed original coverage finding is missing or ambiguous")
+    coverage_finding = coverage_findings[0]
+    coverage_occurrences = coverage_finding.get("occurrences") if isinstance(coverage_finding, dict) else None
+    if (coverage_finding.get("id") != "AE1"
+            or "coverage" not in coverage_finding.get("tags", [])
+            or not isinstance(coverage_occurrences, list)
+            or len(coverage_occurrences) != 1
+            or coverage_occurrences[0].get("file") != "SKILL.md"
+            or coverage_occurrences[0].get("start_line") != 36):
+        raise ValueError("signed AE1 coverage occurrence no longer matches pinned source")
+    raw = original.get("raw_finding_count")
+    grouped_count = sum(required.values())
+    if (type(raw) is not int
+            or original.get("finding_count") != grouped_count
+            or raw != grouped_count + len(coverage_occurrences)):
+        raise ValueError("signed raw finding/coverage occurrence accounting is inconsistent")
+    return {
+        "published_signed_risk_groups_preserved": len(groups),
+        "published_signed_grouped_occurrences_preserved": grouped_count,
+        "published_raw_finding_count": raw,
+        "published_original_AE1_coverage_occurrences": len(coverage_occurrences),
+        "published_unattributed_raw_count": 0,
+        "signed_static_parse_limit_and_AE1_retained": True,
+        "published_original_remains_partial": True,
+        "candidate_not_certified": True,
+    }
+
+
+def load_published(path: Path) -> dict:
+    if git_head(path) != PUBLISHED_REF:
+        raise ValueError("published signed report checkout is not pinned")
+    raw = (path / PUBLISHED_SHARD).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != PUBLISHED_DIGEST:
+        raise ValueError("published signed source shard SHA-256 changed")
+    shard = json.loads(raw)
+    if shard.get("repository") != "777genius/universal-agent-plugins-registry":
+        raise ValueError("published report shard has wrong repository")
+    matches = [r for r in shard.get("records", []) if r.get("id") == PUBLISHED_RECORD_ID]
+    if len(matches) != 1:
+        raise ValueError("published source identity missing or ambiguous")
+    return matches[0]
+
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    for name in ("baseline", "candidate", "source", "published", "output"):
+        ap.add_argument("--" + name, required=True, type=Path)
+    args = ap.parse_args()
+    for path, expected in ((args.baseline, BASE), (args.candidate, CANDIDATE),
+                           (args.source, SOURCE_COMMIT)):
+        if git_head(path) != expected:
+            raise ValueError("immutable source or scanner Git HEAD drift")
+    skill = args.source / SOURCE_ROOT
+    raw = (skill / "SKILL.md").read_bytes()
+    digest = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+    if digest != SOURCE_BLOB or TARGET_LINE not in raw.decode("utf-8").splitlines():
+        raise ValueError("exact pinned source SKILL.md content differs")
+    snapshot = scan_tree(skill)
+    old_exit, old = run(args.baseline / ".venv/bin/skillspector", skill, allow_risk_exit=True)
+    if scan_tree(skill) != snapshot:
+        raise ValueError("baseline scanner modified immutable source")
+    new_exit, new = run(args.candidate / ".venv/bin/skillspector", skill, allow_risk_exit=True)
+    if scan_tree(skill) != snapshot:
+        raise ValueError("candidate scanner modified immutable source")
+    # Preserve the full immutable-source scanner outputs even when a later
+    # fail-closed qualification rejects the candidate. A FAIL is never a PASS.
+    # Both JSON files are from --no-llm scans of this public, pinned tree.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    for label, result in (("baseline", old), ("candidate", new)):
+        (args.output.parent / f"{label}-raw.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    diagnostics = {
+        "kind": "skillspector-sql-api-qualification-diagnostics-v1",
+        "source_commit": SOURCE_COMMIT,
+        "source_skill_git_blob": SOURCE_BLOB,
+        "full_acquired_tree_digest": snapshot,
+        "baseline_scanner_commit": BASE,
+        "candidate_scanner_commit": CANDIDATE,
+        "baseline_exit": old_exit,
+        "candidate_exit": new_exit,
+        "baseline_coverage": old.get("analysis_completeness"),
+        "candidate_coverage": new.get("analysis_completeness"),
+        "qualification_result": "not_yet_verified",
+        "safe_for_automatic_publication": False,
+        "production_partial_reduction": 0,
+        "production_error_reduction": 0,
+    }
+    (args.output.parent / "diagnostic.json").write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    proof = {
+        "kind": "skillspector-sql-api-source-readonly-v1",
+        "source_repository": "777genius/universal-agent-plugins-registry",
+        "source_commit": SOURCE_COMMIT,
+        "source_root": SOURCE_ROOT,
+        "source_skill_git_blob": SOURCE_BLOB,
+        "full_acquired_tree_digest": snapshot,
+        "baseline_scanner_commit": BASE, "candidate_scanner_commit": CANDIDATE,
+        "baseline_exit": old_exit, "candidate_exit": new_exit,
+        **compare(old, new),
+        **published_source_risks(load_published(args.published), new),
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(proof, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as error:
+        print(f"Fail-closed SQL API source qualification: {error}", file=sys.stderr)
+        sys.exit(1)

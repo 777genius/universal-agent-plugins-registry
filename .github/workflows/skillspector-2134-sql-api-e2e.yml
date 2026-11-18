@@ -1,0 +1,84 @@
+name: SkillSpector 2.13.4 SQL API immutable no-LLM qualification
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/skillspector-2134-sql-api-e2e.yml'
+      - 'scripts/skillspector_2134_sql_api_e2e.py'
+      - 'tests/test_skillspector_2134_sql_api_e2e.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: 1f563af2e4f10e28145792d6549bcff564cd8a00
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/SkillSpector
+          ref: f4b58c0a6acfb6a18aee95e66dd6d95063b40f7e
+          persist-credentials: false
+          path: candidate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 4d7d8e075e1b0d899965496bacf2811be5d94091
+          sparse-checkout: plugins/cloudflare/skills/durable-objects
+          persist-credentials: false
+          path: original-skill
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          sparse-checkout: reports/skillspector/v3/shards/32d0ccd64b2cea5366d73bc9856ffd628c92af340e5e90d0d0f55c9b1bd7dd02.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: published-v3
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Contract negatives for no-loss and no-false-Complete
+        working-directory: source
+        run: python3 -m unittest -v tests.test_skillspector_2134_sql_api_e2e
+      - name: Install exact locked scanners
+        run: |
+          python3 -m pip install --disable-pip-version-check uv==0.13.4
+          uv sync --directory baseline --frozen --no-dev --python 3.12
+          uv sync --directory candidate --frozen --extra dev --python 3.12
+      - name: Candidate Ruff and source-bound no-LLM unit tests
+        working-directory: candidate
+        run: |
+          .venv/bin/ruff check src/skillspector/references.py tests/test_documented_api_lookup_references.py
+          # Diagnostic only: exact pinned Ruff formatter diff, without changing source.
+          # Preserve the following mandatory format --check failure gate.
+          .venv/bin/ruff format --diff src/skillspector/references.py tests/test_documented_api_lookup_references.py || test "$?" -eq 1
+          .venv/bin/ruff format --check src/skillspector/references.py tests/test_documented_api_lookup_references.py
+          .venv/bin/python -m pytest -q tests/test_documented_api_lookup_references.py
+      - name: Compare immutable real CLI outputs and security evidence
+        working-directory: source
+        run: |
+          python3 -m scripts.skillspector_2134_sql_api_e2e \
+            --baseline "$GITHUB_WORKSPACE/baseline" \
+            --candidate "$GITHUB_WORKSPACE/candidate" \
+            --source "$GITHUB_WORKSPACE/original-skill" \
+            --published "$GITHUB_WORKSPACE/published-v3" \
+            --output "$RUNNER_TEMP/skillspector-sql-api/proof.json"
+      - name: Preserve exact source-bound proof without publication
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: skillspector-2134-sql-api-source-proof
+          path: ${{ runner.temp }}/skillspector-sql-api/
+          if-no-files-found: warn
+          retention-days: 7
