@@ -76,6 +76,54 @@ def require_new_key_for_new_clients(candidate: dict[str, object], active_public_
     )
 
 
+PI_MATERIALIZATION_OSES = frozenset({"linux", "macos", "windows"})
+
+
+def require_pi_release_materialization(candidate: dict[str, object]) -> None:
+    """Require independently trusted Pi source proofs before privileged signing.
+
+    This is a necessary boundary, NOT proof of 72/72 managed saved lifecycles.
+    The preceding publication-trust validator authenticates every referenced
+    evidence artifact; this check binds positive observations to each exact
+    managed Pi release on all three supported operating systems.
+    """
+    evidence_by_id = {item["id"]: item for item in candidate["evidence"]}
+    for distribution in candidate["distributions"]:
+        if distribution["status"] != "active":
+            continue
+        releases = {release["sequence"]: release for release in distribution["releases"]}
+        for policy in distribution["release_policies"]:
+            if policy["status"] not in {"active", "superseded"}:
+                continue
+            if not any(
+                target["client"] == "pi" and target["delivery"] == "managed"
+                for target in policy["targets"]
+            ):
+                continue
+            release = releases[policy["release_sequence"]]
+            observed: set[str] = set()
+            for evidence_id in policy["current_evidence"]:
+                record = evidence_by_id.get(evidence_id)
+                if record is None or not (
+                    record["distribution_id"] == distribution["id"]
+                    and record["release_sequence"] == release["sequence"]
+                    and record["package_tree_digest"] == release["tree_digest"]
+                    and record["client"] == "pi"
+                    and record["level"] == "materialization"
+                    and record["outcome"] == "passed"
+                ):
+                    continue
+                platform = record["os"].lower()
+                observed.add("macos" if platform == "darwin" else platform)
+            missing = sorted(PI_MATERIALIZATION_OSES - observed)
+            require(
+                not missing,
+                f"{distribution['id']}@{release['sequence']}: managed Pi target lacks "
+                f"reviewed positive materialization evidence on {','.join(missing)}; "
+                "signed saved User/Project E2E remains a separate release gate",
+            )
+
+
 def snapshot_evidence_for_sequence(
     evidence: list[dict[str, object]], distributions: list[dict[str, object]], sequence: int,
     *, feed: DirectoryFeedContract = LEGACY_FEED,
@@ -236,6 +284,7 @@ def main(*, feed: DirectoryFeedContract = LEGACY_FEED) -> int:
             candidate["products"], candidate["distributions"],
             candidate["evidence"], config,
         )
+        require_pi_release_materialization(candidate)
         now = parse_timestamp(args.now, "now")
         trusted = load_feed_trusted_keys(args.trusted_keys, feed)
         require(args.key_id in trusted, f"active key ID {args.key_id!r} is not trusted")
