@@ -763,6 +763,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertIs(coverage._recovery_groups_without_generated_ids(two_groups),
                       two_groups["findings"])
 
+        malformed = copy.deepcopy(original)
+        malformed["findings"][0]["occurrences"][0]["finding_id"] = []
+        self.assertIs(coverage._recovery_groups_without_generated_ids(malformed),
+                      malformed["findings"])
+
     def test_independent_equivalent_executions_preserve_published_evidence_and_counts(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}

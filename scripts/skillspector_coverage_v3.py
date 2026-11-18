@@ -1033,7 +1033,7 @@ def _recovery_groups_without_generated_ids(record):
             if not isinstance(occurrence, dict):
                 return groups
             finding_id = occurrence.get("finding_id")
-            if finding_id not in linked:
+            if type(finding_id) is not str or finding_id not in linked:
                 return groups
             stable = {key: value for key, value in occurrence.items()
                       if key != "finding_id"}
