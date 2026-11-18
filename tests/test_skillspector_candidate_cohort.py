@@ -25,8 +25,9 @@ class CandidateCohortTests(unittest.TestCase):
         # admission fields; stage-two tests require full v3 selection identity.
         old["kind"] = item["kind"]
         old["plugin_path"] = item["plugin_path"]
-        old["finding_count"] = 0
-        old["findings"] = []
+        old.update(finding_count=0, raw_finding_count=0, finding_group_count=0,
+                   findings=[], findings_truncated=False)
+        old["coverage"]["grouping_complete"] = True
         new = {
             "id": old["id"], "kind": item["kind"], "plugin_path": item["plugin_path"],
             "source": copy.deepcopy(old["source"]),
@@ -63,7 +64,8 @@ class CandidateCohortTests(unittest.TestCase):
     def test_risk_exit_one_does_not_hide_findings(self):
         item, old, new = self.fixture()
         finding = {"rule": "E4", "severity": "HIGH", "path": "SKILL.md", "line": 7}
-        old.update(findings=[finding], finding_count=1)
+        old.update(findings=[finding], finding_count=1, raw_finding_count=1,
+                   finding_group_count=1)
         new.update(findings=[finding], finding_count=1, raw_finding_count=1,
                    finding_group_count=1)
         new["execution"]["exit_code"] = 1
@@ -102,33 +104,235 @@ class CandidateCohortTests(unittest.TestCase):
         with self.assertRaises(candidate.admission.CohortRejected):
             candidate.verify_candidate(item, old, new)
 
-    def test_changed_findings_are_reported_not_suppressed(self):
+    def test_added_security_finding_requires_independent_review(self):
         item, old, new = self.fixture()
         new.update(findings=[{"rule": "MP3", "severity": "HIGH", "path": "SKILL.md"}],
                    finding_count=1, raw_finding_count=1, finding_group_count=1)
-        proof = candidate.verify_candidate(item, old, new)
-        self.assertTrue(proof["findings_changed"])
-        self.assertEqual(new["findings"][0]["rule"], "MP3")
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, new)
 
     def test_changed_occurrence_positions_are_reported(self):
         item, old, new = self.fixture()
         group = {"rule": "E4", "severity": "HIGH", "path": "SKILL.md", "line": 7,
                  "occurrences": [{"path": "SKILL.md", "line": 7},
                                  {"path": "SKILL.md", "line": 19}]}
-        old.update(findings=[group], finding_count=2)
+        old.update(findings=[group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
         new.update(findings=[copy.deepcopy(group)], finding_count=2, raw_finding_count=2,
                    finding_group_count=1)
         new["findings"][0]["occurrences"].reverse()
         self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
         new["findings"][0]["occurrences"][0]["line"] = 20
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, new)
+
+    def test_only_generated_ids_can_differ_between_signed_security_groups(self):
+        item, old, new = self.fixture()
+        old_group = {
+            "id": "sha256:" + "a" * 64,
+            "rule": "E2", "severity": "HIGH", "path": "SKILL.md", "line": 8,
+            "evidence": {"match": "real credential exposure"},
+            "finding_ids": ["finding-" + "a" * 32],
+            "occurrences": [
+                {"path": "SKILL.md", "line": 8, "start_column": 4,
+                 "finding_id": "finding-" + "a" * 32},
+            ],
+        }
+        next_group = copy.deepcopy(old_group)
+        next_group["finding_ids"] = ["finding-" + "b" * 32]
+        next_group["occurrences"][0]["finding_id"] = "finding-" + "b" * 32
+        old.update(findings=[old_group], finding_count=1,
+                   raw_finding_count=1, finding_group_count=1)
+        new.update(findings=[next_group], finding_count=1,
+                   finding_group_count=1, raw_finding_count=1)
+        parity = candidate.verify_candidate(item, old, new)
+        # The v1 comparison bit remains ID-sensitive even after semantic proof.
+        self.assertTrue(parity["findings_changed"])
+        self.assertEqual(parity["old_findings"], 1)
+
+        for changed in (
+            {"severity": "LOW"},
+            {"id": "sha256:" + "f" * 64},
+            {"evidence": {"match": "suppressed"}},
+        ):
+            with self.subTest(changed=changed):
+                mutated = copy.deepcopy(new)
+                mutated["findings"][0].update(changed)
+                with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+                    candidate.verify_candidate(item, old, mutated)
+
+        mutated = copy.deepcopy(new)
+        mutated["findings"][0]["occurrences"][0]["line"] = 9
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, mutated)
+
+        mutated = copy.deepcopy(new)
+        mutated["findings"][0]["finding_ids"] = ["finding-" + "c" * 32]
+        with self.assertRaisesRegex(candidate.admission.CohortRejected,
+                                    "generated group and occurrence"):
+            candidate.verify_candidate(item, old, mutated)
+
+    def test_reused_generated_ids_cannot_launder_distinct_occurrences(self):
+        item, old, new = self.fixture()
+        original_ids = ["finding-" + "a" * 32, "finding-" + "b" * 32]
+        candidate_ids = ["finding-" + "c" * 32, "finding-" + "d" * 32]
+        group = {
+            "rule": "E2", "severity": "HIGH", "path": "SKILL.md",
+            "finding_ids": original_ids,
+            "occurrences": [
+                {"path": "SKILL.md", "line": 8, "finding_id": original_ids[0]},
+                {"path": "SKILL.md", "line": 18, "finding_id": original_ids[1]},
+            ],
+        }
+        replacement_group = copy.deepcopy(group)
+        replacement_group["finding_ids"] = candidate_ids
+        for row, value in zip(replacement_group["occurrences"], candidate_ids):
+            row["finding_id"] = value
+        old.update(findings=[group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        new.update(findings=[replacement_group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        # Preserve signed-v1 generated-ID-drift flag; both risk sets still match.
         self.assertTrue(candidate.verify_candidate(item, old, new)["findings_changed"])
+        for side in ("original", "candidate"):
+            historical, proposed = copy.deepcopy((old, new))
+            corrupted = historical if side == "original" else proposed
+            one_group = corrupted["findings"][0]
+            one_group["finding_ids"][1] = one_group["finding_ids"][0]
+            one_group["occurrences"][1]["finding_id"] = one_group["finding_ids"][0]
+            with self.subTest(side=side), self.assertRaisesRegex(
+                candidate.admission.CohortRejected, "malformed generated finding identities"
+            ):
+                candidate.verify_candidate(item, historical, proposed)
+
+    def test_generated_id_reuse_between_independent_groups_is_rejected(self):
+        item, old, new = self.fixture()
+        first, second = "finding-" + "a" * 32, "finding-" + "b" * 32
+        def group(path, line, generated):
+            return {
+                "id": "sha256:" + ("a" if line == 8 else "b") * 64,
+                "rule": "E2", "severity": "HIGH", "path": path,
+                "finding_ids": [generated],
+                "occurrences": [
+                    {"path": path, "line": line, "finding_id": generated}
+                ],
+            }
+        originals = [group("SKILL.md", 8, first), group("scripts/run.py", 18, second)]
+        for record in (old, new):
+            record.update(findings=copy.deepcopy(originals), finding_count=2,
+                          raw_finding_count=2, finding_group_count=2)
+        self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
+
+        for side in ("old", "new"):
+            historical, proposed = copy.deepcopy((old, new))
+            corrupted = historical if side == "old" else proposed
+            corrupted["findings"][1]["finding_ids"] = [first]
+            corrupted["findings"][1]["occurrences"][0]["finding_id"] = first
+            with self.subTest(side=side), self.assertRaisesRegex(
+                candidate.admission.CohortRejected, "reused across security groups"
+            ):
+                candidate.verify_candidate(item, historical, proposed)
+
+    def test_one_id_can_cover_multiple_occurrences_without_losing_identity(self):
+        item, old, new = self.fixture()
+        original_id = "finding-" + "a" * 32
+        rotated_id = "finding-" + "b" * 32
+        group = {
+            "rule": "E2", "severity": "HIGH", "path": "SKILL.md",
+            "finding_ids": [original_id],
+            "occurrences": [
+                {"path": "SKILL.md", "line": 8, "finding_id": original_id},
+                {"path": "SKILL.md", "line": 18, "finding_id": original_id},
+            ],
+        }
+        replacement = copy.deepcopy(group)
+        replacement["finding_ids"] = [rotated_id]
+        for row in replacement["occurrences"]:
+            row["finding_id"] = rotated_id
+        old.update(findings=[group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        new.update(findings=[replacement], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        self.assertTrue(candidate.verify_candidate(item, old, new)["findings_changed"])
+        new["findings"][0]["occurrences"].reverse()
+        self.assertTrue(candidate.verify_candidate(item, old, new)["findings_changed"])
+
+        # Same stable content, but one independent identity split into two.
+        split = copy.deepcopy(new)
+        next_id = "finding-" + "c" * 32
+        split["findings"][0]["finding_ids"].append(next_id)
+        split["findings"][0]["occurrences"][0]["finding_id"] = next_id
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, split)
+
+    def test_generated_id_associations_must_not_disappear_or_collapse(self):
+        item, old, new = self.fixture()
+        first, second = "finding-" + "a" * 32, "finding-" + "b" * 32
+        group = {
+            "rule": "E2", "severity": "HIGH", "path": "SKILL.md",
+            "finding_ids": [first, second],
+            "occurrences": [
+                {"path": "SKILL.md", "line": 8, "finding_id": first},
+                {"path": "SKILL.md", "line": 18, "finding_id": second},
+            ],
+        }
+        old.update(findings=[group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        new.update(findings=[copy.deepcopy(group)], finding_count=2,
+                   raw_finding_count=2, finding_group_count=1)
+
+        vanished = copy.deepcopy(new)
+        vanished["findings"][0].pop("finding_ids")
+        for row in vanished["findings"][0]["occurrences"]:
+            row.pop("finding_id")
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, vanished)
+
+        collapsed = copy.deepcopy(new)
+        collapsed["findings"][0]["finding_ids"] = [first]
+        collapsed["findings"][0]["occurrences"][1]["finding_id"] = first
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, collapsed)
+
+        orphaned = copy.deepcopy(new)
+        orphaned["findings"][0]["finding_ids"].append("finding-" + "c" * 32)
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "generated group"):
+            candidate.verify_candidate(item, old, orphaned)
+
+        partly_missing = copy.deepcopy(new)
+        partly_missing["findings"][0]["occurrences"][0].pop("finding_id")
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "generated group"):
+            candidate.verify_candidate(item, old, partly_missing)
+
+    def test_old_independent_security_finding_cannot_disappear(self):
+        item, old, new = self.fixture()
+        old.update(findings=[{"rule": "MP3", "severity": "HIGH",
+                              "path": "SKILL.md", "line": 18}], finding_count=1,
+                   raw_finding_count=1, finding_group_count=1)
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, new)
+
+    def test_original_truncated_or_inconsistent_security_ledger_rejected(self):
+        item, old, new = self.fixture()
+        for mutation in (
+            ("findings_truncated", True),
+            ("coverage", {**old["coverage"], "grouping_complete": False}),
+            ("raw_finding_count", 1),
+        ):
+            witness = copy.deepcopy(old)
+            witness[mutation[0]] = mutation[1]
+            with self.subTest(mutation=mutation[0]), self.assertRaises(
+                    candidate.admission.CohortRejected):
+                candidate.verify_candidate(item, witness, new)
 
     def test_failed_cohort_preserves_only_safe_verified_progress(self):
         previous, selection = BoundedCohortTests.fixture()
         for item in selection["sources"][:-1]:
             old = previous["records"][item["id"]]
             old.update(kind=item["kind"], plugin_path=item["plugin_path"],
-                       finding_count=0, findings=[])
+                       finding_count=0, raw_finding_count=0, finding_group_count=0,
+                       findings_truncated=False, findings=[])
+            old["coverage"]["grouping_complete"] = True
         plan = candidate.admission.build_plan(previous, selection, "b" * 40)
         item, _, verified = self.fixture()
         self.assertEqual(item["id"], plan["selection"]["sources"][0]["id"])

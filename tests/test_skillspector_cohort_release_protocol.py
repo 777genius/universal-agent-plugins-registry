@@ -49,7 +49,10 @@ def qualified_fixture():
                     kind="plugin_skill")
         row = by_old_id[old_id]
         row.update(id=item["id"], kind=item["kind"],
-                   plugin_path=item["plugin_path"], finding_count=0, findings=[])
+                   plugin_path=item["plugin_path"], finding_count=0,
+                   raw_finding_count=0, finding_group_count=0,
+                   findings_truncated=False, findings=[])
+        row["coverage"]["grouping_complete"] = True
         revised_records[row["id"]] = row
         packages[package] = (repository, path)
     previous["records"] = revised_records
@@ -61,6 +64,10 @@ def qualified_fixture():
         findings = ([{"rule": "E4", "severity": "HIGH", "path": "SKILL.md",
                       "line": 9, "occurrences": [{"path": "SKILL.md", "line": 9}]}]
                     if index == 0 else [])
+        if findings:
+            old.update(findings=copy.deepcopy(findings),
+                       finding_count=len(findings), raw_finding_count=len(findings),
+                       finding_group_count=len(findings))
         new = {
             "id": item["id"], "kind": item["kind"], "plugin_path": item["plugin_path"],
             "source": copy.deepcopy(old["source"]),

@@ -10,6 +10,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -51,10 +52,76 @@ def require(condition: bool, message: str) -> None:
         raise admission.CohortRejected(message)
 
 
-def finding_signature(record: dict) -> list[tuple]:
+def finding_signature(record: dict) -> list[str]:
+    """Compare signed security evidence and generated-ID *associations*.
+
+    Finding IDs can change between scans and one upstream ID may cover several
+    locations. The partition of occurrences into independent ID identities must
+    nevertheless stay the same; losing IDs or combining two identities is not
+    just harmless UUID rotation.
+    """
+    signatures = []
+    seen_generated_ids: set[str] = set()
+    for group in record["findings"]:
+        require(isinstance(group, dict), "malformed original security finding group")
+        stable = copy.deepcopy(group)
+        rows = stable.get("occurrences", [])
+        require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows),
+                "malformed signed security occurrences")
+        has_ids = "finding_ids" in stable
+        group_ids = stable.pop("finding_ids", None)
+        associations = None
+        if has_ids:
+            require(isinstance(group_ids, list)
+                    and all(isinstance(v, str)
+                            and re.fullmatch(r"finding-[0-9a-f]{32}", v) is not None
+                            for v in group_ids)
+                    and len(set(group_ids)) == len(group_ids),
+                    "malformed generated finding identities")
+            require(not seen_generated_ids.intersection(group_ids),
+                    "generated finding identities reused across security groups")
+            seen_generated_ids.update(group_ids)
+            associations = {value: [] for value in group_ids}
+        normalized_rows = []
+        for row in rows:
+            one = copy.deepcopy(row)
+            has_row_id = "finding_id" in one
+            generated = one.pop("finding_id", None)
+            if associations is None:
+                require(not has_row_id, "generated group and occurrence identities disagree")
+            else:
+                require(has_row_id and isinstance(generated, str)
+                        and generated in associations,
+                        "generated group and occurrence identities disagree")
+                associations[generated].append(scanner.report_json(one).decode("utf-8"))
+            normalized_rows.append(one)
+        if associations is not None:
+            require(all(associations.values()),
+                    "generated group and occurrence identities disagree")
+            # IDs are volatile, but the one-to-many partition and every stable
+            # occurrence coordinate are part of the signed risk evidence.
+            partitions = sorted(sorted(members) for members in associations.values())
+        else:
+            partitions = None
+        stable["occurrences"] = sorted(normalized_rows, key=scanner.report_json)
+        signatures.append(scanner.report_json({
+            "security_group": stable,
+            "generated_id_partitions": partitions,
+        }))
+    return sorted(signatures)
+
+
+def legacy_v1_finding_signature(record: dict) -> list[tuple]:
+    """Preserve the existing signed-v1 volatile-ID comparison contract.
+
+    Semantic admission above must match every stable security field. A v1
+    comparison nevertheless keeps reporting generated-ID drift until an
+    explicitly versioned signed-v2 consumer replaces that old field.
+    """
     return sorted(
         (row["rule"], row["severity"], row["path"], row.get("line", 0),
-         tuple(sorted(scanner.report_json(position) for position in row.get("occurrences", []))))
+         tuple(sorted(scanner.report_json(position)
+                      for position in row.get("occurrences", []))))
         for row in record["findings"]
     )
 
@@ -104,14 +171,35 @@ def verify_candidate(item: dict, old: dict, new: dict) -> dict:
             and new["raw_finding_count"] >= new["finding_count"] >= new["finding_group_count"]
             and new["finding_group_count"] == len(new["findings"]),
             "candidate finding groups are omitted or malformed")
+    historical = old.get("coverage")
+    require(isinstance(historical, dict)
+            and historical.get("grouping_complete") is True
+            and old.get("findings_truncated") is False
+            and isinstance(old.get("findings"), list)
+            and all(type(old.get(key)) is int and old[key] >= 0
+                    for key in ("finding_count", "raw_finding_count", "finding_group_count"))
+            and old["finding_group_count"] == len(old["findings"])
+            and old["raw_finding_count"] >= old["finding_count"] >= old["finding_group_count"],
+            "original signed findings are ungrouped, truncated or unaccounted")
+    # Signing a Complete cohort must never erase or rewrite independent signed
+    # security evidence. Additional findings need an explicit reviewed policy,
+    # not a merely equal count or an informational findings_changed=True flag.
+    require(old["finding_count"] == new["finding_count"]
+            and old["raw_finding_count"] == new["raw_finding_count"]
+            and old["finding_group_count"] == new["finding_group_count"]
+            and len(old["findings"]) == len(new["findings"])
+            and finding_signature(old) == finding_signature(new),
+            "candidate changed signed security finding groups or occurrences")
     return {
         "id": item["id"],
         "source_digest": new["source"]["content_digest"],
         "old_findings": old["finding_count"],
         "candidate_findings": new["finding_count"],
+        # Signed v1 reports have a conservative, ID-sensitive comparison bit.
+        # Do not rewrite its meaning while adding strict semantic no-loss gates.
         "findings_changed": (
             old["finding_count"] != new["finding_count"] or
-            finding_signature(old) != finding_signature(new)
+            legacy_v1_finding_signature(old) != legacy_v1_finding_signature(new)
         ),
         "candidate_exit_code": new["execution"]["exit_code"],
     }
