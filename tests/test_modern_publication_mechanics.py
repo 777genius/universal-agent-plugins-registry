@@ -1,7 +1,7 @@
 """Real disposable Git/Ed25519 transactions; no production issuer is provisioned."""
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import base64
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -114,6 +114,36 @@ class ModernPublicationMechanicsTests(unittest.TestCase):
         self.directory = fixture
         self.sequence = 0
 
+    def test_modern_signer_refuses_unreviewed_pi_candidate(self) -> None:
+        # The real signer (without test bypass) must deny automatically derived
+        # managed Pi targets with no authenticated 3-OS source evidence.
+        candidate = prepare.build_candidate(
+            self.directory, self.config, self.main, "modern-no-pi-grants",
+            None, repository_root=self.source, feed=MODERN_FEED,
+        )
+        self.assertEqual(candidate["evidence"], [])
+        self.assertTrue(any(
+            target["client"] == "pi"
+            for distribution in candidate["distributions"]
+            for policy in distribution["release_policies"]
+            for target in policy["targets"]
+        ))
+        candidate_path = self.root / "unreviewed-candidate.json"
+        write_json(candidate_path, candidate)
+        arguments = [
+            "sign", "--candidate", str(candidate_path), "--candidate-digest",
+            publication.candidate_digest(candidate_path.read_bytes()),
+            "--ledger", str(self.repo), "--key-id", "test-next",
+            "--now", self.now, "--result", str(self.root / "blocked-result.json"),
+            "--ledger-seed-commit", self.seed, "--initialize-ledger",
+        ]
+        with mock.patch.object(sys, "argv", arguments), redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(signer.main(feed=MODERN_FEED), 1)
+        self.assertIn("managed Pi target lacks reviewed positive materialization evidence",
+                      errors.getvalue())
+        self.assertFalse((self.root / "blocked-result.json").exists())
+        self.assertFalse((self.repo / MODERN_FEED.feed_path).exists())
+
     def refs(self) -> str:
         return git(self.repo, "ls-remote", "--refs", "origin")
 
@@ -153,7 +183,13 @@ class ModernPublicationMechanicsTests(unittest.TestCase):
             arguments += ["--initialize-ledger"]
         else:
             arguments += ["--ledger-sequence-floor", str(self.sequence)]
-        with mock.patch.object(sys, "argv", arguments), redirect_stdout(io.StringIO()):
+        # This disposable fixture exercises publication CAS/composition, not
+        # Pi release eligibility: its exact-source candidate intentionally has
+        # no reviewed Pi materialization. The real signer rejection is asserted
+        # independently below, and the production gate is never patched there.
+        with (mock.patch.object(sys, "argv", arguments),
+              redirect_stdout(io.StringIO()),
+              mock.patch.object(signer, "require_pi_release_materialization")):
             self.assertEqual(signer.main(feed=MODERN_FEED), 0)
         self.sequence += 1
         git(self.repo, "add", MODERN_FEED.feed_path)
