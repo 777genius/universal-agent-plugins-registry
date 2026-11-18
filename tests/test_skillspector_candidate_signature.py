@@ -30,7 +30,9 @@ def full_candidate():
     for item in plan["selection"]["sources"]:
         old = previous["records"][item["id"]]
         old.update(kind=item["kind"], plugin_path=item["plugin_path"],
-                   finding_count=0, findings=[])
+                   finding_count=0, raw_finding_count=0, finding_group_count=0,
+                   findings_truncated=False, findings=[])
+        old["coverage"]["grouping_complete"] = True
         new = {
             "id": item["id"], "kind": item["kind"],
             "plugin_path": item["plugin_path"], "source": copy.deepcopy(old["source"]),
@@ -103,7 +105,8 @@ class SignedCandidateTests(unittest.TestCase):
         finding = {"rule": "E4", "severity": "HIGH", "path": "SKILL.md",
                    "line": 7, "occurrences": [{"path": "SKILL.md", "line": 7}]}
         old = previous["records"][row["id"]]
-        old.update(findings=[copy.deepcopy(finding)], finding_count=1)
+        old.update(findings=[copy.deepcopy(finding)], finding_count=1,
+                   raw_finding_count=1, finding_group_count=1)
         row.update(findings=[copy.deepcopy(finding)], finding_count=1,
                    raw_finding_count=1, finding_group_count=1)
         row["execution"]["exit_code"] = 1

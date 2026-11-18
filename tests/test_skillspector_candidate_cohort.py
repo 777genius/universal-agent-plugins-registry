@@ -25,8 +25,9 @@ class CandidateCohortTests(unittest.TestCase):
         # admission fields; stage-two tests require full v3 selection identity.
         old["kind"] = item["kind"]
         old["plugin_path"] = item["plugin_path"]
-        old["finding_count"] = 0
-        old["findings"] = []
+        old.update(finding_count=0, raw_finding_count=0, finding_group_count=0,
+                   findings=[], findings_truncated=False)
+        old["coverage"]["grouping_complete"] = True
         new = {
             "id": old["id"], "kind": item["kind"], "plugin_path": item["plugin_path"],
             "source": copy.deepcopy(old["source"]),
@@ -63,7 +64,8 @@ class CandidateCohortTests(unittest.TestCase):
     def test_risk_exit_one_does_not_hide_findings(self):
         item, old, new = self.fixture()
         finding = {"rule": "E4", "severity": "HIGH", "path": "SKILL.md", "line": 7}
-        old.update(findings=[finding], finding_count=1)
+        old.update(findings=[finding], finding_count=1, raw_finding_count=1,
+                   finding_group_count=1)
         new.update(findings=[finding], finding_count=1, raw_finding_count=1,
                    finding_group_count=1)
         new["execution"]["exit_code"] = 1
@@ -114,7 +116,8 @@ class CandidateCohortTests(unittest.TestCase):
         group = {"rule": "E4", "severity": "HIGH", "path": "SKILL.md", "line": 7,
                  "occurrences": [{"path": "SKILL.md", "line": 7},
                                  {"path": "SKILL.md", "line": 19}]}
-        old.update(findings=[group], finding_count=2)
+        old.update(findings=[group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
         new.update(findings=[copy.deepcopy(group)], finding_count=2, raw_finding_count=2,
                    finding_group_count=1)
         new["findings"][0]["occurrences"].reverse()
@@ -138,7 +141,8 @@ class CandidateCohortTests(unittest.TestCase):
         next_group = copy.deepcopy(old_group)
         next_group["finding_ids"] = ["finding-" + "b" * 32]
         next_group["occurrences"][0]["finding_id"] = "finding-" + "b" * 32
-        old.update(findings=[old_group], finding_count=1)
+        old.update(findings=[old_group], finding_count=1,
+                   raw_finding_count=1, finding_group_count=1)
         new.update(findings=[next_group], finding_count=1,
                    finding_group_count=1, raw_finding_count=1)
         parity = candidate.verify_candidate(item, old, new)
@@ -170,16 +174,32 @@ class CandidateCohortTests(unittest.TestCase):
     def test_old_independent_security_finding_cannot_disappear(self):
         item, old, new = self.fixture()
         old.update(findings=[{"rule": "MP3", "severity": "HIGH",
-                              "path": "SKILL.md", "line": 18}], finding_count=1)
+                              "path": "SKILL.md", "line": 18}], finding_count=1,
+                   raw_finding_count=1, finding_group_count=1)
         with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
             candidate.verify_candidate(item, old, new)
+
+    def test_original_truncated_or_inconsistent_security_ledger_rejected(self):
+        item, old, new = self.fixture()
+        for mutation in (
+            ("findings_truncated", True),
+            ("coverage", {**old["coverage"], "grouping_complete": False}),
+            ("raw_finding_count", 1),
+        ):
+            witness = copy.deepcopy(old)
+            witness[mutation[0]] = mutation[1]
+            with self.subTest(mutation=mutation[0]), self.assertRaises(
+                    candidate.admission.CohortRejected):
+                candidate.verify_candidate(item, witness, new)
 
     def test_failed_cohort_preserves_only_safe_verified_progress(self):
         previous, selection = BoundedCohortTests.fixture()
         for item in selection["sources"][:-1]:
             old = previous["records"][item["id"]]
             old.update(kind=item["kind"], plugin_path=item["plugin_path"],
-                       finding_count=0, findings=[])
+                       finding_count=0, raw_finding_count=0, finding_group_count=0,
+                       findings_truncated=False, findings=[])
+            old["coverage"]["grouping_complete"] = True
         plan = candidate.admission.build_plan(previous, selection, "b" * 40)
         item, _, verified = self.fixture()
         self.assertEqual(item["id"], plan["selection"]["sources"][0]["id"])

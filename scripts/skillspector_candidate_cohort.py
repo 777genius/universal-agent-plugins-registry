@@ -135,10 +135,22 @@ def verify_candidate(item: dict, old: dict, new: dict) -> dict:
             and new["raw_finding_count"] >= new["finding_count"] >= new["finding_group_count"]
             and new["finding_group_count"] == len(new["findings"]),
             "candidate finding groups are omitted or malformed")
+    historical = old.get("coverage")
+    require(isinstance(historical, dict)
+            and historical.get("grouping_complete") is True
+            and old.get("findings_truncated") is False
+            and isinstance(old.get("findings"), list)
+            and all(type(old.get(key)) is int and old[key] >= 0
+                    for key in ("finding_count", "raw_finding_count", "finding_group_count"))
+            and old["finding_group_count"] == len(old["findings"])
+            and old["raw_finding_count"] >= old["finding_count"] >= old["finding_group_count"],
+            "original signed findings are ungrouped, truncated or unaccounted")
     # Signing a Complete cohort must never erase or rewrite independent signed
     # security evidence. Additional findings need an explicit reviewed policy,
     # not a merely equal count or an informational findings_changed=True flag.
     require(old["finding_count"] == new["finding_count"]
+            and old["raw_finding_count"] == new["raw_finding_count"]
+            and old["finding_group_count"] == new["finding_group_count"]
             and len(old["findings"]) == len(new["findings"])
             and finding_signature(old) == finding_signature(new),
             "candidate changed signed security finding groups or occurrences")
