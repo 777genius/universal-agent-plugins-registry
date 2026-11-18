@@ -102,13 +102,12 @@ class CandidateCohortTests(unittest.TestCase):
         with self.assertRaises(candidate.admission.CohortRejected):
             candidate.verify_candidate(item, old, new)
 
-    def test_changed_findings_are_reported_not_suppressed(self):
+    def test_added_security_finding_requires_independent_review(self):
         item, old, new = self.fixture()
         new.update(findings=[{"rule": "MP3", "severity": "HIGH", "path": "SKILL.md"}],
                    finding_count=1, raw_finding_count=1, finding_group_count=1)
-        proof = candidate.verify_candidate(item, old, new)
-        self.assertTrue(proof["findings_changed"])
-        self.assertEqual(new["findings"][0]["rule"], "MP3")
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, new)
 
     def test_changed_occurrence_positions_are_reported(self):
         item, old, new = self.fixture()
@@ -121,7 +120,59 @@ class CandidateCohortTests(unittest.TestCase):
         new["findings"][0]["occurrences"].reverse()
         self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
         new["findings"][0]["occurrences"][0]["line"] = 20
-        self.assertTrue(candidate.verify_candidate(item, old, new)["findings_changed"])
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, new)
+
+    def test_only_generated_ids_can_differ_between_signed_security_groups(self):
+        item, old, new = self.fixture()
+        old_group = {
+            "id": "sha256:" + "a" * 64,
+            "rule": "E2", "severity": "HIGH", "path": "SKILL.md", "line": 8,
+            "evidence": {"match": "real credential exposure"},
+            "finding_ids": ["finding-" + "a" * 32],
+            "occurrences": [
+                {"path": "SKILL.md", "line": 8, "start_column": 4,
+                 "finding_id": "finding-" + "a" * 32},
+            ],
+        }
+        next_group = copy.deepcopy(old_group)
+        next_group["finding_ids"] = ["finding-" + "b" * 32]
+        next_group["occurrences"][0]["finding_id"] = "finding-" + "b" * 32
+        old.update(findings=[old_group], finding_count=1)
+        new.update(findings=[next_group], finding_count=1,
+                   finding_group_count=1, raw_finding_count=1)
+        parity = candidate.verify_candidate(item, old, new)
+        self.assertFalse(parity["findings_changed"])
+        self.assertEqual(parity["old_findings"], 1)
+
+        for changed in (
+            {"severity": "LOW"},
+            {"id": "sha256:" + "f" * 64},
+            {"evidence": {"match": "suppressed"}},
+        ):
+            with self.subTest(changed=changed):
+                mutated = copy.deepcopy(new)
+                mutated["findings"][0].update(changed)
+                with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+                    candidate.verify_candidate(item, old, mutated)
+
+        mutated = copy.deepcopy(new)
+        mutated["findings"][0]["occurrences"][0]["line"] = 9
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, mutated)
+
+        mutated = copy.deepcopy(new)
+        mutated["findings"][0]["finding_ids"] = ["finding-" + "c" * 32]
+        with self.assertRaisesRegex(candidate.admission.CohortRejected,
+                                    "generated group and occurrence"):
+            candidate.verify_candidate(item, old, mutated)
+
+    def test_old_independent_security_finding_cannot_disappear(self):
+        item, old, new = self.fixture()
+        old.update(findings=[{"rule": "MP3", "severity": "HIGH",
+                              "path": "SKILL.md", "line": 18}], finding_count=1)
+        with self.assertRaisesRegex(candidate.admission.CohortRejected, "security finding"):
+            candidate.verify_candidate(item, old, new)
 
     def test_failed_cohort_preserves_only_safe_verified_progress(self):
         previous, selection = BoundedCohortTests.fixture()
