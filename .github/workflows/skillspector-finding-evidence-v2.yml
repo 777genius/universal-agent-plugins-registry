@@ -1,0 +1,57 @@
+name: SkillSpector finding evidence v2 (read-only)
+on:
+  pull_request:
+    paths:
+      - scripts/skillspector_cohort_evidence_v2.py
+      - tests/test_skillspector_cohort_evidence_v2.py
+      - scripts/skillspector_cohort_evidence_v2_replay.py
+      - .github/workflows/skillspector-finding-evidence-v2.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  evidence-v2-unit-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Run strict semantic parity negative tests
+        run: python3 -m unittest -v tests.test_skillspector_cohort_evidence_v2
+
+  original-zip-evidence-replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Fetch only original immutable source ZIPs (not reconstructed artifacts)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/777genius/universal-agent-plugins-registry/actions/artifacts/14387894677/zip > "$RUNNER_TEMP/published-original.zip"
+          gh api repos/777genius/universal-agent-plugins-registry/actions/artifacts/14394423232/zip > "$RUNNER_TEMP/candidate-original.zip"
+      - name: Authenticate ZIP sha256, CRC and nine exact-source finding groups
+        run: |
+          python3 -m scripts.skillspector_cohort_evidence_v2_replay \
+            --published-zip "$RUNNER_TEMP/published-original.zip" \
+            --candidate-zip "$RUNNER_TEMP/candidate-original.zip" \
+            --output "$RUNNER_TEMP/cohort-v2-readonly-proof.json"
+      - name: Upload unsigned read-only proof (not certification)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-cohort-evidence-v2-unpublished
+          path: ${{ runner.temp }}/cohort-v2-readonly-proof.json
+          retention-days: 7
