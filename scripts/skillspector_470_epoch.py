@@ -68,7 +68,8 @@ def start_epoch(*, source_id: str, published_record: dict, signed_manifest: dict
             and source.get("content_digest") is None
             and published_record.get("target_revision") == revision
             and published_record.get("scanner") == signed_manifest.get("scanner")
-            and isinstance(published_record.get("profile"), dict),
+            and isinstance(signed_manifest.get("profiles"), list)
+            and published_record.get("profile") in signed_manifest["profiles"],
             "source identity, freshness or status drift")
     require({x.get("code") for x in published_record.get("errors", [])} == {"acquisition_failed"}
             and {x.get("code") for x in published_record.get("coverage", {}).get("reasons", [])}
