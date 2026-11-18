@@ -135,7 +135,8 @@ class SqlSourceEvidenceTests(unittest.TestCase):
                     {"reason_code": "reference_missing", "path": "SKILL.md"},
                     {"reason_code": "static_parse_limit", "path": "references/workers.md"},
                 ],
-                "original_findings": [{"id": "AE1"}],
+                "original_findings": [{"id": "AE1", "tags": ["coverage", "reference"],
+                                       "occurrences": [{"file": "SKILL.md", "start_line": 36}]}],
             },
             "source": {"revision": SOURCE_COMMIT, "path": SOURCE_ROOT,
                        "content_digest": PUBLISHED_SOURCE_DIGEST},
@@ -145,7 +146,7 @@ class SqlSourceEvidenceTests(unittest.TestCase):
                               {"path": "references/testing.md", "line": 253},
                               {"path": "references/testing.md", "line": 254},
                           ]}],
-            "raw_finding_count": 3,
+            "raw_finding_count": 3, "finding_count": 2,
         }
         report_issues = [{
             "id": "RP1", "severity": "MEDIUM",
@@ -164,7 +165,20 @@ class SqlSourceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "occurrence list"):
             published_source_risks(incomplete, {"issues": report_issues + [wrong_line]})
         self.assertEqual(good["published_signed_grouped_occurrences_preserved"], 2)
-        self.assertEqual(good["published_unattributed_raw_count"], 1)
+        self.assertEqual(good["published_unattributed_raw_count"], 0)
+        self.assertEqual(good["published_original_AE1_coverage_occurrences"], 1)
+        missing_coverage = copy.deepcopy(original)
+        missing_coverage["coverage"]["original_findings"] = []
+        with self.assertRaisesRegex(ValueError, "coverage finding"):
+            published_source_risks(missing_coverage, {"issues": report_issues + [wrong_line]})
+        shifted_coverage = copy.deepcopy(original)
+        shifted_coverage["coverage"]["original_findings"][0]["occurrences"][0]["start_line"] = 37
+        with self.assertRaisesRegex(ValueError, "AE1 coverage occurrence"):
+            published_source_risks(shifted_coverage, {"issues": report_issues + [wrong_line]})
+        unmatched_raw = copy.deepcopy(original)
+        unmatched_raw["raw_finding_count"] += 1
+        with self.assertRaisesRegex(ValueError, "accounting"):
+            published_source_risks(unmatched_raw, {"issues": report_issues + [wrong_line]})
 
 
 

@@ -236,14 +236,34 @@ def published_source_risks(original: dict, candidate: dict) -> dict:
                 location.get("file"), location.get("start_line"), fingerprint)] += 1
     if required - actual:
         raise ValueError("candidate lost a source-bound original signed security finding")
+    # v3 raw_finding_count includes coverage signals; finding_count counts
+    # only content occurrences (REPORT_V3.md and skillspector_reports.py).
+    # On this exact signed source the seventh raw finding is the separately
+    # preserved AE1 static-parse coverage signal, NOT a hidden security group.
+    coverage_findings = signed_coverage.get("original_findings")
+    if not isinstance(coverage_findings, list) or len(coverage_findings) != 1:
+        raise ValueError("signed original coverage finding is missing or ambiguous")
+    coverage_finding = coverage_findings[0]
+    coverage_occurrences = coverage_finding.get("occurrences") if isinstance(coverage_finding, dict) else None
+    if (coverage_finding.get("id") != "AE1"
+            or "coverage" not in coverage_finding.get("tags", [])
+            or not isinstance(coverage_occurrences, list)
+            or len(coverage_occurrences) != 1
+            or coverage_occurrences[0].get("file") != "SKILL.md"
+            or coverage_occurrences[0].get("start_line") != 36):
+        raise ValueError("signed AE1 coverage occurrence no longer matches pinned source")
     raw = original.get("raw_finding_count")
-    if type(raw) is not int or raw < sum(required.values()):
-        raise ValueError("signed original raw findings are inconsistent")
+    grouped_count = sum(required.values())
+    if (type(raw) is not int
+            or original.get("finding_count") != grouped_count
+            or raw != grouped_count + len(coverage_occurrences)):
+        raise ValueError("signed raw finding/coverage occurrence accounting is inconsistent")
     return {
         "published_signed_risk_groups_preserved": len(groups),
-        "published_signed_grouped_occurrences_preserved": sum(required.values()),
+        "published_signed_grouped_occurrences_preserved": grouped_count,
         "published_raw_finding_count": raw,
-        "published_unattributed_raw_count": raw - sum(required.values()),
+        "published_original_AE1_coverage_occurrences": len(coverage_occurrences),
+        "published_unattributed_raw_count": 0,
         "signed_static_parse_limit_and_AE1_retained": True,
         "published_original_remains_partial": True,
         "candidate_not_certified": True,
