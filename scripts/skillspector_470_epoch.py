@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 
 BASELINE_REPORT_COMMIT = "7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf"
 BASELINE_SOURCE_COMMIT = "a12bd3bdffab6991a2541220a16a0a9d6447e47e"
@@ -89,8 +90,7 @@ def start_epoch(*, source_id: str, published_record: dict, signed_manifest: dict
             and qualification.get("selected_root") == path
             and qualification.get("status") == "complete_acquisition"
             and isinstance(qualification.get("tree_digest"), str)
-            and qualification["tree_digest"].startswith("sha256:")
-            and len(qualification["tree_digest"]) == 71
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", qualification["tree_digest"]) is not None
             and type(qualification.get("file_count")) is int and qualification["file_count"] > 0
             and qualification.get("scan_status") in ("partial", "complete"),
             "no authenticated immutable complete-acquisition observation")

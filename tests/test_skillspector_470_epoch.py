@@ -97,6 +97,9 @@ class EpochTests(unittest.TestCase):
             ("manifest", {"source_commit": "0" * 40}),
             ("qualification", {"status": "failed"}),
             ("qualification", {"tree_digest": None}),
+            ("qualification", {"tree_digest": "sha256:" + "g" * 64}),
+            ("qualification", {"tree_digest": "sha256:" + "A" * 64}),
+            ("qualification", {"tree_digest": "sha256:" + "a" * 63 + "/"}),
         ]
         for where, change in mutations:
             with self.subTest(where=where, change=change):
