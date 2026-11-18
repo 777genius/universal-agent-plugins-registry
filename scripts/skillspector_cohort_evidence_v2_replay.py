@@ -12,7 +12,7 @@ from pathlib import Path
 import zipfile
 
 from scripts.skillspector_cohort_evidence_v2 import (
-    EvidenceRejected, compare_findings_v2, require,
+    compare_findings_v2, require,
 )
 
 OLD_SHA = 'fd0792b4aadecd958493ec22749d05298b44dd9f3c0a2fc559ce532f82f80a72'
