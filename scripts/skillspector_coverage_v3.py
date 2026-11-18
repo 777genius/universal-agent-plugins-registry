@@ -994,7 +994,7 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
 # occurrences. Compare their stable one-to-many association topology, not
 # volatile ID strings. This is only for authenticated fork equality; never
 # rewrite any source report, signed digest, or independent security evidence.
-_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\\Z")
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\Z")
 
 
 def _recovery_groups_without_generated_ids(record):
