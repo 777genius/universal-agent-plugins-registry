@@ -134,6 +134,49 @@ class EpochTests(unittest.TestCase):
                 revision=receipt["source_revision"],
                 tree_digest="sha256:" + "f" * 64, scan=actual)
 
+    def test_failed_acquisition_consumes_budget_and_retains_error(self):
+        receipt = epoch()
+        failure = {"source_id": receipt["source_id"],
+                   "source_revision": receipt["source_revision"],
+                   "status": "error", "reason_code": "acquisition_failed",
+                   "message": "pinned source could not be fetched"}
+        observed = record_shadow_observation(
+            receipt, source_id=receipt["source_id"],
+            revision=receipt["source_revision"],
+            tree_digest=receipt["qualified_tree_digest"],
+            failed_acquisition=failure)
+        self.assertEqual(observed["new_epoch_attempts"][0]["actual_scanner_status"], "error")
+        self.assertFalse(observed["new_epoch_attempts"][0]["certified_complete"])
+        self.assertEqual(observed["production_error_reduction"], 0)
+        with self.assertRaisesRegex(ValueError, "already consumed"):
+            record_shadow_observation(
+                observed, source_id=receipt["source_id"],
+                revision=receipt["source_revision"],
+                tree_digest=receipt["qualified_tree_digest"], failed_acquisition=failure)
+
+    def test_forged_failed_acquisition_does_not_consume_or_certify(self):
+        receipt = epoch()
+        valid = {"source_id": receipt["source_id"],
+                 "source_revision": receipt["source_revision"],
+                 "status": "error", "reason_code": "acquisition_failed"}
+        for key, value in [("source_revision", "0" * 40),
+                           ("status", "complete"), ("reason_code", "complete")]:
+            forged = copy.deepcopy(valid)
+            forged[key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(
+                ValueError, "invalid failed-acquisition"
+            ):
+                record_shadow_observation(
+                    receipt, source_id=receipt["source_id"],
+                    revision=receipt["source_revision"],
+                    tree_digest=receipt["qualified_tree_digest"], failed_acquisition=forged)
+        with self.assertRaisesRegex(ValueError, "invalid failed-acquisition"):
+            record_shadow_observation(
+                receipt, source_id=receipt["source_id"],
+                revision=receipt["source_revision"],
+                tree_digest=receipt["qualified_tree_digest"],
+                failed_acquisition=valid, scan={})
+
     def test_failed_or_inconsistent_scans_never_claim_success(self):
         receipt = epoch()
         for status, is_complete, executed in [
