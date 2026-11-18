@@ -45,6 +45,10 @@ def epoch():
                        report_commit=BASELINE_REPORT_COMMIT)
 
 
+def cli_metadata():
+    return {"skillspector_version": "2.13.1", "llm_requested": False, "inference_usage": []}
+
+
 class EpochTests(unittest.TestCase):
     def test_old_history_is_separate_and_immutable(self):
         source_id, original, _, _ = fixture()
@@ -61,8 +65,9 @@ class EpochTests(unittest.TestCase):
 
     def test_exactly_one_shadow_observation_without_certification(self):
         receipt = epoch()
-        actual = {"analysis_completeness": {"status": "partial", "is_complete": False},
-                  "execution_successful": True, "issues": [{"id": "E1"}]}
+        actual = {"analysis_completeness": {"status": "partial", "is_complete": False,
+                                            "execution_successful": True},
+                  "metadata": cli_metadata(), "execution_successful": True, "issues": [{"id": "E1"}]}
         observed = record_shadow_observation(
             receipt, source_id=receipt["source_id"],
             revision=receipt["source_revision"],
@@ -115,8 +120,9 @@ class EpochTests(unittest.TestCase):
 
     def test_shadow_tampering_or_new_tree_drift_fails(self):
         receipt = epoch()
-        actual = {"analysis_completeness": {"status": "complete", "is_complete": True},
-                  "execution_successful": True, "issues": []}
+        actual = {"analysis_completeness": {"status": "complete", "is_complete": True,
+                                            "execution_successful": True},
+                  "metadata": cli_metadata(), "execution_successful": True, "issues": []}
         for key, value in [
             ("new_policy_digest", "sha256:" + "0" * 64),
             ("original_record_digest", "sha256:" + "0" * 64),
@@ -180,6 +186,24 @@ class EpochTests(unittest.TestCase):
                 tree_digest=receipt["qualified_tree_digest"],
                 failed_acquisition=valid, scan={})
 
+    def test_llm_or_unpinned_scanner_cannot_supply_shadow_observation(self):
+        receipt = epoch()
+        valid = {"analysis_completeness": {"status": "partial", "is_complete": False,
+                                            "execution_successful": True},
+                 "metadata": cli_metadata(), "execution_successful": True, "issues": []}
+        for key, value in [
+            ("llm_requested", True),
+            ("inference_usage", [{"model": "unverified"}]),
+            ("skillspector_version", "2.13.4"),
+        ]:
+            forged = copy.deepcopy(valid)
+            forged["metadata"][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "real successful"):
+                record_shadow_observation(
+                    receipt, source_id=receipt["source_id"],
+                    revision=receipt["source_revision"],
+                    tree_digest=receipt["qualified_tree_digest"], scan=forged)
+
     def test_failed_or_inconsistent_scans_never_claim_success(self):
         receipt = epoch()
         for status, is_complete, executed in [
@@ -187,8 +211,9 @@ class EpochTests(unittest.TestCase):
             ("partial", True, True), ("complete_with_caveats", False, True),
         ]:
             actual = {"analysis_completeness": {"status": status,
-                                                 "is_complete": is_complete},
-                      "execution_successful": executed, "issues": []}
+                                                 "is_complete": is_complete,
+                                                 "execution_successful": executed},
+                      "metadata": cli_metadata(), "execution_successful": executed, "issues": []}
             with self.subTest(status=status), self.assertRaisesRegex(
                 ValueError, "real successful"
             ):
