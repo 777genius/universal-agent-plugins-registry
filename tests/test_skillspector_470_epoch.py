@@ -66,8 +66,11 @@ class EpochTests(unittest.TestCase):
     def test_exactly_one_shadow_observation_without_certification(self):
         receipt = epoch()
         actual = {"analysis_completeness": {"status": "partial", "is_complete": False,
-                                            "execution_successful": True},
-                  "metadata": cli_metadata(), "execution_successful": True, "issues": [{"id": "E1"}]}
+                                            "execution_successful": True,
+                                            "findings_before_filtering": 1,
+                                            "findings_after_filtering": 1},
+                  "metadata": cli_metadata(), "execution_successful": True,
+                  "issues": [{"id": "E1"}], "suppressed": [], "suppressed_count": 0}
         observed = record_shadow_observation(
             receipt, source_id=receipt["source_id"],
             revision=receipt["source_revision"],
@@ -124,8 +127,11 @@ class EpochTests(unittest.TestCase):
     def test_shadow_tampering_or_new_tree_drift_fails(self):
         receipt = epoch()
         actual = {"analysis_completeness": {"status": "complete", "is_complete": True,
-                                            "execution_successful": True},
-                  "metadata": cli_metadata(), "execution_successful": True, "issues": []}
+                                            "execution_successful": True,
+                                            "findings_before_filtering": 0,
+                                            "findings_after_filtering": 0},
+                  "metadata": cli_metadata(), "execution_successful": True,
+                  "issues": [], "suppressed": [], "suppressed_count": 0}
         for key, value in [
             ("new_policy_digest", "sha256:" + "0" * 64),
             ("original_record_digest", "sha256:" + "0" * 64),
@@ -192,8 +198,11 @@ class EpochTests(unittest.TestCase):
     def test_llm_or_unpinned_scanner_cannot_supply_shadow_observation(self):
         receipt = epoch()
         valid = {"analysis_completeness": {"status": "partial", "is_complete": False,
-                                            "execution_successful": True},
-                 "metadata": cli_metadata(), "execution_successful": True, "issues": []}
+                                            "execution_successful": True,
+                                            "findings_before_filtering": 0,
+                                            "findings_after_filtering": 0},
+                 "metadata": cli_metadata(), "execution_successful": True,
+                 "issues": [], "suppressed": [], "suppressed_count": 0}
         for key, value in [
             ("llm_requested", True),
             ("inference_usage", [{"model": "unverified"}]),
@@ -206,6 +215,48 @@ class EpochTests(unittest.TestCase):
                     receipt, source_id=receipt["source_id"],
                     revision=receipt["source_revision"],
                     tree_digest=receipt["qualified_tree_digest"], scan=forged)
+
+    def test_security_findings_and_coverage_cannot_disappear_from_shadow_ledger(self):
+        receipt = epoch()
+        valid = {
+            "analysis_completeness": {
+                "status": "partial", "is_complete": False, "execution_successful": True,
+                "findings_before_filtering": 2, "findings_after_filtering": 1,
+                "ledger_exceptions": [{"reason_code": "reference_missing"}],
+            },
+            "metadata": cli_metadata(), "execution_successful": True,
+            "issues": [{"id": "E1"}], "suppressed": [{"id": "S1"}],
+            "suppressed_count": 1,
+        }
+        args = dict(source_id=receipt["source_id"], revision=receipt["source_revision"],
+                    tree_digest=receipt["qualified_tree_digest"])
+        observed = record_shadow_observation(receipt, scan=valid, **args)
+        attempt = observed["new_epoch_attempts"][0]
+        self.assertEqual(attempt["observed_security_issues"], valid["issues"])
+        self.assertEqual(attempt["observed_suppressed_issues"], valid["suppressed"])
+        self.assertEqual(attempt["observed_analysis_completeness"],
+                         valid["analysis_completeness"])
+        self.assertFalse(attempt["certified_complete"])
+        for field, value in (
+            ("issues", []), ("suppressed", []), ("suppressed_count", 0),
+            ("suppressed_count", True), ("suppressed", None),
+        ):
+            tampered = copy.deepcopy(valid)
+            tampered[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                ValueError, "inconsistent scanner finding accounting"
+            ):
+                record_shadow_observation(receipt, scan=tampered, **args)
+        for field, value in (
+            ("findings_before_filtering", 1), ("findings_before_filtering", True),
+            ("findings_after_filtering", 0), ("findings_after_filtering", 2),
+        ):
+            tampered = copy.deepcopy(valid)
+            tampered["analysis_completeness"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                ValueError, "inconsistent scanner finding accounting"
+            ):
+                record_shadow_observation(receipt, scan=tampered, **args)
 
     def test_failed_or_inconsistent_scans_never_claim_success(self):
         receipt = epoch()

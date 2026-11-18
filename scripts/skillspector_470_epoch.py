@@ -170,12 +170,31 @@ def record_shadow_observation(epoch: dict, *, source_id: str, revision: str,
             and metadata.get("inference_usage") == []
             and isinstance(scan.get("issues"), list),
             "not a real successful scan observation")
+    # A report with omitted filtered/suppressed findings is not a faithful
+    # security observation, regardless of its scanner completeness status.
+    suppressed = scan.get("suppressed")
+    suppressed_count = scan.get("suppressed_count")
+    before = completeness.get("findings_before_filtering")
+    after = completeness.get("findings_after_filtering")
+    require(
+        type(before) is int and type(after) is int
+        and type(suppressed_count) is int
+        and 0 <= after <= before
+        and isinstance(suppressed, list)
+        and len(scan["issues"]) == after
+        and len(suppressed) == suppressed_count
+        and before == after + suppressed_count
+        and all(isinstance(x, dict) for x in [*scan["issues"], *suppressed]),
+        "inconsistent scanner finding accounting",
+    )
     result = copy.deepcopy(epoch)
     result["new_epoch_attempts"] = [{
         "attempt_number_within_epoch": 1,
         "actual_scanner_status": completeness["status"],
         "observed_scan_digest": digest(scan),
         "observed_security_issues": copy.deepcopy(scan["issues"]),
+        "observed_suppressed_issues": copy.deepcopy(suppressed),
+        "observed_analysis_completeness": copy.deepcopy(completeness),
         "certified_complete": False,
     }]
     return result
