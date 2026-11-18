@@ -30,7 +30,8 @@ def fixture():
     }
     manifest = {"schema_version": 3, "source_commit": BASELINE_SOURCE_COMMIT,
                 "profile": {"digest": OLD_POLICY_DIGEST},
-                "scanner": {"revision": OLD_SCANNER_REVISION}}
+                "scanner": {"revision": OLD_SCANNER_REVISION},
+                "profiles": [copy.deepcopy(original["profile"])]}
     qualified = {"repository": repository, "revision": revision, "selected_root": path,
                  "status": "complete_acquisition", "tree_digest": "sha256:" + "a" * 64,
                  "file_count": 12, "scan_status": "partial"}
@@ -85,6 +86,8 @@ class EpochTests(unittest.TestCase):
             ("original", {"attempt_history": []}),
             ("original", {"source": {"revision": "0" * 40}}),
             ("original", {"scanner": {"revision": "0" * 40}}),
+            ("original", {"profile": {"id": "unreviewed-profile"}}),
+            ("manifest", {"profiles": []}),
             ("manifest", {"profile": {"digest": "sha256:" + "f" * 64}}),
             ("manifest", {"source_commit": "0" * 40}),
             ("qualification", {"status": "failed"}),
