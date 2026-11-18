@@ -990,14 +990,15 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     return manifest
 
 
-# These are scanner-emitted, ephemeral correlation IDs, not security identities.
-# Normalize only for authenticated fork *comparison*. Original reports, risk
-# evidence, and signed digest bytes must never be rewritten.
-_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\Z")
+# Scanner-generated finding IDs may each represent one or several
+# occurrences. Compare their stable one-to-many association topology, not
+# volatile ID strings. This is only for authenticated fork equality; never
+# rewrite any source report, signed digest, or independent security evidence.
+_GENERATED_FINDING_ID = re.compile(r"finding-[0-9a-f]{32}\\Z")
 
 
 def _recovery_groups_without_generated_ids(record):
-    """Compare stable finding evidence while preserving unknown/partial records."""
+    """Normalize ONLY valid generated ID rotations, preserving identity partitions."""
     groups = record.get("findings")
     coverage = record.get("coverage")
     if (not isinstance(groups, list) or not isinstance(coverage, dict) or
@@ -1020,35 +1021,35 @@ def _recovery_groups_without_generated_ids(record):
                 not isinstance(occurrences, list) or
                 type(raw_count) is not int or
                 raw_count != len(occurrences) or
-                len(ids) != len(occurrences) or
+                len(ids) > len(occurrences) or
                 any(type(value) is not str or
                     _GENERATED_FINDING_ID.fullmatch(value) is None for value in ids) or
-                len(ids) != len(set(ids))):
-            return groups
-        # Generated occurrence IDs must be one-to-one across the whole record,
-        # not just inside a finding group. Cross-group reuse is ambiguous.
-        if any(value in seen_ids for value in ids):
+                len(ids) != len(set(ids)) or
+                any(value in seen_ids for value in ids)):
             return groups
         seen_ids.update(ids)
-        count += raw_count
-        replacements = {value: "verified-generated-id-" + str(index)
-                        for index, value in enumerate(ids)}
-        encountered = set()
+        linked = {value: [] for value in ids}
         for occurrence in occurrences:
             if not isinstance(occurrence, dict):
                 return groups
             finding_id = occurrence.get("finding_id")
-            if finding_id is None:
-                if ids:
-                    return groups
-            elif finding_id in replacements:
-                encountered.add(finding_id)
-                occurrence["finding_id"] = replacements[finding_id]
-            else:
+            if finding_id not in linked:
                 return groups
-        if encountered != set(ids):
+            stable = {key: value for key, value in occurrence.items()
+                      if key != "finding_id"}
+            linked[finding_id].append(report_json(stable))
+        if any(not entries for entries in linked.values()):
             return groups
-        group["finding_ids"] = list(replacements.values())
+        # Order IDs by the immutable occurrence *content* they represent.
+        # Counts and duplicate partitions survive; split/merge of two finding
+        # identities cannot be disguised as a fresh random ID.
+        ordered = sorted(ids, key=lambda value: (tuple(sorted(linked[value])), value))
+        replacements = {value: "verified-generated-id-" + str(index)
+                        for index, value in enumerate(ordered)}
+        for occurrence in occurrences:
+            occurrence["finding_id"] = replacements[occurrence["finding_id"]]
+        group["finding_ids"] = [replacements[value] for value in ordered]
+        count += raw_count
     if count != record["finding_count"]:
         return groups
     return normalized

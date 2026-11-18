@@ -709,7 +709,7 @@ class RecoveryTests(unittest.TestCase):
                                     coverage.recovery_analysis(candidate))
 
 
-    def test_repeated_generated_ids_across_distinct_groups_or_occurrences_rejected(self):
+    def test_one_generated_id_can_cover_multiple_occurrences_but_cannot_split(self):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
         batch = self.authentic_batch(selection, 303, 0, warning="Evidence must survive.")
@@ -728,26 +728,40 @@ class RecoveryTests(unittest.TestCase):
         )
 
         two_occurrences = copy.deepcopy(original)
-        two_occurrences["findings"][0]["occurrences"].append(
-            copy.deepcopy(two_occurrences["findings"][0]["occurrences"][0])
-        )
+        added = copy.deepcopy(two_occurrences["findings"][0]["occurrences"][0])
+        added["line"] = 18
+        two_occurrences["findings"][0]["occurrences"].append(added)
         two_occurrences["findings"][0]["raw_count"] = 2
         two_occurrences["finding_count"] = 2
-        self.assertIs(
-            coverage._recovery_groups_without_generated_ids(two_occurrences),
-            two_occurrences["findings"],
-        )
+        normalized = coverage._recovery_groups_without_generated_ids(two_occurrences)
+        self.assertIsNot(normalized, two_occurrences["findings"])
+        self.assertEqual(len(normalized[0]["finding_ids"]), 1)
+        self.assertEqual(len(normalized[0]["occurrences"]), 2)
 
+        rotated = copy.deepcopy(two_occurrences)
+        rotated["findings"][0]["finding_ids"] = ["finding-" + "b" * 32]
+        for occurrence in rotated["findings"][0]["occurrences"]:
+            occurrence["finding_id"] = rotated["findings"][0]["finding_ids"][0]
+        self.assertEqual(coverage.recovery_analysis(two_occurrences),
+                         coverage.recovery_analysis(rotated))
+
+        # One independent upstream finding being split into two is a real
+        # association change, even when coordinates and counts are unchanged.
+        split = copy.deepcopy(rotated)
+        split["findings"][0]["finding_ids"].append("finding-" + "c" * 32)
+        split["findings"][0]["occurrences"][1]["finding_id"] = "finding-" + "c" * 32
+        self.assertNotEqual(coverage.recovery_analysis(two_occurrences),
+                            coverage.recovery_analysis(split))
+
+        # Cross-group reuse is ambiguous and cannot be normalized away.
         two_groups = copy.deepcopy(original)
         other = copy.deepcopy(two_groups["findings"][0])
         other["id"] = "sha256:" + "f" * 64
         two_groups["findings"].append(other)
         two_groups["finding_group_count"] = 2
         two_groups["finding_count"] = 2
-        self.assertIs(
-            coverage._recovery_groups_without_generated_ids(two_groups),
-            two_groups["findings"],
-        )
+        self.assertIs(coverage._recovery_groups_without_generated_ids(two_groups),
+                      two_groups["findings"])
 
     def test_independent_equivalent_executions_preserve_published_evidence_and_counts(self):
         subject = item()
