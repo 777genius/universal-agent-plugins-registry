@@ -20,7 +20,7 @@ from legacy_directory_client_boundary import (
     LEGACY_DIRECTORY_CLIENT_IDS, require_legacy_directory_clients,
 )
 from prepare_directory_publication import build_candidate
-from sign_directory_publication import validate_bound_candidate, require_new_key_for_new_clients
+from sign_directory_publication import (validate_bound_candidate, require_new_key_for_new_clients, require_pi_release_materialization)
 
 
 NEW_CLIENTS = ("future-agent", "unknown-client")
@@ -150,6 +150,77 @@ class HistoricalSignerReuseTests(unittest.TestCase):
         require_new_key_for_new_clients(
             {"distributions": [new_distribution("codex")], "evidence": []}, historical_public,
         )
+
+
+class PiSignerMaterializationGateTests(unittest.TestCase):
+    """Test only the necessary signer proof gate, not full released-client E2E."""
+
+    @staticmethod
+    def candidate() -> dict:
+        distribution = new_distribution()
+        distribution["releases"] = [{"sequence": 1, "tree_digest": "sha256:" + "a" * 64}]
+        distribution["release_policies"][0]["current_evidence"] = []
+        return {"distributions": [distribution], "evidence": []}
+
+    @staticmethod
+    def add_observation(candidate: dict, platform: str, *, outcome: str = "passed",
+                        tree_digest: str | None = None) -> None:
+        distribution = candidate["distributions"][0]
+        evidence_id = "pi/materialization/" + platform
+        candidate["evidence"].append({
+            "id": evidence_id,
+            "distribution_id": distribution["id"],
+            "release_sequence": 1,
+            "package_tree_digest": tree_digest or distribution["releases"][0]["tree_digest"],
+            "client": "pi", "level": "materialization", "outcome": outcome,
+            "os": platform,
+        })
+        distribution["release_policies"][0]["current_evidence"].append(evidence_id)
+
+    def test_missing_real_pi_evidence_is_rejected_even_with_a_new_key(self) -> None:
+        candidate = self.candidate()
+        with self.assertRaisesRegex(PublicationError, "materialization evidence on linux,macos,windows"):
+            require_pi_release_materialization(candidate)
+        for platform in ("linux", "macos"):
+            self.add_observation(candidate, platform)
+        with self.assertRaisesRegex(PublicationError, "materialization evidence on windows"):
+            require_pi_release_materialization(candidate)
+        self.add_observation(candidate, "windows")
+        require_pi_release_materialization(candidate)
+
+    def test_failed_wrong_tree_and_unreferenced_evidence_cannot_complete_platforms(self) -> None:
+        candidate = self.candidate()
+        self.add_observation(candidate, "linux")
+        self.add_observation(candidate, "darwin", outcome="failed")
+        self.add_observation(candidate, "windows", tree_digest="sha256:" + "b" * 64)
+        with self.assertRaisesRegex(PublicationError, "materialization evidence on macos,windows"):
+            require_pi_release_materialization(candidate)
+        candidate["evidence"][1]["outcome"] = "passed"
+        candidate["evidence"][2]["package_tree_digest"] = candidate["distributions"][0]["releases"][0]["tree_digest"]
+        # An unreferenced record cannot satisfy the signer-side current policy.
+        candidate["distributions"][0]["release_policies"][0]["current_evidence"].remove(
+            "pi/materialization/windows"
+        )
+        with self.assertRaisesRegex(PublicationError, "materialization evidence on windows"):
+            require_pi_release_materialization(candidate)
+        candidate["distributions"][0]["release_policies"][0]["current_evidence"].append(
+            "pi/materialization/windows"
+        )
+        require_pi_release_materialization(candidate)
+
+    def test_legacy_non_pi_and_terminal_states_are_unaffected(self) -> None:
+        candidate = self.candidate()
+        candidate["distributions"][0]["release_policies"][0]["targets"][0]["client"] = "codex"
+        require_pi_release_materialization(candidate)
+        candidate["distributions"][0]["release_policies"][0]["targets"][0]["client"] = "pi"
+        candidate["distributions"][0]["status"] = "suspended"
+        require_pi_release_materialization(candidate)
+        candidate["distributions"][0]["status"] = "active"
+        candidate["distributions"][0]["release_policies"][0]["status"] = "revoked"
+        require_pi_release_materialization(candidate)
+        candidate["distributions"][0]["release_policies"][0]["status"] = "superseded"
+        with self.assertRaisesRegex(PublicationError, "materialization evidence"):
+            require_pi_release_materialization(candidate)
 
 
 class DerivedPiTargetTests(unittest.TestCase):
