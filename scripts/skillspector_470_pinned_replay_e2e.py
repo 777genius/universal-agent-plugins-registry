@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -67,7 +69,31 @@ def original_qualification() -> dict:
     if not token:
         raise ValueError("GITHUB_TOKEN with actions:read is required to inspect original Actions artifact")
     url = f"https://api.github.com/repos/{REPO}/actions/artifacts/{ACQUISITION_ARTIFACT_ID}/zip"
-    raw = get_bytes(url, maximum=2_000_000, token=token)
+    # Actions artifact API returns an authenticated 302 to an object-store URL.
+    # Never forward the GitHub Bearer credential to that other host: doing so
+    # may both leak a token and make the signed download return HTTP 401.
+    class RefuseAutomaticRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, msg, headers, newurl):
+            return None
+
+    api_request = urllib.request.Request(
+        url, headers={
+            "User-Agent": "skillspector-470-readonly-source-proof",
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+        }
+    )
+    try:
+        with urllib.request.build_opener(RefuseAutomaticRedirect()).open(api_request, timeout=30):
+            raise ValueError("GitHub artifact download did not return expected redirect")
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (302, 303, 307, 308):
+            raise
+        signed_url = exc.headers.get("Location", "")
+    target = urllib.parse.urlparse(signed_url)
+    if target.scheme != "https" or not target.hostname or target.username or target.password:
+        raise ValueError("GitHub artifact supplied unsafe redirect URL")
+    raw = get_bytes(signed_url, maximum=2_000_000)  # no Authorization header
     if sha256(raw) != ACQUISITION_ARTIFACT_SHA256:
         raise ValueError("original acquisition qualification ZIP bytes changed")
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
