@@ -70,7 +70,8 @@ def finding_signature(record: dict) -> list[str]:
             require(isinstance(group_ids, list) and len(group_ids) == len(rows)
                     and all(isinstance(v, str)
                             and re.fullmatch(r"finding-[0-9a-f]{32}", v) is not None
-                            for v in group_ids),
+                            for v in group_ids)
+                    and len(set(group_ids)) == len(group_ids),
                     "malformed generated finding identities")
         found_ids, normalized_rows = [], []
         for row in rows:

@@ -171,6 +171,38 @@ class CandidateCohortTests(unittest.TestCase):
                                     "generated group and occurrence"):
             candidate.verify_candidate(item, old, mutated)
 
+    def test_reused_generated_ids_cannot_launder_distinct_occurrences(self):
+        item, old, new = self.fixture()
+        original_ids = ["finding-" + "a" * 32, "finding-" + "b" * 32]
+        candidate_ids = ["finding-" + "c" * 32, "finding-" + "d" * 32]
+        group = {
+            "rule": "E2", "severity": "HIGH", "path": "SKILL.md",
+            "finding_ids": original_ids,
+            "occurrences": [
+                {"path": "SKILL.md", "line": 8, "finding_id": original_ids[0]},
+                {"path": "SKILL.md", "line": 18, "finding_id": original_ids[1]},
+            ],
+        }
+        replacement_group = copy.deepcopy(group)
+        replacement_group["finding_ids"] = candidate_ids
+        for row, value in zip(replacement_group["occurrences"], candidate_ids):
+            row["finding_id"] = value
+        old.update(findings=[group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        new.update(findings=[replacement_group], finding_count=2, raw_finding_count=2,
+                   finding_group_count=1)
+        self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
+        for side in ("original", "candidate"):
+            historical, proposed = copy.deepcopy((old, new))
+            corrupted = historical if side == "original" else proposed
+            one_group = corrupted["findings"][0]
+            one_group["finding_ids"][1] = one_group["finding_ids"][0]
+            one_group["occurrences"][1]["finding_id"] = one_group["finding_ids"][0]
+            with self.subTest(side=side), self.assertRaisesRegex(
+                candidate.admission.CohortRejected, "malformed generated finding identities"
+            ):
+                candidate.verify_candidate(item, historical, proposed)
+
     def test_old_independent_security_finding_cannot_disappear(self):
         item, old, new = self.fixture()
         old.update(findings=[{"rule": "MP3", "severity": "HIGH",
