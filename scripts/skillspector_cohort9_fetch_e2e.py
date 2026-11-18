@@ -6,6 +6,7 @@ Never executes third-party source content, signs reports, or publishes a scan.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -85,6 +86,10 @@ def main() -> None:
                 and result["production_partial_reduction"] == 0
                 and result["publication_authorized"] is False,
                 "candidate or publication trust boundary changed")
+        output = os.environ.get("PROOF_OUTPUT", "")
+        if output:
+            result["negative_tests_passed"] = negatives
+            Path(output).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         print("PASS pinned original artifacts, signed-v1 unchanged, nine-source semantic parity, "
               "twelve fail-closed negatives; production improvement ZERO")
 
