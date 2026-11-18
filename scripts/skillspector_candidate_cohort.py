@@ -89,7 +89,7 @@ def finding_signature(record: dict) -> list[str]:
                 require(has_row_id and isinstance(generated, str)
                         and generated in associations,
                         "generated group and occurrence identities disagree")
-                associations[generated].append(scanner.report_json(one))
+                associations[generated].append(scanner.report_json(one).decode("utf-8"))
             normalized_rows.append(one)
         if associations is not None:
             require(all(associations.values()),
@@ -105,6 +105,7 @@ def finding_signature(record: dict) -> list[str]:
             "generated_id_partitions": partitions,
         }))
     return sorted(signatures)
+
 
 def legacy_v1_finding_signature(record: dict) -> list[tuple]:
     """Preserve the existing signed-v1 volatile-ID comparison contract.
