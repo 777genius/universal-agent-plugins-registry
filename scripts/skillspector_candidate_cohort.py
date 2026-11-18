@@ -91,6 +91,21 @@ def finding_signature(record: dict) -> list[str]:
     return sorted(signatures)
 
 
+def legacy_v1_finding_signature(record: dict) -> list[tuple]:
+    """Preserve the existing signed-v1 volatile-ID comparison contract.
+
+    Semantic admission above must match every stable security field. A v1
+    comparison nevertheless keeps reporting generated-ID drift until an
+    explicitly versioned signed-v2 consumer replaces that old field.
+    """
+    return sorted(
+        (row["rule"], row["severity"], row["path"], row.get("line", 0),
+         tuple(sorted(scanner.report_json(position)
+                      for position in row.get("occurrences", []))))
+        for row in record["findings"]
+    )
+
+
 def verify_candidate(item: dict, old: dict, new: dict) -> dict:
     """Require complete inspection without erasing or inventing security findings."""
     require(new["id"] == old["id"] == item["id"] and
@@ -160,7 +175,12 @@ def verify_candidate(item: dict, old: dict, new: dict) -> dict:
         "source_digest": new["source"]["content_digest"],
         "old_findings": old["finding_count"],
         "candidate_findings": new["finding_count"],
-        "findings_changed": False,
+        # Signed v1 reports have a conservative, ID-sensitive comparison bit.
+        # Do not rewrite its meaning while adding strict semantic no-loss gates.
+        "findings_changed": (
+            old["finding_count"] != new["finding_count"] or
+            legacy_v1_finding_signature(old) != legacy_v1_finding_signature(new)
+        ),
         "candidate_exit_code": new["execution"]["exit_code"],
     }
 

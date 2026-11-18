@@ -146,7 +146,8 @@ class CandidateCohortTests(unittest.TestCase):
         new.update(findings=[next_group], finding_count=1,
                    finding_group_count=1, raw_finding_count=1)
         parity = candidate.verify_candidate(item, old, new)
-        self.assertFalse(parity["findings_changed"])
+        # The v1 comparison bit remains ID-sensitive even after semantic proof.
+        self.assertTrue(parity["findings_changed"])
         self.assertEqual(parity["old_findings"], 1)
 
         for changed in (
@@ -191,7 +192,8 @@ class CandidateCohortTests(unittest.TestCase):
                    finding_group_count=1)
         new.update(findings=[replacement_group], finding_count=2, raw_finding_count=2,
                    finding_group_count=1)
-        self.assertFalse(candidate.verify_candidate(item, old, new)["findings_changed"])
+        # Preserve signed-v1 generated-ID-drift flag; both risk sets still match.
+        self.assertTrue(candidate.verify_candidate(item, old, new)["findings_changed"])
         for side in ("original", "candidate"):
             historical, proposed = copy.deepcopy((old, new))
             corrupted = historical if side == "original" else proposed
