@@ -169,7 +169,7 @@ class SqlSourceEvidenceTests(unittest.TestCase):
         self.assertEqual(good["published_original_AE1_coverage_occurrences"], 1)
         missing_coverage = copy.deepcopy(original)
         missing_coverage["coverage"]["original_findings"] = []
-        with self.assertRaisesRegex(ValueError, "coverage finding"):
+        with self.assertRaisesRegex(ValueError, "original signed coverage limitations were concealed"):
             published_source_risks(missing_coverage, {"issues": report_issues + [wrong_line]})
         shifted_coverage = copy.deepcopy(original)
         shifted_coverage["coverage"]["original_findings"][0]["occurrences"][0]["start_line"] = 37
