@@ -111,7 +111,7 @@ def audit(old_zip,candidate_zip):
               and c['old_findings']==r['content_occurrences'] and c['candidate_exit_code'] in (0,1),'candidate source or finding summary differs')
     check(sum(x['security_groups'] for x in rows)==9,'expected security group count mismatch')
     check(sum(len(x['false_references_removed']) for x in rows)==11,'expected false reference count mismatch')
-    return {'kind':'independent-source-pinned-nine-cohort-security-parity-v1',
+    return {'schema_version':2, 'kind':'independent-source-pinned-nine-cohort-security-parity-v2',
             'published_report_commit':REPORT_SHA,'published_zip_sha256':BASELINE_SHA,
             'candidate_zip_sha256':CANDIDATE_SHA,'source_count':9,
             'security_groups_preserved':9,'false_missing_reference_rows_removed_in_candidate':11,
