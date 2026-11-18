@@ -3,15 +3,17 @@ on:
   pull_request:
     paths:
       - scripts/skillspector_470_epoch.py
+      - scripts/skillspector_470_pinned_replay_e2e.py
       - tests/test_skillspector_470_epoch.py
       - .github/workflows/skillspector-470-shadow-epoch.yml
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   shadow-epoch-unit-contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,3 +24,15 @@ jobs:
           python-version: '3.12'
       - name: Run fail-closed shadow epoch negatives
         run: python3 -m unittest -v tests.test_skillspector_470_epoch
+      - name: Replay original immutable v3 Errors and historical acquisition artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m scripts.skillspector_470_pinned_replay_e2e "$RUNNER_TEMP/skillspector-470-original-source-proof.json"
+      - name: Upload independent read-only proof
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skillspector-470-source-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/skillspector-470-original-source-proof.json
+          if-no-files-found: error
+          retention-days: 14
