@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest
 
 from scripts.skillspector_470_epoch import (
@@ -275,6 +276,56 @@ class EpochTests(unittest.TestCase):
                     receipt, source_id=receipt["source_id"],
                     revision=receipt["source_revision"],
                     tree_digest=receipt["qualified_tree_digest"], scan=actual)
+
+
+    def test_original_expired_artifact_log_proof_requires_all_pinned_sources(self):
+        # The 7-day Actions ZIP now gives HTTP 410. Historical proof can be
+        # rechecked only against the exact *successful* GitHub job log, never
+        # by skipping source evidence or treating an expired ZIP as verified.
+        from scripts.skillspector_470_pinned_replay_e2e import (
+            EXPECTED_LOG_SOURCES, parse_original_job_log,
+        )
+
+        def make_lines(entries):
+            return (
+                "2026-11-12T14:37:19.4200433Z "
+                + json.dumps(entries, sort_keys=True)
+                + "\n"
+            ).encode("utf-8")
+
+        entries = [
+            {
+                "repository": repo, "revision": sha, "selected_root": root,
+                "status": "complete_acquisition", "file_count": metadata[0],
+                "total_bytes": metadata[1], "unicode_files": metadata[2],
+                "tree_digest": metadata[3], "scan_status": metadata[4],
+                "scan_issue_count": metadata[5],
+            }
+            for (repo, sha, root), metadata in EXPECTED_LOG_SOURCES.items()
+        ]
+        self.assertEqual(len(entries), 5)
+        verified = parse_original_job_log(make_lines(entries))
+        self.assertEqual(verified["status"], "passed")
+        self.assertFalse(verified["expired_artifact_zip_reverified"])
+        for name, mutation in (
+            ("missing", lambda items: items.pop()),
+            ("duplicate", lambda items: items.__setitem__(1, copy.deepcopy(items[0]))),
+            ("source_revision", lambda items: items[0].update(revision="0" * 40)),
+            ("tree_digest", lambda items: items[0].update(tree_digest="sha256:" + "0" * 64)),
+            ("security_issues", lambda items: items[0].update(scan_issue_count=0)),
+            ("partial_to_complete", lambda items: items[0].update(scan_status="complete")),
+            ("wrong_bytes", lambda items: items[0].update(total_bytes=2)),
+            ("unverified_status", lambda items: items[0].update(status="failed")),
+        ):
+            with self.subTest(name=name):
+                changed = copy.deepcopy(entries)
+                mutation(changed)
+                with self.assertRaises(ValueError):
+                    parse_original_job_log(make_lines(changed))
+        with self.assertRaises(ValueError):
+            parse_original_job_log(make_lines(entries) * 2)
+        with self.assertRaises(ValueError):
+            parse_original_job_log(b"2026-11-12T14:37:19Z PASSED\n")
 
 
 if __name__ == "__main__":

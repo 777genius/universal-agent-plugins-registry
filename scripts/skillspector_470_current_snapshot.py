@@ -114,6 +114,7 @@ def classify(*, identifier: str, state: dict, record: dict) -> dict:
     if not changed:
         retry = record.get("retry") or {}
         require(record.get("status") == "error"
+                and isinstance(retry, dict)
                 and source.get("content_digest") is None
                 and {x.get("code") for x in record.get("errors", [])} == {"acquisition_failed"}
                 and {x.get("code") for x in record.get("coverage", {}).get("reasons", [])} == {"acquisition_failed"}
@@ -121,7 +122,13 @@ def classify(*, identifier: str, state: dict, record: dict) -> dict:
                 and retry.get("disposition") == "exhausted"
                 and retry.get("reason") == "transient_retry_limit"
                 and retry.get("next_attempt_at") is None
-                and len(record.get("attempt_history", [])) == 8,
+                and retry.get("next_profile") is None
+                and retry.get("latest_status") == "error"
+                and isinstance(record.get("attempt_history"), list)
+                and len(record["attempt_history"]) == 8
+                and all(isinstance(event, dict) and event.get("status") == "error"
+                        for event in record["attempt_history"])
+                and record["attempt_history"][-1].get("reason") == "transient_retry_limit",
                 "unchanged pin lacks genuine exhausted Error provenance")
     else:
         require(record.get("status") == "partial"
