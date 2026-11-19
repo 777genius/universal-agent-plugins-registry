@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import urllib.error
@@ -64,45 +65,134 @@ def verified_index() -> dict:
     return index
 
 
-def original_qualification() -> dict:
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise ValueError("GITHUB_TOKEN with actions:read is required to inspect original Actions artifact")
-    url = f"https://api.github.com/repos/{REPO}/actions/artifacts/{ACQUISITION_ARTIFACT_ID}/zip"
-    # Actions artifact API returns an authenticated 302 to an object-store URL.
-    # Never forward the GitHub Bearer credential to that other host: doing so
-    # may both leak a token and make the signed download return HTTP 401.
+# The original seven-day Actions ZIP was independently checked in November 2026,
+# but GitHub now returns HTTP 410 for artifact 13953054225. The original
+# successful job's authenticated logs remain available and print the *same*
+# five pinned source receipts. Never report a re-verification of missing ZIP.
+ACQUISITION_RUN_ID = 43237932304
+ACQUISITION_JOB_ID = 131250237483
+ACQUISITION_HEAD_SHA = "dc80a9cc7e605d555305b2161ddf17f4115a9d2d"
+# (file_count, total_bytes, non-ascii paths, directory tree SHA, status, issues)
+EXPECTED_LOG_SOURCES = {
+    ("alchaincyf/elon-musk-skill", "65af7c9a5395cc996d17f55b5bde37e6ed72cf4f", ""): (
+        12, 5438866, 3, "sha256:d70458fd6f6848efa1bef76f81e809faea8440535782ce8721917affdc5ea6bf",
+        "partial", 8,
+    ),
+    ("gogf/skills", "c22b6e4115e1a3747676419bba98fee99af6beff", "skills/goframe-v2"): (
+        962, 4418429, 400, "sha256:75689483353de0f1a54387367d3f38b094022f219c8057021b8c9295a8bba90a",
+        "partial", 108,
+    ),
+    ("zenstory-ai/drama-skills", "8cf7404981b7095b498e061832bb3c9ffd6a42be", "skills/short-drama"): (
+        31, 621272, 6, "sha256:501bb8d7c77a08e7bf50ca575899f55975a13425e2480680f6c35ec7a4a2ffcd",
+        "partial", 10,
+    ),
+    ("zenstory-ai/drama-skills", "8cf7404981b7095b498e061832bb3c9ffd6a42be", "skills/short-drama-develop"): (
+        36, 235483, 15, "sha256:38693b12ac8700c78402ecf1f45093e8fd8d3623a3dc4421e0562bc209cba359",
+        "complete", 1,
+    ),
+    ("zenstory-ai/drama-skills", "8cf7404981b7095b498e061832bb3c9ffd6a42be", "skills/short-drama-edit"): (
+        29, 232288, 1, "sha256:7448ad456b0cbd3fddfe516871ac4b9e03c2a5e2453faccc49ef12ac90d9468a",
+        "partial", 15,
+    ),
+}
+
+
+def parse_original_job_log(raw: bytes) -> dict:
+    """Only accept the *single* final JSON receipt from a pinned original job.
+
+    This re-verifies the original GitHub-hosted source-bound observation, NOT
+    the expired artifact ZIP. Any omitted/changed source is a hard failure.
+    """
+    try:
+        content = raw.decode("utf-8", errors="strict")
+    except UnicodeError as error:
+        raise ValueError("original GitHub job log is not UTF-8") from error
+    receipts = []
+    for line in content.splitlines():
+        match = re.fullmatch(r"\d{4}-\d{2}-\d{2}T[0-9:.]+Z (.*)", line)
+        if not match or not match.group(1).startswith('[{"file_count":'):
+            continue
+        try:
+            receipts.append(json.loads(match.group(1)))
+        except (ValueError, TypeError) as error:
+            raise ValueError("malformed original GitHub receipt") from error
+    if len(receipts) != 1 or not isinstance(receipts[0], list):
+        raise ValueError("missing or ambiguous original GitHub job receipt")
+    rows = receipts[0]
+    if len(rows) != len(EXPECTED_LOG_SOURCES):
+        raise ValueError("missing original immutable source receipt")
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("malformed original source evidence")
+        key = (row.get("repository"), row.get("revision"), row.get("selected_root"))
+        if key not in EXPECTED_LOG_SOURCES or key in seen:
+            raise ValueError("original source identity changed or duplicated")
+        seen.add(key)
+        count, total, unicode_files, tree_digest, scan_status, issues = EXPECTED_LOG_SOURCES[key]
+        if (
+            row.get("status") != "complete_acquisition"
+            or type(row.get("file_count")) is not int or row["file_count"] != count
+            or type(row.get("total_bytes")) is not int or row["total_bytes"] != total
+            or type(row.get("unicode_files")) is not int or row["unicode_files"] != unicode_files
+            or row.get("tree_digest") != tree_digest
+            or row.get("scan_status") != scan_status
+            or type(row.get("scan_issue_count")) is not int
+            or row["scan_issue_count"] != issues
+        ):
+            raise ValueError("original source digests, scan findings or coverage changed")
+    if seen != set(EXPECTED_LOG_SOURCES):
+        raise ValueError("original source ledger incomplete")
+    return {"schema_version": 1, "status": "passed", "sources": rows,
+            "verification_source": "original_authenticated_github_job_log",
+            "expired_artifact_zip_reverified": False}
+
+
+def download_authenticated_log(token: str) -> bytes:
+    """REST uses 302; never send GitHub's token to object storage."""
+    url = f"https://api.github.com/repos/{REPO}/actions/jobs/{ACQUISITION_JOB_ID}/logs"
     class RefuseAutomaticRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, request, fp, code, msg, headers, newurl):
             return None
 
-    api_request = urllib.request.Request(
-        url, headers={
-            "User-Agent": "skillspector-470-readonly-source-proof",
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-        }
-    )
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "skillspector-470-readonly-source-proof",
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+    })
     try:
-        with urllib.request.build_opener(RefuseAutomaticRedirect()).open(api_request, timeout=30):
-            raise ValueError("GitHub artifact download did not return expected redirect")
-    except urllib.error.HTTPError as exc:
-        if exc.code not in (302, 303, 307, 308):
+        with urllib.request.build_opener(RefuseAutomaticRedirect()).open(request, timeout=30):
+            raise ValueError("original job log did not return expected signed redirect")
+    except urllib.error.HTTPError as error:
+        if error.code not in (302, 303, 307, 308):
             raise
-        signed_url = exc.headers.get("Location", "")
-    target = urllib.parse.urlparse(signed_url)
-    if target.scheme != "https" or not target.hostname or target.username or target.password:
-        raise ValueError("GitHub artifact supplied unsafe redirect URL")
-    raw = get_bytes(signed_url, maximum=2_000_000)  # no Authorization header
-    if sha256(raw) != ACQUISITION_ARTIFACT_SHA256:
-        raise ValueError("original acquisition qualification ZIP bytes changed")
-    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        if archive.testzip() is not None or archive.namelist() != ["skillspector-unicode-acceptance.json"]:
-            raise ValueError("invalid original qualification ZIP integrity or members")
-        proof = json.loads(archive.read("skillspector-unicode-acceptance.json"))
-    if proof.get("schema_version") != 1 or proof.get("status") != "passed":
-        raise ValueError("original acquisition qualification was not passing")
-    return proof
+        signed_url = error.headers.get("Location", "")
+    parsed = urllib.parse.urlparse(signed_url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("unsafe original GitHub job-log redirect")
+    return get_bytes(signed_url, maximum=3_000_000)
+
+
+def original_qualification() -> dict:
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise ValueError("GITHUB_TOKEN with actions:read required for original logs")
+    jobs = json.loads(get_bytes(
+        f"https://api.github.com/repos/{REPO}/actions/runs/{ACQUISITION_RUN_ID}/jobs?per_page=100",
+        maximum=2_000_000, token=token,
+    ))
+    candidates = [
+        job for job in jobs.get("jobs", []) if job.get("id") == ACQUISITION_JOB_ID
+    ]
+    if len(candidates) != 1 or not (
+        candidates[0].get("run_id") == ACQUISITION_RUN_ID
+        and candidates[0].get("head_sha") == ACQUISITION_HEAD_SHA
+        and candidates[0].get("name") == "pinned-five-root-acquisition"
+        and candidates[0].get("status") == "completed"
+        and candidates[0].get("conclusion") == "success"
+    ):
+        raise ValueError("original GitHub job identity or result does not match")
+    return parse_original_job_log(download_authenticated_log(token))
 
 
 def run_readonly_proof() -> dict:
@@ -188,7 +278,9 @@ def run_readonly_proof() -> dict:
         "original_report_commit": BASELINE_REPORT_COMMIT,
         "original_index_git_blob_sha": INDEX_BLOB_SHA,
         "original_acquisition_artifact_id": ACQUISITION_ARTIFACT_ID,
-        "original_acquisition_zip_sha256": ACQUISITION_ARTIFACT_SHA256,
+        "original_acquisition_zip_sha256_historical_only": ACQUISITION_ARTIFACT_SHA256,
+        "original_evidence_source": qualification["verification_source"],
+        "expired_artifact_zip_reverified": qualification["expired_artifact_zip_reverified"],
         "published_scanner_revision": OLD_SCANNER_REVISION,
         "sources": output,
         "publication_authorized": False,
