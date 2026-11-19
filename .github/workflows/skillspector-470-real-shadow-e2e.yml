@@ -1,0 +1,70 @@
+name: SkillSpector #470 one real immutable shadow scan (no publication)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/skillspector-470-real-shadow-e2e.yml"
+      - "scripts/skillspector_470_real_shadow_e2e.py"
+      - "scripts/skillspector_470_epoch.py"
+      - "tests/test_skillspector_470_real_shadow_e2e.py"
+      - "tests/test_skillspector_470_epoch.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skillspector-470-real-shadow-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  goframe-immutable-shadow:
+    # Reject fork code running in this repository's trusted workflow context.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 38
+    steps:
+      - name: Checkout exact candidate HEAD without stored credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Checkout published immutable Error evidence
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 7771404dcdfc5b3855f1319b5e9a2bc19d0c7acf
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            reports/skillspector/v3/index.json
+            reports/skillspector/v3/shards/888ac8fe47e347c526fa77737ffb9d3bbe26782c7e5cbc025afc9f8e527c9efd.json
+          path: signed-baseline
+      - name: Checkout exact production scanner, not unreviewed candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: NVIDIA/SkillSpector
+          ref: f3b25697d76256998ca9d42c198d256258d4c035
+          persist-credentials: false
+          path: scanner
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install deterministic verification dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3 uv==0.13.4
+          uv sync --directory scanner --frozen --no-dev --python 3.12
+          python3 scripts/patch_skillspector_directory_references.py scanner --verify
+      - name: Run no-network adversarial admission and shadow ledger tests
+        run: |
+          python3 -m unittest tests.test_skillspector_470_real_shadow_e2e tests.test_skillspector_470_epoch -v
+      - name: Run exactly one real SHA-bound no-LLM scan (never a production attempt)
+        timeout-minutes: 27
+        run: python3 scripts/skillspector_470_real_shadow_e2e.py /tmp/skillspector-470-real-shadow.json
+      - name: Preserve original full security and completeness evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: skillspector-470-goframe-immutable-real-shadow
+          path: /tmp/skillspector-470-real-shadow.json
+          if-no-files-found: warn
+          retention-days: 7
