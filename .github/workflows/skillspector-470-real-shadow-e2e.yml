@@ -39,6 +39,17 @@ jobs:
             reports/skillspector/v3/index.json
             reports/skillspector/v3/shards/888ac8fe47e347c526fa77737ffb9d3bbe26782c7e5cbc025afc9f8e527c9efd.json
           path: signed-baseline
+      - name: Checkout current immutable signed Error/source identity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: 777genius/universal-agent-plugins-registry
+          ref: 2d0c924bd0ebc16b819a71bb759dd4bac0a57199
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            reports/skillspector/v3/index.json
+            reports/skillspector/v3/shards/888ac8fe47e347c526fa77737ffb9d3bbe26782c7e5cbc025afc9f8e527c9efd.json
+          path: signed-current
       - name: Checkout exact production scanner, not unreviewed candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
