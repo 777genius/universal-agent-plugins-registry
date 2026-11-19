@@ -5,7 +5,8 @@ import copy
 import unittest
 
 from scripts.skillspector_470_current_snapshot import (
-    ORIGINAL_PINS, SCANNER_REVISION, classify, git_blob_sha,
+    ORIGINAL_PINS, SCANNER_REVISION, canonical_json, classify, git_blob_sha,
+    sha256, verify_attempt_ledger,
 )
 
 
@@ -174,6 +175,75 @@ class CurrentAdmissionTests(unittest.TestCase):
         record["status"] = "complete"
         with self.assertRaisesRegex(ValueError, "must not be certified"):
             classify(identifier=source_id, state=state, record=record)
+
+
+def independent_queue_fixture():
+    source_id, state, record = fixture()
+    profile = {"id": "static-extended-v3", "digest": "sha256:" + "b" * 64}
+    record["profile"] = profile
+    for index, event in enumerate(record["attempt_history"]):
+        event.update(at=f"2026-11-01T00:00:{index:02d}Z",
+                     fingerprint="sha256:" + f"{index:064x}", profile=profile)
+    item = {"id": source_id, "kind": "skill",
+            "repository": state["repository"], "revision": state["revision"],
+            "path": state["path"], "plugin_path": ""}
+    selection = {"sources": [item]}
+    index = {"source_commit": "a" * 40,
+             "generated_at": "2026-11-01T01:00:00Z",
+             "selection_digest": "sha256:" + sha256(canonical_json(selection)),
+             "profile": {"digest": "sha256:" + "c" * 64},
+             "scanner": record["scanner"]}
+    last = record["attempt_history"][-1]
+    attempt = {"id": source_id, "source_digest": "sha256:" + sha256(canonical_json(
+        {key: item[key] for key in ("kind", "repository", "revision", "path", "plugin_path")})),
+        "scanner": record["scanner"], "policy_digest": index["profile"]["digest"],
+        "profile": profile, "status": "error", "attempt_count": 4,
+        "disposition": "exhausted", "reason": "transient_retry_limit",
+        "next_attempt_at": None, "next_profile": None,
+        "last_attempted_at": last["at"], "fingerprint": last["fingerprint"],
+        "history": copy.deepcopy(record["attempt_history"])}
+    ledger = {"schema_version": 3, "source_commit": index["source_commit"],
+              "selection_digest": index["selection_digest"],
+              "generated_at": index["generated_at"],
+              "queue_cursor": 0, "attempts": [attempt]}
+    return index, selection, ledger, {source_id: record}, source_id
+
+
+class IndependentAttemptLedgerTests(unittest.TestCase):
+    def test_original_shard_and_independently_persisted_queue_agree(self):
+        index, selection, ledger, records, source_id = independent_queue_fixture()
+        proof = verify_attempt_ledger(index, selection, ledger, records)[source_id]
+        self.assertTrue(proof["independent_persisted_attempt_verified"])
+        self.assertFalse(proof["migration_authorized"])
+        self.assertTrue(proof["history_digest"].startswith("sha256:"))
+
+    def test_forged_or_missing_persisted_provenance_fails_closed(self):
+        mutations = {
+            "missing": lambda x: x[2]["attempts"].clear(),
+            "duplicate": lambda x: x[2]["attempts"].append(copy.deepcopy(x[2]["attempts"][0])),
+            "wrong_source": lambda x: x[2]["attempts"][0].update(source_digest="sha256:" + "d"*64),
+            "wrong_policy": lambda x: x[2]["attempts"][0].update(policy_digest="sha256:" + "d"*64),
+            "wrong_scanner": lambda x: x[2]["attempts"][0].update(scanner={"revision": "f"*40}),
+            "wrong_profile": lambda x: x[2]["attempts"][0].update(profile={"id": "forged"}),
+            "wrong_status": lambda x: x[2]["attempts"][0].update(status="complete"),
+            "wrong_retry_count": lambda x: x[2]["attempts"][0].update(attempt_count=1),
+            "altered_history": lambda x: x[2]["attempts"][0]["history"][2].update(status="partial"),
+            "truncated_history": lambda x: x[2]["attempts"][0]["history"].pop(),
+            "wrong_fingerprint": lambda x: x[2]["attempts"][0].update(fingerprint="sha256:" + "e"*64),
+            "different_immutable_selection": lambda x: x[1]["sources"][0].update(revision="f"*40),
+            "missing_selection": lambda x: x[1]["sources"].clear(),
+            "wrong_source_commit": lambda x: x[2].update(source_commit="f"*40),
+            "wrong_selection_digest": lambda x: x[2].update(selection_digest="sha256:"+"f"*64),
+            "wrong_generated_at": lambda x: x[2].update(generated_at="2000-01-01T00:00:00Z"),
+            "wrong_queue_cursor": lambda x: x[2].update(queue_cursor=True),
+            "wrong_record_retry": lambda x: next(iter(x[3].values()))["retry"].update(latest_status="partial"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                fixture_data = list(independent_queue_fixture()[:4])
+                mutate(fixture_data)
+                with self.assertRaises(ValueError):
+                    verify_attempt_ledger(*fixture_data)
 
 
 if __name__ == "__main__":
