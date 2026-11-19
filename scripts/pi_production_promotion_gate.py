@@ -65,9 +65,15 @@ def require_pi_free_ledger(ledger: Path, sequence_arg: str) -> None:
     sequence = int(sequence_arg)
     if sequence >= 10**20:
         raise PromotionDenied("expected sequence exceeds fixed publication width")
-    path = ledger / "registry" / "schemas" / "1" / "snapshots" / f"{sequence:020d}.json"
-    if path.is_symlink() or not path.is_file():
-        raise PromotionDenied("exact staged signed snapshot is missing or a symlink")
+    if ledger.is_symlink():
+        raise PromotionDenied("staged ledger path is a symlink")
+    path = ledger
+    for component in ("registry", "schemas", "1", "snapshots", f"{sequence:020d}.json"):
+        path = path / component
+        if path.is_symlink():
+            raise PromotionDenied("staged signed snapshot path contains a symlink")
+    if not path.is_file():
+        raise PromotionDenied("exact staged signed snapshot is missing")
     data = path.read_bytes()
     if not 0 < len(data) <= MAX_SNAPSHOT_BYTES:
         raise PromotionDenied("exact staged signed snapshot size is invalid")
