@@ -70,7 +70,7 @@ jobs:
           python3 -m unittest tests.test_skillspector_470_real_shadow_e2e tests.test_skillspector_470_epoch -v
       - name: Run exactly one real SHA-bound no-LLM scan (never a production attempt)
         timeout-minutes: 27
-        run: python3 scripts/skillspector_470_real_shadow_e2e.py /tmp/skillspector-470-real-shadow.json
+        run: python3 -m scripts.skillspector_470_real_shadow_e2e /tmp/skillspector-470-real-shadow.json
       - name: Preserve original full security and completeness evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
