@@ -59,6 +59,10 @@ def require_pi_free_snapshot(snapshot: object, expected_sequence: int) -> None:
             raise PromotionDenied(PI_GATE_REASON)
 
 
+def reject_non_json_constant(_value: str) -> object:
+    raise PromotionDenied("non-JSON numeric constant")
+
+
 def require_pi_free_ledger(ledger: Path, sequence_arg: str) -> None:
     if re.fullmatch(r"[1-9][0-9]{0,19}", sequence_arg) is None:
         raise PromotionDenied("expected sequence must be a nonzero 20-digit maximum integer")
@@ -81,9 +85,7 @@ def require_pi_free_ledger(ledger: Path, sequence_arg: str) -> None:
         snapshot = json.loads(
             data,
             object_pairs_hook=strict_object,
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                PromotionDenied("non-JSON numeric constant")
-            ),
+            parse_constant=reject_non_json_constant,
         )
     except (UnicodeError, json.JSONDecodeError) as error:
         raise PromotionDenied("exact staged signed snapshot is invalid JSON") from error
