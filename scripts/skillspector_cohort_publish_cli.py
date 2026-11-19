@@ -42,6 +42,14 @@ def authenticated_fresh_sources(previous: dict, plan: dict) -> dict:
         previous, plan, community, community_info, directory, directory_info)
 
 
+
+def require_fresh_main(github: GitHub, source_commit: str) -> None:
+    """Cheap strict main SHA lease; final publisher still rechecks atomically."""
+    require(admission.SHA.fullmatch(source_commit) is not None,
+            "caller source SHA is invalid")
+    require(publisher.checked_head(github, "main") == source_commit,
+            "main advanced since signed cohort qualification")
+
 def publish_one(candidate_path: Path, token: str, signing_seed: str,
                 signing_key_id: str, source_commit: str) -> str:
     """Requalify source, sign with protected key and CAS-publish exact bytes."""
@@ -53,8 +61,13 @@ def publish_one(candidate_path: Path, token: str, signing_seed: str,
     trusted_keys = load_public_keys(TRUSTED_KEYS)
     require(bool(trusted_keys) and signing_key_id in trusted_keys,
             "independent cohort trusted public key has not been reviewed/registered")
-    private_seed = ed25519_private_key(signing_seed)
+    # Fail fast on obsolete scheduled/main SHA before expensive immutable bundle
+    # acquisition, signed-feed requalification or protected-key parsing. The
+    # publisher independently rechecks main immediately before CAS; this is
+    # only an early rejection, never an admission or a relaxed final guard.
     github = GitHub(token)
+    require_fresh_main(github, source_commit)
+    private_seed = ed25519_private_key(signing_seed)
     with tempfile.TemporaryDirectory(prefix="skillspector-signed-cohort-v1-") as temporary:
         previous_dir = Path(temporary) / "published-v3"
         report_commit = old_publisher.previous(github, previous_dir)
