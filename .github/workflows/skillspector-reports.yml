@@ -147,7 +147,7 @@ jobs:
   scan:
     needs: prepare
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
-    timeout-minutes: 55
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: read
@@ -211,7 +211,7 @@ jobs:
       - name: Scan durable slice 1 without LLMs
         id: scan1
         if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.slices.outcome == 'success' && (steps.resume.outcome == 'success' || steps.resume.outcome == 'skipped') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         working-directory: source
         env:
           SOURCE_COMMIT: ${{ github.sha }}
@@ -254,7 +254,7 @@ jobs:
       - name: Scan durable slice 2 without LLMs
         id: scan2
         if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.slices.outcome == 'success' && (steps.resume.outcome == 'success' || steps.resume.outcome == 'skipped') && steps.slices.outputs.count == '3' }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         working-directory: source
         env:
           SOURCE_COMMIT: ${{ github.sha }}
@@ -297,7 +297,7 @@ jobs:
       - name: Scan durable slice 3 without LLMs
         id: scan3
         if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.slices.outcome == 'success' && (steps.resume.outcome == 'success' || steps.resume.outcome == 'skipped') && steps.slices.outputs.count == '3' }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         working-directory: source
         env:
           SOURCE_COMMIT: ${{ github.sha }}
