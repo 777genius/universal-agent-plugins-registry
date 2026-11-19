@@ -132,7 +132,9 @@ class PiProductionPromotionGateTests(unittest.TestCase):
             real.mkdir()
             safe = {"distributions": snapshot()["distributions"], "evidence": snapshot()["evidence"]}
             data = canonical_json(safe)
-            candidate = real / "candidate.json"
+            sub = real / "sub"
+            sub.mkdir()
+            candidate = sub / "candidate.json"
             candidate.write_bytes(data)
             digest = candidate_digest(data)
             with mock.patch("pi_production_promotion_gate.os.open", wraps=os.open) as opened:
@@ -141,7 +143,7 @@ class PiProductionPromotionGateTests(unittest.TestCase):
             alias = base / "alias"
             alias.symlink_to(real, target_is_directory=True)
             with self.assertRaisesRegex(PromotionDenied, "symlink"):
-                require_pi_free_candidate(alias / "candidate.json", digest)
+                require_pi_free_candidate(alias / "sub" / "candidate.json", digest)
 
     @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "requires POSIX no-follow opening")
     def test_pre_sign_candidate_rejects_final_symlink_swap(self) -> None:
