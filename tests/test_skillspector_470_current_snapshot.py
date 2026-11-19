@@ -23,8 +23,11 @@ def fixture():
         "errors": [{"code": "acquisition_failed"}],
         "coverage": {"reasons": [{"code": "acquisition_failed"}]},
         "retry": {"attempt_count": 4, "disposition": "exhausted",
-                  "reason": "transient_retry_limit", "next_attempt_at": None},
-        "attempt_history": [{"status": "error"}] * 8,
+                  "reason": "transient_retry_limit", "next_attempt_at": None,
+                  "next_profile": None, "latest_status": "error"},
+        "attempt_history": [
+            {"status": "error", "reason": "transient_source_failure"} for _ in range(7)
+        ] + [{"status": "error", "reason": "transient_retry_limit"}],
         "findings": [], "findings_truncated": False,
         "finding_group_count": 0, "finding_count": 0,
     }
@@ -109,6 +112,25 @@ class CurrentAdmissionTests(unittest.TestCase):
                 (a["retry"] if where == "retry" else a)[field] = value
                 with self.assertRaises(ValueError):
                     classify(identifier=source_id, state=state, record=a)
+
+    def test_terminal_exhausted_history_must_be_intact_for_new_epoch_review(self):
+        source_id, state, record = fixture()
+        # Old logic checked only length=8; a non-Error, missing event or
+        # scheduled terminal summary could incorrectly admit an old source.
+        mutations = (
+            ("intermediate_nonerror", lambda x: x["attempt_history"][3].update(status="partial")),
+            ("last_nonerror", lambda x: x["attempt_history"][-1].update(status="partial")),
+            ("last_reason_changed", lambda x: x["attempt_history"][-1].update(reason="analyzer_retry")),
+            ("missing_history_event", lambda x: x["attempt_history"].__setitem__(3, None)),
+            ("future_profile", lambda x: x["retry"].update(next_profile="static-extended-v3")),
+            ("status_mismatch", lambda x: x["retry"].update(latest_status="partial")),
+        )
+        for name, mutate in mutations:
+            with self.subTest(name=name):
+                modified = copy.deepcopy(record)
+                mutate(modified)
+                with self.assertRaisesRegex(ValueError, "exhausted Error provenance"):
+                    classify(identifier=source_id, state=state, record=modified)
 
     def test_security_groups_are_not_silently_dropped_or_rebound(self):
         source_id, state, record = fixture()
