@@ -1030,6 +1030,18 @@ jobs:
           fi
           echo "ledger_commit=$(git -C ledger rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "publication_commit=${EXISTING_MATERIALIZED_COMMIT:-$(git -C ledger rev-parse HEAD)}" >> "$GITHUB_OUTPUT"
+      # Denial-only prepublication boundary. materialize_site pushes the signed
+      # ledger before promotion_intent, so its later gate alone is insufficient.
+      # Do not replace with a candidate claim, test key or manual override.
+      - name: Deny Pi signed ledger publication before publisher token
+        env:
+          EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
+          EXPECTED_LEDGER_COMMIT: ${{ steps.commit.outputs.ledger_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git -C ledger rev-parse HEAD)" = "$EXPECTED_LEDGER_COMMIT"
+          python3 trusted-source/scripts/pi_production_promotion_gate.py \
+            --ledger ledger --sequence "$EXPECTED_SEQUENCE"
       - name: Acquire dedicated publisher token
         id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
