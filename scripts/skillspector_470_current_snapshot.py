@@ -114,6 +114,7 @@ def classify(*, identifier: str, state: dict, record: dict) -> dict:
     if not changed:
         retry = record.get("retry") or {}
         require(record.get("status") == "error"
+                and isinstance(retry, dict)
                 and source.get("content_digest") is None
                 and {x.get("code") for x in record.get("errors", [])} == {"acquisition_failed"}
                 and {x.get("code") for x in record.get("coverage", {}).get("reasons", [])} == {"acquisition_failed"}
