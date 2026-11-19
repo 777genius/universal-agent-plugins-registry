@@ -87,6 +87,26 @@ class PiProductionPromotionGateTests(unittest.TestCase):
             with self.subTest(wrong=wrong), self.assertRaises(PromotionDenied):
                 require_pi_free_snapshot(wrong, 48)
 
+    def test_signed_ledger_publish_is_gated_before_publisher_token(self) -> None:
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/directory-publication.yml").read_text(encoding="utf-8")
+        materialize = workflow.split("\n  materialize_site:\n", 1)[1].split(
+            "\n  gate_exact_staged_publication:\n", 1
+        )[0]
+        gate = materialize.index("trusted-source/scripts/pi_production_promotion_gate.py")
+        token = materialize.index("- name: Acquire dedicated publisher token")
+        publish = materialize.index("- name: Publish the signed and materialized commits with exact CAS")
+        self.assertLess(gate, token)
+        self.assertLess(token, publish)
+        self.assertIn('--ledger ledger --sequence "$EXPECTED_SEQUENCE"', materialize)
+        # Resumed publication skips the signed bundle checkout, but still
+        # needs the trusted gate source before a publisher token is minted.
+        checkout = materialize.split("- uses: actions/checkout@", 1)[1].split(
+            "- uses: actions/setup-python@", 1
+        )[0]
+        self.assertIn("path: trusted-source", checkout)
+        self.assertNotIn("if: inputs.resume_publication_id == ''", checkout)
+
 
 if __name__ == "__main__":
     unittest.main()
