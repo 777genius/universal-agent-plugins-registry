@@ -43,7 +43,7 @@ def sha256(body: bytes) -> str:
 
 
 def git_blob_sha(body: bytes) -> str:
-    return hashlib.sha1(b"blob " + str(len(body)).encode() + b"\\0" + body).hexdigest()
+    return hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
 
 
 def get_bytes(relative: str, limit: int) -> bytes:
