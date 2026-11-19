@@ -30,6 +30,9 @@ SCANNER_CHECKOUT = Path("scanner")
 SCANNER_BINARY = SCANNER_CHECKOUT / ".venv/bin/skillspector"
 REPORT_DIR = Path("signed-baseline/reports/skillspector/v3")
 INDEX_GIT_BLOB = "181b4e95c0f6de5d4535f91031b35dfde7d27a86"
+CURRENT_REPORT_COMMIT = "2d0c924bd0ebc16b819a71bb759dd4bac0a57199"
+CURRENT_INDEX_GIT_BLOB = "c1404b1381f514388b9d829247fea0ce64ceeb27"
+CURRENT_REPORT_DIR = Path("signed-current/reports/skillspector/v3")
 SHARD_SHA256 = "888ac8fe47e347c526fa77737ffb9d3bbe26782c7e5cbc025afc9f8e527c9efd"
 # These are the original independent five-root acquisition receipts from #43237932304.
 TREE_SHA256 = "sha256:75689483353de0f1a54387367d3f38b094022f219c8057021b8c9295a8bba90a"
@@ -80,6 +83,32 @@ def load_immutable_original() -> tuple[dict, dict]:
     records = json.loads(raw).get("records")
     require(isinstance(records, list) and len(records) == 1
             and records[0].get("id") == ID, "original Error record differs")
+    # Independent current signed source lease: an old exhausted Error is not
+    # a valid current replay candidate if the selected source has since moved.
+    require(subprocess.check_output(
+        ["git", "-C", "signed-current", "rev-parse", "HEAD"], text=True
+    ).strip() == CURRENT_REPORT_COMMIT, "wrong current signed report")
+    current_bytes = (CURRENT_REPORT_DIR / "index.json").read_bytes()
+    require(git_blob(current_bytes) == CURRENT_INDEX_GIT_BLOB,
+            "current published report Git blob changed")
+    current_index = json.loads(current_bytes)
+    require(current_index.get("scanner") == index.get("scanner")
+            and current_index.get("profile") == index.get("profile"),
+            "current analyzer/policy drift requires separate qualification")
+    current_states = [x for x in current_index.get("source_states", []) if x.get("id") == ID]
+    require(len(current_states) == 1 and current_states[0].get("current") is True
+            and current_states[0].get("revision") == REVISION
+            and ID in current_states[0].get("selected_ids", []),
+            "source revision is no longer current in latest pinned published cohort")
+    current_shards = [x for x in current_index.get("shards", [])
+                      if x.get("repository") == REPOSITORY]
+    require(len(current_shards) == 1
+            and current_shards[0].get("digest") == "sha256:" + SHARD_SHA256
+            and current_shards[0].get("path") == f"shards/{SHARD_SHA256}.json",
+            "current published source evidence differs")
+    new_raw = (CURRENT_REPORT_DIR / current_shards[0]["path"]).read_bytes()
+    require(new_raw == raw and current_shards[0].get("bytes") == len(new_raw),
+            "current published Error/security evidence changed")
     return index, records[0]
 
 
@@ -148,6 +177,8 @@ def run(output: Path) -> dict:
         "schema_version": 1,
         "kind": "skillspector-470-real-source-unsigned-shadow",
         "historical_report_sha": BASELINE_REPORT_COMMIT,
+        "current_published_report_sha": CURRENT_REPORT_COMMIT,
+        "current_index_git_blob_sha": CURRENT_INDEX_GIT_BLOB,
         "historical_index_git_blob_sha": INDEX_GIT_BLOB,
         "historical_shard_sha256": "sha256:" + SHARD_SHA256,
         "immutable_source_revision": REVISION,
