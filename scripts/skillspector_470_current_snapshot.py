@@ -54,6 +54,41 @@ def get_bytes(relative: str, limit: int) -> bytes:
     return body
 
 
+def verified_finding_groups(record: dict) -> dict:
+    """Summarize every existing group without rewriting independent evidence."""
+    findings = record.get("findings")
+    require(isinstance(findings, list) and record.get("findings_truncated") is False
+            and type(record.get("finding_count")) is int
+            and type(record.get("finding_group_count")) is int
+            and record["finding_group_count"] == len(findings),
+            "published security finding groups are missing or truncated")
+    ids: set[str] = set()
+    instances = 0
+    for group in findings:
+        require(isinstance(group, dict) and isinstance(group.get("occurrences"), list)
+                and isinstance(group.get("finding_ids"), list)
+                and type(group.get("raw_count")) is int,
+                "malformed published security finding group")
+        occurrences = group["occurrences"]
+        group_ids = group["finding_ids"]
+        require(len(occurrences) == len(group_ids) == group["raw_count"],
+                "finding occurrence count or membership changed")
+        current_ids = [x.get("finding_id") if isinstance(x, dict) else None for x in occurrences]
+        require(all(isinstance(x, str) and x for x in current_ids)
+                and sorted(current_ids) == sorted(group_ids)
+                and len(set(current_ids)) == len(current_ids)
+                and not ids.intersection(current_ids),
+                "finding IDs are absent, duplicated or cross independent groups")
+        ids.update(current_ids)
+        instances += len(occurrences)
+    require(instances == record["finding_count"],
+            "published finding occurrence totals disagree")
+    canonical = json.dumps(findings, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return {"finding_group_count": len(findings), "finding_occurrences": instances,
+            "original_findings_sha256": "sha256:" + sha256(canonical)}
+
+
 def classify(*, identifier: str, state: dict, record: dict) -> dict:
     """Pure fail-closed admission; never interpret a newer source as repaired."""
     require(identifier in ORIGINAL_PINS, "unqualified original identity")
@@ -73,6 +108,7 @@ def classify(*, identifier: str, state: dict, record: dict) -> dict:
             and record.get("freshness") == "current"
             and record.get("scanner", {}).get("revision") == SCANNER_REVISION,
             "selected revision or scanner evidence differs")
+    security = verified_finding_groups(record)
     revision = source["revision"]
     changed = revision != prior_revision
     if not changed:
@@ -88,7 +124,10 @@ def classify(*, identifier: str, state: dict, record: dict) -> dict:
                 and len(record.get("attempt_history", [])) == 8,
                 "unchanged pin lacks genuine exhausted Error provenance")
     else:
-        require(record.get("status") != "complete"
+        require(record.get("status") == "partial"
+                and record.get("retry", {}).get("reason") == "reference_missing"
+                and security["finding_group_count"] == 1
+                and security["finding_occurrences"] == 8
                 and isinstance(source.get("content_digest"), str),
                 "changed source must not be certified by historical qualification")
     return {
@@ -96,6 +135,7 @@ def classify(*, identifier: str, state: dict, record: dict) -> dict:
         "original_revision": prior_revision,
         "current_revision": revision,
         "current_status": record["status"],
+        "original_security": security,
         "outcome": "same_pin_exhausted" if not changed else "superseded_qualification",
         "eligible_for_future_review": not changed,
         "migration_authorized": False,
@@ -133,6 +173,7 @@ def audit() -> dict:
         records = shard.get("records", [])
         require(shard.get("repository") == repository
                 and shard.get("scanner") == index["scanner"]
+                and shard.get("profile") == index["profile"]
                 and len(records) == manifest["record_count"] == 1,
                 "shard provenance or record count differs")
         output.append(classify(identifier=identifier, state=matches[0], record=records[0]))
