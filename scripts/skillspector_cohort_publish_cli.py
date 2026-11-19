@@ -45,7 +45,7 @@ def authenticated_fresh_sources(previous: dict, plan: dict) -> dict:
 
 def require_fresh_main(github: GitHub, source_commit: str) -> None:
     """Cheap strict main SHA lease; final publisher still rechecks atomically."""
-    require(admission.SHA.fullmatch(source_commit) is not None,
+    require(isinstance(source_commit, str) and admission.SHA.fullmatch(source_commit) is not None,
             "caller source SHA is invalid")
     require(publisher.checked_head(github, "main") == source_commit,
             "main advanced since signed cohort qualification")
