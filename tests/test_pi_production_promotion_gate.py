@@ -8,7 +8,11 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pi_production_promotion_gate import PromotionDenied, require_pi_free_ledger, require_pi_free_snapshot
+from directory_publication import candidate_digest, canonical_json
+from pi_production_promotion_gate import (
+    PromotionDenied, require_pi_free_candidate, require_pi_free_ledger,
+    require_pi_free_snapshot,
+)
 
 
 def snapshot() -> dict:
@@ -86,6 +90,46 @@ class PiProductionPromotionGateTests(unittest.TestCase):
                       {"sequence": 48, "distributions": [], "evidence": [{"client": None}]}):
             with self.subTest(wrong=wrong), self.assertRaises(PromotionDenied):
                 require_pi_free_snapshot(wrong, 48)
+
+    def test_pre_sign_candidate_exact_digest_and_pi_denial(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_path = Path(temp) / "candidate.json"
+            safe = {"distributions": snapshot()["distributions"], "evidence": snapshot()["evidence"]}
+            safe_bytes = canonical_json(safe)
+            candidate_path.write_bytes(safe_bytes)
+            require_pi_free_candidate(candidate_path, candidate_digest(safe_bytes))
+            with self.assertRaisesRegex(PromotionDenied, "digest differs"):
+                require_pi_free_candidate(candidate_path, "sha256:" + "0" * 64)
+            with self.assertRaisesRegex(PromotionDenied, "canonical"):
+                candidate_path.write_bytes(json.dumps(safe).encode("utf-8"))
+                require_pi_free_candidate(candidate_path, candidate_digest(candidate_path.read_bytes()))
+            for target in (True, False):
+                pi = json.loads(json.dumps(safe))
+                if target:
+                    pi["distributions"][0]["release_policies"][0]["targets"][0]["client"] = "pi"
+                else:
+                    pi["evidence"].append({"id": "unreferenced-pi", "client": "pi"})
+                pi_bytes = canonical_json(pi)
+                candidate_path.write_bytes(pi_bytes)
+                with self.subTest(target=target), self.assertRaisesRegex(PromotionDenied, "72/72 production signed saved"):
+                    require_pi_free_candidate(candidate_path, candidate_digest(pi_bytes))
+            candidate_path.unlink()
+            candidate_path.symlink_to(Path(temp) / "missing")
+            with self.assertRaisesRegex(PromotionDenied, "symlink"):
+                require_pi_free_candidate(candidate_path, "sha256:" + "0" * 64)
+
+    def test_pre_sign_gate_runs_before_private_key_step(self) -> None:
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/directory-publication.yml").read_text(encoding="utf-8")
+        sign_job = workflow.split("\n  sign:\n", 1)[1].split("\n  completed_rerun:\n", 1)[0]
+        gate = sign_job.index("- name: Deny Pi candidate before private signing seed")
+        signing = sign_job.index("- name: Validate candidate digest, sequence, and sign")
+        self.assertLess(gate, signing)
+        pre_sign_step = sign_job[gate:signing]
+        self.assertIn("if: inputs.resume_publication_id == ''", pre_sign_step)
+        self.assertIn("--candidate ../candidate/candidate.json", pre_sign_step)
+        self.assertIn('--candidate-digest "${EXPECTED_CANDIDATE_DIGEST}"', pre_sign_step)
+        self.assertNotIn("DIRECTORY_ED25519_PRIVATE_KEY", pre_sign_step)
 
     def test_signed_ledger_publish_is_gated_before_publisher_token(self) -> None:
         workflow = (Path(__file__).resolve().parents[1] /

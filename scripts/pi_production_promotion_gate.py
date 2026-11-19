@@ -12,6 +12,11 @@ from pathlib import Path
 import re
 import sys
 
+from directory_publication import (
+    MAX_CANDIDATE_BYTES, PublicationError, candidate_digest, canonical_json,
+    parse_json_bytes,
+)
+
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 PI_GATE_REASON = (
     "Pi-bearing Directory promotion is not authorized: missing independently "
@@ -38,7 +43,10 @@ def require_pi_free_snapshot(snapshot: object, expected_sequence: int) -> None:
         raise PromotionDenied("signed snapshot is not a valid sequence-bearing object")
     if snapshot["sequence"] != expected_sequence:
         raise PromotionDenied("signed snapshot sequence differs from exact staged publication")
-    distributions, evidence = snapshot.get("distributions"), snapshot.get("evidence")
+    require_pi_free_records(snapshot.get("distributions"), snapshot.get("evidence"))
+
+
+def require_pi_free_records(distributions: object, evidence: object) -> None:
     if not isinstance(distributions, list) or not isinstance(evidence, list):
         raise PromotionDenied("signed snapshot lacks distribution or evidence arrays")
     for distribution in distributions:
@@ -57,6 +65,30 @@ def require_pi_free_snapshot(snapshot: object, expected_sequence: int) -> None:
             raise PromotionDenied("malformed signed evidence client")
         if record["client"] == "pi":
             raise PromotionDenied(PI_GATE_REASON)
+
+
+def require_pi_free_candidate(path: Path, expected_digest: str) -> None:
+    """Refuse Pi in the exact prepared candidate before a signing seed is exposed."""
+    if path.is_symlink() or path.parent.is_symlink():
+        raise PromotionDenied("candidate path contains a symlink")
+    try:
+        with path.open("rb") as candidate_file:
+            data = candidate_file.read(MAX_CANDIDATE_BYTES + 1)
+    except OSError as error:
+        raise PromotionDenied("prepared candidate cannot be read") from error
+    if not 0 < len(data) <= MAX_CANDIDATE_BYTES:
+        raise PromotionDenied("prepared candidate size is invalid")
+    try:
+        candidate = parse_json_bytes(data, "prepared candidate", max_bytes=MAX_CANDIDATE_BYTES)
+        if candidate_digest(data) != expected_digest:
+            raise PromotionDenied("prepared candidate digest differs from authenticated prepare output")
+        if canonical_json(candidate) != data:
+            raise PromotionDenied("prepared candidate is not canonical JSON")
+    except PublicationError as error:
+        raise PromotionDenied("prepared candidate is invalid") from error
+    if not isinstance(candidate, dict):
+        raise PromotionDenied("prepared candidate must be an object")
+    require_pi_free_records(candidate.get("distributions"), candidate.get("evidence"))
 
 
 def reject_non_json_constant(_value: str) -> object:
@@ -94,15 +126,25 @@ def require_pi_free_ledger(ledger: Path, sequence_arg: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ledger", required=True, type=Path)
-    parser.add_argument("--sequence", required=True)
+    parser.add_argument("--ledger", type=Path)
+    parser.add_argument("--sequence")
+    parser.add_argument("--candidate", type=Path)
+    parser.add_argument("--candidate-digest")
     args = parser.parse_args()
     try:
-        require_pi_free_ledger(args.ledger, args.sequence)
+        if args.candidate is not None:
+            if args.ledger is not None or args.sequence is not None or not args.candidate_digest:
+                raise PromotionDenied("pre-sign candidate mode requires only candidate and digest")
+            require_pi_free_candidate(args.candidate, args.candidate_digest)
+            print("verified: exact prepared candidate contains no Pi targets or Pi evidence")
+        else:
+            if args.ledger is None or args.sequence is None or args.candidate_digest is not None:
+                raise PromotionDenied("signed ledger mode requires only ledger and sequence")
+            require_pi_free_ledger(args.ledger, args.sequence)
+            print("verified: staged signed Directory contains no Pi targets or Pi evidence")
     except (OSError, PromotionDenied) as error:
         print(f"production promotion denied: {error}", file=sys.stderr)
         return 1
-    print("verified: staged signed Directory contains no Pi targets or Pi evidence")
     return 0
 
 

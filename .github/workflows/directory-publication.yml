@@ -532,6 +532,18 @@ jobs:
           test "${marker_commit}" = "${EXPECTED_MARKER_COMMIT}"
           test "$(python3 -c 'import json; print(json.load(open("../candidate/candidate.json"))["source_commit"])')" = "${marker_commit}"
           echo "commit=${marker_commit}" >> "$GITHUB_OUTPUT"
+      # The later signed-snapshot gates prevent ledger CAS publication, but
+      # cannot undo an unauthorized signature already made by the protected job.
+      - name: Deny Pi candidate before private signing seed
+        if: inputs.resume_publication_id == ''
+        working-directory: trusted-source
+        env:
+          EXPECTED_CANDIDATE_DIGEST: ${{ needs.prepare.outputs.candidate_digest }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 scripts/pi_production_promotion_gate.py \
+            --candidate ../candidate/candidate.json \
+            --candidate-digest "${EXPECTED_CANDIDATE_DIGEST}"
       - name: Validate candidate digest, sequence, and sign
         id: signed
         if: inputs.resume_publication_id == ''
