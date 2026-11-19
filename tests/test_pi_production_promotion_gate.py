@@ -55,6 +55,12 @@ class PiProductionPromotionGateTests(unittest.TestCase):
             with self.assertRaisesRegex(PromotionDenied, "duplicate"):
                 target.write_text('{"sequence":48,"sequence":48,"distributions":[],"evidence":[]}', encoding="utf-8")
                 require_pi_free_ledger(ledger, "48")
+            target.write_text(
+                '{"sequence":48,"distributions":[],"evidence":[],"extra":NaN}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(PromotionDenied, "non-JSON numeric constant"):
+                require_pi_free_ledger(ledger, "48")
             target.unlink()
             target.symlink_to(Path(temp) / "nonexistent")
             with self.assertRaisesRegex(PromotionDenied, "contains a symlink"):
@@ -76,7 +82,8 @@ class PiProductionPromotionGateTests(unittest.TestCase):
 
     def test_malformed_or_bypass_fields_fail_closed(self) -> None:
         for wrong in (None, {}, {"sequence": True, "distributions": [], "evidence": []},
-                      {"sequence": 48, "distributions": [{"release_policies": ["pi"]}], "evidence": []}):
+                      {"sequence": 48, "distributions": [{"release_policies": ["pi"]}], "evidence": []},
+                      {"sequence": 48, "distributions": [], "evidence": [{"client": None}]}):
             with self.subTest(wrong=wrong), self.assertRaises(PromotionDenied):
                 require_pi_free_snapshot(wrong, 48)
 

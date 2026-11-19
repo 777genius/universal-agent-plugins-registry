@@ -53,9 +53,9 @@ def require_pi_free_snapshot(snapshot: object, expected_sequence: int) -> None:
                 if target["client"] == "pi":
                     raise PromotionDenied(PI_GATE_REASON)
     for record in evidence:
-        if not isinstance(record, dict):
-            raise PromotionDenied("malformed signed evidence record")
-        if record.get("client") == "pi":
+        if not isinstance(record, dict) or not isinstance(record.get("client"), str):
+            raise PromotionDenied("malformed signed evidence client")
+        if record["client"] == "pi":
             raise PromotionDenied(PI_GATE_REASON)
 
 
@@ -78,7 +78,13 @@ def require_pi_free_ledger(ledger: Path, sequence_arg: str) -> None:
     if not 0 < len(data) <= MAX_SNAPSHOT_BYTES:
         raise PromotionDenied("exact staged signed snapshot size is invalid")
     try:
-        snapshot = json.loads(data, object_pairs_hook=strict_object)
+        snapshot = json.loads(
+            data,
+            object_pairs_hook=strict_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                PromotionDenied("non-JSON numeric constant")
+            ),
+        )
     except (UnicodeError, json.JSONDecodeError) as error:
         raise PromotionDenied("exact staged signed snapshot is invalid JSON") from error
     require_pi_free_snapshot(snapshot, sequence)
