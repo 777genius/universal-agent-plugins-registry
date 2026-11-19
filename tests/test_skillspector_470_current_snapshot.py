@@ -124,6 +124,7 @@ class CurrentAdmissionTests(unittest.TestCase):
             ("missing_history_event", lambda x: x["attempt_history"].__setitem__(3, None)),
             ("future_profile", lambda x: x["retry"].update(next_profile="static-extended-v3")),
             ("status_mismatch", lambda x: x["retry"].update(latest_status="partial")),
+            ("malformed_retry", lambda x: x.update(retry=[{"attempt_count": 4}])),
         )
         for name, mutate in mutations:
             with self.subTest(name=name):
