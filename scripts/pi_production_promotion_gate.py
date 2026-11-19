@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -69,10 +70,15 @@ def require_pi_free_records(distributions: object, evidence: object) -> None:
 
 def require_pi_free_candidate(path: Path, expected_digest: str) -> None:
     """Refuse Pi in the exact prepared candidate before a signing seed is exposed."""
-    if path.is_symlink() or path.parent.is_symlink():
+    # Inspect the original path, not its resolved form, so symlinked ancestors
+    # (including ancestors before "..") cannot be hidden by normalization.
+    if any(component.is_symlink() for component in (path, *path.parents)):
         raise PromotionDenied("candidate path contains a symlink")
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise PromotionDenied("candidate no-follow opening is unavailable")
     try:
-        with path.open("rb") as candidate_file:
+        with os.fdopen(os.open(path, os.O_RDONLY | nofollow), "rb") as candidate_file:
             data = candidate_file.read(MAX_CANDIDATE_BYTES + 1)
     except OSError as error:
         raise PromotionDenied("prepared candidate cannot be read") from error

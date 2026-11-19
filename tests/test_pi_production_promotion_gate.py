@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from directory_publication import candidate_digest, canonical_json
@@ -97,6 +99,10 @@ class PiProductionPromotionGateTests(unittest.TestCase):
             safe = {"distributions": snapshot()["distributions"], "evidence": snapshot()["evidence"]}
             safe_bytes = canonical_json(safe)
             candidate_path.write_bytes(safe_bytes)
+            if not hasattr(os, "O_NOFOLLOW"):
+                with self.assertRaisesRegex(PromotionDenied, "unavailable"):
+                    require_pi_free_candidate(candidate_path, candidate_digest(safe_bytes))
+                return
             require_pi_free_candidate(candidate_path, candidate_digest(safe_bytes))
             with self.assertRaisesRegex(PromotionDenied, "digest differs"):
                 require_pi_free_candidate(candidate_path, "sha256:" + "0" * 64)
@@ -117,6 +123,46 @@ class PiProductionPromotionGateTests(unittest.TestCase):
             candidate_path.symlink_to(Path(temp) / "missing")
             with self.assertRaisesRegex(PromotionDenied, "symlink"):
                 require_pi_free_candidate(candidate_path, "sha256:" + "0" * 64)
+
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "requires POSIX no-follow opening")
+    def test_pre_sign_candidate_rejects_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            real = base / "real"
+            real.mkdir()
+            safe = {"distributions": snapshot()["distributions"], "evidence": snapshot()["evidence"]}
+            data = canonical_json(safe)
+            candidate = real / "candidate.json"
+            candidate.write_bytes(data)
+            digest = candidate_digest(data)
+            with mock.patch("pi_production_promotion_gate.os.open", wraps=os.open) as opened:
+                require_pi_free_candidate(candidate, digest)
+                self.assertTrue(opened.call_args.args[1] & os.O_NOFOLLOW)
+            alias = base / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(PromotionDenied, "symlink"):
+                require_pi_free_candidate(alias / "candidate.json", digest)
+
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "requires POSIX no-follow opening")
+    def test_pre_sign_candidate_rejects_final_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            safe = {"distributions": snapshot()["distributions"], "evidence": snapshot()["evidence"]}
+            data = canonical_json(safe)
+            candidate = base / "candidate.json"
+            other = base / "other.json"
+            candidate.write_bytes(data)
+            other.write_bytes(data)
+            original_open = os.open
+
+            def replace_before_open(path: object, flags: int) -> int:
+                candidate.unlink()
+                candidate.symlink_to(other)
+                return original_open(path, flags)
+
+            with mock.patch("pi_production_promotion_gate.os.open", side_effect=replace_before_open):
+                with self.assertRaisesRegex(PromotionDenied, "cannot be read"):
+                    require_pi_free_candidate(candidate, candidate_digest(data))
 
     def test_pre_sign_gate_runs_before_private_key_step(self) -> None:
         workflow = (Path(__file__).resolve().parents[1] /
