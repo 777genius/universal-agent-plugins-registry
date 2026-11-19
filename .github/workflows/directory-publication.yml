@@ -1575,6 +1575,18 @@ jobs:
           test "$(git -C intent-ledger rev-parse HEAD^)" = "${EXPECTED_SIGNED_COMMIT}"
           python3 trusted-source/scripts/pages_compositor.py require-intent-policy \
             --repository "${GITHUB_REPOSITORY}"
+      # Denial-only bridge. Replace only with an authenticated, exact-snapshot
+      # 72/72 signed saved User/Project 3-OS acceptance gate, never with a
+      # candidate-supplied flag, synthetic key or workflow-dispatch override.
+      - name: Deny Pi promotion until genuine protected signed saved E2E is wired
+        env:
+          MATERIALIZED_COMMIT: ${{ needs.materialize_site.outputs.publication_commit }}
+          PUBLICATION_SEQUENCE: ${{ needs.sign.outputs.sequence }}
+        run: |
+          set -euo pipefail
+          test "$(git -C intent-ledger rev-parse HEAD)" = "$MATERIALIZED_COMMIT"
+          python3 trusted-source/scripts/pi_production_promotion_gate.py \
+            --ledger intent-ledger --sequence "$PUBLICATION_SEQUENCE"
       - name: Acquire dedicated publisher token
         id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
