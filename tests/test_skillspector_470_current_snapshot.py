@@ -25,8 +25,29 @@ def fixture():
         "retry": {"attempt_count": 4, "disposition": "exhausted",
                   "reason": "transient_retry_limit", "next_attempt_at": None},
         "attempt_history": [{"status": "error"}] * 8,
+        "findings": [], "findings_truncated": False,
+        "finding_group_count": 0, "finding_count": 0,
     }
     return source_id, state, record
+
+
+def change_to_current_partial(state, record):
+    """Distinct current revision with eight separately attested occurrences."""
+    state["revision"] = "a" * 40
+    record["target_revision"] = state["revision"]
+    record["source"]["revision"] = state["revision"]
+    record["source"]["content_digest"] = "sha256:" + "f" * 64
+    record["status"] = "partial"
+    record["retry"]["reason"] = "reference_missing"
+    ids = [f"finding-{i:032x}" for i in range(8)]
+    record["finding_count"] = 8
+    record["finding_group_count"] = 1
+    record["findings"] = [{
+        "id": "sha256:" + "b" * 64, "rule": "RP1", "severity": "MEDIUM",
+        "raw_count": 8, "finding_ids": ids,
+        "occurrences": [{"finding_id": x, "path": "README.md", "line": i}
+                        for i, x in enumerate(ids, 1)],
+    }]
 
 
 class CurrentAdmissionTests(unittest.TestCase):
@@ -45,11 +66,7 @@ class CurrentAdmissionTests(unittest.TestCase):
 
     def test_new_revision_partial_is_not_old_error_requalified(self):
         source_id, state, record = fixture()
-        state["revision"] = "a" * 40
-        record["target_revision"] = state["revision"]
-        record["source"]["revision"] = state["revision"]
-        record["source"]["content_digest"] = "sha256:" + "f" * 64
-        record["status"] = "partial"
+        change_to_current_partial(state, record)
         actual = classify(identifier=source_id, state=state, record=record)
         self.assertEqual(actual["outcome"], "superseded_qualification")
         self.assertFalse(actual["eligible_for_future_review"])
@@ -93,12 +110,44 @@ class CurrentAdmissionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     classify(identifier=source_id, state=state, record=a)
 
+    def test_security_groups_are_not_silently_dropped_or_rebound(self):
+        source_id, state, record = fixture()
+        change_to_current_partial(state, record)
+        accepted = classify(identifier=source_id, state=state, record=record)
+        self.assertEqual(accepted["original_security"]["finding_group_count"], 1)
+        self.assertEqual(accepted["original_security"]["finding_occurrences"], 8)
+        self.assertTrue(accepted["original_security"]["original_findings_sha256"].startswith("sha256:"))
+        tampered = []
+        for field, value in [
+            ("findings_truncated", True),
+            ("finding_count", 7),
+            ("finding_group_count", 0),
+            ("findings", []),
+        ]:
+            modified = copy.deepcopy(record)
+            modified[field] = value
+            tampered.append(modified)
+        for change in ["duplicate", "foreign", "missing", "extra"]:
+            modified = copy.deepcopy(record)
+            group = modified["findings"][0]
+            if change == "duplicate":
+                group["occurrences"][1]["finding_id"] = group["occurrences"][0]["finding_id"]
+            elif change == "foreign":
+                group["finding_ids"][0] = "finding-" + "f" * 32
+            elif change == "missing":
+                group["occurrences"].pop()
+            else:
+                modified["findings"].append(copy.deepcopy(group))
+                modified["finding_group_count"] = 2
+                modified["finding_count"] = 16
+            tampered.append(modified)
+        for index, modified in enumerate(tampered):
+            with self.subTest(mutation=index), self.assertRaises(ValueError):
+                classify(identifier=source_id, state=state, record=modified)
+
     def test_drift_cannot_certify_complete(self):
         source_id, state, record = fixture()
-        state["revision"] = "a" * 40
-        record["target_revision"] = state["revision"]
-        record["source"]["revision"] = state["revision"]
-        record["source"]["content_digest"] = "sha256:" + "f" * 64
+        change_to_current_partial(state, record)
         record["status"] = "complete"
         with self.assertRaisesRegex(ValueError, "must not be certified"):
             classify(identifier=source_id, state=state, record=record)
