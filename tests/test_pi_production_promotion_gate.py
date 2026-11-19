@@ -57,7 +57,21 @@ class PiProductionPromotionGateTests(unittest.TestCase):
                 require_pi_free_ledger(ledger, "48")
             target.unlink()
             target.symlink_to(Path(temp) / "nonexistent")
-            with self.assertRaisesRegex(PromotionDenied, "missing or a symlink"):
+            with self.assertRaisesRegex(PromotionDenied, "contains a symlink"):
+                require_pi_free_ledger(ledger, "48")
+
+    def test_parent_symlink_cannot_redirect_signed_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            outside = base / "outside/schemas/1/snapshots"
+            outside.mkdir(parents=True)
+            (outside / "00000000000000000048.json").write_text(
+                json.dumps(snapshot()), encoding="utf-8"
+            )
+            ledger = base / "ledger"
+            ledger.mkdir()
+            (ledger / "registry").symlink_to(base / "outside", target_is_directory=True)
+            with self.assertRaisesRegex(PromotionDenied, "contains a symlink"):
                 require_pi_free_ledger(ledger, "48")
 
     def test_malformed_or_bypass_fields_fail_closed(self) -> None:
