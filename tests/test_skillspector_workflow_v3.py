@@ -161,6 +161,10 @@ class SkillSpectorWorkflowV3Tests(unittest.TestCase):
                 self.assertLessEqual(int(result['count']) * int(result['budget']), budget)
         slices = [step for step in scan['steps'] if step.get('id', '').startswith('scan')]
         self.assertEqual(len(slices), 3)
+        # Production #44452888295 timed out after 15m despite a 700s
+        # cooperative budget: leave bounded headroom for in-flight work.
+        for step in slices:
+            self.assertGreaterEqual(int(step['timeout-minutes']) * 60, 700 + 180 + 120)
         self.assertGreaterEqual(int(scan['timeout-minutes']) - sum(int(step['timeout-minutes']) for step in slices), 10)
         for step in slices:
             self.assertIn('--slice-attempts', step['run'])
