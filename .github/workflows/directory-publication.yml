@@ -925,8 +925,9 @@ jobs:
         with:
           name: ${{ needs.sign.outputs.signed_artifact_name }}
           path: ${{ runner.temp }}/signed-objects
+      # Required for both fresh and resumed publication: the Pi denial gate
+      # must be available before any publisher token can be acquired.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.resume_publication_id == ''
         with:
           ref: ${{ github.sha }}
           path: trusted-source

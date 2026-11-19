@@ -99,6 +99,13 @@ class PiProductionPromotionGateTests(unittest.TestCase):
         self.assertLess(gate, token)
         self.assertLess(token, publish)
         self.assertIn('--ledger ledger --sequence "$EXPECTED_SEQUENCE"', materialize)
+        # Resumed publication skips the signed bundle checkout, but still
+        # needs the trusted gate source before a publisher token is minted.
+        checkout = materialize.split("- uses: actions/checkout@", 1)[1].split(
+            "- uses: actions/setup-python@", 1
+        )[0]
+        self.assertIn("path: trusted-source", checkout)
+        self.assertNotIn("if: inputs.resume_publication_id == ''", checkout)
 
 
 if __name__ == "__main__":
