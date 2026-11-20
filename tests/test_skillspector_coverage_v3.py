@@ -568,6 +568,88 @@ class QueueTests(unittest.TestCase):
                         verified_current_origin=origin)
             self.assertFalse((root / "too-small" / "index.json").exists())
 
+    def test_full_security_evidence_changes_require_signed_witness_not_coarse_match(self):
+        """Same rule/path/fingerprint can hide different evidence or occurrences.
+
+        Generated ID rotation alone is benign, but distinct original findings
+        must not be erased even when their coarse finding identities match.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(*, partial, message="Original advisory.", occurrence_lines=(2,),
+                     upstream_id="finding-" + "1" * 32, evidence=None):
+            raw = upstream_report()
+            raw["issues"] = [{
+                "id": "PI1", "severity": "HIGH", "explanation": message,
+                "pattern": "Stable rule label", "match_fingerprint": "same-coarse-match",
+                "finding_id": upstream_id,
+                "evidence": evidence if evidence is not None else {"proof": "original"},
+                "location": {"file": "SKILL.md", "start_line": 2},
+                "occurrences": [
+                    {"file": "SKILL.md", "start_line": line}
+                    for line in occurrence_lines],
+            }]
+            if partial:
+                raw["analysis_completeness"].update(
+                    is_complete=False, status="partial", partially_inspected_files=1)
+                raw["analysis_completeness"]["ledger_exceptions"] = [
+                    {"reason_code": "static_parse_limit", "message": "Independent coverage gap."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old = observed(partial=True)
+        generated_rotation = observed(partial=False, upstream_id="finding-" + "2" * 32)
+        self.assertEqual(coverage.finding_identities(old),
+                         coverage.finding_identities(generated_rotation))
+        self.assertEqual(coverage.finding_evidence_identities(old),
+                         coverage.finding_evidence_identities(generated_rotation))
+        self.assertFalse(coverage.degraded_rescan(old, generated_rotation))
+
+        changes = {
+            "message": observed(partial=False, message="Different critical security advice."),
+            "evidence": observed(partial=False, evidence={"proof": "new independent source"}),
+            "occurrence": observed(partial=False, occurrence_lines=(2, 8)),
+        }
+        for name, newer in changes.items():
+            with self.subTest(change=name):
+                self.assertEqual(old["source"], newer["source"])
+                self.assertEqual(coverage.finding_identities(old),
+                                 coverage.finding_identities(newer))
+                self.assertNotEqual(coverage.finding_evidence_identities(old),
+                                    coverage.finding_evidence_identities(newer))
+                self.assertTrue(coverage.degraded_rescan(old, newer))
+
+        current = changes["occurrence"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            outcome = worker(selection, [current], previous)
+            with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+                coverage.merge_reports(selection, previous, [outcome], source_commit=COMMIT,
+                    output_dir=root / "untrusted")
+            self.assertFalse((root / "untrusted" / "index.json").exists())
+
+            origin = {"run_id": 44617591867, "run_attempt": 1}
+            coverage.merge_reports(selection, previous, [outcome], source_commit=COMMIT,
+                output_dir=root / "verified", authenticated_current_workers=True,
+                verified_current_origin=origin)
+            actual = coverage.read_bundle(root / "verified")
+            kept = actual["records"][subject["id"]]
+            self.assertEqual((kept["status"], kept["coverage"]["status"]),
+                             ("partial", "partial"))
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertTrue(kept["findings_truncated"])
+            self.assertEqual(kept["recovery_witnesses"],
+                             [{"origin": origin, "record": current}])
+            self.assertFalse(coverage.finding_evidence_identities(current) -
+                             coverage.represented_finding_evidence_identities(kept))
+            self.assertEqual(publisher.validate_directory(root / "verified", COMMIT)["manifest"],
+                             actual["manifest"])
+
     def test_equal_count_osv_fallback_and_dependency_advisory_remain_distinct(self):
         """A later OSV outage cannot erase independently verified advisories."""
         subject = item()
