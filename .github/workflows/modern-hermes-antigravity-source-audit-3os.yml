@@ -1,0 +1,57 @@
+name: Hermes and Antigravity unsigned source audit (3 OS)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/modern_hermes_antigravity_audit.py'
+      - 'tests/test_modern_hermes_antigravity_audit.py'
+      - '.github/workflows/modern-hermes-antigravity-source-audit-3os.yml'
+      - 'registry/client-capabilities.json'
+      - 'registry/client-capabilities.lock.json'
+      - 'registry/directory.json'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/modern_hermes_antigravity_audit.py'
+      - 'tests/test_modern_hermes_antigravity_audit.py'
+      - '.github/workflows/modern-hermes-antigravity-source-audit-3os.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-source-only:
+    name: unsigned review / ${{ matrix.os }} (not saved E2E)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Verify exact committed source and negative authority boundary
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          python -m unittest tests.test_modern_hermes_antigravity_audit -v
+          python scripts/modern_hermes_antigravity_audit.py \
+            --source-head "$SOURCE_HEAD" \
+            --output "$RUNNER_TEMP/modern-hermes-antigravity-unsigned-source-review.json"
+      - name: Preserve non-authoritative source review report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-source-review-${{ matrix.os }}
+          path: ${{ runner.temp }}/modern-hermes-antigravity-unsigned-source-review.json
+          if-no-files-found: warn
+          retention-days: 14
