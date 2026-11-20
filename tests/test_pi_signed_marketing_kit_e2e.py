@@ -11,8 +11,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pi_signed_marketing_kit_e2e import (
-    EXPECTED, CHILD_VERSIONS, assert_foreign, check_installations, check_lock,
-    check_native, fresh_case, json_object,
+    EXPECTED, CHILD_VERSIONS, RELEASE_VERSIONS, assert_foreign, check_installations,
+    check_lock, check_native, fresh_case, json_object, observe_signed_policy,
 )
 
 
@@ -48,6 +48,68 @@ def installed_fixture(scope: str = "user") -> dict:
         } for number, distribution in enumerate(EXPECTED.values(), 1)
     ]}}
 
+def signed_policy_fixture() -> dict:
+    return {"snapshot_sequence": 48, "snapshot_digest": "sha256:" + "d" * 64,
+            "releases": {
+                distribution: {
+                    "release_sequence": 1, "resolved_revision": "c" * 40,
+                    "tree_digest": "sha256:" + "a" * 64,
+                    "manifest_digest": "sha256:" + "b" * 64,
+                    "version": RELEASE_VERSIONS[alias],
+                } for alias, distribution in EXPECTED.items()
+            }}
+
+
+def signed_info_fixture(alias: str) -> dict:
+    distribution = EXPECTED[alias]
+    return {"result": "success", "command": "info", "data": {
+        "selected_distribution": distribution,
+        "snapshot_sequence": 48,
+        "snapshot_digest": "sha256:" + "d" * 64,
+        "selected_release": {
+            "id": distribution, "release_status": "active",
+            "release_sequence": 1,
+            "package_version": RELEASE_VERSIONS[alias],
+            "resolved_revision": "c" * 40,
+            "tree_digest": "sha256:" + "a" * 64,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "target_compatibility": [{"client": "pi", "scopes": ["user"],
+                                      "delivery": "managed"}],
+        },
+    }}
+
+
+class SignedPolicyInfoTests(unittest.TestCase):
+    def observe(self, records: list[dict]) -> dict:
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", side_effect=records) as invoke:
+            policy = observe_signed_policy("binary", {}, Path("project"))
+            self.assertEqual(invoke.call_count, 4)
+            return policy
+
+    def test_production_info_binds_one_signed_snapshot_and_four_active_pi_grants(self):
+        records = [signed_info_fixture(alias) for alias in EXPECTED]
+        self.assertEqual(self.observe(records), signed_policy_fixture())
+
+    def test_refuses_missing_grant_and_mismatched_signed_source(self):
+        cases = {
+            "missing-pi": lambda r: r[2]["data"]["selected_release"].update(target_compatibility=[]),
+            "borrowed-target": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(client="codex"),
+            "wrong-scope": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(scopes=["project"]),
+            "prepared": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(delivery="prepared"),
+            "changed-snapshot": lambda r: r[2]["data"].update(snapshot_sequence=49),
+            "wrong-digest": lambda r: r[2]["data"].update(snapshot_digest="not-a-digest"),
+            "changed-revision": lambda r: r[2]["data"]["selected_release"].update(resolved_revision="main"),
+            "wrong-version": lambda r: r[2]["data"]["selected_release"].update(package_version="2.0.0"),
+            "wrong-name": lambda r: r[2]["data"].update(selected_distribution="notion"),
+        }
+        for label, mutation in cases.items():
+            records = [signed_info_fixture(alias) for alias in EXPECTED]
+            mutation(records)
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                self.observe(records)
+
+
+
 
 class SignedMarketingLockTests(unittest.TestCase):
     def check(self, lock: dict) -> str:
@@ -58,6 +120,19 @@ class SignedMarketingLockTests(unittest.TestCase):
 
     def test_accepts_exact_four_signed_pi_owners_and_edges(self):
         self.assertTrue(self.check(lock_fixture()).startswith("sha256:"))
+
+
+    def test_policy_lock_rejects_unsigned_or_wrong_release_digests(self):
+        policy = signed_policy_fixture()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "uap.lock"
+            data = lock_fixture()
+            path.write_text(json.dumps(data), encoding="utf-8")
+            check_lock(path, policy)
+            data["packages"][2]["tree_digest"] = "sha256:" + "e" * 64
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
+                check_lock(path, policy)
 
     def test_rejects_missing_child_or_borrowed_signed_target(self):
         for mutation in (
@@ -83,6 +158,23 @@ class SignedMarketingInventoryTests(unittest.TestCase):
         for scope in ("user", "project"):
             self.assertEqual(
                 len(check_installations(installed_fixture(scope), scope)), 4)
+
+
+    def test_inventory_identity_must_match_original_signed_info(self):
+        policy = signed_policy_fixture()
+        data = installed_fixture()
+        for installation in data["data"]["installations"]:
+            release = policy["releases"][installation["directory"]["recorded_distribution"]]
+            installation["clients"][0]["package_revision"].update({
+                "version": release["version"],
+                "resolved_revision": release["resolved_revision"],
+                "tree_digest": release["tree_digest"],
+                "manifest_digest": release["manifest_digest"],
+            })
+        check_installations(data, "user", policy)
+        data["data"]["installations"][1]["clients"][0]["package_revision"]["tree_digest"] = "sha256:" + "e" * 64
+        with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
+            check_installations(data, "user", policy)
 
     def test_rejects_incomplete_and_forged_installation_receipts(self):
         cases = {
