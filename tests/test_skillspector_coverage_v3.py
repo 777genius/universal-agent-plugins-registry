@@ -579,6 +579,90 @@ class QueueTests(unittest.TestCase):
             self.assertNotIn("new-advisory", diagnostic)
             self.assertFalse((root / "too-small" / "index.json").exists())
 
+    def test_three_authenticated_current_witnesses_preserve_all_signed_findings(self):
+        """Three source-identical scanner originals survive without manufactured Complete.
+
+        Regression: production run 44695473497 rejected seven novel finding instances
+        solely because two older authenticated witnesses had already filled the list.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(label, line):
+            raw = upstream_report()
+            raw["issues"] = [{
+                "id": "PI1", "severity": "HIGH",
+                "explanation": "Distinct authenticated " + label + " evidence.",
+                "pattern": label,
+                "location": {"file": "SKILL.md", "start_line": line},
+            }]
+            raw["analysis_completeness"].update(
+                is_complete=False, status="partial", partially_inspected_files=1)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Still incomplete."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        originals = [observed(name, offset) for offset, name in
+                     enumerate(("first", "second", "third", "fourth"), start=1)]
+        self.assertEqual(len({value["report_digest"] for value in originals}), 4)
+        self.assertEqual(len({value["source"]["content_digest"] for value in originals}), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "original", selection, [originals[0]])
+            third_input = None
+            second_previous = None
+            for index, current in enumerate(originals[1:], start=1):
+                candidate = worker(selection, [current], previous)
+                if index == 3:
+                    third_input, second_previous = candidate, previous
+                output = root / ("signed-" + str(index))
+                coverage.merge_reports(
+                    selection, previous, [candidate], source_commit=COMMIT,
+                    output_dir=output, authenticated_current_workers=True,
+                    verified_current_origin={"run_id": 44695473497 + index,
+                                             "run_attempt": 1})
+                verified = coverage.read_bundle(output)
+                retained = verified["records"][subject["id"]]
+                self.assertEqual(retained["status"], "partial")
+                self.assertTrue(retained["findings_truncated"])
+                self.assertFalse(retained["coverage"]["grouping_complete"])
+                self.assertEqual(len(retained["recovery_witnesses"]), index)
+                self.assertEqual([w["record"]["report_digest"] for w in
+                                  retained["recovery_witnesses"]],
+                                 [r["report_digest"] for r in originals[1:index + 1]])
+                self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                                coverage.reason_codes(retained))
+                self.assertEqual(publisher.validate_directory(output, COMMIT)["manifest"],
+                                 verified["manifest"])
+                previous = verified
+
+            retained = previous["records"][subject["id"]]
+            all_original = set().union(*(set(coverage.finding_evidence_identities(original))
+                                         for original in originals))
+            self.assertEqual(set(coverage.represented_finding_evidence_identities(retained)),
+                             all_original)
+            self.assertEqual(retained["source"], originals[0]["source"])
+            self.assertEqual(retained["findings"], originals[0]["findings"])
+
+            # Under the old two-witness ceiling, authenticated current findings
+            # must still be rejected instead of disappearing from the signed shard.
+            with mock.patch.object(contract, "MAX_RECOVERY_WITNESSES", 2):
+                with self.assertRaisesRegex(
+                    PublicationError, "security witness could not be represented"
+                ) as rejected:
+                    coverage.merge_reports(
+                        selection, second_previous, [third_input], source_commit=COMMIT,
+                        output_dir=root / "old-bound", authenticated_current_workers=True,
+                        verified_current_origin={"run_id": 44695473500,
+                                                 "run_attempt": 1})
+            self.assertIn('"witness_count_limit_reached":true', str(rejected.exception))
+            self.assertFalse((root / "old-bound" / "index.json").exists())
+            self.assertNotIn("Distinct authenticated", str(rejected.exception))
+
     def test_full_security_evidence_changes_require_signed_witness_not_coarse_match(self):
         """Same rule/path/fingerprint can hide different evidence or occurrences.
 
