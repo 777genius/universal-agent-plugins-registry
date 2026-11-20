@@ -605,10 +605,12 @@ class QueueTests(unittest.TestCase):
             self.assertNotIn("new-advisory", diagnostic)
             self.assertFalse((root / "too-small" / "index.json").exists())
 
-    def test_current_partial_superset_with_lower_coverage_keeps_authenticated_new_findings(self):
-        """Real 44733681502 regression: 37 novel findings were discarded even
-        though a signed witness fitted every capacity and origin guard. The
-        old Partial's coverage was stronger but its findings were a subset.
+    def test_current_partial_superset_with_regressed_analyzer_keeps_authenticated_new_findings(self):
+        """Real 44733681502: five truly additional security groups were omitted
+        (37 were unrepresented *after* quarantine disabled generated-ID
+        normalization). The extended Partial inspected more files overall
+        but regressed a specific analyzer relative to the standard Partial.
+        Both source-identical original reports must remain signed and Partial.
         """
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
