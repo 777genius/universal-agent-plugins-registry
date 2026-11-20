@@ -108,6 +108,18 @@ class FullSignedCatalogTests(unittest.TestCase):
             extension.write_text("export default {};\n", encoding="utf-8")
             subject.check_native_contract(root, ["extensions"])
 
+    def test_marketing_kit_dependency_closure_cannot_omit_hubspot(self):
+        required = {"777genius/marketing-kit", "777genius/notion",
+                    "777genius/hubspot-crm", "777genius/playwright-bridge"}
+        subject.check_known_dependency_closure("777genius/marketing-kit", required)
+        for child in required:
+            with self.subTest(child=child), self.assertRaises(RuntimeError):
+                subject.check_known_dependency_closure("777genius/marketing-kit",
+                                                       required - {child})
+        with self.assertRaises(RuntimeError):
+            subject.check_known_dependency_closure("777genius/marketing-kit",
+                                                   required | {"777genius/unreviewed"})
+
     def test_authored_revision_is_not_current_test_commit(self):
         item = self.sources()[0]
         release = {"release_sequence": 1, "resolved_revision": "d" * 40,

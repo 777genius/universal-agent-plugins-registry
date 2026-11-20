@@ -144,6 +144,15 @@ def check_root_source(signed: dict, item: dict) -> None:
             "authenticated Pi root differs from exact reviewed catalog source")
 
 
+def check_known_dependency_closure(root: str, distributions: set[str]) -> None:
+    """The Marketing Kit approval depends on all three signed child packages."""
+    if root == "777genius/marketing-kit":
+        require(distributions == {
+            "777genius/marketing-kit", "777genius/notion",
+            "777genius/hubspot-crm", "777genius/playwright-bridge",
+        }, "signed Marketing Kit dependency closure incomplete or changed")
+
+
 def inspect_saved(cli: str, env: dict[str, str], project: Path,
                   portable: Path, scope: str, source: dict,
                   native_before: dict[str, str], other_before: dict[str, str],
@@ -171,6 +180,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
         require(dist and dist not in distributions, "duplicate Directory package identity")
         distributions.add(dist)
         pinned[alias] = package
+    check_known_dependency_closure(source["distribution"], distributions)
     root_alias = source["manifest_name"]
     require(root_alias in pinned and pinned[root_alias]["source_key"] ==
             "directory:" + source["distribution"],
