@@ -153,6 +153,38 @@ def check_known_dependency_closure(root: str, distributions: set[str]) -> None:
         }, "signed Marketing Kit dependency closure incomplete or changed")
 
 
+def observe_readonly_doctor(cli: str, env: dict[str, str], project: Path,
+                            portable: Path, scope: str, alias: str, count: int) -> None:
+    """Prove the command does not mutate either Pi scope or saved state."""
+    lockfile, manifest = portable / "uap.lock", portable / "uap.toml"
+
+    def state() -> tuple:
+        require(lockfile.is_file() and not lockfile.is_symlink()
+                and manifest.is_file() and not manifest.is_symlink(),
+                "read-only doctor requires intact saved files")
+        other_scope = "project" if scope == "user" else "user"
+        return (lockfile.read_bytes(), manifest.read_bytes(),
+                native_fingerprint(native_root(env, project, scope)),
+                native_fingerprint(native_root(env, project, other_scope)))
+
+    before = state()
+    result = invoke(cli, env, project, "native-doctor", "doctor", alias,
+                    "--target", "pi", "--scope", scope,
+                    *(("--project-root", str(project)) if scope == "project" else ()))
+    require(state() == before, "read-only doctor modified saved or native Pi state")
+    doctor = result.get("data")
+    require(result.get("command") == "doctor" and isinstance(doctor, dict)
+            and doctor.get("read_only") is True
+            and doctor.get("installation_count") == count
+            and doctor.get("open_operation_count") == 0
+            and isinstance(doctor.get("findings"), list)
+            and all(isinstance(f, dict) and isinstance(f.get("status"), str)
+                    and isinstance(f.get("code"), str)
+                    and f["status"] != "degraded" and f["code"] not in BAD_FINDINGS
+                    for f in doctor["findings"]),
+            "read-only native doctor did not validate signed installation")
+
+
 def inspect_saved(cli: str, env: dict[str, str], project: Path,
                   portable: Path, scope: str, source: dict,
                   native_before: dict[str, str], other_before: dict[str, str],
@@ -279,20 +311,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
             "Pi native projection missing or leaked to other scope")
     check_native_contract(native_root(env, project, scope), source["components"])
     for alias in pinned:
-        result = invoke(cli, env, project, "native-doctor", "doctor", alias,
-                        "--target", "pi", "--scope", scope,
-                        *(("--project-root", str(project)) if scope == "project" else ()))
-        doctor = result.get("data")
-        require(result.get("command") == "doctor" and isinstance(doctor, dict)
-                and doctor.get("read_only") is True
-                and doctor.get("installation_count") == len(pinned)
-                and doctor.get("open_operation_count") == 0
-                and isinstance(doctor.get("findings"), list)
-                and all(isinstance(f, dict) and isinstance(f.get("status"), str)
-                        and isinstance(f.get("code"), str)
-                        and f["status"] != "degraded" and f["code"] not in BAD_FINDINGS
-                        for f in doctor["findings"]),
-                "read-only native doctor did not validate signed installation")
+        observe_readonly_doctor(cli, env, project, portable, scope, alias, len(pinned))
     return ("sha256:" + hashlib.sha256(lockbytes).hexdigest(), owners, actual, snapshot)
 
 

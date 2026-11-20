@@ -108,6 +108,43 @@ class FullSignedCatalogTests(unittest.TestCase):
             extension.write_text("export default {};\n", encoding="utf-8")
             subject.check_native_contract(root, ["extensions"])
 
+    def test_doctor_cannot_mutate_saved_files_or_either_native_scope(self):
+        valid = {"command": "doctor", "data": {
+            "read_only": True, "installation_count": 1,
+            "open_operation_count": 0, "findings": []}}
+        for scope in ("user", "project"):
+            for target in ("uap.lock", "uap.toml", "active", "other"):
+                with self.subTest(scope=scope, target=target):
+                    with tempfile.TemporaryDirectory() as d:
+                        root = Path(d)
+                        portable = root / "portable"
+                        portable.mkdir()
+                        (portable / "uap.lock").write_text("lock-before", encoding="utf-8")
+                        (portable / "uap.toml").write_text("toml-before", encoding="utf-8")
+                        project = root / "project"
+                        project.mkdir()
+                        env = {"PI_CODING_AGENT_DIR": str(root / "home" / ".pi" / "agent")}
+                        active = subject.native_root(env, project, scope)
+                        other_scope = "project" if scope == "user" else "user"
+                        other = subject.native_root(env, project, other_scope)
+                        if target in ("active", "other"):
+                            path = (active if target == "active" else other) / "unexpected.txt"
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                        else:
+                            path = portable / target
+
+                        def mutate(*_args):
+                            path.write_text("modified", encoding="utf-8")
+                            return valid
+
+                        with patch.object(subject, "invoke", side_effect=mutate):
+                            with self.assertRaisesRegex(RuntimeError, "doctor modified"):
+                                subject.observe_readonly_doctor(
+                                    "cli", env, project, portable, scope, "root", 1)
+                        with patch.object(subject, "invoke", return_value=valid):
+                            subject.observe_readonly_doctor(
+                                "cli", env, project, portable, scope, "root", 1)
+
     def test_marketing_kit_dependency_closure_cannot_omit_hubspot(self):
         required = {"777genius/marketing-kit", "777genius/notion",
                     "777genius/hubspot-crm", "777genius/playwright-bridge"}
