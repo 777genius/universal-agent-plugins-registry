@@ -24,6 +24,7 @@ EXPECTED = {
     "playwright": "777genius/playwright-bridge",
 }
 CHILD_VERSIONS = {"notion": "0.1.0", "hubspot-crm": "0.1.0", "playwright": "0.0.80"}
+RELEASE_VERSIONS = {"marketing-kit": "0.1.0", **CHILD_VERSIONS}
 SAFE_ENV = ("PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC",
             "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
             "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "GIT_SSL_CAINFO")
@@ -46,7 +47,7 @@ def json_object(body: str, stage: str) -> dict:
     return value
 
 
-def check_lock(path: Path) -> str:
+def check_lock(path: Path, policy: dict | None = None) -> str:
     require(path.is_file() and not path.is_symlink(), "signed saved lock missing")
     data = json.loads(path.read_text(encoding="utf-8"))
     packages = data.get("packages")
@@ -68,6 +69,11 @@ def check_lock(path: Path) -> str:
                 and isinstance(source.get("registry"), dict)
                 and source["registry"].get("distribution") == EXPECTED[alias],
                 "signed lock package has no matching Directory identity")
+        if policy is not None:
+            release = policy["releases"][EXPECTED[alias]]
+            require(all(package[key] == release[key]
+                        for key in ("tree_digest", "manifest_digest")),
+                    "saved lock digests differ from authenticated signed release")
         edges = package.get("required_by", [])
         require(isinstance(edges, list), "signed lock dependency edges malformed")
         if alias == "marketing-kit":
@@ -83,7 +89,7 @@ def check_lock(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def check_installations(document: dict, scope: str) -> dict[str, str]:
+def check_installations(document: dict, scope: str, policy: dict | None = None) -> dict[str, str]:
     data = document.get("data")
     require(isinstance(data, dict) and isinstance(data.get("installations"), list),
             "native saved inventory missing")
@@ -117,6 +123,15 @@ def check_installations(document: dict, scope: str) -> dict[str, str]:
                 and isinstance(signed.get("recorded_revision"), str)
                 and re.fullmatch(r"[0-9a-f]{40}", signed["recorded_revision"]),
                 "native Pi installation does not bind materialized signed release")
+        if policy is not None:
+            release = policy["releases"][distribution]
+            revision = binding["package_revision"]
+            require(revision["release_sequence"] == release["release_sequence"]
+                    and signed["recorded_revision"] == release["resolved_revision"]
+                    and all(revision.get(key) == release[key]
+                            for key in ("version", "tree_digest", "manifest_digest"))
+                    and revision.get("resolved_revision") == release["resolved_revision"],
+                    "native saved receipt differs from authenticated signed release")
         identities[distribution] = instance
     require(len(set(identities.values())) == 4, "duplicate installed ownership IDs")
     return identities
@@ -215,6 +230,54 @@ def invoke(cli: str, env: dict[str, str], project: Path, stage: str,
     return json_object(proc.stdout, stage)
 
 
+def observe_signed_policy(cli: str, env: dict[str, str], project: Path) -> dict:
+    """Read the authentic release and Pi authorization from the public CLI."""
+    baseline = None
+    releases: dict[str, dict] = {}
+    for alias, distribution in EXPECTED.items():
+        envelope = invoke(cli, env, project, "signed info", "info",
+                          distribution, "--target", "pi", "--scope", "user")
+        data = envelope.get("data")
+        require(envelope.get("command") == "info" and isinstance(data, dict)
+                and data.get("selected_distribution") == distribution,
+                "signed Directory info has wrong selected distribution")
+        seq, digest = data.get("snapshot_sequence"), data.get("snapshot_digest")
+        require(type(seq) is int and seq > 0
+                and isinstance(digest, str) and DIGEST.fullmatch(digest),
+                "signed Directory info has no authenticated snapshot identity")
+        identity = (seq, digest)
+        require(baseline is None or baseline == identity,
+                "signed Directory snapshot changed across Marketing Kit graph")
+        baseline = identity
+        release = data.get("selected_release")
+        require(isinstance(release, dict) and release.get("id") == distribution
+                and release.get("release_status") == "active"
+                and type(release.get("release_sequence")) is int
+                and release["release_sequence"] > 0
+                and release.get("package_version") == RELEASE_VERSIONS[alias]
+                and isinstance(release.get("resolved_revision"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", release["resolved_revision"])
+                and all(isinstance(release.get(key), str)
+                        and DIGEST.fullmatch(release[key])
+                        for key in ("tree_digest", "manifest_digest")),
+                "signed Pi release identity/version/digest is invalid")
+        targets = release.get("target_compatibility")
+        require(isinstance(targets, list) and any(
+            isinstance(target, dict) and target.get("client") == "pi"
+            and target.get("delivery") == "managed"
+            and target.get("scopes") == ["user"]
+            for target in targets), "signed Pi target is missing for required package")
+        releases[distribution] = {
+            key: release[key] for key in (
+                "release_sequence", "resolved_revision", "tree_digest",
+                "manifest_digest")
+        }
+        releases[distribution]["version"] = release["package_version"]
+    require(baseline is not None, "signed Pi policy has no snapshot")
+    return {"snapshot_sequence": baseline[0], "snapshot_digest": baseline[1],
+            "releases": releases}
+
+
 def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
     env_a, project_a, state_a, _ = fresh_case(root, scope + "-A", scope)
     env_b, project_b, state_b, _ = fresh_case(root, scope + "-B", scope)
@@ -225,41 +288,45 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
     portable_a = project_a if scope == "project" else state_a
     portable_b = project_b if scope == "project" else state_b
 
+    policy = observe_signed_policy(cli, env_a, project_a)
     invoke(cli, env_a, project_a, "signed add", "add", "marketing-kit",
            "--target", "pi", *args_a)
     original = check_installations(
         invoke(cli, env_a, project_a, "signed list", "list", "--target", "pi", *args_a),
-        scope)
+        scope, policy)
     check_native(env_a, project_a, scope)
-    lock_digest = check_lock(portable_a / "uap.lock")
+    lock_digest = check_lock(portable_a / "uap.lock", policy)
     require((portable_a / "uap.toml").is_file(), "saved source agreement missing")
     report.append({"scope": scope, "stage": "signed-add", "result": "passed",
-                   "installed": len(original), "lock_digest": lock_digest})
+                   "installed": len(original), "lock_digest": lock_digest,
+                   "snapshot_sequence": policy["snapshot_sequence"]})
 
     invoke(cli, env_a, project_a, "repeat signed add", "add", "marketing-kit",
            "--target", "pi", *args_a)
     require(original == check_installations(
         invoke(cli, env_a, project_a, "repeat list", "list", "--target", "pi", *args_a),
-        scope), "repeat add changed signed owners")
+        scope, policy), "repeat add changed signed owners")
     invoke(cli, env_a, project_a, "signed update", "update", "marketing-kit", *args_a)
     invoke(cli, env_a, project_a, "signed repair", "repair", "marketing-kit",
            "--target", "pi", *args_a)
-    require(lock_digest == check_lock(portable_a / "uap.lock"),
+    require(lock_digest == check_lock(portable_a / "uap.lock", policy),
             "unchanged signed saved lifecycle rewrote lock")
     require(original == check_installations(
         invoke(cli, env_a, project_a, "post-repair list", "list",
-               "--target", "pi", *args_a), scope),
+               "--target", "pi", *args_a), scope, policy),
             "signed update/repair lost installed owner")
     report.append({"scope": scope, "stage": "repeat-update-repair", "result": "passed"})
 
     for filename in ("uap.toml", "uap.lock"):
         shutil.copyfile(portable_a / filename, portable_b / filename)
+    require(observe_signed_policy(cli, env_b, project_b) == policy,
+            "cold restore changed authenticated Pi Directory snapshot")
     invoke(cli, env_b, project_b, "cold locked restore", "install",
            "--locked", "--yes", *args_b)
     restored = check_installations(
         invoke(cli, env_b, project_b, "restored list", "list",
-               "--target", "pi", *args_b), scope)
-    require(lock_digest == check_lock(portable_b / "uap.lock")
+               "--target", "pi", *args_b), scope, policy)
+    require(lock_digest == check_lock(portable_b / "uap.lock", policy)
             and not set(original.values()) & set(restored.values()),
             "cold restore changed signed pins or reused installation IDs")
     check_native(env_b, project_b, scope)
