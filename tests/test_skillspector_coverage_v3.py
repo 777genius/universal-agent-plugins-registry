@@ -579,6 +579,76 @@ class QueueTests(unittest.TestCase):
             self.assertNotIn("new-advisory", diagnostic)
             self.assertFalse((root / "too-small" / "index.json").exists())
 
+    def test_current_partial_superset_with_lower_coverage_keeps_authenticated_new_findings(self):
+        """Real 44733681502 regression: 37 novel findings were discarded even
+        though a signed witness fitted every capacity and origin guard. The
+        old Partial's coverage was stronger but its findings were a subset.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(names, fully_inspected):
+            raw = upstream_report()
+            raw["issues"] = [
+                {"id": "PI1", "severity": "HIGH",
+                 "explanation": "Distinct authenticated " + name + " security advice.",
+                 "pattern": name,
+                 "location": {"file": "SKILL.md", "start_line": index}}
+                for index, name in enumerate(names, start=1)
+            ]
+            raw["analysis_completeness"].update(
+                is_complete=False, status="partial",
+                fully_inspected_files=fully_inspected,
+                partially_inspected_files=1,
+                coverage_percent=50.0 if fully_inspected else 0.0)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Incomplete source inspection."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old = observed(("shared",), 1)
+        new = observed(("shared", "novel"), 0)
+        self.assertEqual(old["source"], new["source"])
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        self.assertFalse(coverage.represented_finding_evidence_identities(old) -
+                         coverage.finding_evidence_identities(new))
+        self.assertEqual(sum((coverage.finding_evidence_identities(new) -
+                              coverage.represented_finding_evidence_identities(old)).values()), 1)
+        origin = {"run_id": 44733681502, "run_attempt": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            current = worker(selection, [new], previous)
+            # No signed origin can authorize publication of a mixed finding set.
+            with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+                coverage.merge_reports(selection, previous, [current],
+                    source_commit=COMMIT, output_dir=root / "unsigned")
+            self.assertFalse((root / "unsigned" / "index.json").exists())
+            verified_dir = root / "verified"
+            coverage.merge_reports(selection, previous, [current],
+                source_commit=COMMIT, output_dir=verified_dir,
+                authenticated_current_workers=True, verified_current_origin=origin)
+            verified = coverage.read_bundle(verified_dir)
+            retained = verified["records"][subject["id"]]
+            self.assertEqual((retained["status"], retained["coverage"]["status"]),
+                             ("partial", "partial"))
+            self.assertEqual(retained["findings"], old["findings"])
+            self.assertTrue(retained["findings_truncated"])
+            self.assertFalse(retained["coverage"]["grouping_complete"])
+            self.assertEqual(retained["recovery_witnesses"],
+                             [{"origin": origin, "record": new}])
+            self.assertFalse(coverage.finding_evidence_identities(new) -
+                             coverage.represented_finding_evidence_identities(retained))
+            self.assertEqual(verified["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(publisher.validate_directory(verified_dir, COMMIT)["manifest"],
+                             verified["manifest"])
+            # The next replay cannot reinterpret the authenticated evidence.
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                            coverage.reason_codes(retained))
+
     def test_three_authenticated_current_witnesses_preserve_all_signed_findings(self):
         """Three source-identical scanner originals survive without manufactured Complete.
 
