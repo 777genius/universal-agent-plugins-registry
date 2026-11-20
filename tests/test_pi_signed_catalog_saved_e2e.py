@@ -75,6 +75,25 @@ class FullSignedCatalogTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 subject.native_fingerprint(root)
 
+    def test_native_transport_requires_nonempty_mcp_and_valid_skill(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            with self.assertRaises(RuntimeError):
+                subject.check_native_contract(root, ["mcp"])
+            (root / "mcp.json").write_text('{"mcpServers":{"empty":{}}}', encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                subject.check_native_contract(root, ["mcp"])
+            (root / "mcp.json").write_text(
+                '{"mcpServers":{"real":{"command":"node","args":["server.js"]}}}',
+                encoding="utf-8")
+            subject.check_native_contract(root, ["mcp"])
+            with self.assertRaises(RuntimeError):
+                subject.check_native_contract(root, ["mcp", "skills"])
+            skill = root / "skills" / "sample" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("A real skill", encoding="utf-8")
+            subject.check_native_contract(root, ["mcp", "skills"])
+
     def test_authored_revision_is_not_current_test_commit(self):
         item = self.sources()[0]
         release = {"release_sequence": 1, "resolved_revision": "d" * 40,
