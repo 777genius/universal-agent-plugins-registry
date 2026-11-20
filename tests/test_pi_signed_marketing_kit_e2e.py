@@ -1,0 +1,392 @@
+"""Fail-closed parsing of genuine production-default signed Pi saved E2E receipts."""
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from pi_signed_marketing_kit_e2e import (
+    EXPECTED, CHILD_VERSIONS, RELEASE_VERSIONS, assert_foreign, check_installations,
+    check_lock, check_native, check_opposite_scope, fresh_case, json_object, observe_signed_policy,
+    observe_native_doctor, require_native_tamper_refusal,
+)
+
+
+def lock_fixture() -> dict:
+    packages = []
+    for alias, distribution in EXPECTED.items():
+        packages.append({
+            "alias": alias, "source_key": "directory:" + distribution,
+            "targets": ["pi"], "version": RELEASE_VERSIONS[alias],
+            "source": {"registry": {
+                "distribution": distribution, "distribution_id": distribution,
+                "product_id": alias, "repository": distribution, "path": "",
+                "commit": "c" * 40, "release_sequence": 1,
+            }},
+            "tree_digest": "sha256:" + "a" * 64,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "required_by": [] if alias == "marketing-kit" else [
+                {"alias": "marketing-kit",
+                 "selector": {"kind": "version", "value": CHILD_VERSIONS[alias]}}],
+        })
+    return {"schema_version": 1, "packages": packages}
+
+
+def installed_fixture(scope: str = "user") -> dict:
+    return {"result": "success", "data": {"installations": [
+        {
+            "installation_id": str(number), "directory": {
+                "recorded_distribution": distribution,
+                "recorded_release_sequence": 1,
+                "recorded_snapshot_sequence": 48,
+                "recorded_revision": "c" * 40,
+            },
+            "clients": [{"client_id": "pi", "scope": scope,
+                         "materialization": "materialized",
+                         "verification": "installation_verified",
+                         "package_revision": {"distribution_id": distribution,
+                                              "release_sequence": 1}}],
+        } for number, distribution in enumerate(EXPECTED.values(), 1)
+    ]}}
+
+def signed_policy_fixture() -> dict:
+    return {"snapshot_sequence": 48, "snapshot_digest": "sha256:" + "d" * 64,
+            "releases": {
+                distribution: {
+                    "release_sequence": 1, "resolved_revision": "c" * 40,
+                    "tree_digest": "sha256:" + "a" * 64,
+                    "manifest_digest": "sha256:" + "b" * 64,
+                    "version": RELEASE_VERSIONS[alias],
+                    "product_id": alias, "repository": distribution, "package_path": "",
+                } for alias, distribution in EXPECTED.items()
+            }}
+
+
+def signed_info_fixture(alias: str) -> dict:
+    distribution = EXPECTED[alias]
+    return {"result": "success", "command": "info", "data": {
+        "selected_distribution": distribution,
+        "product_id": alias,
+        "snapshot_sequence": 48,
+        "snapshot_digest": "sha256:" + "d" * 64,
+        "selected_release": {
+            "id": distribution, "release_status": "active",
+            "release_sequence": 1,
+            "package_version": RELEASE_VERSIONS[alias],
+            "repository": distribution,
+            "resolved_revision": "c" * 40,
+            "tree_digest": "sha256:" + "a" * 64,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "target_compatibility": [{"client": "pi", "scopes": ["user"],
+                                      "delivery": "managed"}],
+        },
+    }}
+
+
+class SignedPolicyInfoTests(unittest.TestCase):
+    def observe(self, records: list[dict]) -> dict:
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", side_effect=records) as invoke:
+            policy = observe_signed_policy("binary", {}, Path("project"))
+            self.assertEqual(invoke.call_count, 4)
+            return policy
+
+    def test_production_info_binds_one_signed_snapshot_and_four_active_pi_grants(self):
+        records = [signed_info_fixture(alias) for alias in EXPECTED]
+        self.assertEqual(self.observe(records), signed_policy_fixture())
+
+    def test_refuses_missing_grant_and_mismatched_signed_source(self):
+        cases = {
+            "missing-pi": lambda r: r[2]["data"]["selected_release"].update(target_compatibility=[]),
+            "borrowed-target": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(client="codex"),
+            "wrong-scope": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(scopes=["project"]),
+            "missing-product": lambda r: r[2]["data"].pop("product_id"),
+            "prepared": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(delivery="prepared"),
+            "changed-snapshot": lambda r: r[2]["data"].update(snapshot_sequence=49),
+            "wrong-digest": lambda r: r[2]["data"].update(snapshot_digest="not-a-digest"),
+            "changed-revision": lambda r: r[2]["data"]["selected_release"].update(resolved_revision="main"),
+            "wrong-version": lambda r: r[2]["data"]["selected_release"].update(package_version="2.0.0"),
+            "wrong-name": lambda r: r[2]["data"].update(selected_distribution="notion"),
+        }
+        for label, mutation in cases.items():
+            records = [signed_info_fixture(alias) for alias in EXPECTED]
+            mutation(records)
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                self.observe(records)
+
+
+
+
+class SignedMarketingLockTests(unittest.TestCase):
+    def check(self, lock: dict) -> str:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "uap.lock"
+            path.write_text(json.dumps(lock), encoding="utf-8")
+            return check_lock(path)
+
+    def test_accepts_exact_four_signed_pi_owners_and_edges(self):
+        self.assertTrue(self.check(lock_fixture()).startswith("sha256:"))
+
+
+    def test_policy_lock_rejects_unsigned_or_wrong_release_digests(self):
+        policy = signed_policy_fixture()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "uap.lock"
+            data = lock_fixture()
+            path.write_text(json.dumps(data), encoding="utf-8")
+            check_lock(path, policy)
+            data["packages"][2]["tree_digest"] = "sha256:" + "e" * 64
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
+                check_lock(path, policy)
+
+    def test_rejects_swapped_valid_release_commit_sequence_and_version(self):
+        policy = signed_policy_fixture()
+        for label, mutate in {
+            "commit": lambda p: p["source"]["registry"].update(commit="e" * 40),
+            "release-sequence": lambda p: p["source"]["registry"].update(release_sequence=2),
+            "different-feed": lambda p: p["source"]["registry"].update(feed_id="modern-v1"),
+            "wrong-product": lambda p: p["source"]["registry"].update(product_id="other"),
+            "wrong-repository": lambda p: p["source"]["registry"].update(repository="other/repo"),
+            "wrong-package-path": lambda p: p["source"]["registry"].update(path="other"),
+            "version": lambda p: p.update(version="2.0.0"),
+        }.items():
+            lock = lock_fixture()
+            mutate(lock["packages"][2])
+            with tempfile.TemporaryDirectory() as temp, self.subTest(label=label):
+                path = Path(temp) / "uap.lock"
+                path.write_text(json.dumps(lock), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "authenticated signed release|immutable Directory"):
+                    check_lock(path, policy)
+
+    def test_rejects_missing_child_or_borrowed_signed_target(self):
+        for mutation in (
+            lambda p: p.pop(),
+            lambda p: p[1].update(targets=["codex"]),
+            lambda p: p[2].update(source_key="github:" + EXPECTED["hubspot-crm"]),
+            lambda p: p[2].update(alias="notion"),
+            lambda p: p[2].update(tree_digest="unverified"),
+            lambda p: p[2]["source"]["registry"].update(distribution="other/hubspot"),
+            lambda p: p[2]["source"]["registry"].update(commit="main"),
+            lambda p: p[2]["source"]["registry"].update(release_sequence=0),
+            lambda p: p[2]["source"]["registry"].pop("commit"),
+            lambda p: p[2].update(required_by=[]),
+            lambda p: p[2]["required_by"][0]["selector"].update(value="2.0.0"),
+            lambda p: p[0].update(required_by=[{"alias": "notion"}]),
+        ):
+            data = lock_fixture()
+            with self.subTest(mutation=mutation):
+                mutation(data["packages"])
+                with self.assertRaisesRegex(RuntimeError, "signed|closure|dependency"):
+                    self.check(data)
+
+
+class SignedMarketingInventoryTests(unittest.TestCase):
+    def test_requires_four_distinct_materialized_signed_pi_bindings(self):
+        for scope in ("user", "project"):
+            self.assertEqual(
+                len(check_installations(installed_fixture(scope), scope)), 4)
+
+
+    def test_inventory_identity_must_match_original_signed_info(self):
+        policy = signed_policy_fixture()
+        data = installed_fixture()
+        for installation in data["data"]["installations"]:
+            release = policy["releases"][installation["directory"]["recorded_distribution"]]
+            installation["clients"][0]["package_revision"].update({
+                "version": release["version"],
+                "resolved_revision": release["resolved_revision"],
+                "tree_digest": release["tree_digest"],
+                "manifest_digest": release["manifest_digest"],
+            })
+        check_installations(data, "user", policy)
+        data["data"]["installations"][1]["clients"][0]["package_revision"]["tree_digest"] = "sha256:" + "e" * 64
+        with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
+            check_installations(data, "user", policy)
+        data["data"]["installations"][1]["clients"][0]["package_revision"]["tree_digest"] = policy["releases"][EXPECTED["notion"]]["tree_digest"]
+        data["data"]["installations"][1]["directory"]["recorded_snapshot_sequence"] = 49
+        with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
+            check_installations(data, "user", policy)
+
+    def test_rejects_incomplete_and_forged_installation_receipts(self):
+        cases = {
+            "missing": lambda d: d["data"]["installations"].pop(),
+            "borrowed-target": lambda d: d["data"]["installations"][0]["clients"][0].update(client_id="codex"),
+            "wrong-scope": lambda d: d["data"]["installations"][0]["clients"][0].update(scope="project"),
+            "unmaterialized": lambda d: d["data"]["installations"][0]["clients"][0].update(materialization="prepared"),
+            "unverified": lambda d: d["data"]["installations"][0]["clients"][0].update(verification="package_validated"),
+            "wrong-owner": lambda d: d["data"]["installations"][0]["clients"][0]["package_revision"].update(distribution_id="foo"),
+            "unknown-record": lambda d: d["data"]["installations"][0]["directory"].update(recorded_distribution="foreign/package"),
+            "reused-id": lambda d: d["data"]["installations"][1].update(installation_id="1"),
+            "untrusted-revision": lambda d: d["data"]["installations"][0]["directory"].update(recorded_revision="main"),
+            "wrong-sequence": lambda d: d["data"]["installations"][0]["directory"].update(recorded_release_sequence=2),
+            "wrong-feed": lambda d: d["data"]["installations"][0]["directory"].update(feed_id="modern-v1"),
+            "duplicate-record": lambda d: d["data"]["installations"][1]["directory"].update(
+                recorded_distribution=EXPECTED["marketing-kit"]),
+        }
+        for title, mutate in cases.items():
+            data = installed_fixture()
+            mutate(data)
+            with self.subTest(title=title), self.assertRaises(RuntimeError):
+                check_installations(data, "user")
+
+    def test_refuses_success_exit_without_valid_structured_response(self):
+        for body in ("", "[]", "{}", '{"result":"failed"}',
+                     '{"result":"success","outcome":"partial"}'):
+            with self.subTest(body=body), self.assertRaises(RuntimeError):
+                json_object(body, "test")
+
+
+class SignedMarketingIsolationTests(unittest.TestCase):
+    def test_profile_environment_excludes_runner_tokens_and_origin_overrides(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
+            "pi_signed_marketing_kit_e2e.os.environ",
+            {"PATH": "/bin", "GITHUB_TOKEN": "secret",
+             "AGENTPLUGINS_DIRECTORY_ORIGIN": "https://evil.example",
+             "NODE_OPTIONS": "--require /tmp/hook.js",
+             "HOME": "/home/real"}, clear=True,
+        ):
+            env, project, state, native = fresh_case(Path(temp), "user-A", "user")
+            self.assertEqual(env["PATH"], "/bin")
+            self.assertNotIn("GITHUB_TOKEN", env)
+            self.assertNotIn("AGENTPLUGINS_DIRECTORY_ORIGIN", env)
+            self.assertNotIn("NODE_OPTIONS", env)
+            self.assertNotEqual(env["HOME"], "/home/real")
+            self.assertEqual(env["PI_CODING_AGENT_DIR"], str(native))
+            self.assertTrue(state.is_dir() and project.is_dir())
+
+    def test_refuses_mutated_or_missing_foreign_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fresh_case(root, "user-A", "user")
+            fresh_case(root, "user-B", "user")
+            assert_foreign(root, "user")
+            bad = root / "user-A" / "home" / "foreign-do-not-change.txt"
+            bad.write_text("changed", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                assert_foreign(root, "user")
+
+
+class SignedMarketingNativeMaterializationTests(unittest.TestCase):
+    def test_requires_actual_skill_and_all_three_mcp_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, project, _, native = fresh_case(Path(tmp), "user-A", "user")
+            with self.assertRaisesRegex(RuntimeError, "Skill"):
+                check_native(env, project, "user")
+            skill = native / "skills" / "campaign-planning" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("---\\nname: campaign-planning\\n---\\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "MCP configuration absent"):
+                check_native(env, project, "user")
+            config = native / "mcp.json"
+            config.write_text(json.dumps({"mcpServers": {
+                "notion": {}, "hubspot-crm": {},
+            }}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                check_native(env, project, "user")
+            config.write_text(json.dumps({"mcpServers": {
+                "notion": {"command": "python3", "args": ["-c", "print(1)"]},
+                "hubspot-crm": {"url": "http://127.0.0.1:7777/mcp"},
+                "playwright": {},
+            }}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "lacks executable"):
+                check_native(env, project, "user")
+            config.write_text(json.dumps({"mcpServers": {
+                "notion": {"command": "python3", "args": ["-c", "print(1)"]},
+                "hubspot-crm": {"url": "http://127.0.0.1:7777/mcp"},
+                "playwright": {"command": "python3"},
+            }}), encoding="utf-8")
+            check_native(env, project, "user")
+            with self.assertRaisesRegex(RuntimeError, "retains Marketing Kit Skill"):
+                check_native(env, project, "user", removed=True)
+            skill.unlink()
+            with self.assertRaisesRegex(RuntimeError, "retains signed MCP"):
+                check_native(env, project, "user", removed=True)
+            config.write_text('{"mcpServers":{}}', encoding="utf-8")
+            check_native(env, project, "user", removed=True)
+
+
+
+class SignedMarketingScopeIsolationTests(unittest.TestCase):
+    def test_opposite_native_scope_rejects_cross_scope_skill(self):
+        for scope in ("user", "project"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as temp:
+                env, project, _, _ = fresh_case(Path(temp), "case", scope)
+                check_opposite_scope(env, project, scope)
+                other = "project" if scope == "user" else "user"
+                native = (project / ".pi" if other == "project"
+                          else Path(env["PI_CODING_AGENT_DIR"]))
+                skill = native / "skills" / "campaign-planning" / "SKILL.md"
+                skill.parent.mkdir(parents=True, exist_ok=True)
+                skill.write_text("tampered cross-scope", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "retains Marketing Kit Skill"):
+                    check_opposite_scope(env, project, scope)
+
+
+class SignedMarketingDoctorTests(unittest.TestCase):
+    @staticmethod
+    def doctor_report(*findings: dict) -> dict:
+        return {"result": "success", "command": "doctor",
+                "data": {"read_only": True, "installation_count": 4,
+                         "open_operation_count": 0, "findings": list(findings)}}
+
+    def test_refuses_stale_or_unverified_native_and_accepts_real_tamper_signal(self):
+        healthy = self.doctor_report()
+        drift = self.doctor_report({"code": "native_projection_changed",
+                                    "status": "degraded", "client_id": "pi"})
+        unchecked = self.doctor_report({"code": "native_projection_not_checked",
+                                        "status": "unknown", "client_id": "pi"})
+        for report, expectation in ((healthy, False), (drift, True)):
+            with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=report) as invoke:
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"),
+                                      expect_drift=expectation)
+                self.assertEqual(invoke.call_count, 1 if expectation else 4)
+                self.assertEqual(
+                    [call.args[4:6] for call in invoke.call_args_list],
+                    [("doctor", "marketing-kit")] if expectation else
+                    [("doctor", alias) for alias in EXPECTED])
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=unchecked):
+            with self.assertRaisesRegex(RuntimeError, "unqualified native"):
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"))
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=healthy):
+            with self.assertRaisesRegex(RuntimeError, "tampered Pi native Skill"):
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"),
+                                      expect_drift=True)
+
+    def test_doctor_rejects_unchecked_managed_install_integrity(self):
+        unknown = self.doctor_report({"code": "managed_integrity_not_checked",
+                                      "status": "unknown", "client_id": "pi"})
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=unknown):
+            with self.assertRaisesRegex(RuntimeError, "unqualified native"):
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"))
+
+    def test_e2e_tamper_instrumentation_restores_original_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env, project, _, native = fresh_case(Path(temp), "user-A", "user")
+            skill = native / "skills" / "campaign-planning" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            original = b"---\\nname: campaign-planning\\n---\\n"
+            skill.write_bytes(original)
+            before = []
+            def observe(_cli, _env, _project, _args, *, expect_drift=False):
+                current = skill.read_bytes()
+                before.append((expect_drift, current))
+                if expect_drift:
+                    self.assertNotEqual(current, original)
+                else:
+                    self.assertEqual(current, original)
+            with mock.patch("pi_signed_marketing_kit_e2e.observe_native_doctor",
+                            side_effect=observe):
+                require_native_tamper_refusal("cli", env, project, "user",
+                                             ("--scope", "user"))
+            self.assertEqual(skill.read_bytes(), original)
+            self.assertEqual([entry[0] for entry in before], [True, False])
+
+
+
+if __name__ == "__main__":
+    unittest.main()
