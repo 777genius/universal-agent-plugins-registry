@@ -283,8 +283,11 @@ class SignedMarketingDoctorTests(unittest.TestCase):
             with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=report) as invoke:
                 observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"),
                                       expect_drift=expectation)
-                self.assertEqual(invoke.call_args.args[4:6],
-                                 ("doctor", "marketing-kit"))
+                self.assertEqual(invoke.call_count, 1 if expectation else 4)
+                self.assertEqual(
+                    [call.args[4:6] for call in invoke.call_args_list],
+                    [("doctor", "marketing-kit")] if expectation else
+                    [("doctor", alias) for alias in EXPECTED])
         with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=unchecked):
             with self.assertRaisesRegex(RuntimeError, "unqualified native"):
                 observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"))
