@@ -18,6 +18,7 @@ class FullSignedCatalogTests(unittest.TestCase):
             {"distribution": f"777genius/example-{i:02d}", "release_sequence": 1,
              "distribution_status": "active", "manifest_name": f"example-{i:02d}",
              "revision": "a" * 40, "authored_revision": "a" * 40,
+             "source": f"github:777genius/example-{i:02d}@{'a'*40}//packages/{i:02d}",
              "tree_digest": "sha256:" + "b" * 64,
              "manifest_digest": "sha256:" + "c" * 64}
             for i in range(36)
@@ -97,12 +98,17 @@ class FullSignedCatalogTests(unittest.TestCase):
     def test_authored_revision_is_not_current_test_commit(self):
         item = self.sources()[0]
         release = {"release_sequence": 1, "resolved_revision": "d" * 40,
+                   "repository": "777genius/example-00", "package_path": "packages/00",
                    "tree_digest": item["tree_digest"],
                    "manifest_digest": item["manifest_digest"]}
         with self.assertRaises(RuntimeError):
             subject.check_root_source({"release": release}, item)
         item["authored_revision"] = None
         subject.check_root_source({"release": release}, item)
+        release["repository"] = "777genius/other"
+        with self.assertRaises(RuntimeError):
+            subject.check_root_source({"release": release}, item)
+        release["repository"] = "777genius/example-00"
         release["tree_digest"] = "sha256:" + "e" * 64
         with self.assertRaises(RuntimeError):
             subject.check_root_source({"release": release}, item)
