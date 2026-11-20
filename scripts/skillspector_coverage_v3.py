@@ -917,6 +917,13 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
         quarantine_recovery(records, attempts, item, outcome,
                             prefer_existing=degraded_complete, witness_origin=verified_current_origin)
+        # An authenticated *current* run must not silently discard a genuinely
+        # new independent finding merely because the alternate will not fit the
+        # signed v3 shard. Historical recovery has its own incomplete disclosure
+        # policy; live publication stays blocked until all new evidence fits.
+        if verified_current_origin is not None:
+            require(not (finding_identities(new) - represented_finding_identities(records[identifier])),
+                    "verified current security witness could not be represented in signed shard")
         if predecessor_uncertain(old_record):
             mark_missing_predecessor(records[identifier], attempts[identifier])
         return True
