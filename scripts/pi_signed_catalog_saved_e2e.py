@@ -85,8 +85,10 @@ def check_native_contract(root: Path, components: list[str]) -> None:
                     "native Pi MCP server has no executable/HTTP transport")
     if "extensions" in kinds:
         extensions = root / "extensions"
-        require(extensions.is_dir() and bool(list(extensions.rglob("*"))),
-                "native Pi extensions absent")
+        require(extensions.is_dir() and not extensions.is_symlink()
+                and any(p.is_file() and not p.is_symlink() and p.stat().st_size > 0
+                        for p in extensions.rglob("*")),
+                "native Pi extensions missing a nonempty file")
 
 
 def signed_info(cli: str, env: dict[str, str], project: Path,

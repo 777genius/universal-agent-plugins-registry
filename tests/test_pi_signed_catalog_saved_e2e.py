@@ -95,6 +95,19 @@ class FullSignedCatalogTests(unittest.TestCase):
             skill.write_text("A real skill", encoding="utf-8")
             subject.check_native_contract(root, ["mcp", "skills"])
 
+    def test_native_extensions_reject_directory_only_or_empty_placeholder(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "extensions" / "nested").mkdir(parents=True)
+            with self.assertRaises(RuntimeError):
+                subject.check_native_contract(root, ["extensions"])
+            extension = root / "extensions" / "nested" / "plugin.ts"
+            extension.write_text("", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                subject.check_native_contract(root, ["extensions"])
+            extension.write_text("export default {};\n", encoding="utf-8")
+            subject.check_native_contract(root, ["extensions"])
+
     def test_authored_revision_is_not_current_test_commit(self):
         item = self.sources()[0]
         release = {"release_sequence": 1, "resolved_revision": "d" * 40,
