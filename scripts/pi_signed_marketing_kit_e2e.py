@@ -147,6 +147,8 @@ def check_installations(document: dict, scope: str, policy: dict | None = None) 
                 and binding["package_revision"]["release_sequence"] > 0
                 and signed.get("recorded_release_sequence") ==
                     binding["package_revision"]["release_sequence"]
+                # The published CLI 0.1.111 may bind only the compiled-in legacy feed.
+                and signed.get("feed_id", "") == ""
                 and isinstance(signed.get("recorded_revision"), str)
                 and re.fullmatch(r"[0-9a-f]{40}", signed["recorded_revision"]),
                 "native Pi installation does not bind materialized signed release")
