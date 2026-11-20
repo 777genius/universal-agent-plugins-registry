@@ -969,7 +969,7 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
                     "origin_conflicts_with_existing_witness": any(
                         entry["origin"] == verified_current_origin and entry != candidate
                         for entry in witnesses),
-                    "witness_count_limit_reached": len(witnesses) >= 2,
+                    "witness_count_limit_reached": len(witnesses) >= contract.MAX_RECOVERY_WITNESSES,
                 }
                 raise PublicationError(
                     "verified current security witness could not be represented in signed shard: " +
@@ -1303,7 +1303,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
                          not any(key in new for key in
                                  ("freshness", "target_revision", "retry", "attempt_history")) and
                          not any(entry["origin"] == witness_origin and entry != witness for entry in witnesses) and
-                         (witness in witnesses or len(witnesses) < 2))
+                         (witness in witnesses or len(witnesses) < contract.MAX_RECOVERY_WITNESSES))
         if representable and witness not in witnesses:
             retained.setdefault("recovery_witnesses", []).append(witness)
             added_witness = witness
