@@ -1216,10 +1216,12 @@ jobs:
               test "${attempt}" -lt 3
             done
           done
+      # The owner no longer requires CLI 0.1.89 compatibility (2026-11-15).
+      # Keep a real, checksum-pinned released CLI proof for the staged signed feed.
       - name: Prove compatibility with the exact released CLI
         env:
-          AGENTPLUGINS_COMMIT: 36b2dd824d56523613b0c773ff89eb5107934584
-          AGENTPLUGINS_VERSION: 0.1.89
+          AGENTPLUGINS_COMMIT: eb75218c574472169d37a898af65952080d15c99
+          AGENTPLUGINS_VERSION: 0.1.114
           EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
           EXPECTED_SNAPSHOT_DIGEST: ${{ needs.sign.outputs.snapshot_digest }}
           EXPECTED_LEDGER_HEAD: ${{ needs.materialize_site.outputs.ledger_commit }}
@@ -1234,9 +1236,9 @@ jobs:
           binary="${release_dir}/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
           chmod +x "${binary}"
           cd "${release_dir}"
-          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = 41bb941b8cd583588759748ad77d01f0a3ad015a779231ed1dd5e0c7f40a6134
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 24b4d4047396eb2dba0403198438c4d7db7920858efc0c6da24464e6c136d075
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 6fc4c8d232a75b9ba332f4237c51607f93bc0a310dcace027f43aa88782ccb49
+          test "$(sha256sum "$(basename "${binary}")" | cut -d ' ' -f 1)" = 6994e4d79414c64439aa57acabf001621b2b01d6dfa37fd9d6801f72d3e0a3eb
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = be77f1b0998879dc728dceda1f0e9ebde9d22569964fa840d8b3b57caadb809c
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 354b2527cc255209d93e1a9ede31412ee1789a83346b72f9ef97d84fee439ca7
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib
