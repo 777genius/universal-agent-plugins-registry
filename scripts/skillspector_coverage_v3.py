@@ -941,8 +941,39 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
         # signed v3 shard. Historical recovery has its own incomplete disclosure
         # policy; live publication stays blocked until all new evidence fits.
         if verified_current_origin is not None:
-            require(not (finding_evidence_identities(new) - represented_finding_evidence_identities(records[identifier])),
-                    "verified current security witness could not be represented in signed shard")
+            # Diagnostic only. Never relax the no-loss signed publication gate.
+            # The original checkpoint is authenticated, but a second full
+            # report may exceed per-witness or per-shard limits. Report only
+            # bounded typed capacity facts and digests: no source text, paths,
+            # findings, exception messages, or secret evidence in CI logs.
+            unrepresented = (finding_evidence_identities(new) -
+                             represented_finding_evidence_identities(records[identifier]))
+            if unrepresented:
+                retained = records[identifier]
+                witnesses = retained.get("recovery_witnesses", [])
+                candidate = {"origin": verified_current_origin, "record": new}
+                with_candidate = copy.deepcopy(retained)
+                with_candidate.setdefault("recovery_witnesses", []).append(candidate)
+                context = {
+                    "subject_digest": source_digest(item),
+                    "old_report_digest": old_record["report_digest"],
+                    "new_report_digest": new["report_digest"],
+                    "unrepresented_instances": sum(unrepresented.values()),
+                    "existing_witnesses": len(witnesses),
+                    "candidate_witness_bytes": len(report_json(candidate)),
+                    "candidate_fits_rebound_budget": witness_fits_max_rebound_id(candidate),
+                    "candidate_fits_shard_budget": witness_fits_shard_budget(
+                        with_candidate, item["repository"]),
+                    "candidate_has_queue_controls": any(field in new for field in
+                        ("freshness", "target_revision", "retry", "attempt_history")),
+                    "origin_conflicts_with_existing_witness": any(
+                        entry["origin"] == verified_current_origin and entry != candidate
+                        for entry in witnesses),
+                    "witness_count_limit_reached": len(witnesses) >= 2,
+                }
+                raise PublicationError(
+                    "verified current security witness could not be represented in signed shard: " +
+                    json.dumps(context, sort_keys=True, separators=(",", ":")))
         if predecessor_uncertain(old_record):
             mark_missing_predecessor(records[identifier], attempts[identifier])
         return True
