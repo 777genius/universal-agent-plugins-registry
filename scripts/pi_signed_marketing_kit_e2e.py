@@ -152,13 +152,17 @@ def fresh_case(root: Path, name: str, scope: str) -> tuple[dict[str, str], Path,
     return env, project, state, native
 
 
-def assert_foreign(root: Path) -> None:
-    for marker in root.rglob("foreign-do-not-change.txt"):
-        require(marker.is_file() and not marker.is_symlink()
-                and marker.read_text(encoding="utf-8") == "foreign and unchanged\n",
-                "foreign Pi/User/Project content changed")
-    require(len(list(root.rglob("foreign-do-not-change.txt"))) == 6,
-            "foreign Pi/User/Project sentinel missing")
+def assert_foreign(root: Path, scope: str) -> None:
+    require(scope in ("user", "project"), "unexpected test scope")
+    for suffix in ("A", "B"):
+        case = root / (scope + "-" + suffix)
+        for relative in ("home/foreign-do-not-change.txt",
+                         "project/foreign-do-not-change.txt",
+                         "home/.pi/agent/foreign-do-not-change.txt"):
+            marker = case / relative
+            require(marker.is_file() and not marker.is_symlink()
+                    and marker.read_text(encoding="utf-8") == "foreign and unchanged\n",
+                    "foreign Pi/User/Project content changed")
 
 
 def invoke(cli: str, env: dict[str, str], project: Path, stage: str,
@@ -224,7 +228,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         data = listing.get("data")
         require(isinstance(data, dict) and data.get("installations") == [],
                 "removed Pi profile retains signed installations")
-    assert_foreign(root)
+    assert_foreign(root, scope)
     report.append({"scope": scope, "stage": "signed-removal-foreign", "result": "passed"})
 
 
