@@ -566,11 +566,17 @@ class QueueTests(unittest.TestCase):
             self.assertGreater(full_size, short_size + 128)
             with mock.patch.object(coverage, "MAX_SHARD_BYTES", short_size + 128):
                 with self.assertRaisesRegex(PublicationError,
-                                            "security witness could not be represented"):
+                                            "security witness could not be represented") as rejected:
                     coverage.merge_reports(
                         selection, previous, [candidate], source_commit=COMMIT,
                         output_dir=root / "too-small", authenticated_current_workers=True,
                         verified_current_origin=origin)
+            diagnostic = str(rejected.exception)
+            self.assertIn('"candidate_fits_shard_budget":false', diagnostic)
+            self.assertIn('"unrepresented_instances":', diagnostic)
+            self.assertIn('"subject_digest":"sha256:', diagnostic)
+            self.assertNotIn("Original advisory.", diagnostic)
+            self.assertNotIn("new-advisory", diagnostic)
             self.assertFalse((root / "too-small" / "index.json").exists())
 
     def test_full_security_evidence_changes_require_signed_witness_not_coarse_match(self):
