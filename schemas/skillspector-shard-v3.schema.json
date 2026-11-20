@@ -1075,7 +1075,7 @@
         },
         "recovery_witnesses": {
           "type": "array",
-          "maxItems": 2,
+          "maxItems": 3,
           "items": {
             "type": "object",
             "additionalProperties": false,
