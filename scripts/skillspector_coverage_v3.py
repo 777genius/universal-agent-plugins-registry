@@ -809,7 +809,7 @@ def represented_finding_evidence_identities(record):
     return identities
 
 
-def require_represented_degraded_findings(item, old, new, attempt):
+def require_represented_degraded_findings(item, old, new, attempt, *, degradation="complete"):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
     old_groups, new_groups = represented_finding_evidence_identities(old), finding_evidence_identities(new)
     novel = new_groups - old_groups
@@ -826,7 +826,7 @@ def require_represented_degraded_findings(item, old, new, attempt):
             "new_fully_inspected_files": new["coverage"]["fully_inspected_files"],
             "old_partially_inspected_files": old["coverage"]["partially_inspected_files"],
             "new_partially_inspected_files": new["coverage"]["partially_inspected_files"]}
-        raise PublicationError("degraded complete introduces unrepresented new findings: " +
+        raise PublicationError("degraded " + degradation + " introduces unrepresented new findings: " +
             json.dumps(context, sort_keys=True, separators=(",", ":")))
 
 
@@ -931,8 +931,15 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
         # Without a verified producing run, keep rejecting a new finding set.
         # A bound current-main checkpoint can instead retain its complete
         # original alternate as a signed recovery witness, never as Complete.
-        if degraded_complete and verified_current_origin is None:
-            require_represented_degraded_findings(item, old_record, new, attempt)
+        if verified_current_origin is None:
+            # Authenticated worker bytes alone are not a signed origin for an
+            # independent finding. Without a verified producing run, neither
+            # an old nor a new adverse group may disappear from publication.
+            if degraded_complete:
+                require_represented_degraded_findings(item, old_record, new, attempt)
+            if conflicting_partial:
+                require_represented_degraded_findings(
+                    item, old_record, new, attempt, degradation="partial")
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
         quarantine_recovery(records, attempts, item, outcome,
                             prefer_existing=degraded_complete or (
