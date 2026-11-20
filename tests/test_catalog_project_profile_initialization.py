@@ -17,7 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from tests.test_catalog_publication_readiness import arguments, catalog, PROJECT_RELEASE_FIXTURE
+from tests.test_catalog_publication_readiness import arguments, catalog
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
 import catalog_publication_readiness as gate
@@ -33,7 +33,7 @@ class ProjectProfileInitializationTests(unittest.TestCase):
             path.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
             path.chmod(0o700)
         return SimpleNamespace(
-            binary=directory / "agentplugins", project_binary=directory / "agentplugins",
+            binary=directory / "agentplugins",
             codex=directory / "codex", claude=directory / "claude",
             copilot=directory / "copilot", opencode=directory / "opencode",
             inspector=None, npx=None)
@@ -127,7 +127,12 @@ class ProjectProfileInitializationTests(unittest.TestCase):
             with patch.object(gate, "child", side_effect=native):
                 baseline = project.initialize_user_profile(args, case, roots, env, readonly)
             self.assertEqual(len(calls), 2)
+            records = baseline.pop("records")
             self.assertEqual(baseline, first_baseline[0])
+            # Native files of record are captured byte-exactly before UAP runs.
+            self.assertEqual(set(records), set(project.RECORD_FILES))
+            self.assertEqual(records[".claude/.claude.json"], (roots["home"] / ".claude/.claude.json").read_bytes())
+            baseline["records"] = records
             project.validate_user_isolation(baseline, roots)
 
     def test_home_substitution_is_rejected_before_reading_profile_at_either_control(self):
@@ -529,13 +534,16 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                     self.assertEqual(len(calls), control)
 
     def test_managed_project_add_keeps_initialized_profile_frozen(self):
-        for mutation in (None, "new_file", "profile_bytes", "backup_bytes", "durable_state"):
+        # The released CLI may only add exact trust for the selected project
+        # to the native files of record; every other User change is rejected.
+        for mutation in (None, "exact_trust", "new_file", "profile_bytes", "backup_bytes", "durable_state",
+                         "codex_mcp_leak", "claude_settings_enable", "foreign_trust", "extra_claude_project_field",
+                         "user_codex_skill", "foreign_claude_registry", "nonempty_lock"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
                 args = self.tools(root)
                 case_root = root / "case"
-                release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-                release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
+                release = patch.dict(managed.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())})
                 calls = []
 
                 def child(argv, **kwargs):
@@ -563,27 +571,70 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                     elif mutation == "durable_state":
                         (case_root / "state/state-v2.json").write_text(
                             '{"installations":[]}\n', encoding="utf-8")
+                    elif mutation is not None:
+                        self.write_project_trust(case_root, mutation)
                     # Stop at an existing predicate immediately after the real
                     # User-isolation guard. No later lifecycle is mocked as a pass.
                     return self.native_result(argv, stdout=json.dumps(
                         {"command": "add", "result": "success", "data": {}}))
 
-                with patch.object(project, "RELEASE", release), patch.object(gate, "child", side_effect=child):
+                with release, patch.object(gate, "child", side_effect=child):
                     case = project.expected(catalog(), gate.selected)
-                    message = ("Project operation changed User native or durable state" if mutation is not None
-                               else "managed saved add incomplete")
+                    message = ("managed saved add incomplete" if mutation in (None, "exact_trust")
+                               else "Project operation changed User native or durable state|native trust|"
+                                    "beyond exact project trust|outside the selected project|not the exact project")
                     with self.assertRaisesRegex(ValueError, message):
                         managed.run(args, case_root, case,
                                     {"directory_origin": "https://example.invalid/exact-ledger/"})
                 self.assertEqual(calls, ["native", "native", "add"])
 
+    def write_project_trust(self, case_root, mutation):
+        """Exact native trust the released CLI records for a Project install."""
+        home, workspace = case_root / "home", str(case_root / "workspace")
+        trusted = "/elsewhere" if mutation == "foreign_trust" else workspace
+        def write(name, body):
+            path = home / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+            lock = home / (name + ".agentplugins.lock")
+            lock.write_text("held" if mutation == "nonempty_lock" else "", encoding="utf-8")
+            lock.chmod(0o600)
+        write(".gemini/trustedFolders.json", json.dumps({trusted: "TRUST_FOLDER"}))
+        write(".copilot/config.json", json.dumps({"trustedFolders": [trusted]}))
+        codex = f'projects."{trusted}".trust_level = "trusted"\n'
+        if mutation == "codex_mcp_leak":
+            codex += '[mcp_servers.leaked]\ncommand = "leaked"\n'
+        write(".codex/config.toml", codex)
+        profile = home / ".claude/.claude.json"
+        value = json.loads(profile.read_text())
+        value["projects"] = {trusted: {"hasTrustDialogAccepted": True, **({"allowedTools": ["*"]} if mutation == "extra_claude_project_field" else {})}}
+        value["userID"] = "1" * 64
+        profile.write_text(json.dumps(value), encoding="utf-8")
+        marketplace = "agentplugins-" + "a" * 12
+        install = home / ".claude/plugins/cache" / marketplace / "marketing-kit/0.1.0"
+        install.mkdir(parents=True)
+        (install / "plugin.json").write_text("{}", encoding="utf-8")
+        write(".claude/plugins/installed_plugins.json", json.dumps({"version": 2, "plugins": {"marketing-kit@" + marketplace: [
+            {"scope": "user" if mutation == "foreign_claude_registry" else "project", "projectPath": workspace, "installPath": str(install)}]}}))
+        write(".claude/plugins/known_marketplaces.json", json.dumps({marketplace: {
+            "source": {"source": "directory", "path": workspace + "/.claude/skills/marketing-kit-" + "b" * 12},
+            "installLocation": workspace + "/.claude/skills/marketing-kit-" + "b" * 12, "lastUpdated": "2026-11-20T00:00:00Z"}}))
+        (home / ".cache/claude-cli-nodejs/project/mcp-logs-plugin-notion-notion").mkdir(parents=True)
+        (home / ".cache/claude-cli-nodejs/project/mcp-logs-plugin-notion-notion/log.jsonl").write_text("{}\n", encoding="utf-8")
+        (home / ".codex/skills/.system/skill-creator").mkdir(parents=True)
+        (home / ".codex/skills/.system/skill-creator/SKILL.md").write_text("bundled\n", encoding="utf-8")
+        (home / ".codex/state_5.sqlite").write_bytes(b"runtime")
+        if mutation == "claude_settings_enable":
+            (home / ".claude/settings.json").write_text(json.dumps({"enabledPlugins": {"leaked@" + marketplace: True}}), encoding="utf-8")
+        if mutation == "user_codex_skill":
+            (home / ".codex/skills/leaked").mkdir()
+            (home / ".codex/skills/leaked/SKILL.md").write_text("leaked\n", encoding="utf-8")
+
     def test_main_redacts_native_profile_failure_and_never_writes_success(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             args = self.tools(root)
-            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
             binary_digest = gate.digest(args.binary.read_bytes())
-            release["cli"]["binary_digest"] = binary_digest
             snapshot = catalog()
             invocation = arguments(snapshot)
             baseline = copy.deepcopy(snapshot)
@@ -615,10 +666,10 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                     "--sandbox", str(sandbox), "--output", str(output)]
             for field in gate.CONTEXT_FIELDS:
                 argv.extend(["--" + field.replace("_", "-"), str(getattr(invocation, field))])
-            for field in ("binary", "project_binary", "codex", "claude", "copilot", "opencode"):
+            for field in ("binary", "codex", "claude", "copilot", "opencode"):
                 argv.extend(["--" + field.replace("_", "-"), str(getattr(args, field))])
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.object(project, "RELEASE", release), patch.dict(gate.CLI, {"binary_digest": binary_digest}):
+            with patch.dict(managed.CLI, {"binary_digest": binary_digest}), patch.dict(gate.CLI, {"binary_digest": binary_digest}):
                 expected = gate.expected_artifact(
                     snapshot, baseline, {"sequence": 13, "snapshot_digest": "sha256:" + "f" * 64},
                     gate.context(invocation, snapshot,

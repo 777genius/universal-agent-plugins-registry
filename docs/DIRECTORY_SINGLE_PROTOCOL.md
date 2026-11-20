@@ -78,7 +78,7 @@ the v1 reader rejects.
    supports Pi direct-source workflows, but **does not automatically
    route to a production modern feed**. Test user/project
    add/info/update/repair/remove and immutable source pins on all three
-   OS, plus old CLI 0.1.89 warm-cache/live-legacy compatibility.
+   OS.
 6. Verify exact signed snapshot, envelope, ledger, CDN/Pages and real
    production UI against the published sequence. No positive Pi
    catalog claim before this completes and post-merge E2E passes.

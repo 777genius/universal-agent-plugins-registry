@@ -1,0 +1,11 @@
+{
+  "expires_at": "2026-12-20T17:33:37Z",
+  "generated_at": "2026-11-20T17:33:37Z",
+  "key_id": "uap-directory-2026-11",
+  "publication_id": "44772997184",
+  "purpose": "Untouched signed candidate (first uap-directory-2026-11 signature, derived Pi, Hermes and Antigravity targets) for offline catalog readiness regression. It does not qualify a CLI release or production readiness.",
+  "sequence": 49,
+  "signed_ledger_commit": "d3c441ab4fea5f2d003dbdc518d1ee9de333dab9",
+  "snapshot_digest": "sha256:f54f905f55d05477ee01ae6028a8d32e10b8b8db58784f81f624642ae71f2452",
+  "source_commit": "ae31f07885299de479afea1afc80cf10ee0b537c"
+}

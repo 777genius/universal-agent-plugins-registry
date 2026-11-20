@@ -391,56 +391,24 @@ sys.modules['catalog_process_isolation']=module
             self.assertIn("--baseline-feed baseline/registry/schemas/1", body)
         self.assertNotIn("refusal", " ".join(workflow["on"]["workflow_call"].get("inputs", {})))
 
-    def test_project_release_is_one_fixed_authority_for_download_and_canonical_proof(self) -> None:
+    def test_catalog_readiness_downloads_and_runs_exactly_one_released_cli(self) -> None:
         workflow = load(CATALOG_READINESS)
         steps = workflow["jobs"]["produce"]["steps"]
-        preflight = next(step for step in steps if step.get("name") == "Require the reviewed six User and six Project CLI release identity")
-        download = next(step for step in steps if step.get("name") == "Download and authenticate the reviewed User/Project CLI before execution")
-        managed = next(step for step in steps if step.get("name") == "Download and authenticate the managed dependency CLI 0.1.91 before execution")
-        for step in (preflight, download):
-            self.assertNotIn("if", step)
-            self.assertNotIn("continue-on-error", step)
-        self.assertLess(steps.index(preflight), min(index for index, step in enumerate(steps)
-                                                  if step.get("name", "").startswith("Download and authenticate")))
-        self.assertNotIn("inputs.", preflight["run"] + download["run"])
+        downloads = [step for step in steps if "release download" in step.get("run", "")
+                     and "777genius/universal-agent-plugins" in step["run"] and "plugin-kit-ai" not in step["run"]]
+        self.assertEqual([step["name"] for step in downloads], ["Download and authenticate the exact released CLI before execution"])
+        download = downloads[0]
+        self.assertNotIn("if", download)
+        self.assertNotIn("continue-on-error", download)
         self.assertEqual(download["env"], {"GH_TOKEN": "${{ github.token }}"})
-        # The Project transport is exactly the existing authenticated path,
-        # with its release identity sourced from the one reviewed constant.
-        normalized = download["run"].replace("release-project", "release-managed")
-        normalized = normalized.replace("$PROJECT_CLI_TAG", "agentplugins-v${AGENTPLUGINS_VERSION}")
-        normalized = normalized.replace("PROJECT_CLI_VERSION", "AGENTPLUGINS_VERSION").replace("PROJECT_CLI_COMMIT", "AGENTPLUGINS_COMMIT")
-        for variable, digest in (
-            ("PROJECT_BINARY_SHA256", "7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"),
-            ("PROJECT_CHECKSUMS_SHA256", "7988df7f3d87c2c7485f2ce84bb434fbefe1f0cf24ef60e99ae626245685ebad"),
-            ("PROJECT_MANIFEST_SHA256", "de7c6ea83db79f091b722a589cc415b805a5b0819a84f9ed327476fb0cb4b937"),
-        ):
-            normalized = normalized.replace('"$' + variable + '"', digest)
-        self.assertEqual(normalized, managed["run"])
+        self.assertNotIn("inputs.", download["run"])
+        self.assertIn("gh attestation verify", download["run"])
+        self.assertIn('assert manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]', download["run"])
         producer = commands(workflow["jobs"]["produce"])
-        self.assertIn('--project-binary "$RUNNER_TEMP/release-project/agentplugins_${PROJECT_CLI_VERSION}_linux_amd64"', producer)
-        self.assertIn('--managed-binary "$RUNNER_TEMP/release-managed/agentplugins_0.1.91_linux_amd64"', producer)
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.89")
+        self.assertIn('--binary "$RUNNER_TEMP/release/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"', producer)
+        for retired in ("--managed-binary", "--project-binary", "PROJECT_CLI_", "release-managed", "release-project", "reviewed_release"):
+            self.assertNotIn(retired, json.dumps(workflow))
         self.assertIn("scripts/catalog_project_readiness.py", load(DIRECTORY_PUBLICATION)["on"]["push"]["paths"])
-        with mock.patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
-            import catalog_project_readiness as project
-        # Execute the actual workflow's export code with an offline synthetic
-        # fixed authority, then prove an unset identity exports nothing.
-        fixture = {"cli": {"version": "0.1.103", "tag": "agentplugins-v0.1.103", "commit": "a" * 40,
-                           "binary_digest": "sha256:" + "b" * 64},
-                   "checksums_digest": "sha256:" + "c" * 64, "manifest_digest": "sha256:" + "d" * 64}
-        code = "\n".join(preflight["run"].splitlines()[1:-1])
-        with tempfile.TemporaryDirectory() as temporary:
-            exported = Path(temporary) / "environment"
-            with mock.patch.dict(os.environ, {"GITHUB_ENV": str(exported)}), mock.patch.object(project, "RELEASE", fixture):
-                exec(compile(code, "Project release preflight", "exec"), {})
-            self.assertEqual(dict(line.split("=", 1) for line in exported.read_text().splitlines()), {
-                "PROJECT_CLI_VERSION": "0.1.103", "PROJECT_CLI_TAG": "agentplugins-v0.1.103", "PROJECT_CLI_COMMIT": "a" * 40,
-                "PROJECT_BINARY_SHA256": "b" * 64, "PROJECT_CHECKSUMS_SHA256": "c" * 64, "PROJECT_MANIFEST_SHA256": "d" * 64})
-            exported.unlink()
-            with mock.patch.dict(os.environ, {"GITHUB_ENV": str(exported)}), mock.patch.object(project, "RELEASE", None), \
-                    self.assertRaisesRegex(ValueError, "identity is unset"):
-                exec(compile(code, "Project release preflight", "exec"), {})
-            self.assertFalse(exported.exists())
 
     def test_catalog_gate_attests_both_canonical_subjects_and_exact_oidc_invocation(self) -> None:
         workflow = load(CATALOG_READINESS)
@@ -450,27 +418,38 @@ sys.modules['catalog_process_isolation']=module
         self.assertNotIn("continue-on-error", policy)
         self.assertIn("--schema-version 2", policy["run"])
         self.assertIn("run_source_policy_conformance.py", policy["run"])
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.89")
-        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "36b2dd824d56523613b0c773ff89eb5107934584")
-        readiness_tree = ast.parse((ROOT / "scripts/catalog_publication_readiness.py").read_text())
-        readiness_cli = ast.literal_eval(next(
-            node.value for node in readiness_tree.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "CLI" for target in node.targets)
-        ))
-        self.assertEqual(readiness_cli["version"], workflow["env"]["AGENTPLUGINS_VERSION"])
-        self.assertEqual(readiness_cli["tag"], f"agentplugins-v{workflow['env']['AGENTPLUGINS_VERSION']}")
-        self.assertEqual(readiness_cli["commit"], workflow["env"]["AGENTPLUGINS_COMMIT"])
-        self.assertIn(readiness_cli["binary_digest"].removeprefix("sha256:"), commands(producer))
+        # Sequence 49+ is signed by uap-directory-2026-11, which only dual-key
+        # CLIs (0.1.111+) trust. One released CLI serves every readiness case
+        # and the staged-publication parity gate.
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_VERSION"], "0.1.114")
+        self.assertEqual(workflow["env"]["AGENTPLUGINS_COMMIT"], "eb75218c574472169d37a898af65952080d15c99")
+        with mock.patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
+            import catalog_publication_readiness as readiness
+        self.assertEqual({key: readiness.CLI[key] for key in ("version", "tag", "commit", "binary_digest")},
+                         readiness.managed.CLI)
+        self.assertIs(readiness.project.managed.CLI, readiness.managed.CLI)
+        self.assertEqual(readiness.CLI["version"], workflow["env"]["AGENTPLUGINS_VERSION"])
+        self.assertEqual(readiness.CLI["tag"], f"agentplugins-v{workflow['env']['AGENTPLUGINS_VERSION']}")
+        self.assertEqual(readiness.CLI["commit"], workflow["env"]["AGENTPLUGINS_COMMIT"])
+        released_digests = [
+            "6994e4d79414c64439aa57acabf001621b2b01d6dfa37fd9d6801f72d3e0a3eb",
+            "be77f1b0998879dc728dceda1f0e9ebde9d22569964fa840d8b3b57caadb809c",
+            "354b2527cc255209d93e1a9ede31412ee1789a83346b72f9ef97d84fee439ca7",
+        ]
+        self.assertEqual(readiness.CLI["binary_digest"], "sha256:" + released_digests[0])
+        download = next(step for step in producer["steps"]
+                        if step.get("name") == "Download and authenticate the exact released CLI before execution")
+        self.assertEqual(re.findall(r"\b[0-9a-f]{64}\b", download["run"]), released_digests)
+        self.assertIn('--source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners', download["run"])
         compat_job = load(DIRECTORY_PUBLICATION)["jobs"]["gate_exact_staged_publication"]
         compat = next(step for step in compat_job["steps"]
                       if step.get("name") == "Prove compatibility with the exact released CLI")
         self.assertEqual(compat["env"]["AGENTPLUGINS_VERSION"], workflow["env"]["AGENTPLUGINS_VERSION"])
         self.assertEqual(compat["env"]["AGENTPLUGINS_COMMIT"], workflow["env"]["AGENTPLUGINS_COMMIT"])
-        compat_digests = re.findall(r"\b[0-9a-f]{64}\b", compat["run"])
-        self.assertGreaterEqual(len(compat_digests), 3)
-        for digest in compat_digests:
-            self.assertIn(digest, commands(producer))
+        self.assertEqual(re.findall(r"\b[0-9a-f]{64}\b", compat["run"]), released_digests)
+        self.assertIn("sha256sum --check checksums.txt --ignore-missing", compat["run"])
+        self.assertIn('assert manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]', compat["run"])
+        self.assertIn('test "$("${binary}" version)" = "agentplugins ${AGENTPLUGINS_VERSION}"', compat["run"])
         self.assertEqual(workflow["env"]["SOURCE_POLICY_AGENTPLUGINS_VERSION"], "0.1.24")
         self.assertEqual(workflow["env"]["SOURCE_POLICY_AGENTPLUGINS_COMMIT"], "c78c79e44efd5ad07083d63436d9170b107df6cb")
         self.assertIn('ref: c78c79e44efd5ad07083d63436d9170b107df6cb', CATALOG_READINESS.read_text())

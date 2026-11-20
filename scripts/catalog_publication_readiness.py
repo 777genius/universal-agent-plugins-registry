@@ -48,12 +48,16 @@ CONTEXT_FIELDS = ("repository", "source_sha", "workflow_sha", "signed_ledger_sha
                   "run_id", "run_attempt", "directory_origin")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-CLI = {"version": "0.1.89", "tag": "agentplugins-v0.1.89",
-       "commit": "36b2dd824d56523613b0c773ff89eb5107934584",
-       "binary_digest": "sha256:41bb941b8cd583588759748ad77d01f0a3ad015a779231ed1dd5e0c7f40a6134",
-       "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
+CLI = {**managed.CLI, "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
+# A no-change update still verifies Claude targets with Claude Code's own MCP
+# health probe (`claude mcp get`), which starts or contacts the package MCP
+# servers. These exact paths are the logs and caches that Claude and those
+# servers wrote across the full matrix with the pinned CLI; everything else,
+# including installer state and owned artifacts, is still compared exactly.
+NATIVE_RUNTIME_CACHES = ("home/.cache/claude-cli-nodejs", "home/.claude/mcp-needs-auth-cache.json",
+                         "home/.cache/firebase/firebase-debug.log", "home/.hscli/logs")
 NATIVE_LIST_STEPS = {
     "claude": ("probe", "exit", "json_decode", "json_shape", "matching", "scope", "enabled", "path"),
     "copilot": ("probe", "exit", "section", "format", "count", "identity", "version", "status", "path"),
@@ -157,6 +161,28 @@ def selected(snapshot: dict, alias: str, clients: tuple[str, ...], *, cli: dict 
             "fallback_reason": resolved["fallback_reason"]}
 
 
+def release_components(snapshot: dict, selection: dict) -> set:
+    distribution = next(item for item in snapshot["distributions"] if item["id"] == selection["distribution_id"])
+    return set(next(item for item in distribution["releases"] if item["sequence"] == selection["release_sequence"])["components"])
+
+
+def derived_target(distribution: dict, policy: dict, target: dict) -> bool:
+    """Exactly the target publication derives from pinned client capabilities.
+
+    Owner decision 2026-11-16: no per-package evidence. The shape, source kind,
+    authentication and installer floor must still match the derivation.
+    """
+    floors = registry.DERIVED_CLIENT_MINIMUM_INSTALLER_VERSIONS
+    client = target["client"]
+    if client not in floors or distribution["kind"] == "upstream":
+        return False
+    authentication = {item["authentication"] for item in policy["targets"] if item["client"] not in floors}
+    version = lambda value: tuple(int(part) for part in value.split("."))
+    return (len(authentication) == 1
+            and target == {"client": client, "scopes": ["user"], "delivery": "managed", "authentication": next(iter(authentication))}
+            and version(policy["minimum_installer_version"]) >= version(floors[client]))
+
+
 def row_identity(selection: dict, client: str) -> dict:
     return {**{key: value for key, value in selection.items() if key != "policy" and not key.startswith("_")}, "client": client,
             "target_policy": next(item for item in selection["policy"]["targets"] if item["client"] == client)}
@@ -217,7 +243,6 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_ca
                for selection, clients in selections for client in clients}
     covered.update((selection["distribution_id"], selection["release_sequence"], "chatgpt", "user")
                    for selection in (selected(snapshot, selector, ("chatgpt",)) for selector in STATIC))
-    covered.update(managed.coverage(managed.expected(snapshot, selected)))
     # Positive User placement is proved independently of Project resources.
     covered.update(managed.coverage(release_user_case))
     old = {item["id"]: item for item in baseline["distributions"]}
@@ -234,6 +259,8 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_ca
                 if target["scopes"] and all((distribution["id"], policy["release_sequence"], target["client"], scope) in covered
                                             for scope in target["scopes"]):
                     continue
+                if derived_target(distribution, policy, target):
+                    continue
                 old_entry = previous.get((policy["release_sequence"], target["client"]))
                 prior = old_entry[0] if old_entry else None
                 restricted = dict(target)
@@ -245,8 +272,9 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_ca
                 require(new_floor >= prior_floor, f"uncovered installer floor expansion: {distribution['id']}")
 
 
-def lifecycle_proof(client: str) -> dict:
+def lifecycle_proof(client: str, *, mcp: bool) -> dict:
     return {"add": "passed", "info": "passed", "update": "passed_no_change",
+            "update_native_mcp_health_probe": "claude_mcp_get_ran_package_mcp" if client == "claude" and mcp else "not_applicable",
             "state_bytes_unchanged": True, "owned_artifacts_unchanged": True,
             "remove": "passed_purged", "doctor": "passed_read_only", "installation_count": 0,
             "open_operation_count": 0, "owned_artifacts_absent": True,
@@ -286,31 +314,13 @@ def credential_free_probe(selection: dict) -> bool:
     return bool(targets) and all(target.get("authentication") == "not_required" for target in targets)
 
 
-def load_refusal_source(args: argparse.Namespace, positive_context: dict) -> tuple[dict, dict]:
-    """Historical point-in-time audit helper; normal expiry, no publisher use."""
-    require(getattr(args, "refusal_feed", None) is not None, "historical audit feed required")
-    snapshot, identity = load_feed(args.refusal_feed, args.trusted_keys)
-    pins = project.refusal_source_identity()
-    require(identity == {key: pins[key] for key in ("sequence", "snapshot_digest")}, "wrong fixed refusal feed")
-    fields = {**positive_context, **pins, "source_sha": snapshot["source_commit"],
-              "publication_id": snapshot["publication_id"]}
-    fields["directory_origin"] = f"https://raw.githubusercontent.com/{fields['repository']}/{pins['materialized_ledger_sha']}/registry/schemas/1/"
-    ctx = context(argparse.Namespace(**fields), snapshot, identity)
-    project.validate_refusal_context(ctx)
-    return snapshot, ctx
-
-
 def dependency_cases(snapshot: dict, ctx: dict) -> dict:
     project_case = project.expected(snapshot, selected)
     release_user_case = managed.release_expected(snapshot, selected)
     cases = {"project_dependencies": project_case, "release_user_dependencies": release_user_case}
     if project_case is not None:
-        boundary = project.current_boundary(project_case)
-        cases["vscode_user_policy_boundary"] = boundary
-        if boundary["kind"] == "missing_signed_target":
-            cases["vscode_user_refusal"] = project.expected_user_refusal(project_case)
-        else:
-            cases["vscode_user_saved_management"] = project.expected_user_saved_management(project_case, ctx)
+        cases["vscode_user_policy_boundary"] = project.current_boundary(project_case)
+        cases["vscode_user_saved_management"] = project.expected_user_saved_management(project_case, ctx)
         require(project_case["cli"] == release_user_case["cli"], "current boundary released CLI differs")
     return cases
 
@@ -320,7 +330,8 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     dependencies = dependency_cases(snapshot, ctx)
     project_case, release_user_case = dependencies["project_dependencies"], dependencies["release_user_dependencies"]
     policy_scope(baseline, snapshot, selections, project_case=project_case, release_user_case=release_user_case)
-    rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
+    rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client, mcp="mcp" in release_components(snapshot, selection))}
+            for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
               if selection["product_id"] in ("context7", "cloudflare-docs")
               and credential_free_probe(selection) for method in ("tools/list", "tools/call")]
@@ -334,9 +345,6 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
             "static_metadata": static_rows(snapshot), "mcp_probes": probes,
             "process_isolation": "linux-bubblewrap-per-child-v1",
             "runtime_claims": False, "account_runtime": "not_tested", "oauth": "not_tested"}
-    case = managed.expected(snapshot, selected)
-    if case is not None:
-        result["managed_dependencies"] = case
     if project_case is not None:
         result.update(dependencies)
     return result
@@ -441,6 +449,11 @@ emit() {
   done < "$state"
   printf ']\n'
 }
+# The released adapter pins every registry call to the isolated profile.
+if [ "$1" = "--config-dir" ]; then
+  [ "$2" = "$HOME/.qoder" ] || exit 1
+  shift 2
+fi
 case "$1" in
   --version) echo "1.0.0" ;;
   plugins)
@@ -458,7 +471,7 @@ case "$1" in
         drop "$name" || exit 1
         printf '%s|%s|%s\n' "$name" "$version" "$3" >> "$state"
         ;;
-      uninstall) drop "$3" ;;
+      uninstall) [ "$4" = "--scope" ] && [ "$5" = "user" ] || exit 1; drop "$3" ;;
       *) exit 1 ;;
     esac
     ;;
@@ -697,6 +710,11 @@ def native_binding(bindings: list[dict], client: str) -> dict:
     return matches[0]
 
 
+# The released adapters verify these registries after --external-uninstalled,
+# so the installer itself must uninstall them through their client CLI stubs.
+NATIVE_REGISTRY_CLIENTS = ("grok", "kimi", "qoder")
+
+
 def remove_targets(run, plugin: str, clients: tuple, verify_native_absent) -> dict:
     remaining = clients
     if "copilot" in clients or "vscode" in clients:
@@ -707,6 +725,10 @@ def remove_targets(run, plugin: str, clients: tuple, verify_native_absent) -> di
         exact_targets(first, shared)
         verify_native_absent()
         remaining = tuple(client for client in clients if client not in shared)
+    registry_clients = tuple(client for client in remaining if client in NATIVE_REGISTRY_CLIENTS)
+    if registry_clients:
+        exact_targets(run("remove", plugin, "--target", ",".join(registry_clients)), registry_clients)
+        remaining = tuple(client for client in remaining if client not in registry_clients)
     require(bool(remaining), "fixed lifecycle expects nonnative targets remaining")
     result = run("remove", plugin, "--target", ",".join(remaining), "--external-uninstalled", "--purge-data")
     exact_targets(result, remaining)
@@ -794,7 +816,7 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     immutable = {name: path for name, path in roots.items() if name != "state"}
     immutable.update({f"owned{index}": path for index, path in enumerate(owned)})
     step("snapshot_before_update")
-    before, state_before = snapshot_roots(immutable), state_file.read_bytes()
+    before, state_before = snapshot_roots(immutable, ignore=NATIVE_RUNTIME_CACHES), state_file.read_bytes()
     updated = run("update", selection["product_id"], *common)
     step("validate_update")
     require(updated.get("status") == "completed", "no-change update failed")
@@ -802,7 +824,8 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
         result = target.get("output", {}).get("result", {})
         require(result.get("no_change") is True and result.get("mutated") is False, "update changed package")
     step("snapshot_after_update")
-    require(state_file.read_bytes() == state_before and snapshot_roots(immutable) == before, "no-change update mutated state or artifacts")
+    require(state_file.read_bytes() == state_before and snapshot_roots(immutable, ignore=NATIVE_RUNTIME_CACHES) == before,
+            "no-change update mutated state or artifacts")
     def verify_native_absent():
         step("native_list_removed")
         native_listing(args.copilot, env, roots["workspace"], selection["product_id"], False, root=root, readonly=readonly, diagnostic=step)
@@ -856,7 +879,6 @@ def canonical_inputs(args: argparse.Namespace) -> tuple[dict, dict]:
     baseline, baseline_identity = load_feed(args.baseline_feed, args.trusted_keys, baseline=True)
     require(baseline_identity["sequence"] < identity["sequence"], "baseline must precede candidate")
     ctx = context(args, snapshot, identity)
-    require(getattr(args, "refusal_feed", None) is None, "historical refusal input is not a recurring publication input")
     expected = expected_artifact(snapshot, baseline, baseline_identity, ctx)
     return snapshot, expected
 
@@ -881,9 +903,6 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
     require(not args.output.exists(), "output must be new; refusing stale success artifact")
     root.mkdir(mode=0o700)
     try:
-        if "managed_dependencies" in expected:
-            args.failure_phase = "managed:prepare"
-            managed.run(args, root / "managed-marketing-kit", expected["managed_dependencies"], expected["context"])
         if "release_user_dependencies" in expected:
             args.failure_phase = "release_user:prepare"
             managed.run(args, root / "release-user-marketing-kit", expected["release_user_dependencies"], expected["context"])
@@ -894,10 +913,6 @@ def produce(args: argparse.Namespace, snapshot: dict, expected: dict) -> None:
             project.run_user_saved_management(args, root / "vscode-user-saved-management",
                                               expected["vscode_user_saved_management"], expected["context"],
                                               expected["project_dependencies"])
-        if "vscode_user_refusal" in expected:
-            refusal_case = expected["vscode_user_refusal"]
-            project.run_user_refusal(args, root / "vscode-user-refusal", refusal_case,
-                                     refusal_case.get("context", expected["context"]))
         for selection, clients in plan(snapshot):
             case_id = selection.get("_case_id", selection["selector"])
             args.failure_phase = "lifecycle:" + case_id
@@ -941,7 +956,7 @@ def parser() -> argparse.ArgumentParser:
         result.add_argument("--" + name, type=Path, required=True)
     for name in CONTEXT_FIELDS:
         result.add_argument("--" + name.replace("_", "-"), type=int if name in ("sequence", "run_attempt") else str, required=True)
-    for name in ("binary", "managed-binary", "project-binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
+    for name in ("binary", "sandbox", "output", "artifact", "codex", "claude", "copilot", "inspector", "opencode"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--npx", type=Path, default=Path(shutil.which("npx") or "npx"))
     return result
@@ -957,8 +972,6 @@ def main(argv: list[str] | None = None) -> int:
             validate_artifact(read_json(args.artifact, canonical=True), expected)
         else:
             require(all(getattr(args, name) is not None for name in ("binary", "sandbox", "output", "claude", "copilot", "opencode")), "producer paths required")
-            require("project_dependencies" not in expected or args.project_binary is not None,
-                    "--project-binary required for six-target User/Project dependency proof")
             produce(args, snapshot, expected)
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration, EvidenceError, subprocess.SubprocessError, registry.RegistryError, publication.PublicationError) as error:

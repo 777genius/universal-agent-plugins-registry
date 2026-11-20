@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime, load_historical_source
+from tests.test_catalog_publication_readiness import catalog, paired_arguments, ProofTime
 import catalog_publication_readiness as gate
 import catalog_managed_readiness as managed
 
@@ -26,24 +26,22 @@ class ManagedReadinessTests(unittest.TestCase):
     def test_paired_release_user_preserves_four_identities_and_truthful_vscode_boundary(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}), \
-                patch.object(gate, "datetime", ProofTime), patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
+                patch.object(gate, "datetime", ProofTime):
             args = paired_arguments(Path(temporary))
             snapshot, artifact = gate.canonical_inputs(args)
-            historical = artifact["managed_dependencies"]
             user, project = artifact["release_user_dependencies"], artifact["project_dependencies"]
-            prior_snapshot, _ = load_historical_source(args, artifact["context"])
-            prior = gate.project.expected(prior_snapshot, gate.selected)
-            self.assertEqual(historical["cli"]["version"], "0.1.91")
-            self.assertEqual(user["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+            self.assertNotIn("managed_dependencies", artifact)
+            self.assertEqual(user["cli"], managed.CLI)
             self.assertEqual(user["cli"], project["cli"])
             self.assertEqual(user["placement_scope"], "user")
             self.assertEqual(user["proof"]["vscode_qualification"], "source_grant_prepared_only")
-            self.assertEqual(managed.immutable_closure(user), managed.immutable_closure(prior))
             self.assertEqual(managed.immutable_closure(user), managed.immutable_closure(project))
+            self.assertEqual(managed.immutable_closure(user), gate.project.REVIEWED_SOURCE_CLOSURE)
             # Root prepared grant belongs to positive policy coverage, never
-            # negative45 or an invented seventh positive User installation.
+            # an invented seventh positive User installation.
             self.assertIn((managed.ROOT, 1, "vscode", "user"), managed.coverage(user))
             self.assertNotIn("vscode", user["targets"])
+            self.assertFalse(set(user["targets"]) & set(managed.DERIVED_CLIENTS))
             for change in ("missing", "duplicate", "foreign"):
                 invalid = copy.deepcopy(user)
                 if change == "missing":
@@ -55,11 +53,12 @@ class ManagedReadinessTests(unittest.TestCase):
                 with self.subTest(change=change), self.assertRaisesRegex(ValueError, "cardinality"):
                     managed.immutable_closure(invalid)
 
-    def test_separate_case_preserves_legacy_matrix_and_exact_coverage(self):
-        self.assertEqual(gate.CLI["version"], "0.1.89")
+    def test_separate_case_preserves_matrix_and_exact_coverage(self):
+        self.assertEqual(gate.CLI["version"], "0.1.114")
         self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
-        self.assertEqual(self.case["cli"]["version"], "0.1.91")
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]))
+        self.assertEqual(self.case["cli"], managed.CLI)
+        self.assertEqual(self.case["targets"], list(managed.CLIENTS))
+        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]) + 1)
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
         with self.assertRaisesRegex(ValueError, "uncovered target"):
@@ -70,28 +69,6 @@ class ManagedReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered target"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
 
-    def test_published_legacy_and_candidate_copilot_source_coverage_are_distinct(self):
-        self.assertEqual(tuple(self.case["targets"]), managed.LEGACY_CLIENTS)
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 5)
-        historical = copy.deepcopy(self.snapshot)
-        root = next(row for row in historical["distributions"] if row["id"] == managed.ROOT)
-        root["release_policies"][0]["targets"] = [
-            row for row in root["release_policies"][0]["targets"] if row["client"] != "copilot"
-        ]
-        prior = managed.expected(historical, gate.selected)
-        self.assertEqual(tuple(prior["targets"]), managed.LEGACY_CLIENTS)
-        self.assertEqual(len(managed.coverage(prior)), len(managed.PINS) * 5)
-        for change in ("kiro", "project"):
-            invalid = copy.deepcopy(self.snapshot)
-            policy = next(row for row in invalid["distributions"] if row["id"] == managed.ROOT)["release_policies"][0]
-            if change == "kiro":
-                policy["targets"].append({"client": "kiro", "authentication": "required",
-                                          "scopes": ["user"], "delivery": "managed"})
-            else:
-                policy["targets"][-1]["scopes"] = ["project"]
-            with self.subTest(change=change), self.assertRaises((ValueError, gate.registry.RegistryError)):
-                managed.expected(invalid, gate.selected)
-
     def test_user_coverage_cannot_qualify_a_project_scope_expansion(self):
         baseline = copy.deepcopy(self.snapshot)
         distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/atlassian")
@@ -100,42 +77,17 @@ class ManagedReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uncovered target policy"):
             gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
 
-    def test_unreviewed_pi_signed_target_fails_legacy_readiness(self):
-        # This protects the existing 0.1.89 publication gate, NOT proof that
-        # its strict Directory v1 parser can understand a future Pi snapshot.
-        self.assertEqual(gate.CLI["version"], "0.1.89")
-        self.assertNotIn("pi", gate.CATALOG_CLIENTS)
-        baseline = copy.deepcopy(self.snapshot)
-        for floor in ("0.1.89", "0.1.102"):
-            candidate = copy.deepcopy(baseline)
-            distribution = next(item for item in candidate["distributions"]
-                                if item["id"] == "777genius/atlassian")
-            policy = next(item for item in distribution["release_policies"]
-                          if item["status"] == "active")
-            old_target = next(item for item in policy["targets"]
-                              if item["client"] == "codex")
-            policy["targets"].append({**copy.deepcopy(old_target), "client": "pi"})
-            policy["minimum_installer_version"] = floor
-            with self.subTest(floor=floor), self.assertRaisesRegex(
-                ValueError, "uncovered target policy change|requires newer CLI"
-            ):
-                gate.policy_scope(baseline, candidate, gate.plan(candidate))
-
-    def test_release_user_requires_fixed_authority_and_preserves_historical_case(self):
-        with patch.object(gate.project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
-            managed.release_expected(self.snapshot, gate.selected)
-        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
-            case = managed.release_expected(self.snapshot, gate.selected)
-        self.assertEqual(case["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+    def test_release_user_uses_the_one_pinned_cli_and_six_targets(self):
+        case = managed.release_expected(self.snapshot, gate.selected)
+        self.assertEqual(case["cli"], managed.CLI)
         self.assertEqual(case["targets"], list(managed.CLIENTS))
         self.assertEqual(len(case["associations"]), 24)
         self.assertEqual(self.case["cli"], managed.CLI)
-        self.assertEqual(self.case["targets"], list(managed.LEGACY_CLIENTS))
-        historical = copy.deepcopy(self.snapshot)
-        policy = next(item for item in historical["distributions"] if item["id"] == managed.ROOT)["release_policies"][0]
+        missing = copy.deepcopy(self.snapshot)
+        policy = next(item for item in missing["distributions"] if item["id"] == managed.ROOT)["release_policies"][0]
         policy["targets"] = [target for target in policy["targets"] if target["client"] != "copilot"]
-        with patch.object(gate.project, "RELEASE", None):
-            self.assertIsNone(managed.release_expected(historical, gate.selected))
+        with self.assertRaisesRegex(ValueError, "unqualified managed target expansion"):
+            managed.release_expected(missing, gate.selected)
 
     def test_release_user_foreign_skills_project_and_native_members_survive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -166,8 +118,7 @@ class ManagedReadinessTests(unittest.TestCase):
             managed.validate_foreign_state(paths, before, configs)
 
     def test_release_user_real_bindings_receipts_skills_and_copilot_marketplace(self):
-        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
-            self.case = managed.release_expected(self.snapshot, gate.selected)
+        self.case = managed.release_expected(self.snapshot, gate.selected)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             state, ctx, aliases = self.state(root)
@@ -347,13 +298,11 @@ class ManagedReadinessTests(unittest.TestCase):
                 path = tools / name
                 path.write_text("#!/bin/sh\nexit 1\n")
                 path.chmod(0o700)
-            args = SimpleNamespace(binary=tools / "agentplugins", project_binary=tools / "agentplugins",
+            args = SimpleNamespace(binary=tools / "agentplugins",
                                    codex=tools / "codex", claude=tools / "claude", copilot=tools / "copilot",
                                    opencode=tools / "opencode", inspector=None, npx=None)
-            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-            release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
             actual_validator = gate.project.validate_operation
-            with patch.object(gate.project, "RELEASE", release):
+            with patch.dict(managed.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}):
                 self.case = managed.release_expected(self.snapshot, gate.selected)
                 for payload_scope in ("user", "project"):
                     case_root = root / ("case-" + payload_scope)
@@ -509,12 +458,10 @@ class ManagedReadinessTests(unittest.TestCase):
                 path.write_text("#!/bin/sh\\nexit 1\\n")
                 path.chmod(0o700)
             args = SimpleNamespace(
-                binary=tools / "agentplugins", project_binary=tools / "agentplugins", codex=tools / "codex",
+                binary=tools / "agentplugins", codex=tools / "codex",
                 claude=tools / "claude", copilot=tools / "copilot",
                 opencode=tools / "opencode", inspector=None, npx=None,
                 failure_phase=None)
-            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-            release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
             ctx = {"directory_origin": "https://example.invalid/exact-signed-feed/"}
             private = "PRIVATE_CHILD_RESPONSE_DO_NOT_LOG"
             def response(*, code=0, payload=None):
@@ -528,7 +475,7 @@ class ManagedReadinessTests(unittest.TestCase):
             ]
             # This test isolates command failure labels. Genuine profile setup
             # and its integration with this runner have a separate test suite.
-            with patch.object(gate.project, "RELEASE", release), patch.object(
+            with patch.dict(managed.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}), patch.object(
                     gate.project, "initialize_user_profile", side_effect=lambda _args, _root, roots, _env, _readonly:
                     managed.snapshot_paths(gate.project.user_paths(roots))):
                 case = gate.project.expected(self.snapshot, gate.selected)
@@ -637,7 +584,7 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_policy_and_version_changes_fail_closed(self):
         for mutation in (
-            lambda item: item["release_policies"][0].update(minimum_installer_version="0.1.90"),
+            lambda item: item["release_policies"][0].update(minimum_installer_version="0.1.115"),
             lambda item: item["release_policies"][0]["targets"].append({**item["release_policies"][0]["targets"][0], "client": "kiro"}),
             lambda item: item["releases"][0].update(package_version="0.1.1"),
         ):
@@ -825,14 +772,14 @@ class ManagedReadinessTests(unittest.TestCase):
 
     def test_offline_artifact_cannot_omit_or_forge_managed_proof(self):
         baseline = copy.deepcopy(self.snapshot)
-        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
-            expected = gate.expected_artifact(self.snapshot, baseline, {"sequence": 42}, {"sequence": 43})
+        expected = gate.expected_artifact(self.snapshot, baseline, {"sequence": 42}, {"sequence": 43})
         for mutation in (
-            lambda value: value.pop("managed_dependencies"),
-            lambda value: value["managed_dependencies"]["closure"].pop(),
-            lambda value: value["managed_dependencies"]["associations"].pop(),
-            lambda value: value["managed_dependencies"]["proof"].update(oauth="passed"),
-            lambda value: value["managed_dependencies"]["cli"].update(version="0.1.89"),
+            lambda value: value.pop("release_user_dependencies"),
+            lambda value: value["release_user_dependencies"]["closure"].pop(),
+            lambda value: value["release_user_dependencies"]["associations"].pop(),
+            lambda value: value["release_user_dependencies"]["proof"].update(oauth="passed"),
+            lambda value: value["release_user_dependencies"]["cli"].update(version="0.1.89"),
+            lambda value: value.update(managed_dependencies=copy.deepcopy(value["release_user_dependencies"])),
         ):
             value = copy.deepcopy(expected)
             mutation(value)
@@ -860,112 +807,42 @@ class ManagedReadinessTests(unittest.TestCase):
             self.assertNotEqual(before, managed.snapshot_paths(paths))
 
 
-class PreparedCompanionPolicyTests(unittest.TestCase):
-    """#462 unsigned future policy; this is not signed45 publication evidence."""
+class CurrentRootPolicyTests(unittest.TestCase):
     def setUp(self):
-        self.snapshot = unsigned_source_catalog()
+        self.snapshot = catalog()
         self.case = managed.expected(self.snapshot, gate.selected)
 
-    def test_three_authority_shapes_keep_distinct_legacy_and_corrected_coverage(self):
-        signed45 = catalog()
-        historical = copy.deepcopy(signed45)
-        root = next(item for item in historical["distributions"] if item["id"] == managed.ROOT)
-        root["release_policies"][0]["targets"] = [target for target in root["release_policies"][0]["targets"] if target["client"] != "copilot"]
-        for snapshot in (historical, signed45):
-            case = managed.expected(snapshot, gate.selected)
-            self.assertEqual(case["targets"], list(managed.LEGACY_CLIENTS))
-            self.assertEqual(len(managed.coverage(case)), 20)
-            self.assertNotIn((managed.ROOT, 1, "vscode", "user"), managed.coverage(case))
-        self.assertEqual(self.case["targets"], list(managed.CLIENTS))
-        self.assertEqual(len(managed.coverage(self.case)), 25)
-        with patch.object(gate.project, "RELEASE", PROJECT_RELEASE_FIXTURE):
-            corrected = managed.release_expected(signed45, gate.selected)
-        self.assertEqual(corrected["targets"], list(managed.CLIENTS))
-        self.assertEqual(len(managed.coverage(corrected)), 24)
-        self.assertNotIn((managed.ROOT, 1, "vscode", "user"), managed.coverage(corrected))
-
-    def test_missing_prepared_sibling_never_keeps_six_positive_legacy_targets(self):
-        missing = copy.deepcopy(self.snapshot)
-        root = next(item for item in missing["distributions"] if item["id"] == managed.ROOT)
-        root["release_policies"][0]["targets"] = [target for target in root["release_policies"][0]["targets"] if target["client"] != "vscode"]
-        case = managed.expected(missing, gate.selected)
-        self.assertEqual(case["targets"], list(managed.LEGACY_CLIENTS))
-        self.assertNotIn("copilot", case["proof"]["native_plugin_listing"])
-        self.assertEqual(len(managed.coverage(case)), 20)
-        with patch.object(gate.project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
-            managed.release_expected(missing, gate.selected)
-
-    def test_legacy_and_corrected_user_project_lanes_require_their_own_fixed_binary(self):
+    def test_lanes_require_the_one_pinned_binary_and_a_known_scope(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            legacy_binary, corrected_binary = root / "legacy", root / "corrected"
-            legacy_binary.write_bytes(b"offline historical binary fixture")
-            corrected_binary.write_bytes(b"offline corrected binary fixture")
-            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-            release["cli"]["binary_digest"] = gate.digest(corrected_binary.read_bytes())
-            args = SimpleNamespace(managed_binary=legacy_binary, project_binary=corrected_binary, codex=None)
-            with patch.dict(managed.CLI, {"binary_digest": gate.digest(legacy_binary.read_bytes())}), \
-                    patch.object(gate.project, "RELEASE", release), patch.object(gate, "child") as child:
-                legacy = managed.expected(self.snapshot, gate.selected)
-                corrected = managed.release_expected(catalog(), gate.selected)
-                project_case = gate.project.expected(catalog(), gate.selected)
-                for case in (legacy, corrected, project_case):
+            pinned, foreign = root / "pinned", root / "foreign"
+            pinned.write_bytes(b"offline pinned binary fixture")
+            foreign.write_bytes(b"offline foreign binary fixture")
+            with patch.dict(managed.CLI, {"binary_digest": gate.digest(pinned.read_bytes())}), patch.object(gate, "child") as child:
+                user = managed.release_expected(self.snapshot, gate.selected)
+                project_case = gate.project.expected(self.snapshot, gate.selected)
+                for case in (user, project_case):
                     with self.assertRaisesRegex(ValueError, "Codex path must be absolute"):
-                        managed.run(args, root / "not-created", case, {})
-                with patch.object(gate.project, "RELEASE", None):
-                    with self.assertRaisesRegex(ValueError, "Codex path must be absolute"):
-                        managed.run(args, root / "not-created", legacy, {})
-                    for case in (corrected, project_case):
-                        with self.assertRaisesRegex(ValueError, "identity is unset"):
-                            managed.run(args, root / "not-created", case, {})
-                missing_scope = copy.deepcopy(corrected)
-                missing_scope.pop("placement_scope")
-                mislabeled_legacy = {**legacy, "placement_scope": "user"}
-                ungranted_legacy = {**legacy, "closure": corrected["closure"]}
-                for case, message in ((missing_scope, "historical managed CLI authority"),
-                                      (mislabeled_legacy, "corrected managed CLI authority"),
-                                      (ungranted_legacy, "requires prepared VSCode source grant"),
-                                      ({**legacy, "placement_scope": "unknown"}, "targets or scope")):
-                    with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
-                        managed.run(args, root / "not-created", case, {})
-                for case in (legacy, corrected, project_case):
-                    swapped = SimpleNamespace(managed_binary=corrected_binary, project_binary=legacy_binary, codex=None)
+                        managed.run(SimpleNamespace(binary=pinned, codex=None), root / "not-created", case, {})
                     with self.assertRaisesRegex(ValueError, "wrong managed released binary"):
-                        managed.run(swapped, root / "not-created", case, {})
+                        managed.run(SimpleNamespace(binary=foreign, codex=None), root / "not-created", case, {})
+                    with self.assertRaisesRegex(ValueError, "missing managed released binary"):
+                        managed.run(SimpleNamespace(binary=None, codex=None), root / "not-created", case, {})
+                    with self.assertRaisesRegex(ValueError, "wrong managed CLI authority"):
+                        managed.run(SimpleNamespace(binary=pinned, codex=None), root / "not-created",
+                                    {**case, "cli": {**case["cli"], "version": "0.1.104"}}, {})
+                for case in ({**user, "placement_scope": "unknown"}, {k: v for k, v in user.items() if k != "placement_scope"},
+                             {**user, "targets": list(managed.COPILOT_AUTHORIZED_CLIENTS)}):
+                    with self.assertRaisesRegex(ValueError, "targets or scope"):
+                        managed.run(SimpleNamespace(binary=pinned, codex=None), root / "not-created", case, {})
                 child.assert_not_called()
                 self.assertFalse((root / "not-created").exists())
 
-    def test_separate_case_preserves_legacy_matrix_and_exact_coverage(self):
-        self.assertEqual(gate.CLI["version"], "0.1.89")
-        self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
-        self.assertEqual(self.case["cli"]["version"], "0.1.91")
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * len(self.case["targets"]) + 1)
-        baseline = copy.deepcopy(self.snapshot)
-        baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
-        gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
-        unknown = copy.deepcopy(next(item for item in self.snapshot["distributions"] if item["id"] == managed.ROOT))
-        unknown["id"] = "unqualified/new-package"
-        self.snapshot["distributions"].append(unknown)
-        with self.assertRaisesRegex(ValueError, "uncovered target"):
-            gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot))
-
-    def test_published_legacy_and_candidate_copilot_source_coverage_are_distinct(self):
-        self.assertEqual(tuple(self.case["targets"]), managed.CLIENTS)
-        self.assertEqual(len(managed.coverage(self.case)), len(managed.PINS) * 6 + 1)
-        self.assertIn((managed.ROOT, 1, "vscode", "user"), managed.coverage(self.case))
-        self.assertNotIn("vscode", self.case["targets"])
+    def test_root_policy_shape_changes_fail_closed(self):
         actual = next(item for item in self.snapshot["distributions"] if item["id"] == managed.ROOT)
-        self.assertEqual(tuple(t["client"] for t in actual["release_policies"][0]["targets"]),
-                         managed.COPILOT_AUTHORIZED_CLIENTS)
-        historical = copy.deepcopy(self.snapshot)
-        root = next(row for row in historical["distributions"] if row["id"] == managed.ROOT)
-        root["release_policies"][0]["targets"] = [
-            row for row in root["release_policies"][0]["targets"] if row["client"] not in ("copilot", "vscode")
-        ]
-        prior = managed.expected(historical, gate.selected)
-        self.assertEqual(tuple(prior["targets"]), managed.LEGACY_CLIENTS)
-        self.assertEqual(len(managed.coverage(prior)), len(managed.PINS) * 5)
-        for change in ("kiro", "project", "wrong_delivery",
+        self.assertEqual(set(t["client"] for t in actual["release_policies"][0]["targets"]),
+                         set(managed.COPILOT_AUTHORIZED_CLIENTS) | set(managed.DERIVED_CLIENTS))
+        for change in ("kiro", "project", "wrong_delivery", "missing_derived", "duplicate_target",
                        "sibling_project", "sibling_auth", "dependency_missing_sibling",
                        "dependency_mismatched_auth"):
             invalid = copy.deepcopy(self.snapshot)
@@ -978,6 +855,10 @@ class PreparedCompanionPolicyTests(unittest.TestCase):
                 policy["targets"][-1]["scopes"] = ["project"]
             elif change == "wrong_delivery":
                 next(t for t in policy["targets"] if t["client"] == "vscode")["delivery"] = "managed"
+            elif change == "missing_derived":
+                policy["targets"] = [t for t in policy["targets"] if t["client"] != "hermes"]
+            elif change == "duplicate_target":
+                policy["targets"].append(copy.deepcopy(policy["targets"][0]))
             elif change == "sibling_project":
                 next(t for t in policy["targets"] if t["client"] == "vscode")["scopes"] = ["project"]
             elif change == "sibling_auth":
@@ -996,141 +877,4 @@ class PreparedCompanionPolicyTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises((ValueError, gate.registry.RegistryError)):
                 managed.expected(invalid, gate.selected)
 
-    def test_historical_six_requires_initial_and_terminal_copilot_native_listing(self):
-        # A complete bounded composition fixture; package/native commands remain
-        # offline responses, while the saved-state and Copilot parsers are real.
-        for stale_registry in (False, True):
-            with self.subTest(stale_registry=stale_registry), tempfile.TemporaryDirectory() as temporary:
-                parent = Path(temporary).resolve()
-                tools = parent / "tools"
-                tools.mkdir()
-                for name in ("agentplugins", "codex", "claude", "copilot", "opencode"):
-                    path = tools / name
-                    path.write_text("#!/bin/sh\nexit 1\n")
-                    path.chmod(0o700)
-                args = SimpleNamespace(binary=tools / "agentplugins", managed_binary=tools / "agentplugins", project_binary=None,
-                                       codex=tools / "codex", claude=tools / "claude", copilot=tools / "copilot",
-                                       opencode=tools / "opencode", inspector=None, npx=None)
-                root = parent / "case"
-                helper = ManagedReadinessTests()
-                events, current = [], {}
-                ctx = {"directory_origin": "https://example.invalid/historical-policy/"}
-                native_listing = gate.native_listing
-                with patch.dict(managed.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())}):
-                    helper.case = copy.deepcopy(managed.expected(self.snapshot, gate.selected))
-                    manifests = {}
-                    for selected in helper.case["closure"]:
-                        body = json.dumps({"name": selected["product_id"], "version": selected["package_version"]}).encode()
-                        manifests[selected["distribution_id"]] = body
-                        selected["manifest_digest"] = gate.digest(body)
-                    def child(argv, **kwargs):
-                        name = Path(argv[0]).name
-                        if name == "codex":
-                            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"installed": []}))
-                        if name == "copilot":
-                            lines = ["Installed plugins:"]
-                            if current["copilot_installed"]:
-                                for selected in helper.case["closure"]:
-                                    binding = current["original"][selected["distribution_id"]]["clients"]["copilot"]
-                                    lines.append("  • " + selected["product_id"] + "@" + gate.managed_marketplace(binding["physical_artifact_id"]) + " (v" + selected["package_version"] + ")")
-                            else:
-                                lines.append("  No plugins installed.")
-                            return SimpleNamespace(returncode=0, stderr="", stdout="\n".join(lines) + "\n")
-                        command = argv[1]
-                        target = argv[argv.index("--target") + 1] if "--target" in argv else None
-                        events.append(("command", command, target))
-                        state_root = Path(kwargs["env"]["AGENTPLUGINS_HOME"])
-                        manifest, lock, state_file = state_root / "uap.toml", state_root / "uap.lock", state_root / "state-v2.json"
-                        if command == "add":
-                            state, state_ctx, aliases = helper.state(root)
-                            ctx.update(state_ctx)
-                            for index, installation in enumerate(state["installations"]):
-                                locator = state_root / "plugin-data" / ("retained-" + str(index))
-                                locator.mkdir(parents=True)
-                                receipt = {"data_receipt_id": "data-" + str(index), "physical_backend_id": locator.name,
-                                           "scope": "user", "locator": str(locator), "state": "owned"}
-                                (locator / ".agentplugins-data-owner.json").write_text(json.dumps(receipt))
-                                installation["data_receipts"] = {receipt["data_receipt_id"]: receipt}
-                            current.update(state=state, aliases=aliases, original=copy.deepcopy({item["directory"]["distribution_id"]: item for item in state["installations"]}), copilot_installed=True)
-                            for selected in helper.case["closure"]:
-                                package = state_root / "store/packages/agentplugins-tree-sha256-v1" / selected["tree_digest"].removeprefix("sha256:") / "package"
-                                package.mkdir(parents=True)
-                                (package / "plugin.json").write_bytes(manifests[selected["distribution_id"]])
-                                if selected["distribution_id"] == managed.ROOT:
-                                    (package / "uap.toml").write_text('schema_version = 1\n[dependencies]\n' + ''.join(json.dumps(key) + ' = ' + json.dumps(version) + '\n' for key, version in managed.PINS.items() if key != managed.ROOT))
-                            manifest.write_text('[dependencies]\nmarketing-kit = "0.1.0"\n[targets]\n' + ''.join(client + ' = ["marketing-kit"]\n' for client in managed.CLIENTS))
-                            lock.write_text(json.dumps(helper.lock()))
-                            state_file.write_text(json.dumps(state))
-                            data = {"scope": "user", "outcome": "completed",
-                                    "actions": [{"alias": alias, "client_id": client, "action": "install"}
-                                                for alias in aliases.values() for client in managed.CLIENTS],
-                                    "results": [{"client_id": client, "operation": "install", "outcome": "completed",
-                                                 "installation_id": current["original"][distribution]["installation_id"]}
-                                                for distribution in managed.PINS for client in managed.CLIENTS],
-                                    "environment": {"saved": True, "manifest_path": str(manifest), "lock_path": str(lock)}}
-                        elif command == "info":
-                            distribution = next(key for key, alias in current["aliases"].items() if alias == argv[2])
-                            data = {"installation_id": current["original"][distribution]["installation_id"],
-                                    "clients": [{"client_id": client} for client in managed.CLIENTS]}
-                        elif command == "deps":
-                            data = {"scope": "user", "pending_recovery": False,
-                                    "facts": [{"alias": alias, "client_id": client, "owner": "user-default", "facts": []}
-                                              for alias in current["aliases"].values() for client in managed.CLIENTS]}
-                        elif command in ("install", "update"):
-                            data = {"outcome": "completed", "results": [],
-                                    "actions": [{"alias": alias, "client_id": client, "action": "unchanged"}
-                                                for alias in current["aliases"].values() for client in managed.CLIENTS]}
-                        elif command == "remove":
-                            removed = set(managed.CLIENTS) if target is None else {target}
-                            for installation in current["state"]["installations"]:
-                                for client in list(installation["clients"]):
-                                    if client in removed:
-                                        shutil.rmtree(installation["clients"].pop(client)["target_locator"])
-                                if target is None:
-                                    installation["data_retained"] = True
-                            current["state"]["environment_receipts"] = [receipt for receipt in current["state"]["environment_receipts"] if receipt["client_id"] not in removed]
-                            state_file.write_text(json.dumps(current["state"]))
-                            if target is None:
-                                lock.write_text('{"lock_version":1,"packages":[]}')
-                                current["copilot_installed"] = stale_registry
-                            data = {"outcome": "completed"}
-                        elif command == "list":
-                            data = {"installations": []}
-                        elif command == "doctor":
-                            data = {"read_only": True, "installation_count": 0, "open_operation_count": 0,
-                                    "findings": [{"status": "healthy", "code": "no_degradation_detected", "message": "no tracked degradation was detected"}]}
-                        else:
-                            self.fail("unexpected historical fixture command " + command)
-                        value = {"command": command, "result": "success", "data": data} if command in ("add", "info", "list", "doctor") else data
-                        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(value))
-                    def listing(tool, env, workspace, plugin, installed, **kwargs):
-                        if tool.name == "copilot":
-                            events.append(("copilot", installed, plugin))
-                            return native_listing(tool, env, workspace, plugin, installed, **kwargs)
-                    with patch.object(gate.project, "RELEASE", None), patch.object(gate, "child", side_effect=child), \
-                            patch.object(gate, "native_listing", side_effect=listing), \
-                            patch.object(gate.registry, "directory_tree_digest", side_effect=lambda path: "sha256:" + path.parent.name), \
-                            patch.object(managed, "validate_release_user_bindings") as release_bindings, \
-                            patch.object(managed, "seed_foreign_state") as foreign, patch.object(managed, "seed_retained_data") as restore:
-                        if stale_registry:
-                            with self.assertRaisesRegex(ValueError, "Copilot native listing mismatch"):
-                                managed.run(args, root, helper.case, ctx)
-                        else:
-                            managed.run(args, root, helper.case, ctx)
-                            self.assertEqual(args.failure_phase, "managed:complete")
-                        release_bindings.assert_not_called()
-                        foreign.assert_not_called()
-                        restore.assert_not_called()
-                    before_status = next(index for index, event in enumerate(events) if event[:2] == ("command", "deps"))
-                    initial = [event[2] for event in events[:before_status] if event[:2] == ("copilot", True)]
-                    expected_plugins = {item["product_id"] for item in helper.case["closure"]}
-                    self.assertEqual(len(initial), 4)
-                    self.assertEqual(set(initial), expected_plugins)
-                    orphan_remove = next(index for index, event in enumerate(events) if event == ("command", "remove", None))
-                    final = [event[2] for event in events[orphan_remove:] if event[:2] == ("copilot", False)]
-                    self.assertTrue(final)
-                    if stale_registry:
-                        self.assertFalse(any(event[:2] == ("command", "doctor") for event in events))
-                    else:
-                        self.assertEqual(len(final), 4)
-                        self.assertEqual(set(final), expected_plugins)
+
