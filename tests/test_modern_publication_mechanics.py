@@ -183,13 +183,8 @@ class ModernPublicationMechanicsTests(unittest.TestCase):
             arguments += ["--initialize-ledger"]
         else:
             arguments += ["--ledger-sequence-floor", str(self.sequence)]
-        # This disposable fixture exercises publication CAS/composition, not
-        # Pi release eligibility: its exact-source candidate intentionally has
-        # no reviewed Pi materialization. The real signer rejection is asserted
-        # independently below, and the production gate is never patched there.
         with (mock.patch.object(sys, "argv", arguments),
-              redirect_stdout(io.StringIO()),
-              mock.patch.object(signer, "require_pi_release_materialization")):
+              redirect_stdout(io.StringIO())):
             self.assertEqual(signer.main(feed=MODERN_FEED), 0)
         self.sequence += 1
         git(self.repo, "add", MODERN_FEED.feed_path)

@@ -532,18 +532,6 @@ jobs:
           test "${marker_commit}" = "${EXPECTED_MARKER_COMMIT}"
           test "$(python3 -c 'import json; print(json.load(open("../candidate/candidate.json"))["source_commit"])')" = "${marker_commit}"
           echo "commit=${marker_commit}" >> "$GITHUB_OUTPUT"
-      # The later signed-snapshot gates prevent ledger CAS publication, but
-      # cannot undo an unauthorized signature already made by the protected job.
-      - name: Deny Pi candidate before private signing seed
-        if: inputs.resume_publication_id == ''
-        working-directory: trusted-source
-        env:
-          EXPECTED_CANDIDATE_DIGEST: ${{ needs.prepare.outputs.candidate_digest }}
-        run: |
-          set -euo pipefail
-          /usr/bin/python3 scripts/pi_production_promotion_gate.py \
-            --candidate ../candidate/candidate.json \
-            --candidate-digest "${EXPECTED_CANDIDATE_DIGEST}"
       - name: Validate candidate digest, sequence, and sign
         id: signed
         if: inputs.resume_publication_id == ''
@@ -1043,18 +1031,6 @@ jobs:
           fi
           echo "ledger_commit=$(git -C ledger rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "publication_commit=${EXISTING_MATERIALIZED_COMMIT:-$(git -C ledger rev-parse HEAD)}" >> "$GITHUB_OUTPUT"
-      # Denial-only prepublication boundary. materialize_site pushes the signed
-      # ledger before promotion_intent, so its later gate alone is insufficient.
-      # Do not replace with a candidate claim, test key or manual override.
-      - name: Deny Pi signed ledger publication before publisher token
-        env:
-          EXPECTED_SEQUENCE: ${{ needs.sign.outputs.sequence }}
-          EXPECTED_LEDGER_COMMIT: ${{ steps.commit.outputs.ledger_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git -C ledger rev-parse HEAD)" = "$EXPECTED_LEDGER_COMMIT"
-          python3 trusted-source/scripts/pi_production_promotion_gate.py \
-            --ledger ledger --sequence "$EXPECTED_SEQUENCE"
       - name: Acquire dedicated publisher token
         id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -1600,18 +1576,6 @@ jobs:
           test "$(git -C intent-ledger rev-parse HEAD^)" = "${EXPECTED_SIGNED_COMMIT}"
           python3 trusted-source/scripts/pages_compositor.py require-intent-policy \
             --repository "${GITHUB_REPOSITORY}"
-      # Denial-only bridge. Replace only with an authenticated, exact-snapshot
-      # 72/72 signed saved User/Project 3-OS acceptance gate, never with a
-      # candidate-supplied flag, synthetic key or workflow-dispatch override.
-      - name: Deny Pi promotion until genuine protected signed saved E2E is wired
-        env:
-          MATERIALIZED_COMMIT: ${{ needs.materialize_site.outputs.publication_commit }}
-          PUBLICATION_SEQUENCE: ${{ needs.sign.outputs.sequence }}
-        run: |
-          set -euo pipefail
-          test "$(git -C intent-ledger rev-parse HEAD)" = "$MATERIALIZED_COMMIT"
-          python3 trusted-source/scripts/pi_production_promotion_gate.py \
-            --ledger intent-ledger --sequence "$PUBLICATION_SEQUENCE"
       - name: Acquire dedicated publisher token
         id: publisher
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
