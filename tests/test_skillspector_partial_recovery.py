@@ -521,7 +521,7 @@ class RecoveryTests(unittest.TestCase):
                             coverage.v2.timestamp(coverage.scanner.now(), "generated"),
                             allowed_profiles=[], scanner_identity={"id": "future-policy"}, scheduled=True)
 
-    def test_authenticated_superset_fork_then_witness_cap_discloses_per_source(self):
+    def test_authenticated_superset_fork_then_third_witness_preserves_per_source(self):
         primary = item()
         another = item(id="fixture/other", repository="owner/other", path="skills/other")
         selection = {"schema_version": 1, "sources": [primary, another]}
@@ -562,8 +562,14 @@ class RecoveryTests(unittest.TestCase):
             final = self.recover(root / "overflow", selection, [overflow, other_batch], represented)
             kept = final["records"][primary["id"]]
             self.assertEqual(kept["report_digest"], visible["report_digest"])
-            self.assertEqual(kept["recovery_witnesses"], visible["recovery_witnesses"])
+            self.assertEqual(kept["recovery_witnesses"][:2], visible["recovery_witnesses"])
+            self.assertEqual(len(kept["recovery_witnesses"]), 3)
+            self.assertEqual(kept["recovery_witnesses"][2]["origin"],
+                             {"run_id": 9204, "run_attempt": 1})
+            self.assertEqual(kept["recovery_witnesses"][2]["record"]["findings"][0]["message"],
+                             "Risk D.")
             self.assertEqual(kept["status"], "partial")
+            self.assertTrue(kept["findings_truncated"])
             self.assertIn("recovery_conflict", coverage.reason_codes(kept))
             self.assertEqual(final["records"][another["id"]]["status"], "complete")
             replay = self.recover(root / "overflow-replay", selection, [overflow, other_batch], final)
