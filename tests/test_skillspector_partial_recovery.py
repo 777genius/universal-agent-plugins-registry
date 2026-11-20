@@ -206,6 +206,66 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
+    def test_sequential_partial_with_same_coarse_group_but_new_evidence_is_witnessed(self):
+        """A real authenticated replay must not fall through to the unauthenticated gate.
+
+        Regression for production main@f2d60e prepare: recovery admission used
+        coarse finding identities although apply_outcome had upgraded to full
+        security evidence. Differing messages with the same rule/path/fingerprint
+        were incorrectly rejected, blocking all eight scan partitions.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        first = self.authentic_batch(
+            selection, 5561, 0, warning="Previously attested HIGH security evidence.",
+            pattern="shared-risk-pattern", status="partial", reason="static_parse_limit",
+            profile_id="static-extended-v3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "baseline", selection, [first])
+            second = self.authentic_batch(
+                selection, 5562, 1, warning="Different HIGH security evidence in same group.",
+                pattern="shared-risk-pattern", status="partial", reason="static_parse_limit",
+                profile_id="static-standard-v3", previous=baseline,
+            )
+            old = baseline["records"][subject["id"]]
+            new = second["workers"][0]["attempts"][0]["record"]
+            self.assertTrue(coverage.degraded_rescan(old, new))
+            self.assertEqual(coverage.finding_identities(old), coverage.finding_identities(new))
+            self.assertNotEqual(coverage.finding_evidence_identities(old),
+                                coverage.finding_evidence_identities(new))
+
+            no_origin = copy.deepcopy(second)
+            no_origin.pop("execution_origin")
+            with self.assertRaisesRegex(PublicationError, "degraded partial rescan introduces new findings"):
+                self.recover(root / "untrusted", selection, [no_origin], baseline)
+            self.assertEqual(baseline["records"][subject["id"]]["findings"], old["findings"])
+
+            recovered = self.recover(root / "witnessed", selection, [second], baseline)
+            kept = recovered["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertFalse(kept["coverage"]["grouping_complete"])
+            self.assertTrue(kept["findings_truncated"])
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                            coverage.reason_codes(kept))
+            self.assertEqual(len(kept["recovery_witnesses"]), 1)
+            self.assertEqual(kept["recovery_witnesses"][0]["origin"],
+                             {"run_id": 5562, "run_attempt": 1})
+            self.assertEqual(kept["recovery_witnesses"][0]["record"]["findings"], new["findings"])
+            self.assertEqual(coverage.represented_finding_evidence_identities(kept),
+                             coverage.finding_evidence_identities(old) |
+                             coverage.finding_evidence_identities(new))
+            self.assertEqual(recovered["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(recovered["manifest"]["coverage"]["complete"], 0)
+            self.assertEqual(recovered["manifest"]["coverage"]["partial"], 1)
+            self.assertEqual(coverage.read_bundle(root / "witnessed")["records"], recovered["records"])
+            replay = self.recover(root / "idempotent", selection, [second], recovered)
+            self.assertEqual(replay["records"], recovered["records"])
+            self.assertEqual(replay["attempts"], recovered["attempts"])
+            self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
+
     def test_authenticated_degraded_complete_is_explicit_partial_with_risk_retained(self):
         """A new 'Complete' cannot erase verified same-source risks or analysis."""
         subject = item()

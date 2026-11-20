@@ -1480,7 +1480,7 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             # unsigned/current worker Complete merges remain strictly rejected.
             degraded = old_record is not None and degraded_rescan(old_record, outcome["record"])
             conflicting_partial = (outcome["record"]["status"] == "partial" and
-                finding_identities(outcome["record"]) - finding_identities(old_record)) if degraded else False
+                finding_evidence_identities(outcome["record"]) - finding_evidence_identities(old_record)) if degraded else False
             degraded_complete = degraded and outcome["record"]["status"] == "complete"
             if follows and (conflicting_partial or degraded_complete):
                 require(attempt == make_attempt(item, outcome["record"], old_attempt, old_record,
