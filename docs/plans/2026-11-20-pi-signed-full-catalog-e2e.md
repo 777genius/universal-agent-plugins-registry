@@ -61,3 +61,16 @@ compatibility remain independent production acceptance gates.
 - Estimate: 400 Python lines + 125 test lines + 62 workflow lines + 55
   documentation lines. Complexity 6/10; preproduction reliability 5/10;
   confidence in **production** lifecycle results 0/10 before authorized run.
+
+## Independent all-OS acceptance gate
+
+The positive 18-shard matrix must finish with **every executed job SUCCESS**,
+then a separate aggregate job reads the 18 saved artifacts and refuses absent,
+extra, duplicated, skipped or mismatched reports. Each report binds its
+12 scopes to the exact workflow source HEAD and authenticated snapshot digest.
+The aggregate independently requires 36 active releases × User/Project on
+**each** of Ubuntu/macOS/Windows (216 executions total), and one identical
+signed snapshot **sequence and digest across all OS/shards**. A matrix with
+mixed production snapshots is not a single qualified release and fails.
+The summary is preserved only after independent verification. Offline unit
+fixtures prove fail-closed behavior but are synthetic, **not production PASS**.
