@@ -22,8 +22,11 @@ def lock_fixture() -> dict:
     for alias, distribution in EXPECTED.items():
         packages.append({
             "alias": alias, "source_key": "directory:" + distribution,
-            "targets": ["pi"],
-            "source": {"registry": {"distribution": distribution}},
+            "targets": ["pi"], "version": RELEASE_VERSIONS[alias],
+            "source": {"registry": {
+                "distribution": distribution, "distribution_id": distribution,
+                "commit": "c" * 40, "release_sequence": 1,
+            }},
             "tree_digest": "sha256:" + "a" * 64,
             "manifest_digest": "sha256:" + "b" * 64,
             "required_by": [] if alias == "marketing-kit" else [
@@ -39,6 +42,7 @@ def installed_fixture(scope: str = "user") -> dict:
             "installation_id": str(number), "directory": {
                 "recorded_distribution": distribution,
                 "recorded_release_sequence": 1,
+                "recorded_snapshot_sequence": 48,
                 "recorded_revision": "c" * 40,
             },
             "clients": [{"client_id": "pi", "scope": scope,
@@ -135,6 +139,21 @@ class SignedMarketingLockTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
                 check_lock(path, policy)
 
+    def test_rejects_swapped_valid_release_commit_sequence_and_version(self):
+        policy = signed_policy_fixture()
+        for label, mutate in {
+            "commit": lambda p: p["source"]["registry"].update(commit="e" * 40),
+            "release-sequence": lambda p: p["source"]["registry"].update(release_sequence=2),
+            "version": lambda p: p.update(version="2.0.0"),
+        }.items():
+            lock = lock_fixture()
+            mutate(lock["packages"][2])
+            with tempfile.TemporaryDirectory() as temp, self.subTest(label=label):
+                path = Path(temp) / "uap.lock"
+                path.write_text(json.dumps(lock), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "authenticated signed release|immutable Directory"):
+                    check_lock(path, policy)
+
     def test_rejects_missing_child_or_borrowed_signed_target(self):
         for mutation in (
             lambda p: p.pop(),
@@ -143,6 +162,9 @@ class SignedMarketingLockTests(unittest.TestCase):
             lambda p: p[2].update(alias="notion"),
             lambda p: p[2].update(tree_digest="unverified"),
             lambda p: p[2]["source"]["registry"].update(distribution="other/hubspot"),
+            lambda p: p[2]["source"]["registry"].update(commit="main"),
+            lambda p: p[2]["source"]["registry"].update(release_sequence=0),
+            lambda p: p[2]["source"]["registry"].pop("commit"),
             lambda p: p[2].update(required_by=[]),
             lambda p: p[2]["required_by"][0]["selector"].update(value="2.0.0"),
             lambda p: p[0].update(required_by=[{"alias": "notion"}]),
@@ -174,6 +196,10 @@ class SignedMarketingInventoryTests(unittest.TestCase):
             })
         check_installations(data, "user", policy)
         data["data"]["installations"][1]["clients"][0]["package_revision"]["tree_digest"] = "sha256:" + "e" * 64
+        with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
+            check_installations(data, "user", policy)
+        data["data"]["installations"][1]["clients"][0]["package_revision"]["tree_digest"] = policy["releases"][EXPECTED["notion"]]["tree_digest"]
+        data["data"]["installations"][1]["directory"]["recorded_snapshot_sequence"] = 49
         with self.assertRaisesRegex(RuntimeError, "authenticated signed release"):
             check_installations(data, "user", policy)
 

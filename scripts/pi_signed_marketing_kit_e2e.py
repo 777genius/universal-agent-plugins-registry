@@ -65,15 +65,24 @@ def check_lock(path: Path, policy: dict | None = None) -> str:
                         for key in ("tree_digest", "manifest_digest")),
                 "signed lock has missing/unsigned Pi package pin")
         source = package.get("source")
-        require(isinstance(source, dict)
-                and isinstance(source.get("registry"), dict)
-                and source["registry"].get("distribution") == EXPECTED[alias],
-                "signed lock package has no matching Directory identity")
+        registry = source.get("registry") if isinstance(source, dict) else None
+        require(isinstance(registry, dict)
+                and registry.get("distribution") == EXPECTED[alias]
+                and registry.get("distribution_id", EXPECTED[alias]) == EXPECTED[alias]
+                and isinstance(registry.get("commit"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", registry["commit"])
+                and type(registry.get("release_sequence")) is int
+                and registry["release_sequence"] > 0
+                and package.get("version") == RELEASE_VERSIONS[alias],
+                "signed lock package has no exact immutable Directory release pin")
         if policy is not None:
             release = policy["releases"][EXPECTED[alias]]
-            require(all(package[key] == release[key]
-                        for key in ("tree_digest", "manifest_digest")),
-                    "saved lock digests differ from authenticated signed release")
+            require(registry["commit"] == release["resolved_revision"]
+                    and registry["release_sequence"] == release["release_sequence"]
+                    and package["version"] == release["version"]
+                    and all(package[key] == release[key]
+                            for key in ("tree_digest", "manifest_digest")),
+                    "saved lock pin differs from authenticated signed release")
         edges = package.get("required_by", [])
         require(isinstance(edges, list), "signed lock dependency edges malformed")
         if alias == "marketing-kit":
@@ -126,7 +135,9 @@ def check_installations(document: dict, scope: str, policy: dict | None = None) 
         if policy is not None:
             release = policy["releases"][distribution]
             revision = binding["package_revision"]
-            require(revision["release_sequence"] == release["release_sequence"]
+            require(signed.get("recorded_snapshot_sequence") ==
+                        policy["snapshot_sequence"]
+                    and revision["release_sequence"] == release["release_sequence"]
                     and signed["recorded_revision"] == release["resolved_revision"]
                     and all(revision.get(key) == release[key]
                             for key in ("version", "tree_digest", "manifest_digest"))
