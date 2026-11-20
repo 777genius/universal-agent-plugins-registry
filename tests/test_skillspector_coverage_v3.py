@@ -313,6 +313,9 @@ class QueueTests(unittest.TestCase):
         current["findings"] = [{"id": "new-high", "rule": "SC4", "path": "requirements.txt",
                                 "line": 3, "pattern": "new-advisory", "severity": "HIGH"}]
         current["finding_count"] = 1
+        # Distinct immutable scanner originals must have independent digests.
+        # A copied raw digest would rightly fail signed-witness admission.
+        current["report_digest"] = "sha256:" + "b" * 64
         outcome = {"record": current, "attempt": coverage.make_attempt(subject, current)}
         self.assertTrue(coverage.degraded_rescan(old, current))
 
