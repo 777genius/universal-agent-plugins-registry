@@ -323,10 +323,18 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(baseline[subject["id"]], old)
         self.assertEqual(attempts, {})
 
-        # Only a separately authenticated current worker can expose explicitly
-        # truncated evidence while retaining a real scanner report + retry.
+        # Worker authentication without an exact signed producing origin is
+        # insufficient to omit either independent security finding.
+        with self.assertRaisesRegex(
+                PublicationError, "degraded partial introduces unrepresented new findings"):
+            coverage.apply_outcome(baseline, attempts, subject, outcome,
+                                   authenticated_current_worker=True)
+        self.assertEqual(baseline[subject["id"]], old)
+        self.assertEqual(attempts, {})
+        origin = {"run_id": 44733681502, "run_attempt": 1}
         accepted = coverage.apply_outcome(baseline, attempts, subject, outcome,
-                                         authenticated_current_worker=True)
+                                         authenticated_current_worker=True,
+                                         verified_current_origin=origin)
         self.assertTrue(accepted)
         result = baseline[subject["id"]]
         self.assertEqual(result["status"], "partial")
@@ -335,6 +343,9 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(result["coverage"]["grouping_complete"])
         self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(result))
         self.assertEqual(result["findings"], old["findings"])  # CRITICAL retained over changed HIGH
+        self.assertEqual(result["recovery_witnesses"], [{"origin": origin, "record": current}])
+        self.assertFalse(coverage.finding_evidence_identities(current) -
+                         coverage.represented_finding_evidence_identities(result))
         self.assertEqual(attempts[subject["id"]]["attempt_count"], 1)
         self.assertEqual(attempts[subject["id"]]["reason"], "recovery_conflict")
         self.assertEqual(attempts[subject["id"]]["disposition"], "scheduled")
@@ -396,13 +407,25 @@ class QueueTests(unittest.TestCase):
                     output_dir=root / "untrusted")
             self.assertFalse((root / "untrusted" / "index.json").exists())
 
+            # A verified current main origin, not merely an authenticated
+            # worker flag, is mandatory to sign both distinct risk reports.
+            with self.assertRaisesRegex(
+                    PublicationError, "degraded partial introduces unrepresented new findings"):
+                coverage.merge_reports(selection, previous, [updated_worker], source_commit=COMMIT,
+                    output_dir=root / "originless", authenticated_current_workers=True)
+            self.assertFalse((root / "originless" / "index.json").exists())
+            origin = {"run_id": 44733681502, "run_attempt": 1}
             coverage.merge_reports(selection, previous, [updated_worker], source_commit=COMMIT,
-                output_dir=root / "authenticated", authenticated_current_workers=True)
+                output_dir=root / "authenticated", authenticated_current_workers=True,
+                verified_current_origin=origin)
             verified = coverage.read_bundle(root / "authenticated")
             retained, attempt = verified["records"][subject["id"]], verified["attempts"][subject["id"]]
             self.assertEqual(retained["freshness"], "current")
             self.assertEqual(retained["status"], "partial")
-            self.assertEqual(retained["findings"], current["findings"])
+            self.assertEqual(retained["findings"], old["findings"])
+            self.assertEqual(retained["recovery_witnesses"], [{"origin": origin, "record": current}])
+            self.assertFalse(coverage.finding_evidence_identities(current) -
+                             coverage.represented_finding_evidence_identities(retained))
             self.assertTrue(retained["findings_truncated"])
             self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(retained))
             self.assertEqual(retained["retry"], coverage.retry_summary(attempt))
@@ -627,6 +650,14 @@ class QueueTests(unittest.TestCase):
                 coverage.merge_reports(selection, previous, [current],
                     source_commit=COMMIT, output_dir=root / "unsigned")
             self.assertFalse((root / "unsigned" / "index.json").exists())
+            # A caller cannot bypass the signing gate by claiming that worker
+            # bytes were authenticated while withholding the producing origin.
+            with self.assertRaisesRegex(
+                    PublicationError, "degraded partial introduces unrepresented new findings"):
+                coverage.merge_reports(selection, previous, [current],
+                    source_commit=COMMIT, output_dir=root / "originless",
+                    authenticated_current_workers=True)
+            self.assertFalse((root / "originless" / "index.json").exists())
             verified_dir = root / "verified"
             coverage.merge_reports(selection, previous, [current],
                 source_commit=COMMIT, output_dir=verified_dir,
