@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pi_signed_marketing_kit_e2e import (
     EXPECTED, CHILD_VERSIONS, RELEASE_VERSIONS, assert_foreign, check_installations,
-    check_lock, check_native, fresh_case, json_object, observe_signed_policy,
+    check_lock, check_native, check_opposite_scope, fresh_case, json_object, observe_signed_policy,
     observe_native_doctor, require_native_tamper_refusal,
 )
 
@@ -25,6 +25,7 @@ def lock_fixture() -> dict:
             "targets": ["pi"], "version": RELEASE_VERSIONS[alias],
             "source": {"registry": {
                 "distribution": distribution, "distribution_id": distribution,
+                "product_id": alias, "repository": distribution, "path": "",
                 "commit": "c" * 40, "release_sequence": 1,
             }},
             "tree_digest": "sha256:" + "a" * 64,
@@ -61,6 +62,7 @@ def signed_policy_fixture() -> dict:
                     "tree_digest": "sha256:" + "a" * 64,
                     "manifest_digest": "sha256:" + "b" * 64,
                     "version": RELEASE_VERSIONS[alias],
+                    "product_id": alias, "repository": distribution, "package_path": "",
                 } for alias, distribution in EXPECTED.items()
             }}
 
@@ -69,12 +71,14 @@ def signed_info_fixture(alias: str) -> dict:
     distribution = EXPECTED[alias]
     return {"result": "success", "command": "info", "data": {
         "selected_distribution": distribution,
+        "product_id": alias,
         "snapshot_sequence": 48,
         "snapshot_digest": "sha256:" + "d" * 64,
         "selected_release": {
             "id": distribution, "release_status": "active",
             "release_sequence": 1,
             "package_version": RELEASE_VERSIONS[alias],
+            "repository": distribution,
             "resolved_revision": "c" * 40,
             "tree_digest": "sha256:" + "a" * 64,
             "manifest_digest": "sha256:" + "b" * 64,
@@ -100,6 +104,7 @@ class SignedPolicyInfoTests(unittest.TestCase):
             "missing-pi": lambda r: r[2]["data"]["selected_release"].update(target_compatibility=[]),
             "borrowed-target": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(client="codex"),
             "wrong-scope": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(scopes=["project"]),
+            "missing-product": lambda r: r[2]["data"].pop("product_id"),
             "prepared": lambda r: r[2]["data"]["selected_release"]["target_compatibility"][0].update(delivery="prepared"),
             "changed-snapshot": lambda r: r[2]["data"].update(snapshot_sequence=49),
             "wrong-digest": lambda r: r[2]["data"].update(snapshot_digest="not-a-digest"),
@@ -144,6 +149,10 @@ class SignedMarketingLockTests(unittest.TestCase):
         for label, mutate in {
             "commit": lambda p: p["source"]["registry"].update(commit="e" * 40),
             "release-sequence": lambda p: p["source"]["registry"].update(release_sequence=2),
+            "different-feed": lambda p: p["source"]["registry"].update(feed_id="modern-v1"),
+            "wrong-product": lambda p: p["source"]["registry"].update(product_id="other"),
+            "wrong-repository": lambda p: p["source"]["registry"].update(repository="other/repo"),
+            "wrong-package-path": lambda p: p["source"]["registry"].update(path="other"),
             "version": lambda p: p.update(version="2.0.0"),
         }.items():
             lock = lock_fixture()
@@ -215,6 +224,7 @@ class SignedMarketingInventoryTests(unittest.TestCase):
             "reused-id": lambda d: d["data"]["installations"][1].update(installation_id="1"),
             "untrusted-revision": lambda d: d["data"]["installations"][0]["directory"].update(recorded_revision="main"),
             "wrong-sequence": lambda d: d["data"]["installations"][0]["directory"].update(recorded_release_sequence=2),
+            "wrong-feed": lambda d: d["data"]["installations"][0]["directory"].update(feed_id="modern-v1"),
             "duplicate-record": lambda d: d["data"]["installations"][1]["directory"].update(
                 recorded_distribution=EXPECTED["marketing-kit"]),
         }
@@ -279,7 +289,16 @@ class SignedMarketingNativeMaterializationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "incomplete"):
                 check_native(env, project, "user")
             config.write_text(json.dumps({"mcpServers": {
-                "notion": {}, "hubspot-crm": {}, "playwright": {},
+                "notion": {"command": "python3", "args": ["-c", "print(1)"]},
+                "hubspot-crm": {"url": "http://127.0.0.1:7777/mcp"},
+                "playwright": {},
+            }}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "lacks executable"):
+                check_native(env, project, "user")
+            config.write_text(json.dumps({"mcpServers": {
+                "notion": {"command": "python3", "args": ["-c", "print(1)"]},
+                "hubspot-crm": {"url": "http://127.0.0.1:7777/mcp"},
+                "playwright": {"command": "python3"},
             }}), encoding="utf-8")
             check_native(env, project, "user")
             with self.assertRaisesRegex(RuntimeError, "retains Marketing Kit Skill"):
@@ -290,6 +309,22 @@ class SignedMarketingNativeMaterializationTests(unittest.TestCase):
             config.write_text('{"mcpServers":{}}', encoding="utf-8")
             check_native(env, project, "user", removed=True)
 
+
+
+class SignedMarketingScopeIsolationTests(unittest.TestCase):
+    def test_opposite_native_scope_rejects_cross_scope_skill(self):
+        for scope in ("user", "project"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as temp:
+                env, project, _, _ = fresh_case(Path(temp), "case", scope)
+                check_opposite_scope(env, project, scope)
+                other = "project" if scope == "user" else "user"
+                native = (project / ".pi" if other == "project"
+                          else Path(env["PI_CODING_AGENT_DIR"]))
+                skill = native / "skills" / "campaign-planning" / "SKILL.md"
+                skill.parent.mkdir(parents=True, exist_ok=True)
+                skill.write_text("tampered cross-scope", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "retains Marketing Kit Skill"):
+                    check_opposite_scope(env, project, scope)
 
 
 class SignedMarketingDoctorTests(unittest.TestCase):

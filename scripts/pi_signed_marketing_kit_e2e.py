@@ -36,6 +36,14 @@ def require(ok: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+class StageFailure(RuntimeError):
+    """A fixed harness-controlled command stage; never persist exception text."""
+
+    def __init__(self, stage: str, category: str):
+        super().__init__(stage)
+        self.stage, self.category = stage, category
+
+
 def json_object(body: str, stage: str) -> dict:
     try:
         value = json.loads(body)
@@ -68,7 +76,14 @@ def check_lock(path: Path, policy: dict | None = None) -> str:
         registry = source.get("registry") if isinstance(source, dict) else None
         require(isinstance(registry, dict)
                 and registry.get("distribution") == EXPECTED[alias]
-                and registry.get("distribution_id", EXPECTED[alias]) == EXPECTED[alias]
+                and registry.get("distribution_id") == EXPECTED[alias]
+                and isinstance(registry.get("product_id"), str)
+                and bool(registry["product_id"])
+                # v0.1.111 has only the historical compiled-in signed feed.
+                and registry.get("feed_id", "") == ""
+                and isinstance(registry.get("repository"), str)
+                and bool(registry["repository"])
+                and isinstance(registry.get("path", ""), str)
                 and isinstance(registry.get("commit"), str)
                 and re.fullmatch(r"[0-9a-f]{40}", registry["commit"])
                 and type(registry.get("release_sequence")) is int
@@ -79,6 +94,9 @@ def check_lock(path: Path, policy: dict | None = None) -> str:
             release = policy["releases"][EXPECTED[alias]]
             require(registry["commit"] == release["resolved_revision"]
                     and registry["release_sequence"] == release["release_sequence"]
+                    and registry["product_id"] == release["product_id"]
+                    and registry["repository"] == release["repository"]
+                    and registry.get("path", "") == release["package_path"]
                     and package["version"] == release["version"]
                     and all(package[key] == release[key]
                             for key in ("tree_digest", "manifest_digest")),
@@ -137,6 +155,7 @@ def check_installations(document: dict, scope: str, policy: dict | None = None) 
             revision = binding["package_revision"]
             require(signed.get("recorded_snapshot_sequence") ==
                         policy["snapshot_sequence"]
+                    and signed.get("feed_id", "") == ""
                     and revision["release_sequence"] == release["release_sequence"]
                     and signed["recorded_revision"] == release["resolved_revision"]
                     and all(revision.get(key) == release[key]
@@ -184,6 +203,21 @@ def check_native(env: dict[str, str], project: Path, scope: str,
     else:
         require(required_mcp.issubset(servers),
                 "real signed Pi child MCP configuration is incomplete")
+        for name in required_mcp:
+            server = servers[name]
+            command, url = server.get("command"), server.get("url")
+            require((isinstance(command, str) and bool(command.strip()))
+                    or (isinstance(url, str) and
+                        (url.startswith("https://") or
+                         url.startswith("http://127.0.0.1:") or
+                         url.startswith("http://localhost:")) and len(url) > 12),
+                    "real signed Pi MCP server lacks executable or HTTP endpoint")
+
+
+def check_opposite_scope(env: dict[str, str], project: Path, scope: str) -> None:
+    """No managed package may leak into the other native Pi placement."""
+    check_native(env, project, "project" if scope == "user" else "user",
+                 removed=True)
 
 
 def fresh_case(root: Path, name: str, scope: str) -> tuple[dict[str, str], Path, Path, Path]:
@@ -234,11 +268,18 @@ def assert_foreign(root: Path, scope: str) -> None:
 
 def invoke(cli: str, env: dict[str, str], project: Path, stage: str,
            *args: str) -> dict:
-    proc = subprocess.run([cli, *args, "--format", "json"], cwd=project, env=env,
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=300, check=False)
-    require(proc.returncode == 0, f"{stage}: public CLI refused (exit={proc.returncode})")
-    return json_object(proc.stdout, stage)
+    try:
+        proc = subprocess.run([cli, *args, "--format", "json"], cwd=project, env=env,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=300, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise StageFailure(stage, "CLITimeout") from error
+    if proc.returncode != 0:
+        raise StageFailure(stage, "CLIRefusal")
+    try:
+        return json_object(proc.stdout, stage)
+    except RuntimeError as error:
+        raise StageFailure(stage, "InvalidCLIResponse") from error
 
 
 def observe_native_doctor(cli: str, env: dict[str, str],
@@ -309,8 +350,10 @@ def observe_signed_policy(cli: str, env: dict[str, str], project: Path) -> dict:
                           distribution, "--target", "pi", "--scope", "user")
         data = envelope.get("data")
         require(envelope.get("command") == "info" and isinstance(data, dict)
-                and data.get("selected_distribution") == distribution,
-                "signed Directory info has wrong selected distribution")
+                and data.get("selected_distribution") == distribution
+                and isinstance(data.get("product_id"), str)
+                and bool(data["product_id"]),
+                "signed Directory info has wrong selected distribution or product")
         seq, digest = data.get("snapshot_sequence"), data.get("snapshot_digest")
         require(type(seq) is int and seq > 0
                 and isinstance(digest, str) and DIGEST.fullmatch(digest),
@@ -325,6 +368,9 @@ def observe_signed_policy(cli: str, env: dict[str, str], project: Path) -> dict:
                 and type(release.get("release_sequence")) is int
                 and release["release_sequence"] > 0
                 and release.get("package_version") == RELEASE_VERSIONS[alias]
+                and isinstance(release.get("repository"), str)
+                and bool(release["repository"])
+                and isinstance(release.get("package_path", ""), str)
                 and isinstance(release.get("resolved_revision"), str)
                 and re.fullmatch(r"[0-9a-f]{40}", release["resolved_revision"])
                 and all(isinstance(release.get(key), str)
@@ -340,9 +386,11 @@ def observe_signed_policy(cli: str, env: dict[str, str], project: Path) -> dict:
         releases[distribution] = {
             key: release[key] for key in (
                 "release_sequence", "resolved_revision", "tree_digest",
-                "manifest_digest")
+                "manifest_digest", "repository")
         }
         releases[distribution]["version"] = release["package_version"]
+        releases[distribution]["product_id"] = data["product_id"]
+        releases[distribution]["package_path"] = release.get("package_path", "")
     require(baseline is not None, "signed Pi policy has no snapshot")
     return {"snapshot_sequence": baseline[0], "snapshot_digest": baseline[1],
             "releases": releases}
@@ -365,6 +413,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         invoke(cli, env_a, project_a, "signed list", "list", "--target", "pi", *args_a),
         scope, policy)
     check_native(env_a, project_a, scope)
+    check_opposite_scope(env_a, project_a, scope)
     observe_native_doctor(cli, env_a, project_a, args_a)
     require_native_tamper_refusal(cli, env_a, project_a, scope, args_a)
     lock_digest = check_lock(portable_a / "uap.lock", policy)
@@ -373,21 +422,25 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
                    "installed": len(original), "lock_digest": lock_digest,
                    "snapshot_sequence": policy["snapshot_sequence"]})
 
+    def assert_unchanged(stage: str) -> None:
+        require(lock_digest == check_lock(portable_a / "uap.lock", policy),
+                stage + ": signed saved lock changed")
+        require(original == check_installations(
+            invoke(cli, env_a, project_a, stage + " list", "list",
+                   "--target", "pi", *args_a), scope, policy),
+                stage + ": signed saved ownership changed")
+        check_native(env_a, project_a, scope)
+        check_opposite_scope(env_a, project_a, scope)
+        observe_native_doctor(cli, env_a, project_a, args_a)
+
     invoke(cli, env_a, project_a, "repeat signed add", "add", "marketing-kit",
            "--target", "pi", *args_a)
-    require(original == check_installations(
-        invoke(cli, env_a, project_a, "repeat list", "list", "--target", "pi", *args_a),
-        scope, policy), "repeat add changed signed owners")
+    assert_unchanged("repeat-add")
     invoke(cli, env_a, project_a, "signed update", "update", "marketing-kit", *args_a)
+    assert_unchanged("update")
     invoke(cli, env_a, project_a, "signed repair", "repair", "marketing-kit",
            "--target", "pi", *args_a)
-    require(lock_digest == check_lock(portable_a / "uap.lock", policy),
-            "unchanged signed saved lifecycle rewrote lock")
-    require(original == check_installations(
-        invoke(cli, env_a, project_a, "post-repair list", "list",
-               "--target", "pi", *args_a), scope, policy),
-            "signed update/repair lost installed owner")
-    observe_native_doctor(cli, env_a, project_a, args_a)
+    assert_unchanged("repair")
     report.append({"scope": scope, "stage": "repeat-update-repair", "result": "passed"})
 
     for filename in ("uap.toml", "uap.lock"):
@@ -403,6 +456,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
             and not set(original.values()) & set(restored.values()),
             "cold restore changed signed pins or reused installation IDs")
     check_native(env_b, project_b, scope)
+    check_opposite_scope(env_b, project_b, scope)
     observe_native_doctor(cli, env_b, project_b, args_b)
     report.append({"scope": scope, "stage": "cold-locked-restore", "result": "passed"})
 
@@ -413,6 +467,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         require(isinstance(data, dict) and data.get("installations") == [],
                 "removed Pi profile retains signed installations")
         check_native(env, project, scope, removed=True)
+        check_opposite_scope(env, project, scope)
     assert_foreign(root, scope)
     report.append({"scope": scope, "stage": "signed-removal-foreign", "result": "passed"})
 
@@ -443,17 +498,21 @@ def main() -> int:
               "scope_coverage": "marketing-kit-only-not-72/72",
               "status": "failed", "stages": []}
     args.report.parent.mkdir(parents=True, exist_ok=True)
+    current_scope = "runner-precondition"
     try:
         with tempfile.TemporaryDirectory(prefix="pi-signed-saved-",
                                          dir=os.environ["RUNNER_TEMP"]) as temp:
             for scope in ("user", "project"):
+                current_scope = "scope-" + scope
                 run_scope(str(Path(binary).resolve()), Path(temp), scope, report["stages"])
         report["status"] = "passed"
         return 0
     except Exception as error:
-        # Do not attach untrusted command output, paths, tokens or native config.
-        report["failure_kind"] = type(error).__name__
-        report["failure_stage"] = str(error).split(":")[0][:100]
+        # Report only fixed harness stage/category, never exception text or paths.
+        report["failure_kind"] = (error.category if isinstance(error, StageFailure)
+                                  else type(error).__name__)
+        report["failure_stage"] = (error.stage if isinstance(error, StageFailure)
+                                   else current_scope)
         return 1
     finally:
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
