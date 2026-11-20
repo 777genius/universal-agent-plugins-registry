@@ -125,10 +125,16 @@ def signed_info(cli: str, env: dict[str, str], project: Path,
 
 def check_root_source(signed: dict, item: dict) -> None:
     release = signed["release"]
+    reviewed = re.fullmatch(
+        r"github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@([0-9a-f]{40})//([A-Za-z0-9_./-]*)",
+        item["source"])
+    require(reviewed is not None, "reviewed root lacks exact GitHub source")
     # Registry-local null revisions resolve at publication time, not at
     # this test-only workflow commit. Never equate current HEAD with that
     # immutable published revision; compare signed digests and explicit pins.
-    require(release["release_sequence"] == item["release_sequence"]
+    require(release["repository"] == reviewed.group(1)
+            and release.get("package_path", "") == reviewed.group(3)
+            and release["release_sequence"] == item["release_sequence"]
             and (item["authored_revision"] is None or
                  release["resolved_revision"] == item["authored_revision"])
             and release["tree_digest"] == item["tree_digest"]
