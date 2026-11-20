@@ -229,11 +229,16 @@ class QueueTests(unittest.TestCase):
                 {"record": changed, "attempt": coverage.make_attempt(subject, changed)})
         self.assertEqual(records[subject["id"]]["findings"], old["findings"])
         self.assertEqual(attempts, {})
-        # When a full-match fingerprint exists it, not the column alone,
-        # anchors the stable security identity.
+        # Even with an identical upstream match fingerprint, a changed
+        # occurrence position is independent evidence. Coarse identity alone
+        # cannot authorize dropping the original signed finding; quarantine
+        # remains fail-closed until a full-evidence reconciliation.
         old["findings"][0]["match_fingerprint"] = "stable-source-match"
         changed["findings"][0]["match_fingerprint"] = "stable-source-match"
-        self.assertFalse(coverage.degraded_rescan(old, changed))
+        self.assertEqual(coverage.finding_identities(old), coverage.finding_identities(changed))
+        self.assertNotEqual(coverage.finding_evidence_identities(old),
+                            coverage.finding_evidence_identities(changed))
+        self.assertTrue(coverage.degraded_rescan(old, changed))
 
     def test_degraded_partial_preserves_duplicate_finding_identity_counts(self):
         subject = item()
@@ -473,6 +478,182 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(attempt["reason"], "recovery_conflict")
         self.assertEqual(attempt["disposition"], "scheduled")
         self.assertEqual(attempt["next_profile"], "static-extended-v3")
+
+    def test_verified_current_witness_retains_old_and_novel_security_groups_in_signed_partial(self):
+        """A fully provenance-bound current-main checkpoint must not abort the
+        whole catalog or silently discard independent new findings."""
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(status, risks):
+            raw = upstream_report()
+            raw["issues"] = [
+                {"id": "PI1", "severity": severity,
+                 "explanation": "Independent " + name + " advisory.",
+                 "location": {"file": "SKILL.md", "start_line": line},
+                 "pattern": name}
+                for name, severity, line in risks]
+            if status == "partial":
+                raw["analysis_completeness"].update(
+                    is_complete=False, status="partial", partially_inspected_files=1)
+                raw["analysis_completeness"]["ledger_exceptions"] = [
+                    {"reason_code": "static_parse_limit", "message": "Partial inspection."}]
+            source_record = scanner.empty_record_v3(subject)
+            source_record["source"]["content_digest"] = "sha256:" + "a" * 64
+            source_record["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                source_record, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old = observed("partial", [("shared", "HIGH", 1), ("old-only", "HIGH", 2)])
+        new = observed("complete", [("shared", "HIGH", 1),
+                                     ("novel-critical", "CRITICAL", 3),
+                                     ("novel-medium", "MEDIUM", 4)])
+        self.assertEqual(old["source"], new["source"])
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        self.assertEqual(sum((coverage.finding_identities(new) -
+                              coverage.finding_identities(old)).values()), 2)
+        origin = {"run_id": 44617591867, "run_attempt": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            candidate = worker(selection, [new], previous)
+            for title, authenticated, witness in [
+                ("untrusted", False, None),
+                ("unbound", True, None),
+                ("spoofed", False, origin),
+                ("malformed", True, {"run_id": "spoof", "run_attempt": 1}),
+            ]:
+                with self.subTest(case=title), self.assertRaises(PublicationError):
+                    coverage.merge_reports(
+                        selection, previous, [candidate], source_commit=COMMIT,
+                        output_dir=root / title, authenticated_current_workers=authenticated,
+                        verified_current_origin=witness)
+                self.assertFalse((root / title / "index.json").exists())
+
+            output = root / "verified-current"
+            coverage.merge_reports(
+                selection, previous, [candidate], source_commit=COMMIT,
+                output_dir=output, authenticated_current_workers=True,
+                verified_current_origin=origin)
+            published = coverage.read_bundle(output)
+            retained = published["records"][subject["id"]]
+            actual_attempt = published["attempts"][subject["id"]]
+            self.assertEqual(retained["status"], "partial")
+            self.assertEqual(retained["coverage"]["status"], "partial")
+            self.assertEqual(retained["findings"], old["findings"])
+            self.assertTrue(retained["findings_truncated"])
+            self.assertFalse(retained["coverage"]["grouping_complete"])
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                            coverage.reason_codes(retained))
+            self.assertEqual(len(retained["recovery_witnesses"]), 1)
+            self.assertEqual(retained["recovery_witnesses"][0],
+                             {"origin": origin, "record": new})
+            self.assertFalse(coverage.finding_identities(new) -
+                             coverage.represented_finding_identities(retained))
+            self.assertEqual(actual_attempt["status"], "complete")
+            self.assertEqual(actual_attempt["history"], candidate["attempts"][0]["attempt"]["history"])
+            self.assertEqual(publisher.validate_directory(output, COMMIT)["manifest"],
+                             published["manifest"])
+
+            # A signed witness that cannot fit must FAIL, not silently drop
+            # any new CRITICAL/MEDIUM group or fabricate a Complete.
+            no_witness = copy.deepcopy(retained)
+            del no_witness["recovery_witnesses"]
+            short_size = len(coverage.report_json(coverage.shard_document(
+                subject["repository"], [scanner.redact_public_record(no_witness)])))
+            full_size = len(coverage.report_json(coverage.shard_document(
+                subject["repository"], [scanner.redact_public_record(retained)])))
+            self.assertGreater(full_size, short_size + 128)
+            with mock.patch.object(coverage, "MAX_SHARD_BYTES", short_size + 128):
+                with self.assertRaisesRegex(PublicationError,
+                                            "security witness could not be represented"):
+                    coverage.merge_reports(
+                        selection, previous, [candidate], source_commit=COMMIT,
+                        output_dir=root / "too-small", authenticated_current_workers=True,
+                        verified_current_origin=origin)
+            self.assertFalse((root / "too-small" / "index.json").exists())
+
+    def test_full_security_evidence_changes_require_signed_witness_not_coarse_match(self):
+        """Same rule/path/fingerprint can hide different evidence or occurrences.
+
+        Generated ID rotation alone is benign, but distinct original findings
+        must not be erased even when their coarse finding identities match.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(*, partial, message="Original advisory.", occurrence_lines=(2,),
+                     upstream_id="finding-" + "1" * 32, evidence=None):
+            raw = upstream_report()
+            raw["issues"] = [{
+                "id": "PI1", "severity": "HIGH", "explanation": message,
+                "pattern": "Stable rule label", "match_fingerprint": "same-coarse-match",
+                "finding_id": upstream_id,
+                "evidence": evidence if evidence is not None else {"proof": "original"},
+                "location": {"file": "SKILL.md", "start_line": 2},
+                "occurrences": [
+                    {"file": "SKILL.md", "start_line": line}
+                    for line in occurrence_lines],
+            }]
+            if partial:
+                raw["analysis_completeness"].update(
+                    is_complete=False, status="partial", partially_inspected_files=1)
+                raw["analysis_completeness"]["ledger_exceptions"] = [
+                    {"reason_code": "static_parse_limit", "message": "Independent coverage gap."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old = observed(partial=True)
+        generated_rotation = observed(partial=False, upstream_id="finding-" + "2" * 32)
+        self.assertEqual(coverage.finding_identities(old),
+                         coverage.finding_identities(generated_rotation))
+        self.assertEqual(coverage.finding_evidence_identities(old),
+                         coverage.finding_evidence_identities(generated_rotation))
+        self.assertFalse(coverage.degraded_rescan(old, generated_rotation))
+
+        changes = {
+            "message": observed(partial=False, message="Different critical security advice."),
+            "evidence": observed(partial=False, evidence={"proof": "new independent source"}),
+            "occurrence": observed(partial=False, occurrence_lines=(2, 8)),
+        }
+        for name, newer in changes.items():
+            with self.subTest(change=name):
+                self.assertEqual(old["source"], newer["source"])
+                self.assertEqual(coverage.finding_identities(old),
+                                 coverage.finding_identities(newer))
+                self.assertNotEqual(coverage.finding_evidence_identities(old),
+                                    coverage.finding_evidence_identities(newer))
+                self.assertTrue(coverage.degraded_rescan(old, newer))
+
+        current = changes["occurrence"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            outcome = worker(selection, [current], previous)
+            with self.assertRaisesRegex(PublicationError, "complete rescan regresses"):
+                coverage.merge_reports(selection, previous, [outcome], source_commit=COMMIT,
+                    output_dir=root / "untrusted")
+            self.assertFalse((root / "untrusted" / "index.json").exists())
+
+            origin = {"run_id": 44617591867, "run_attempt": 1}
+            coverage.merge_reports(selection, previous, [outcome], source_commit=COMMIT,
+                output_dir=root / "verified", authenticated_current_workers=True,
+                verified_current_origin=origin)
+            actual = coverage.read_bundle(root / "verified")
+            kept = actual["records"][subject["id"]]
+            self.assertEqual((kept["status"], kept["coverage"]["status"]),
+                             ("partial", "partial"))
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertTrue(kept["findings_truncated"])
+            self.assertEqual(kept["recovery_witnesses"],
+                             [{"origin": origin, "record": current}])
+            self.assertFalse(coverage.finding_evidence_identities(current) -
+                             coverage.represented_finding_evidence_identities(kept))
+            self.assertEqual(publisher.validate_directory(root / "verified", COMMIT)["manifest"],
+                             actual["manifest"])
 
     def test_equal_count_osv_fallback_and_dependency_advisory_remain_distinct(self):
         """A later OSV outage cannot erase independently verified advisories."""

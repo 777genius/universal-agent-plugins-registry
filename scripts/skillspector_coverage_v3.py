@@ -790,9 +790,28 @@ def represented_finding_identities(record):
     return identities
 
 
+def finding_evidence_identities(record):
+    """Attest complete finding groups, not only coarse rule/path identities.
+
+    A stable coarse identity can conceal changed evidence, raw occurrence counts,
+    affected positions or remediation. Remove only independently qualified
+    scanner-generated ID rotations; unknown IDs keep exact byte comparison.
+    A distinct finding group is never silently replaced with a candidate.
+    """
+    return Counter(report_json(group) for group in
+                   _recovery_groups_without_generated_ids(record))
+
+
+def represented_finding_evidence_identities(record):
+    identities = finding_evidence_identities(record)
+    for witness in record.get("recovery_witnesses", []):
+        identities |= finding_evidence_identities(witness["record"])
+    return identities
+
+
 def require_represented_degraded_findings(item, old, new, attempt):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
-    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
+    old_groups, new_groups = represented_finding_evidence_identities(old), finding_evidence_identities(new)
     novel = new_groups - old_groups
     if novel:
         # Purely numeric diagnostics: old/new group counts can be equal while
@@ -826,7 +845,7 @@ def degraded_rescan(old, new):
         return True
     # Finding group IDs can vary across scanner runs. Retain verified
     # source positions, rules and fingerprint identities across rescans.
-    return bool(represented_finding_identities(old) - finding_identities(new))
+    return bool(represented_finding_evidence_identities(old) - finding_evidence_identities(new))
 
 
 def retained_degraded_replay(item, old_record, old_attempt, outcome):
@@ -850,7 +869,7 @@ def retained_degraded_replay(item, old_record, old_attempt, outcome):
             not degraded_rescan(old_record, new)):
         return False
     return (attempt["fingerprint"] == attempt_fingerprint(item, new) and
-            not finding_identities(new) - finding_identities(old_record))
+            not finding_evidence_identities(new) - finding_evidence_identities(old_record))
 
 
 def witness_fits_max_rebound_id(witness):
@@ -866,7 +885,8 @@ def witness_fits_max_rebound_id(witness):
     return len(report_json(sized)) <= 256 << 10
 
 
-def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticated_current_worker=False):
+def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticated_current_worker=False,
+                  verified_current_origin=None):
     """Commit one record/retry transaction while retaining useful failed-scan fallback."""
     attempt, new = outcome["attempt"], outcome["record"]
     identifier = item["id"]
@@ -890,6 +910,11 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
             "attempt count is not consecutive")
     require(attempt == make_attempt(item, new, old_attempt, old_record, at=attempt["last_attempted_at"]),
             "worker attempt lineage differs")
+    if verified_current_origin is not None:
+        require(authenticated_current_worker and type(verified_current_origin) is dict and
+                set(verified_current_origin) == {"run_id", "run_attempt"} and
+                all(type(value) is int and value > 0 for value in verified_current_origin.values()),
+                "current witness origin requires authenticated main checkpoints")
     degraded = degraded_rescan(old_record, new)
     # Only source-proven current-main worker artifacts may quarantine a degraded
     # Complete or a Partial introducing conflicting evidence. Preserve the actual
@@ -897,18 +922,27 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
     # of claiming Complete or silently dropping findings. Untrusted merges still fail.
     degraded_complete = degraded and new["status"] == "complete"
     conflicting_partial = (degraded and new["status"] == "partial" and
-        bool(finding_identities(new) - finding_identities(old_record)))
+        bool(finding_evidence_identities(new) - finding_evidence_identities(old_record)))
     if degraded_complete or conflicting_partial:
         require(authenticated_current_worker,
                 "complete rescan regresses verified same-source analysis" if degraded_complete else
                 "degraded partial rescan introduces new findings")
         # Two disjoint finding sets cannot be merged into one attested report.
-        # Keep the strict refusal until a reviewed rescan resolves that conflict.
-        if degraded_complete:
+        # Without a verified producing run, keep rejecting a new finding set.
+        # A bound current-main checkpoint can instead retain its complete
+        # original alternate as a signed recovery witness, never as Complete.
+        if degraded_complete and verified_current_origin is None:
             require_represented_degraded_findings(item, old_record, new, attempt)
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
         quarantine_recovery(records, attempts, item, outcome,
-                            prefer_existing=degraded_complete)
+                            prefer_existing=degraded_complete, witness_origin=verified_current_origin)
+        # An authenticated *current* run must not silently discard a genuinely
+        # new independent finding merely because the alternate will not fit the
+        # signed v3 shard. Historical recovery has its own incomplete disclosure
+        # policy; live publication stays blocked until all new evidence fits.
+        if verified_current_origin is not None:
+            require(not (finding_evidence_identities(new) - represented_finding_evidence_identities(records[identifier])),
+                    "verified current security witness could not be represented in signed shard")
         if predecessor_uncertain(old_record):
             mark_missing_predecessor(records[identifier], attempts[identifier])
         return True
@@ -933,9 +967,11 @@ def shard_document(repository, records):
 
 def merge_reports(selection, previous, workers, *, source_commit, output_dir, discovery_summary=None,
                   expected_partition_count=None, allow_partial_workers=False, recovered_sources=0,
-                  authenticated_current_workers=False):
+                  authenticated_current_workers=False, verified_current_origin=None):
     validate_selection(selection)
     require(type(authenticated_current_workers) is bool, "invalid authenticated-worker option")
+    require(verified_current_origin is None or authenticated_current_workers,
+            "untrusted merge cannot attach current findings witness")
     require(SHA.fullmatch(source_commit) is not None and workers, "source commit and worker artifacts required")
     require(type(recovered_sources) is int and 0 <= recovered_sources <= len(selection["sources"]),
             "invalid recovered source count")
@@ -966,7 +1002,8 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
             require(identifier not in seen, "repeated attempt across partitions")
             seen.add(identifier)
             apply_outcome(records, attempts, expected[identifier], outcome,
-                          authenticated_current_worker=authenticated_current_workers)
+                          authenticated_current_worker=authenticated_current_workers,
+                          verified_current_origin=verified_current_origin)
     require(allow_partial_workers or partitions == set(range(expected_count)), "missing worker partition")
     current_ids = {identifier for state in (summary or {}).get("source_states", []) if state["current"] for identifier in state["selected_ids"]}
     historical_ids = {identifier for state in (summary or {}).get("source_states", []) if not state["current"]
@@ -1196,7 +1233,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # A recovered Complete may come from a checkpoint rejected in assembly.
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
-    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
+    old_groups, new_groups = represented_finding_evidence_identities(old), finding_evidence_identities(new)
     # Two genuine Partial (or independent fork) scans can each contain an
     # adverse group missing from the other. Quarantining just the "stronger"
     # representative would hide the second authenticated security finding.
@@ -1531,6 +1568,7 @@ def main():
             write_bounded(args.output, worker, MAX_WORKER_BYTES)
         else:
             authenticated_current = False
+            verified_current_origin = None
             if args.authenticated_checkpoints is not None:
                 # list-workers already verified every current-main artifact.
                 # Recheck the exact local packages and its consumed manifest
@@ -1564,12 +1602,14 @@ def main():
                     actual[key] = proof
                 require(bound == actual, "authenticated checkpoint inventory or provenance differs")
                 authenticated_current = True
+                verified_current_origin = {"run_id": run_id, "run_attempt": run_attempt}
             workers = [read_json(path, max_bytes=MAX_WORKER_BYTES) for path in args.workers]
             manifest = merge_reports(selection, previous, workers, source_commit=args.source_commit,
                 output_dir=args.output_dir, discovery_summary=summary,
                 expected_partition_count=args.expected_partition_count, allow_partial_workers=args.allow_partial_workers,
                 recovered_sources=args.recovered_sources,
-                authenticated_current_workers=authenticated_current)
+                authenticated_current_workers=authenticated_current,
+                verified_current_origin=verified_current_origin)
             print(json.dumps(manifest["coverage"], sort_keys=True))
         return 0
     except (PublicationError, CheckpointYield, OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.SubprocessError) as error:
