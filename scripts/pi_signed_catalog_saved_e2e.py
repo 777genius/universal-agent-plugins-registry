@@ -242,3 +242,158 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
                         for f in doctor["findings"]),
                 "read-only native doctor did not validate signed installation")
     return ("sha256:" + hashlib.sha256(lockbytes).hexdigest(), owners, actual, snapshot)
+
+
+def run_case(cli: str, scratch: Path, source: dict, scope: str) -> dict:
+    label = source["distribution"]
+    identity = hashlib.sha256(label.encode("utf-8")).hexdigest()[:16]
+    root = scratch / ("case-" + identity + "-" + str(source["release_sequence"]) + "-" + scope)
+    root.mkdir()
+    env_a, project_a, state_a, _ = fresh_case(root, "A", scope)
+    env_b, project_b, state_b, _ = fresh_case(root, "B", scope)
+    args_a = ("--scope", scope) + (("--project-root", str(project_a)) if scope == "project" else ())
+    args_b = ("--scope", scope) + (("--project-root", str(project_b)) if scope == "project" else ())
+    portable_a = project_a if scope == "project" else state_a
+    portable_b = project_b if scope == "project" else state_b
+    native_a = native_fingerprint(native_root(env_a, project_a, scope))
+    other_a = native_fingerprint(native_root(env_a, project_a, "project" if scope == "user" else "user"))
+    native_b = native_fingerprint(native_root(env_b, project_b, scope))
+    other_b = native_fingerprint(native_root(env_b, project_b, "project" if scope == "user" else "user"))
+    policy = signed_info(cli, env_a, project_a, label, scope)
+    check_root_source(policy, source)
+    invoke(cli, env_a, project_a, "signed-add", "add", label, "--target", "pi", *args_a)
+    original = inspect_saved(cli, env_a, project_a, portable_a, scope, source, native_a, other_a, policy["snapshot"])
+    require((portable_a / "uap.toml").is_file(), "saved source agreement absent")
+    manifest_bytes = (portable_a / "uap.toml").read_bytes()
+    for stage, command in (("repeat-add", ("add", label, "--target", "pi")),
+                           ("update", ("update", source["manifest_name"])),
+                           ("repair", ("repair", source["manifest_name"], "--target", "pi"))):
+        invoke(cli, env_a, project_a, stage, *command, *args_a)
+        now = inspect_saved(cli, env_a, project_a, portable_a, scope, source, native_a, other_a, policy["snapshot"])
+        require(now == original and (portable_a / "uap.toml").read_bytes() == manifest_bytes,
+                "signed lifecycle changed immutable lock, owners or native Pi projection")
+    for filename in ("uap.toml", "uap.lock"):
+        shutil.copyfile(portable_a / filename, portable_b / filename)
+    require(signed_info(cli, env_b, project_b, label, scope)["snapshot"] == policy["snapshot"],
+            "cold profile uses different authenticated signed snapshot")
+    invoke(cli, env_b, project_b, "cold-locked-restore", "install", "--locked", "--yes", *args_b)
+    restored = inspect_saved(cli, env_b, project_b, portable_b, scope, source, native_b, other_b, policy["snapshot"])
+    require(restored[0] == original[0] and
+            not (set(restored[1].values()) & set(original[1].values())),
+            "cold restore reused owner identity or changed immutable lock")
+    for env, project, portable, args, before, other in (
+            (env_b, project_b, portable_b, args_b, native_b, other_b),
+            (env_a, project_a, portable_a, args_a, native_a, other_a)):
+        invoke(cli, env, project, "signed-remove", "remove", source["manifest_name"], *args)
+        response = invoke(cli, env, project, "removed-list", "list", "--target", "pi", *args)
+        data = response.get("data")
+        require(isinstance(data, dict) and data.get("installations") == [],
+                "signed dependency owners remain after removal")
+        require(native_fingerprint(native_root(env, project, scope)) == before
+                and native_fingerprint(native_root(env, project, "project" if scope == "user" else "user")) == other,
+                "native Pi projection remains or other scope was modified")
+    for suffix in ("A", "B"):
+        case = root / suffix
+        for marker in (case / "home/foreign-do-not-change.txt",
+                       case / "project/foreign-do-not-change.txt",
+                       case / "home/.pi/agent/foreign-do-not-change.txt"):
+            require(marker.is_file() and marker.read_text(encoding="utf-8") == "foreign and unchanged\n",
+                    "unowned profile content was modified")
+    return {"distribution": label, "release_sequence": source["release_sequence"],
+            "scope": scope, "status": "passed", "snapshot_sequence": policy["snapshot"][0],
+            "installed_dependency_count": len(original[1])}
+
+
+def catalog_sources(head: str) -> list[dict]:
+    """Carry exact authored pin, not synthetic HEAD for local null revisions."""
+    source = json.loads((ROOT / "registry/directory.json").read_text(encoding="utf-8"))
+    pins = {}
+    for dist in source["distributions"]:
+        releases = {r["sequence"]: r for r in dist["releases"]}
+        for policy in dist["release_policies"]:
+            if policy["status"] == "active":
+                release = releases[policy["release_sequence"]]
+                key = (dist["id"], release["sequence"])
+                require(key not in pins, "duplicate authored active Directory policy")
+                pins[key] = release["package_source"]["revision"]
+    sources = active_sources(head)
+    require(len(pins) == len(sources), "authored source inventory differs")
+    for item in sources:
+        key = (item["distribution"], item["release_sequence"])
+        require(key in pins, "unbound authored source policy")
+        item["authored_revision"] = pins[key]
+    return sources
+
+
+def expected_shard(sources: list[dict], shard: int) -> list[tuple[dict, str]]:
+    require(0 <= shard < SHARDS, "invalid catalog shard")
+    active = sorted((s for s in sources if s["distribution_status"] == "active"),
+                    key=lambda s: (s["distribution"], s["release_sequence"]))
+    require(len(active) == ACTIVE_RELEASES
+            and len(sources) == ACTIVE_RELEASES + 1
+            and len({(s["distribution"], s["release_sequence"]) for s in active}) == ACTIVE_RELEASES,
+            "active catalog count/identity changed; review coverage before test")
+    return [(s, scope) for i, s in enumerate(active) if i % SHARDS == shard for scope in SCOPES]
+
+
+def verify_shard(results: list[dict], sources: list[dict], shard: int) -> None:
+    expected = {(s["distribution"], s["release_sequence"], scope)
+                for s, scope in expected_shard(sources, shard)}
+    actual = [(r.get("distribution"), r.get("release_sequence"), r.get("scope"))
+              for r in results]
+    require(len(actual) == len(expected) and len(set(actual)) == len(actual)
+            and set(actual) == expected and all(
+                r.get("status") == "passed"
+                and type(r.get("snapshot_sequence")) is int
+                and r["snapshot_sequence"] > 0
+                and type(r.get("installed_dependency_count")) is int
+                and r["installed_dependency_count"] >= 1 for r in results),
+            "full signed saved shard coverage incomplete (skipped/refused is not PASS)")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-head", required=True)
+    parser.add_argument("--platform", required=True, choices=tuple(PLATFORMS))
+    parser.add_argument("--shard", type=int, required=True)
+    parser.add_argument("--cli", default="agentplugins")
+    parser.add_argument("--report", type=Path, required=True)
+    args = parser.parse_args()
+    require(SHA.fullmatch(args.source_head) is not None
+            and os.environ.get("GITHUB_ACTIONS") == "true"
+            and os.environ.get("GITHUB_REPOSITORY") == REPO
+            and os.environ.get("RUNNER_OS") == PLATFORMS[args.platform]
+            and bool(os.environ.get("RUNNER_TEMP")),
+            "real signed saved acceptance requires exact GitHub Actions checkout/OS")
+    require_exact_checkout(args.source_head)
+    binary = shutil.which(args.cli)
+    require(binary is not None, "released public CLI missing")
+    version = subprocess.run([binary, "version"], capture_output=True, text=True,
+                             timeout=30, check=True)
+    require(version.stdout.strip() == "agentplugins " + PUBLIC_CLI,
+            "released CLI differs from exact qualified public version")
+    sources = catalog_sources(args.source_head)
+    cases = expected_shard(sources, args.shard)
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    report = {"kind": "pi-signed-full-catalog-saved-production-e2e",
+              "source_head": args.source_head, "platform": args.platform,
+              "shard": args.shard, "cli_version": PUBLIC_CLI,
+              "signed_production_default": True, "synthetic_signed_feed": False,
+              "status": "failed", "cases": []}
+    try:
+        with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"], prefix="pi-signed-full-") as temp:
+            for item, scope in cases:
+                report["cases"].append(run_case(str(Path(binary).resolve()), Path(temp), item, scope))
+        verify_shard(report["cases"], sources, args.shard)
+        report["status"] = "passed"
+        return 0
+    except Exception as error:
+        report["failure_stage"] = error.stage if isinstance(error, StageFailure) else "catalog-lifecycle"
+        report["failure_kind"] = error.category if isinstance(error, StageFailure) else type(error).__name__
+        return 1
+    finally:
+        args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
