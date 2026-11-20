@@ -17,7 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from tests.test_catalog_publication_readiness import arguments, catalog, PROJECT_RELEASE_FIXTURE
+from tests.test_catalog_publication_readiness import arguments, catalog
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
 import catalog_publication_readiness as gate
@@ -33,7 +33,7 @@ class ProjectProfileInitializationTests(unittest.TestCase):
             path.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
             path.chmod(0o700)
         return SimpleNamespace(
-            binary=directory / "agentplugins", project_binary=directory / "agentplugins",
+            binary=directory / "agentplugins",
             codex=directory / "codex", claude=directory / "claude",
             copilot=directory / "copilot", opencode=directory / "opencode",
             inspector=None, npx=None)
@@ -528,14 +528,15 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                     self.assertEqual(attempted_reads, [])
                     self.assertEqual(len(calls), control)
 
-    def test_managed_project_add_keeps_initialized_profile_frozen(self):
+    def test_managed_project_add_keeps_user_durable_state_frozen(self):
+        # The released CLI records exact-project trust in native client
+        # profiles by design; UAP's own User durable state stays frozen.
         for mutation in (None, "new_file", "profile_bytes", "backup_bytes", "durable_state"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
                 args = self.tools(root)
                 case_root = root / "case"
-                release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-                release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
+                release = patch.dict(managed.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())})
                 calls = []
 
                 def child(argv, **kwargs):
@@ -568,9 +569,9 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                     return self.native_result(argv, stdout=json.dumps(
                         {"command": "add", "result": "success", "data": {}}))
 
-                with patch.object(project, "RELEASE", release), patch.object(gate, "child", side_effect=child):
+                with release, patch.object(gate, "child", side_effect=child):
                     case = project.expected(catalog(), gate.selected)
-                    message = ("Project operation changed User native or durable state" if mutation is not None
+                    message = ("Project operation changed User durable state" if mutation == "durable_state"
                                else "managed saved add incomplete")
                     with self.assertRaisesRegex(ValueError, message):
                         managed.run(args, case_root, case,
@@ -581,9 +582,7 @@ class ProjectProfileInitializationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             args = self.tools(root)
-            release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
             binary_digest = gate.digest(args.binary.read_bytes())
-            release["cli"]["binary_digest"] = binary_digest
             snapshot = catalog()
             invocation = arguments(snapshot)
             baseline = copy.deepcopy(snapshot)
@@ -615,10 +614,10 @@ class ProjectProfileInitializationTests(unittest.TestCase):
                     "--sandbox", str(sandbox), "--output", str(output)]
             for field in gate.CONTEXT_FIELDS:
                 argv.extend(["--" + field.replace("_", "-"), str(getattr(invocation, field))])
-            for field in ("binary", "project_binary", "codex", "claude", "copilot", "opencode"):
+            for field in ("binary", "codex", "claude", "copilot", "opencode"):
                 argv.extend(["--" + field.replace("_", "-"), str(getattr(args, field))])
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.object(project, "RELEASE", release), patch.dict(gate.CLI, {"binary_digest": binary_digest}):
+            with patch.dict(managed.CLI, {"binary_digest": binary_digest}), patch.dict(gate.CLI, {"binary_digest": binary_digest}):
                 expected = gate.expected_artifact(
                     snapshot, baseline, {"sequence": 13, "snapshot_digest": "sha256:" + "f" * 64},
                     gate.context(invocation, snapshot,

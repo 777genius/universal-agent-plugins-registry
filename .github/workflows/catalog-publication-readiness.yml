@@ -35,8 +35,8 @@ env:
   SIGNED_LEDGER_SHA: ${{ inputs.signed_ledger_sha }}
   MATERIALIZED_LEDGER_SHA: ${{ inputs.materialized_ledger_sha }}
   BASELINE_LEDGER_SHA: ${{ inputs.baseline_ledger_sha }}
-  AGENTPLUGINS_VERSION: "0.1.89"
-  AGENTPLUGINS_COMMIT: 36b2dd824d56523613b0c773ff89eb5107934584
+  AGENTPLUGINS_VERSION: "0.1.114"
+  AGENTPLUGINS_COMMIT: eb75218c574472169d37a898af65952080d15c99
   SOURCE_POLICY_AGENTPLUGINS_VERSION: "0.1.24"
   SOURCE_POLICY_AGENTPLUGINS_COMMIT: c78c79e44efd5ad07083d63436d9170b107df6cb
   CODEX_VERSION: "0.164.0"
@@ -70,22 +70,6 @@ jobs:
           test "$WORKFLOW_SHA" = "$GITHUB_SHA"
           test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/directory-publication.yml@refs/heads/main"
           case "$GITHUB_EVENT_NAME" in push|schedule|workflow_dispatch) ;; *) exit 1 ;; esac
-      - name: Require the reviewed six User and six Project CLI release identity
-        run: |
-          python3 - <<'PYPROJECT'
-          import os, sys
-          sys.path.insert(0, "scripts")
-          from catalog_project_readiness import reviewed_release
-          release = reviewed_release()  # Unset identity fails before any download.
-          cli = release["cli"]
-          values = {"PROJECT_CLI_VERSION": cli["version"], "PROJECT_CLI_TAG": cli["tag"],
-              "PROJECT_CLI_COMMIT": cli["commit"], "PROJECT_BINARY_SHA256": cli["binary_digest"].removeprefix("sha256:"),
-              "PROJECT_CHECKSUMS_SHA256": release["checksums_digest"].removeprefix("sha256:"),
-              "PROJECT_MANIFEST_SHA256": release["manifest_digest"].removeprefix("sha256:")}
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              for name, value in values.items():
-                  output.write(f"{name}={value}\n")
-          PYPROJECT
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.materialized_ledger_sha }}
@@ -166,9 +150,9 @@ jobs:
             --pattern checksums.txt --pattern release-manifest.json \
             --dir "$RUNNER_TEMP/release"
           cd "$RUNNER_TEMP/release"
-          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = 41bb941b8cd583588759748ad77d01f0a3ad015a779231ed1dd5e0c7f40a6134
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 24b4d4047396eb2dba0403198438c4d7db7920858efc0c6da24464e6c136d075
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 6fc4c8d232a75b9ba332f4237c51607f93bc0a310dcace027f43aa88782ccb49
+          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = 6994e4d79414c64439aa57acabf001621b2b01d6dfa37fd9d6801f72d3e0a3eb
+          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = be77f1b0998879dc728dceda1f0e9ebde9d22569964fa840d8b3b57caadb809c
+          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = 354b2527cc255209d93e1a9ede31412ee1789a83346b72f9ef97d84fee439ca7
           sha256sum --check checksums.txt --ignore-missing
           python3 - <<'PY'
           import hashlib, json, os
@@ -190,78 +174,6 @@ jobs:
               --source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners
           done
           chmod +x "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
-      - name: Download and authenticate the managed dependency CLI 0.1.91 before execution
-        env:
-          AGENTPLUGINS_VERSION: "0.1.91"
-          AGENTPLUGINS_COMMIT: 4555aa53844ee0078e9036cd82638afd67f77c16
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/release-managed"
-          gh release download "agentplugins-v${AGENTPLUGINS_VERSION}" \
-            --repo 777genius/universal-agent-plugins \
-            --pattern "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
-            --pattern checksums.txt --pattern release-manifest.json \
-            --dir "$RUNNER_TEMP/release-managed"
-          cd "$RUNNER_TEMP/release-managed"
-          test "$(sha256sum agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = 7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = 7988df7f3d87c2c7485f2ce84bb434fbefe1f0cf24ef60e99ae626245685ebad
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = de7c6ea83db79f091b722a589cc415b805a5b0819a84f9ed327476fb0cb4b937
-          sha256sum --check checksums.txt --ignore-missing
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          manifest = json.loads(Path("release-manifest.json").read_text())
-          asset = manifest["assets"]["linux-amd64"]
-          assert manifest["schema_version"] == 2
-          assert manifest["tag"] == f"agentplugins-v{os.environ['AGENTPLUGINS_VERSION']}"
-          assert manifest["version"] == os.environ["AGENTPLUGINS_VERSION"]
-          assert manifest["commit"] == os.environ["AGENTPLUGINS_COMMIT"]
-          assert asset["file"] == f"agentplugins_{os.environ['AGENTPLUGINS_VERSION']}_linux_amd64"
-          binary = Path(asset["file"])
-          assert asset["size"] == binary.stat().st_size
-          assert asset["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
-          PY
-          for asset in "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
-            gh attestation verify "$asset" --repo 777genius/universal-agent-plugins \
-              --signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml \
-              --source-digest "$AGENTPLUGINS_COMMIT" --deny-self-hosted-runners
-          done
-          chmod +x "agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64"
-      - name: Download and authenticate the reviewed User/Project CLI before execution
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/release-project"
-          gh release download "$PROJECT_CLI_TAG" \
-            --repo 777genius/universal-agent-plugins \
-            --pattern "agentplugins_${PROJECT_CLI_VERSION}_linux_amd64" \
-            --pattern checksums.txt --pattern release-manifest.json \
-            --dir "$RUNNER_TEMP/release-project"
-          cd "$RUNNER_TEMP/release-project"
-          test "$(sha256sum agentplugins_${PROJECT_CLI_VERSION}_linux_amd64 | cut -d ' ' -f 1)" = "$PROJECT_BINARY_SHA256"
-          test "$(sha256sum checksums.txt | cut -d ' ' -f 1)" = "$PROJECT_CHECKSUMS_SHA256"
-          test "$(sha256sum release-manifest.json | cut -d ' ' -f 1)" = "$PROJECT_MANIFEST_SHA256"
-          sha256sum --check checksums.txt --ignore-missing
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          manifest = json.loads(Path("release-manifest.json").read_text())
-          asset = manifest["assets"]["linux-amd64"]
-          assert manifest["schema_version"] == 2
-          assert manifest["tag"] == f"agentplugins-v{os.environ['PROJECT_CLI_VERSION']}"
-          assert manifest["version"] == os.environ["PROJECT_CLI_VERSION"]
-          assert manifest["commit"] == os.environ["PROJECT_CLI_COMMIT"]
-          assert asset["file"] == f"agentplugins_{os.environ['PROJECT_CLI_VERSION']}_linux_amd64"
-          binary = Path(asset["file"])
-          assert asset["size"] == binary.stat().st_size
-          assert asset["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
-          PY
-          for asset in "agentplugins_${PROJECT_CLI_VERSION}_linux_amd64" checksums.txt release-manifest.json; do
-            gh attestation verify "$asset" --repo 777genius/universal-agent-plugins \
-              --signer-workflow 777genius/universal-agent-plugins/.github/workflows/agentplugins-release.yml \
-              --source-digest "$PROJECT_CLI_COMMIT" --deny-self-hosted-runners
-          done
-          chmod +x "agentplugins_${PROJECT_CLI_VERSION}_linux_amd64"
       - name: Install exact public clients without account credentials
         env:
           TOOLS_ROOT: ${{ runner.temp }}/catalog-tools
@@ -364,8 +276,6 @@ jobs:
             --baseline-feed baseline/registry/schemas/1 \
             --directory-origin "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${MATERIALIZED_LEDGER_SHA}/registry/schemas/1/" \
             --binary "$RUNNER_TEMP/release/agentplugins_${AGENTPLUGINS_VERSION}_linux_amd64" \
-            --managed-binary "$RUNNER_TEMP/release-managed/agentplugins_0.1.91_linux_amd64" \
-            --project-binary "$RUNNER_TEMP/release-project/agentplugins_${PROJECT_CLI_VERSION}_linux_amd64" \
             --codex "$RUNNER_TEMP/catalog-tools/node_modules/.bin/codex" \
             --claude "$RUNNER_TEMP/catalog-tools/node_modules/.bin/claude" \
             --copilot "$RUNNER_TEMP/catalog-tools/node_modules/.bin/copilot" --npx "$(command -v npx)" \

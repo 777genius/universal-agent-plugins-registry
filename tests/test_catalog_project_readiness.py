@@ -14,134 +14,92 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from tests.test_catalog_publication_readiness import catalog, unsigned_source_catalog, arguments, PROJECT_RELEASE_FIXTURE, paired_arguments, ProofTime, load_historical_source, SIGNED46_FEED, SIGNED45_FEED
+from tests.test_catalog_publication_readiness import catalog, arguments, paired_arguments, ProofTime, SIGNED48_FEED, SIGNED49_FEED, SIGNED49_SNAPSHOT
 from tests import test_catalog_managed_readiness as managed_tests
 import catalog_managed_readiness as managed
 import catalog_project_readiness as project
 import catalog_publication_readiness as gate
 
 
-# Deliberately synthetic CLI identity used only by offline contract fixtures.
-RELEASE_FIXTURE = PROJECT_RELEASE_FIXTURE["cli"]
-
 class ProjectReadinessTests(unittest.TestCase):
     def setUp(self):
-        release = patch.object(project, "RELEASE", PROJECT_RELEASE_FIXTURE)
-        release.start()
-        self.addCleanup(release.stop)
         self.snapshot = catalog()
         self.case = project.expected(self.snapshot, gate.selected)
 
-    def test_paired_authority_rejects_closure_context_and_policy_substitutions(self):
+    def test_paired_current_case_is_bound_to_the_reviewed_source_and_policy(self):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {"UAP_ACTIVE_REPOSITORY": "777genius/universal-agent-plugins-registry"}), \
                 patch.object(gate, "datetime", ProofTime):
             args = paired_arguments(Path(temporary))
             snapshot, artifact = gate.canonical_inputs(args)
             case = artifact["project_dependencies"]
-            negative = load_historical_source(args, artifact["context"])
-            project.validate_refusal_pair(case, negative, gate.selected)
+            project.validate_source_anchor(case)
+            self.assertEqual(case["cli"], managed.CLI)
             for field in ("product_id", "distribution_id", "release_sequence", "package_version", "package_source", "tree_digest", "manifest_digest"):
                 changed = copy.deepcopy(case)
                 changed["closure"][0][field] = {**changed["closure"][0][field], "revision": "f" * 40} if field == "package_source" else 999 if field == "release_sequence" else "changed"
                 with self.subTest(field=field), self.assertRaises(ValueError):
-                    project.validate_refusal_pair(changed, negative, gate.selected)
-            for field in ("signed_ledger_sha", "materialized_ledger_sha", "snapshot_digest", "sequence", "directory_origin", "source_sha", "publication_id"):
-                changed = copy.deepcopy(negative)
-                changed[1][field] = 46 if field == "sequence" else "changed"
-                with self.subTest(field=field), self.assertRaises(ValueError):
-                    project.validate_refusal_pair(case, changed, gate.selected)
-            for mutation in ("authentication", "scopes", "floor", "dependency", "grant_mask"):
-                changed = copy.deepcopy(case)
-                root = changed["closure"][0]["policy"]
+                    project.validate_source_anchor(changed)
+            for mutation in ("authentication", "scopes", "floor", "grant_mask"):
+                changed = copy.deepcopy(snapshot)
+                root = next(item for item in changed["distributions"] if item["id"] == managed.ROOT)["release_policies"][0]
                 if mutation == "authentication":
                     root["targets"][0]["authentication"] = "not_required"
                 elif mutation == "scopes":
                     root["targets"][0]["scopes"] = ["project"]
                 elif mutation == "floor":
-                    root["minimum_installer_version"] = "0.1.104"
-                elif mutation == "dependency":
-                    changed["closure"][1]["policy"]["minimum_installer_version"] = "0.1.104"
+                    root["minimum_installer_version"] = "0.1.115"
                 else:
                     root["targets"] = [row for row in root["targets"] if row["client"] != "copilot"]
-                with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, "policy delta"):
-                    project.validate_refusal_pair(changed, negative, gate.selected)
-            with self.assertRaisesRegex(ValueError, "source grant changed"):
-                project.expected_user_refusal(case)
-            changed = copy.deepcopy(negative)
-            changed[0]["distributions"][0]["release_policies"][0]["minimum_installer_version"] = "0.1.999"
-            with self.assertRaisesRegex(ValueError, "snapshot changed"):
-                project.validate_refusal_pair(case, changed, gate.selected)
-            stale = copy.deepcopy(case)
-            stale["cli"] = gate.managed.CLI
-            with self.assertRaisesRegex(ValueError, "CLI differs"):
-                project.validate_refusal_pair(stale, negative, gate.selected)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    project.expected(changed, gate.selected)
 
-    def test_six_positive_user_six_positive_project_and_separate_vscode_refusal(self):
-        user = managed.expected(self.snapshot, gate.selected)
-        self.assertEqual(tuple(user["targets"]), managed.LEGACY_CLIENTS)
+    def test_six_positive_user_six_positive_project_and_saved_vscode_boundary(self):
         self.assertEqual(tuple(self.case["targets"]), managed.CLIENTS)
         self.assertEqual(self.case["placement_scope"], "project")
         self.assertEqual(self.case["signed_source_scope"], "user")
-        self.assertEqual(len(managed.coverage(user)), 20)
         self.assertEqual(len(project.source_coverage(self.case)), 24)
         release_user = managed.release_expected(self.snapshot, gate.selected)
-        refusal = project.expected_user_refusal(self.case)
         self.assertEqual(tuple(release_user["targets"]), managed.CLIENTS)
-        self.assertEqual(len(managed.coverage(release_user)), 24)
+        self.assertEqual(len(managed.coverage(release_user)), 25)
         self.assertEqual(release_user["cli"], self.case["cli"])
         self.assertEqual(release_user["closure"], self.case["closure"])
-        self.assertEqual(refusal["target"], "vscode")
-        self.assertEqual(refusal["outcome"], "refused")
-        self.assertNotIn("user_refusal", self.case)
-        self.assertNotIn("user_refusal", release_user)
+        self.assertEqual(project.current_boundary(self.case)["kind"], "prepared_target_saved_management")
+        saved = project.expected_user_saved_management(self.case, {"sequence": 20})
+        self.assertEqual((saved["target"], saved["outcome"]), ("vscode", "refused"))
         self.assertNotIn("native_plugin_listing", self.case["proof"])
         self.assertEqual(self.case["proof"]["account_runtime"], "not_tested")
+        self.assertIs(self.case["proof"]["user_durable_state_unchanged"], True)
+        self.assertEqual(self.case["proof"]["user_native_profiles_unchanged"], "not_claimed")
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
         gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot), project_case=self.case, release_user_case=release_user)
         self.assertEqual(len([(selection, client) for selection, clients in gate.plan(self.snapshot) for client in clients]), 380)
 
-    def test_historical_five_source_snapshot_has_no_project_case(self):
+    def test_missing_prepared_vscode_grant_has_no_current_boundary(self):
         prior = copy.deepcopy(self.snapshot)
         root = next(item for item in prior["distributions"] if item["id"] == managed.ROOT)
-        root["release_policies"][0]["targets"] = [target for target in root["release_policies"][0]["targets"] if target["client"] != "copilot"]
-        with patch.object(project, "RELEASE", None):
-            self.assertIsNone(project.expected(prior, gate.selected))
+        root["release_policies"][0]["targets"] = [target for target in root["release_policies"][0]["targets"] if target["client"] != "vscode"]
+        with self.assertRaisesRegex(ValueError, "unqualified managed target expansion"):
+            project.expected(prior, gate.selected)
+        with self.assertRaisesRegex(ValueError, "unqualified current VSCode boundary"):
+            project.current_boundary({**self.case, "closure": [
+                {**self.case["closure"][0], "policy": {**self.case["closure"][0]["policy"], "targets": [
+                    target for target in self.case["closure"][0]["policy"]["targets"] if target["client"] != "vscode"]}},
+                *self.case["closure"][1:]]})
 
-    def test_seven_grant_current_policy_requires_fixed_release_and_saved_boundary(self):
-        future = json.loads((SIGNED46_FEED / "snapshots/00000000000000000046.json").read_text())
-        with patch.object(project, "RELEASE", None):
-            for construct in (project.expected, managed.release_expected):
-                with self.assertRaisesRegex(ValueError, "identity is unset"):
-                    construct(future, gate.selected)
-        artifact = gate.expected_artifact(future, future, {"sequence": 19}, {"sequence": 20})
+    def test_current_policy_selects_the_saved_management_boundary(self):
+        current = json.loads(SIGNED49_SNAPSHOT.read_text())
+        artifact = gate.expected_artifact(current, current, {"sequence": 48}, {"sequence": 49})
         self.assertEqual(artifact["vscode_user_policy_boundary"]["kind"], "prepared_target_saved_management")
         self.assertIn("vscode_user_saved_management", artifact)
         self.assertNotIn("vscode_user_refusal", artifact)
         with self.assertRaises(TypeError):
-            project.expected(future, gate.selected, refusal_source=(self.snapshot, {}))
-
-    def test_release_authority_is_explicit_unset_and_has_exact_authenticated_assets(self):
-        with patch.object(project, "RELEASE", None), self.assertRaisesRegex(ValueError, "identity is unset"):
-            project.reviewed_release()
-        self.assertEqual(project.reviewed_release(), PROJECT_RELEASE_FIXTURE)
-        copied = project.reviewed_release()
-        copied["cli"]["version"] = "modified"
-        self.assertEqual(project.RELEASE, PROJECT_RELEASE_FIXTURE)
-        for mutation in (
-            lambda value: value.pop("checksums_digest"),
-            lambda value: value.update(manifest_digest="unverified"),
-            lambda value: value.update(download_url="https://example.invalid/cli"),
-        ):
-            value = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-            mutation(value)
-            with self.subTest(mutation=mutation), patch.object(project, "RELEASE", value), self.assertRaises(ValueError):
-                project.reviewed_release()
+            project.expected(current, gate.selected, refusal_source=(self.snapshot, {}))
         with self.assertRaises(TypeError):
-            gate.expected_artifact(self.snapshot, self.snapshot, {}, {}, project_cli=RELEASE_FIXTURE)
+            gate.expected_artifact(self.snapshot, self.snapshot, {}, {}, project_cli=managed.CLI)
 
-    def entrypoint_argv(self, root, mode, *, project_binary=True):
+    def entrypoint_argv(self, root, mode, *, binary=True):
         argv = [mode, "--feed", str(root / "feed"), "--baseline-feed", str(root / "baseline"),
                 "--trusted-keys", str(root / "keys.json")]
         for field, value in vars(arguments(self.snapshot)).items():
@@ -149,10 +107,10 @@ class ProjectReadinessTests(unittest.TestCase):
         if mode == "verify":
             argv.extend(["--artifact", str(root / "artifact.json")])
         else:
-            for name in ("binary", "managed-binary", "claude", "copilot", "opencode", "sandbox", "output"):
+            for name in ("claude", "copilot", "opencode", "sandbox", "output"):
                 argv.extend(["--" + name, str(root / name)])
-            if project_binary:
-                argv.extend(["--project-binary", str(root / "project-binary")])
+            if binary:
+                argv.extend(["--binary", str(root / "binary")])
         return argv
 
     def test_produce_and_verify_entrypoints_require_fixed_project_contract(self):
@@ -160,26 +118,25 @@ class ProjectReadinessTests(unittest.TestCase):
         ctx = {"sequence": 20, "snapshot_digest": "sha256:" + "e" * 64}
         baseline_identity = {"sequence": 19, "snapshot_digest": "sha256:" + "f" * 64}
         expected = gate.expected_artifact(self.snapshot, baseline, baseline_identity, ctx)
-        self.assertEqual(expected["project_dependencies"]["cli"], PROJECT_RELEASE_FIXTURE["cli"])
+        self.assertEqual(expected["project_dependencies"]["cli"], managed.CLI)
         for mode in ("produce", "verify"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 artifact = root / "artifact.json"
                 artifact.write_bytes(gate.publication.canonical_json(expected))
-                def invoke(*, unset=False, project_binary=True):
+                def invoke(*, binary=True):
                     with patch.object(gate, "load_feed", side_effect=((self.snapshot, ctx), (baseline, baseline_identity))), \
                             patch.object(gate, "context", return_value=ctx), \
                             patch.object(gate, "produce") as producer, \
-                            patch.object(project, "RELEASE", None if unset else PROJECT_RELEASE_FIXTURE), \
                             redirect_stderr(io.StringIO()):
-                        result = gate.main(self.entrypoint_argv(root, mode, project_binary=project_binary))
+                        result = gate.main(self.entrypoint_argv(root, mode, binary=binary))
                     return result, producer
                 result, producer = invoke()
                 self.assertEqual(result, 0)
                 if mode == "produce":
                     self.assertEqual(producer.call_args.args[2], expected)
-                    self.assertEqual(producer.call_args.args[0].project_binary, root / "project-binary")
-                    result, producer = invoke(project_binary=False)
+                    self.assertEqual(producer.call_args.args[0].binary, root / "binary")
+                    result, producer = invoke(binary=False)
                     self.assertEqual(result, 1)
                     producer.assert_not_called()
                 else:
@@ -193,15 +150,12 @@ class ProjectReadinessTests(unittest.TestCase):
                     artifact.write_bytes(gate.publication.canonical_json(forged))
                     self.assertEqual(invoke()[0], 1)
                     artifact.write_bytes(gate.publication.canonical_json(expected))
-                result, producer = invoke(unset=True)
-                self.assertEqual(result, 1)
-                producer.assert_not_called()
 
     def test_unreviewed_source_grants_floor_and_release_pin_refused(self):
         for mutate in (
             lambda root: root["release_policies"][0]["targets"].append({"client": "kiro", "scopes": ["user"], "authentication": "required", "delivery": "managed"}),
             lambda root: root["release_policies"][0]["targets"][0].update(scopes=["project"]),
-            lambda root: root["release_policies"][0].update(minimum_installer_version="0.1.90"),
+            lambda root: root["release_policies"][0].update(minimum_installer_version="0.1.115"),
             lambda root: root["releases"][0].update(package_version="0.1.1"),
         ):
             value = copy.deepcopy(self.snapshot)
@@ -209,17 +163,13 @@ class ProjectReadinessTests(unittest.TestCase):
             with self.subTest(mutate=mutate), self.assertRaises((ValueError, gate.registry.RegistryError)):
                 project.expected(value, gate.selected)
         for mutate in (
-            lambda cli: cli.update(version="0.1.102"),
-            lambda cli: cli.update(tag="main"),
-            lambda cli: cli.update(commit="main"),
-            lambda cli: cli.update(binary_digest="unverified"),
-            lambda cli: cli.update(download_url="https://example.invalid/cli"),
+            lambda cli: cli.update(version="0.1.104"),
+            lambda cli: cli.update(binary_digest="sha256:" + "0" * 64),
         ):
-            cli = copy.deepcopy(RELEASE_FIXTURE)
-            mutate(cli)
-            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
-                with patch.object(project, "RELEASE", {**PROJECT_RELEASE_FIXTURE, "cli": cli}):
-                    project.expected(self.snapshot, gate.selected)
+            case = copy.deepcopy(self.case)
+            mutate(case["cli"])
+            with self.subTest(mutate=mutate), self.assertRaisesRegex(ValueError, "released CLI differs"):
+                project.expected_user_saved_management(case, {})
 
     def test_canonical_artifact_rejects_missing_or_forged_project_case(self):
         expected = gate.expected_artifact(self.snapshot, self.snapshot, {"sequence": 19},
@@ -233,9 +183,10 @@ class ProjectReadinessTests(unittest.TestCase):
             lambda value: value["project_dependencies"]["targets"].append("kiro"),
             lambda value: value["project_dependencies"]["closure"][0].update(tree_digest="sha256:" + "0" * 64),
             lambda value: value["project_dependencies"]["closure"][0]["policy"]["targets"][0].update(scopes=["project"]),
-            lambda value: value["vscode_user_refusal"].update(outcome="passed"),
-            lambda value: value["vscode_user_refusal"].update(target="copilot"),
-            lambda value: value.pop("vscode_user_refusal"),
+            lambda value: value["vscode_user_saved_management"].update(outcome="passed"),
+            lambda value: value["vscode_user_saved_management"].update(target="copilot"),
+            lambda value: value.pop("vscode_user_saved_management"),
+            lambda value: value.update(vscode_user_refusal=copy.deepcopy(value["vscode_user_saved_management"])),
             lambda value: value.pop("release_user_dependencies"),
             lambda value: value["release_user_dependencies"]["targets"].remove("copilot"),
             lambda value: value["release_user_dependencies"]["cli"].update(binary_digest="sha256:" + "0" * 64),
@@ -244,7 +195,7 @@ class ProjectReadinessTests(unittest.TestCase):
             lambda value: value["release_user_dependencies"]["proof"].update(locked_restore="not_tested"),
             lambda value: value["release_user_dependencies"]["proof"].update(repair="not_tested"),
             lambda value: value["project_dependencies"]["proof"].update(native_project_cleanup="not_tested"),
-            lambda value: value["managed_dependencies"]["targets"].insert(2, "copilot"),
+            lambda value: value.update(managed_dependencies=copy.deepcopy(value["release_user_dependencies"])),
             lambda value: value["context"].update(sequence=21),
         ):
             value = copy.deepcopy(expected)
@@ -296,20 +247,26 @@ class ProjectReadinessTests(unittest.TestCase):
                 target = (workspace / project.SKILL_ROOTS[client] / selected["product_id"] if client == "claude"
                           else workspace / ".uap/managed" / client / selected["product_id"])
                 target.mkdir(parents=True)
+                objects = []
+                # The released Claude Project package is a local marketplace
+                # whose plugin root Claude Code caches for the project.
+                plugin = target / ".agentplugins-plugin"
                 if client == "claude":
                     manifest = {"name": selected["product_id"], "version": selected["package_version"]}
                     manifest["skills" if is_root else "mcpServers"] = "./.agentplugins-runtime/skills/" if is_root else "./.mcp.json"
                     (target / ".claude-plugin").mkdir()
-                    (target / ".claude-plugin/plugin.json").write_text(json.dumps(manifest))
-                objects = []
+                    (target / ".claude-plugin/marketplace.json").write_text(json.dumps({"plugins": [{"name": selected["product_id"]}]}))
+                    (plugin / ".claude-plugin").mkdir(parents=True)
+                    (plugin / ".claude-plugin/plugin.json").write_text(json.dumps(manifest))
+                    objects.append({"kind": "claude_project_plugin_cache", "logical_name": selected["product_id"], "path": str(plugin)})
                 if is_root:
-                    native = target / ".agentplugins-runtime/skills/campaign-planning" if client == "claude" else workspace / project.SKILL_ROOTS[client] / "campaign-planning"
+                    native = plugin / ".agentplugins-runtime/skills/campaign-planning" if client == "claude" else workspace / project.SKILL_ROOTS[client] / "campaign-planning"
                     native.mkdir(parents=True)
                     (native / "SKILL.md").write_text("immutable Skill bytes\n")
                     if client != "claude":
                         objects.append({"kind": client + "_project_skill_directory", "logical_name": "campaign-planning", "path": str(native)})
                 elif client == "claude":
-                    (target / ".mcp.json").write_text(json.dumps(servers))
+                    (plugin / ".mcp.json").write_text(json.dumps(servers))
                 else:
                     path = workspace / project.MCP_PATHS[client]
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -330,7 +287,7 @@ class ProjectReadinessTests(unittest.TestCase):
         return workspace, store, installations
 
     def test_actual_project_resource_proof_rejects_missing_receipts_paths_and_bytes(self):
-        for mutation in ("none", "skill_bytes", "missing_member", "wrong_scope", "wrong_path", "wrong_endpoint", "missing_receipt", "user_listing", "missing_surfaces", "sibling_surface", "missing_claude_reference", "wrong_claude_version"):
+        for mutation in ("none", "skill_bytes", "missing_member", "wrong_scope", "wrong_path", "wrong_endpoint", "missing_receipt", "user_listing", "missing_surfaces", "sibling_surface", "missing_claude_reference", "wrong_claude_version", "missing_claude_cache_receipt", "missing_claude_marketplace"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 workspace, store, installations = self.fixture(Path(temporary))
                 binding = installations[managed.ROOT]["clients"]["copilot"]
@@ -353,8 +310,12 @@ class ProjectReadinessTests(unittest.TestCase):
                     binding.pop("affected_surfaces")
                 elif mutation == "sibling_surface":
                     binding["affected_surfaces"].append("kiro")
+                elif mutation == "missing_claude_cache_receipt":
+                    installations[managed.ROOT]["clients"]["claude"]["native_objects"] = []
+                elif mutation == "missing_claude_marketplace":
+                    (Path(installations[managed.ROOT]["clients"]["claude"]["target_locator"]) / ".claude-plugin/marketplace.json").unlink()
                 elif mutation in ("missing_claude_reference", "wrong_claude_version"):
-                    manifest = Path(installations[managed.ROOT]["clients"]["claude"]["target_locator"]) / ".claude-plugin/plugin.json"
+                    manifest = Path(installations[managed.ROOT]["clients"]["claude"]["target_locator"]) / ".agentplugins-plugin/.claude-plugin/plugin.json"
                     value = json.loads(manifest.read_text())
                     if mutation == "missing_claude_reference":
                         value.pop("skills")
@@ -462,68 +423,6 @@ class ProjectReadinessTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     project.validate_server(entry, source, package, cli_digest="sha256:" + "0" * 64, project_root=root, data_root=root / ".uap/plugin-data/backend")
 
-    def test_user_refusal_requires_reason_nonzero_and_zero_native_portable_state_mutation(self):
-        for behavior in ("refused", "directory_cache", "success", "unrelated_error", "native_mutation", "portable_mutation", "durable_mutation", "journal_mutation", "unrelated_mention", "cache_wrong_sequence", "warm_wrong_digest", "warm_no_cache", "stdout_space", "stdout_lf", "padded_prefix", "padded_suffix", "truncated", "extra_lf", "missing_lf", "warm_stderr_space"):
-            with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                tools = root / "tools"
-                tools.mkdir()
-                args = argparse.Namespace(binary=tools / "agentplugins", project_binary=tools / "agentplugins",
-                                          claude=tools / "claude", copilot=tools / "copilot", codex=tools / "codex",
-                                          opencode=tools / "opencode", inspector=None, npx=None)
-                for tool in tools.iterdir():
-                    self.fail("fresh tools directory was not empty")
-                for name in ("agentplugins", "claude", "copilot", "codex", "opencode"):
-                    tool = tools / name
-                    tool.write_text("#!/bin/sh\nexit 1\n")
-                    tool.chmod(0o700)
-                fixture = Path(__file__).parent / "fixtures/directory-publication"
-                args.trusted_keys = fixture / "trusted-keys.json"
-                snapshot_bytes = (fixture / "snapshot.json").read_bytes()
-                ctx = {"directory_origin": "https://example.invalid/exact-ledger/", "sequence": 15, "snapshot_digest": gate.digest(snapshot_bytes)}
-                case = project.expected_user_refusal(self.case)
-                case["cli"]["binary_digest"] = gate.digest(args.binary.read_bytes())
-                def invoke(argv, **kwargs):
-                    profile = Path(kwargs["env"]["AGENTPLUGINS_HOME"])
-                    def write_cache(sequence=15):
-                        cache = profile / "directory-v1-cache.json"
-                        cache.write_text(json.dumps({"schema_version": 1, "sequence": sequence, "snapshot": base64.b64encode(snapshot_bytes).decode(), "envelope": base64.b64encode((fixture / "envelope-current.json").read_bytes()).decode()}))
-                        cache.chmod(0o600)
-                    if argv[1] == "info":
-                        self.assertEqual(argv[1:], ["info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"])
-                        if behavior != "warm_no_cache":
-                            write_cache()
-                        return SimpleNamespace(returncode=0, stderr=" " if behavior == "warm_stderr_space" else "", stdout=json.dumps({"command": "info", "result": "success", "data": {"snapshot_sequence": 15, "snapshot_digest": "wrong" if behavior == "warm_wrong_digest" else ctx["snapshot_digest"]}}))
-                    self.assertEqual(argv[1:], ["add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"])
-                    if behavior in ("directory_cache", "cache_wrong_sequence"):
-                        cache = profile / "directory-v1-cache.json"
-                        cache.write_text(json.dumps({"schema_version": 1, "sequence": 14 if behavior == "cache_wrong_sequence" else 15, "snapshot": base64.b64encode(snapshot_bytes).decode(), "envelope": base64.b64encode((fixture / "envelope-current.json").read_bytes()).decode()}))
-                        cache.chmod(0o600)
-                    elif behavior == "native_mutation":
-                        (Path(kwargs["env"]["HOME"]) / ".copilot/mcp-config.json").write_text("{}")
-                    elif behavior == "portable_mutation":
-                        (kwargs["cwd"] / "uap.toml").write_text("changed")
-                    elif behavior == "durable_mutation":
-                        (profile / "state-v2.json").write_text("{}")
-                    elif behavior == "journal_mutation":
-                        (profile / "operations-v2").mkdir()
-                        (profile / "operations-v2/open.json").write_text("{}")
-                    stderr = ('Resolving and validating one Agent Plugin package for every selected target...\n'
-                              'agentplugins: no eligible directory release for "marketing-kit": '
-                              '777genius/marketing-kit: release does not support complete target set; missing vscode\n')
-                    stderr = {"unrelated_error": "network timeout", "unrelated_mention": "network timeout; source log mentioned missing vscode",
-                              "padded_prefix": " " + stderr, "padded_suffix": stderr + " ", "truncated": stderr.split("\n", 1)[1],
-                              "extra_lf": stderr + "\n", "missing_lf": stderr[:-1]}.get(behavior, stderr)
-                    return SimpleNamespace(returncode=0 if behavior == "success" else 1,
-                                           stdout=" " if behavior == "stdout_space" else "\n" if behavior == "stdout_lf" else "", stderr=stderr)
-                with patch.object(gate, "canonical_inputs", return_value=(None, {"vscode_user_refusal": case, "context": ctx})), \
-                        patch.object(gate, "child", side_effect=invoke):
-                    if behavior in ("refused", "directory_cache"):
-                        project.run_user_refusal(args, root / "case", case, ctx)
-                    else:
-                        with self.assertRaises(ValueError):
-                            project.run_user_refusal(args, root / "case", case, ctx)
-
 
 class SavedManagementBoundaryTests(unittest.TestCase):
     def setUp(self):
@@ -534,13 +433,11 @@ class SavedManagementBoundaryTests(unittest.TestCase):
 
     def fixture(self, root):
         args = paired_arguments(root)
-        for name in ("binary", "project_binary", "claude", "copilot", "codex", "opencode", "npx"):
+        for name in ("binary", "claude", "copilot", "codex", "opencode", "npx"):
             path = getattr(args, name)
             path.write_text("#!/bin/sh\nexit 1\n")
             path.chmod(0o700)
-        release = copy.deepcopy(PROJECT_RELEASE_FIXTURE)
-        release["cli"]["binary_digest"] = gate.digest(args.project_binary.read_bytes())
-        return args, release
+        return args, patch.dict(managed.CLI, {"binary_digest": gate.digest(args.binary.read_bytes())})
 
     def invoke_fixture(self, args, artifact, behavior, calls):
         case = artifact["vscode_user_saved_management"]
@@ -554,7 +451,7 @@ class SavedManagementBoundaryTests(unittest.TestCase):
             if argv[1] == "info":
                 self.assertEqual(argv[3:], ["--target", "vscode", "--scope", "user", "--format", "json"])
                 selected = selections[argv[2]]
-                feed, sequence = (SIGNED45_FEED, 45) if behavior == "cache45" else (SIGNED46_FEED, 46)
+                feed, sequence = (SIGNED48_FEED, 48) if behavior == "cache48" else (SIGNED49_FEED, 49)
                 body = (feed / f"snapshots/{sequence:020d}.json").read_bytes()
                 envelope = (feed / f"snapshots/{sequence:020d}.envelope.json").read_bytes()
                 if behavior != "no_cache":
@@ -564,7 +461,7 @@ class SavedManagementBoundaryTests(unittest.TestCase):
                     cache.chmod(0o600)
                 targets = [{"client": "vscode", "scopes": ["user"], "delivery": "managed" if behavior == "managed_policy" else "prepared"}]
                 data = {"product_id": selected["product_id"], "selected_distribution": selected["distribution_id"],
-                        "snapshot_sequence": 45 if behavior == "warm45" else ctx["sequence"],
+                        "snapshot_sequence": 48 if behavior == "warm48" else ctx["sequence"],
                         "snapshot_digest": "wrong" if behavior == "wrong_digest" else ctx["snapshot_digest"],
                         "target_compatibility": targets,
                         "selected_release": {"id": selected["distribution_id"], "release_sequence": selected["release_sequence"],
@@ -618,7 +515,7 @@ class SavedManagementBoundaryTests(unittest.TestCase):
         return invoke
 
     def test_current_policy_capability_boundary_is_raw_exact_and_read_only(self):
-        warm_failures = ("warm45", "wrong_digest", "cache45", "no_cache", "managed_policy", "wrong_source", "wrong_product",
+        warm_failures = ("warm48", "wrong_digest", "cache48", "no_cache", "managed_policy", "wrong_source", "wrong_product",
                          "wrong_distribution", "wrong_release", "malformed_targets", "warm_mutation", "warm_stderr",
                          "bool_sequence", "bool_release", "inactive_release", "warm_raise", "bad_warm_and_mutation", "warm_bool_return")
         failures = (*warm_failures, "success", "stdout_space", "stdout_lf", "padded_prefix", "padded_suffix", "missing_lf", "extra_lf",
@@ -627,7 +524,7 @@ class SavedManagementBoundaryTests(unittest.TestCase):
             with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args, release = self.fixture(root)
-                with patch.object(project, "RELEASE", release):
+                with release:
                     _, artifact = gate.canonical_inputs(args)
                     calls = []
                     with patch.object(gate, "child", side_effect=self.invoke_fixture(args, artifact, behavior, calls)), \
@@ -649,14 +546,14 @@ class SavedManagementBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args, release = self.fixture(root)
-            with patch.object(project, "RELEASE", release):
+            with release:
                 _, artifact = gate.canonical_inputs(args)
                 case, ctx, source = artifact["vscode_user_saved_management"], artifact["context"], artifact["project_dependencies"]
-                historical_ctx = load_historical_source(args, ctx)[1]
+                foreign_ctx = {**ctx, "sequence": 48, "snapshot_digest": "sha256:" + "f" * 64}
                 mutations = (
-                    (case, historical_ctx, source),
-                    ({**case, "context": historical_ctx}, ctx, source),
-                    ({**case, "cli": managed.CLI}, ctx, source),
+                    (case, foreign_ctx, source),
+                    ({**case, "context": foreign_ctx}, ctx, source),
+                    ({**case, "cli": {**case["cli"], "version": "0.1.104"}}, ctx, source),
                     ({**case, "reason": "missing_vscode_signed_target_grant"}, ctx, source),
                     ({**case, "prepared_native_absence": "passed"}, ctx, source),
                     (case, ctx, {**source, "closure": source["closure"][:-1]}),
@@ -667,8 +564,6 @@ class SavedManagementBoundaryTests(unittest.TestCase):
                             project.run_user_saved_management(args, root / "not-created", changed_case, changed_ctx, changed_source)
                         self.assertFalse((root / "not-created").exists())
                     child.assert_not_called()
-                prior, _ = load_historical_source(args, ctx)
-                self.assertIsNone(project.expected_user_saved_management(project.expected(prior, gate.selected), historical_ctx))
 
 
 if __name__ == "__main__":

@@ -275,8 +275,12 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def snapshot_roots(roots: dict[str, Path]) -> str:
-    """Hash topology, modes, symlink targets, and file bytes without mtimes."""
+def snapshot_roots(roots: dict[str, Path], *, ignore: tuple[str, ...] = ()) -> str:
+    """Hash topology, modes, symlink targets, and file bytes without mtimes.
+
+    ``ignore`` names exact ``label/relative`` subtrees owned by a native
+    client's own runtime cache; everything else is still hashed.
+    """
     digest = hashlib.sha256()
     for label, root in sorted(roots.items()):
         if not root.is_dir() or root.is_symlink():
@@ -284,6 +288,8 @@ def snapshot_roots(roots: dict[str, Path]) -> str:
         paths = [root, *sorted(root.rglob("*"), key=lambda value: value.as_posix())]
         for path in paths:
             relative = "." if path == root else path.relative_to(root).as_posix()
+            if any(f"{label}/{relative}" == item or f"{label}/{relative}".startswith(item + "/") for item in ignore):
+                continue
             info = path.lstat()
             mode = stat.S_IMODE(info.st_mode)
             if stat.S_ISREG(info.st_mode):

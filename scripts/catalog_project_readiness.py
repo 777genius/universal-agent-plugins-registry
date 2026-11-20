@@ -1,7 +1,7 @@
 """Marketing Kit Project placement from signed v1 User-qualified sources.
 
-This module owns the fixed reviewed User/Project release identity. It never accepts
-a caller-selected installer identity, downloads an unpinned installer or grants a target.
+It uses the one pinned released CLI identity (catalog_managed_readiness.CLI). It
+never accepts a caller-selected installer identity or grants a target.
 Project native configuration is evidence of installed resources, not a claim
 about account authentication, trust approval or successful MCP execution.
 """
@@ -16,28 +16,6 @@ import tomllib
 import catalog_managed_readiness as managed
 
 require = managed.require
-# Immutable public release and asset digests reviewed for the six-client
-# User/Project qualification. No development or caller-selected pin.
-RELEASE = {
-    "cli": {
-        "version": "0.1.104",
-        "tag": "agentplugins-v0.1.104",
-        "commit": "79db603603235e5b8fe2b79b07fab6832256dc3a",
-        "binary_digest": "sha256:043c3f2d66a578239204f3bebaaf4d7eaab1a70b8f0be08f4e2cda03e8443e01",
-    },
-    "checksums_digest": "sha256:63aaff2c7a0347402b6246712b75c8875f5239491b9369d5f03f9732e32beb3f",
-    "manifest_digest": "sha256:3284ce5edcba9a919f9e64813a1e136beeedace3ed4533dd2485937c8c419071",
-}
-# Historical point-in-time evidence identity; never a recurring runtime feed.
-# Grants are read only from authenticated feed data.
-# The materialized commit has the signed commit as its direct parent, and both
-# contain the same immutable snapshot/envelope bytes.
-REFUSAL_SOURCE = {
-    "signed_ledger_sha": "3f9c30e8b76a51ae3a83f3232cbbb0129fecd468",
-    "materialized_ledger_sha": "3509baaac8e4f7ee3d565440f8c0d0bd1f928fba",
-    "sequence": 45,
-    "snapshot_digest": "sha256:2aba9b0d97556ac0756dff5f974aa7377914e0d8d1d9b735b46c5bc804b81f50",
-}
 # Reviewed nonexpiring package facts from the independently authenticated signed45
 # closure (also unchanged in signed46). These are not target grants or a feed:
 # every runtime authorization, signature, expiry and floor remains current.
@@ -104,32 +82,6 @@ MCP_PATHS = {"codex": ".codex/config.toml", "cursor": ".cursor/mcp.json",
              "gemini": ".gemini/settings.json", "opencode": "opencode.json"}
 
 
-def validate_cli(cli):
-    require(isinstance(cli, dict) and set(cli) == {"version", "tag", "commit", "binary_digest"},
-            "Project CLI identity fields")
-    require(isinstance(cli["version"], str) and re.fullmatch(r"0\.1\.[0-9]+", cli["version"])
-            and int(cli["version"].rsplit(".", 1)[1]) >= 103,
-            "Project requires a corrected released CLI")
-    require(cli["tag"] == "agentplugins-v" + cli["version"]
-            and isinstance(cli["commit"], str) and re.fullmatch(r"[0-9a-f]{40}", cli["commit"])
-            and isinstance(cli["binary_digest"], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", cli["binary_digest"]),
-            "Project released CLI identity")
-
-
-def reviewed_release():
-    require(RELEASE is not None, "reviewed Project CLI release identity is unset")
-    require(isinstance(RELEASE, dict) and set(RELEASE) == {"cli", "checksums_digest", "manifest_digest"},
-            "Project release identity fields")
-    validate_cli(RELEASE["cli"])
-    require(all(isinstance(RELEASE[key], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", RELEASE[key])
-                for key in ("checksums_digest", "manifest_digest")), "Project release asset digests")
-    return copy.deepcopy(RELEASE)
-
-
-def refusal_source_identity():
-    return copy.deepcopy(REFUSAL_SOURCE)
-
-
 def validate_source_anchor(case):
     import catalog_publication_readiness as gate
     require(gate.publication.canonical_json(managed.immutable_closure(case)) ==
@@ -139,39 +91,9 @@ def validate_source_anchor(case):
 def current_boundary(case):
     """A closed oracle choice from the authenticated, already validated policy."""
     root = next(item for item in case["closure"] if item["distribution_id"] == managed.ROOT)
-    clients = tuple(target["client"] for target in root["policy"]["targets"])
-    require(clients in (CLIENTS, managed.COPILOT_AUTHORIZED_CLIENTS), "unqualified current VSCode boundary")
+    require("vscode" in {target["client"] for target in root["policy"]["targets"]}, "unqualified current VSCode boundary")
     return {"source": "current_authenticated_feed", "target": "vscode", "placement_scope": "user",
-            "kind": "missing_signed_target" if clients == CLIENTS else "prepared_target_saved_management"}
-
-
-def validate_refusal_context(ctx):
-    import catalog_publication_readiness as gate
-    require(isinstance(ctx, dict) and set(ctx) == set(gate.CONTEXT_FIELDS), "refusal context fields")
-    require(all(ctx.get(key) == value for key, value in REFUSAL_SOURCE.items()), "refusal source identity changed")
-    expected_origin = f"https://raw.githubusercontent.com/{gate.active_registry_repository()}/{REFUSAL_SOURCE['materialized_ledger_sha']}/registry/schemas/1/"
-    require(ctx.get("directory_origin") == expected_origin, "refusal origin changed")
-
-
-def validate_refusal_pair(case, refusal_source, select):
-    """Historical point-in-time comparison; never a recurring authorization input."""
-    import argparse
-    import catalog_publication_readiness as gate
-    require(isinstance(refusal_source, tuple) and len(refusal_source) == 2, "fixed refusal source required")
-    snapshot, ctx = refusal_source
-    validate_refusal_context(ctx)
-    identity = {"sequence": snapshot["sequence"], "snapshot_digest": gate.digest(gate.publication.canonical_json(snapshot))}
-    require(identity == {key: REFUSAL_SOURCE[key] for key in ("sequence", "snapshot_digest")}, "refusal snapshot changed")
-    gate.context(argparse.Namespace(**ctx), snapshot, identity)
-    negative = expected(snapshot, select)
-    require(negative is not None and negative["cli"] == case["cli"], "refusal released CLI differs")
-    require(managed.immutable_closure(case) == managed.immutable_closure(negative), "positive/refusal immutable closure differs")
-    for positive, prior in zip(case["closure"], negative["closure"]):
-        policy = copy.deepcopy(positive["policy"])
-        if positive["distribution_id"] == managed.ROOT:
-            policy["targets"] = [target for target in policy["targets"] if target["client"] != "vscode"]
-        require(policy == prior["policy"], "positive/refusal policy delta exceeds prepared VSCode grant")
-    return negative
+            "kind": "prepared_target_saved_management"}
 
 
 def expected(snapshot, select):
@@ -179,12 +101,7 @@ def expected(snapshot, select):
     base = managed.expected(snapshot, select)
     if base is None:
         return None
-    root = base["closure"][0]
-    source_clients = tuple(target["client"] for target in root["policy"]["targets"])
-    if source_clients == managed.LEGACY_CLIENTS:
-        return None
-    require(source_clients in (CLIENTS, managed.COPILOT_AUTHORIZED_CLIENTS), "unqualified Project source targets")
-    cli = reviewed_release()["cli"]
+    cli = managed.CLI
     closure = [select(snapshot, selector, CLIENTS, cli=cli) for selector in managed.PINS]
     require(all(item["package_version"] == managed.PINS[item["selector"]] for item in closure),
             "Project immutable closure changed")
@@ -200,7 +117,7 @@ def expected(snapshot, select):
     proof.pop("native_plugin_listing")
     proof.update(native_project_resources={client: "passed_exact_resources" for client in CLIENTS},
                  repeat_add="passed_no_change", repair="passed_same_signed_identity",
-                 user_native_and_durable_state_unchanged=True,
+                 user_durable_state_unchanged=True, user_native_profiles_unchanged="not_claimed",
                  claude_profile_setup="native_first_start_then_fixed_unchanged_control_before_uap",
                  native_client_discovery="not_qualified_by_this_case", client_tools_call="not_tested",
                  native_project_cleanup="passed_exact_absence")
@@ -220,32 +137,12 @@ def expected(snapshot, select):
     return case
 
 
-def expected_user_refusal(case, *, context=None):
-    """A separate explicit VSCode request cannot borrow Copilot's source grant."""
-    if case is None:
-        return None
-    require(all("vscode" not in {target["client"] for target in item["policy"]["targets"]}
-                for item in case["closure"] if item["distribution_id"] == managed.ROOT), "VSCode refusal source grant changed")
-    result = {"cli": copy.deepcopy(case["cli"]), "root": managed.ROOT,
-            "target": "vscode", "placement_scope": "user", "outcome": "refused",
-            "reason": "missing_vscode_signed_target_grant",
-            "native_and_portable_state_unchanged": True,
-            "authenticated_directory_cache": "warmed_unchanged"}
-    if context is not None:
-        validate_refusal_context(context)
-        result["context"] = copy.deepcopy(context)
-    return result
-
-
-
 def expected_user_saved_management(case, ctx):
     """Current signed preparation grant does not grant saved-target capability."""
     if case is None:
         return None
-    root = next(item for item in case["closure"] if item["distribution_id"] == managed.ROOT)
-    if tuple(target["client"] for target in root["policy"]["targets"]) != managed.COPILOT_AUTHORIZED_CLIENTS:
-        return None
-    require(case["cli"] == reviewed_release()["cli"], "saved-management corrected CLI differs")
+    current_boundary(case)
+    require(case["cli"] == managed.CLI, "saved-management released CLI differs")
     return {"cli": copy.deepcopy(case["cli"]), "context": copy.deepcopy(ctx),
             "root": managed.ROOT, "target": "vscode", "placement_scope": "user",
             "signed_delivery": "prepared", "outcome": "refused",
@@ -359,6 +256,15 @@ def validate_native_resources(installations, case, project, store):
             data_root = project / ".uap/plugin-data" / backend
             if client == "claude":
                 require(target.parent == project / SKILL_ROOTS[client], "Claude Project package path")
+                # The owned package is a local Claude marketplace; Claude Code
+                # installs the plugin below it into its own project cache.
+                plugin_root = target / ".agentplugins-plugin"
+                caches = [item for item in binding.get("native_objects", []) if item.get("kind") == "claude_project_plugin_cache"]
+                require(len(caches) == 1 and caches[0].get("path") == str(plugin_root) and plugin_root.is_dir(),
+                        "Claude Project plugin cache receipt changed")
+                confined(target / ".claude-plugin/marketplace.json", project)
+                require((target / ".claude-plugin/marketplace.json").is_file(), "Claude Project marketplace missing")
+                target = plugin_root
                 manifest_path = target / ".claude-plugin/plugin.json"
                 confined(manifest_path, project)
                 manifest = gate.read_json(manifest_path)
@@ -414,7 +320,9 @@ def validate_native_cleanup(installations, project):
                     continue
                 path = Path(item.get("path", ""))
                 confined(path, project)
-                if "skill" in item.get("kind", ""):
+                if item.get("kind") == "claude_project_plugin_cache":
+                    require(not path.exists(), "Claude Project plugin cache remains")
+                elif "skill" in item.get("kind", ""):
                     require(not path.exists(), "Project native Skill remains")
                 elif "mcp" in item.get("kind", ""):
                     paths = (project / ".github/mcp.json", project / ".mcp.json") if client == "copilot" else (path,)
@@ -435,7 +343,13 @@ def user_paths(roots):
 
 
 def validate_user_isolation(before, roots):
-    require(managed.snapshot_paths(user_paths(roots)) == before, "Project operation changed User native or durable state")
+    # The released CLI places Project resources through the clients' native
+    # project flows. By design they record exact-project trust and native caches
+    # in the selected client profiles under HOME, so the proof freezes UAP's own
+    # User-scope durable state and XDG configuration, not native profiles.
+    frozen = {key: path for key, path in user_paths(roots).items() if key != "home"}
+    require(managed.snapshot_paths(frozen) == {key: before[key] for key in frozen},
+            "Project operation changed User durable state")
 
 
 def initialize_user_profile(args, root, roots, env, readonly):
@@ -601,61 +515,6 @@ def validate_operation(value, aliases, clients, *, operation, expected_scope, in
                     "Project operation changed installation identity")
 
 
-def run_user_refusal(args, root, case, ctx):
-    import catalog_publication_readiness as gate
-    require(case["outcome"] == "refused", "VSCode User refusal mislabeled as success")
-    if "context" not in case:
-        _, canonical = gate.canonical_inputs(args)
-        require("vscode_user_refusal" in canonical, "current signed-refusal contract missing")
-        gate.validate_artifact(case, canonical["vscode_user_refusal"])
-        gate.validate_artifact(ctx, canonical["context"])
-    else:
-        # Explicit historical audit calls still authenticate the original feed
-        # with normal expiry. An archived context is not runtime permission.
-        historical, historical_ctx = gate.load_refusal_source(args, ctx)
-        gate.validate_artifact(ctx, historical_ctx)
-        historical_case = expected(historical, gate.selected)
-        gate.validate_artifact(case, expected_user_refusal(historical_case, context=historical_ctx))
-    binary = args.project_binary.resolve(strict=True)
-    require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong Project released binary")
-    root.mkdir(mode=0o700)
-    roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.codex, args.claude, args.copilot, args.opencode))
-    managed.seed_runtime(root / "bin", env, args.codex)
-    initial = refusal_snapshot(roots)
-    readonly = (*gate.tool_paths(args), binary.parent)
-    before = None
-    try:
-        args.failure_phase = "vscode:warm_directory"
-        warmed = gate.child([str(binary), "info", "marketing-kit", "--target", "codex", "--scope", "user", "--format", "json"],
-                            root=root, readonly=readonly, env=env, cwd=roots["workspace"], timeout=600)
-        require(type(warmed.returncode) is int and warmed.returncode == 0 and warmed.stderr == "", "VSCode refusal Directory warmup failed")
-        info = gate.publication.parse_json_bytes(warmed.stdout.encode(), "Directory warmup", max_bytes=gate.LIMIT)
-        require(isinstance(info, dict) and info.get("command") == "info" and info.get("result") == "success"
-                and info.get("data", {}).get("snapshot_sequence") == ctx["sequence"]
-                and info["data"].get("snapshot_digest") == ctx["snapshot_digest"], "VSCode refusal warmed wrong signed publication")
-        validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=True)
-        require(refusal_snapshot(roots) == initial, "Directory warmup changed non-cache state")
-        before = managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")})
-        args.failure_phase = "vscode:user_refusal"
-        result = gate.child([str(binary), "add", "marketing-kit", "--target", "vscode", "--scope", "user", "--no-save", "--yes", "--format", "json"],
-                            root=root, readonly=(*gate.tool_paths(args), binary.parent), env=env,
-                            cwd=roots["workspace"], timeout=600)
-        reason = ('Resolving and validating one Agent Plugin package for every selected target...\n'
-                  'agentplugins: no eligible directory release for "marketing-kit": '
-                  '777genius/marketing-kit: release does not support complete target set; missing vscode')
-        # The genuine Linux CLI emits these two complete lines and one terminal LF.
-        # Whitespace, padding or another diagnostic must not count as signed refusal.
-        require(type(result.returncode) is int and result.returncode == 1 and result.stdout == "" and result.stderr == reason + "\n",
-                "VSCode User did not receive exact signed-target refusal")
-    finally:
-        try:
-            require((refusal_snapshot(roots) == initial) if before is None else
-                    managed.snapshot_paths({name: roots[name] for name in ("home", "config", "workspace", "state")}) == before,
-                    "VSCode User refusal mutated native, portable or durable state")
-        finally:
-            validate_directory_cache(roots["state"] / "directory-v1-cache.json", args.trusted_keys, ctx, required=before is not None)
-
-
 def run_user_saved_management(args, root, case, ctx, source_case):
     """Probe only the explicit saved route; no standalone Editor lifecycle claim."""
     import catalog_publication_readiness as gate
@@ -666,7 +525,7 @@ def run_user_saved_management(args, root, case, ctx, source_case):
     gate.validate_artifact(case, canonical["vscode_user_saved_management"])
     gate.validate_artifact(ctx, canonical["context"])
     gate.validate_artifact(source_case, canonical["project_dependencies"])
-    binary = args.project_binary.resolve(strict=True)
+    binary = args.binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong saved-management released binary")
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (args.codex, args.claude, args.copilot, args.opencode))
