@@ -372,6 +372,7 @@ def run_case(cli: str, scratch: Path, source: dict, scope: str) -> dict:
                     "unowned profile content was modified")
     return {"distribution": label, "release_sequence": source["release_sequence"],
             "scope": scope, "status": "passed", "snapshot_sequence": policy["snapshot"][0],
+            "snapshot_digest": policy["snapshot"][1],
             "installed_dependency_count": len(original[1])}
 
 
@@ -417,6 +418,7 @@ def verify_shard(results: list[dict], sources: list[dict], shard: int) -> None:
                 r.get("status") == "passed"
                 and type(r.get("snapshot_sequence")) is int
                 and r["snapshot_sequence"] > 0
+                and digest(r.get("snapshot_digest"))
                 and type(r.get("installed_dependency_count")) is int
                 and r["installed_dependency_count"] >= 1 for r in results),
             "full signed saved shard coverage incomplete (skipped/refused is not PASS)")
