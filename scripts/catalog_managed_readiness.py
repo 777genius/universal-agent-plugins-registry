@@ -1,7 +1,8 @@
 """Bounded saved-dependency proof for Marketing Kit; no account/runtime claim.
 
-The legacy catalog matrix stays pinned independently. This case exercises the
-released saved-environment protocol, including the transitive MCP closure.
+The catalog matrix, User and Project cases all run the one pinned released CLI.
+This case exercises the saved-environment protocol, including the transitive
+MCP closure.
 """
 from __future__ import annotations
 
@@ -15,16 +16,21 @@ import stat
 from pathlib import Path
 import tomllib
 
-CLI = {"version": "0.1.91", "tag": "agentplugins-v0.1.91",
-       "commit": "4555aa53844ee0078e9036cd82638afd67f77c16",
-       "binary_digest": "sha256:7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"}
-# Historical signed v1 snapshots retain five clients; only the reviewed
-# new root policy may add Copilot. Never relabel a legacy snapshot as six.
+from build_registry import DERIVED_CLIENT_MINIMUM_INSTALLER_VERSIONS
+
+# The one released CLI used by every catalog readiness case. Sequence 49+ is
+# signed by uap-directory-2026-11, which only dual-key CLIs (0.1.111+) trust.
+CLI = {"version": "0.1.114", "tag": "agentplugins-v0.1.114",
+       "commit": "eb75218c574472169d37a898af65952080d15c99",
+       "binary_digest": "sha256:6994e4d79414c64439aa57acabf001621b2b01d6dfa37fd9d6801f72d3e0a3eb"}
 CLIENTS = ("codex", "cursor", "copilot", "claude", "gemini", "opencode")
-LEGACY_CLIENTS = tuple(client for client in CLIENTS if client != "copilot")
-# The legacy .91 resolver requires this prepared VSCode sibling grant for six
-# requested User clients. It is not an additional saved-install target.
+# Copilot shares its backend with this prepared VSCode sibling grant. It is
+# not an additional saved-install target.
 COPILOT_AUTHORIZED_CLIENTS = ("codex", "cursor", "copilot", "vscode", "claude", "gemini", "opencode")
+# Publication derives these managed User targets from the pinned client
+# capabilities (owner decision 2026-11-16); they carry no per-package evidence
+# and are not saved-install targets of this case.
+DERIVED_CLIENTS = tuple(DERIVED_CLIENT_MINIMUM_INSTALLER_VERSIONS)
 NATIVE_TARGETS = ("codex", "claude")
 PINS = {"777genius/marketing-kit": "0.1.0", "777genius/hubspot-crm": "0.1.0",
         "777genius/notion": "0.1.0", "777genius/playwright-bridge": "0.0.80"}
@@ -44,24 +50,22 @@ def expected(snapshot, select):
                 if policy["release_sequence"] == 1 and policy["status"] == "active"]
     require(len(roots) == 1 and len(policies) == 1, "ambiguous managed root policy")
     authorized = tuple(target["client"] for target in policies[0]["targets"])
-    require(authorized in (LEGACY_CLIENTS, CLIENTS, COPILOT_AUTHORIZED_CLIENTS),
+    require(len(set(authorized)) == len(authorized)
+            and set(authorized) == set(COPILOT_AUTHORIZED_CLIENTS) | set(DERIVED_CLIENTS),
             "unqualified managed target expansion")
-    # Five grants and signed45's six own grants retain the historical .91
-    # five-User proof. That release can qualify six only with the explicit
-    # prepared VSCode sibling grant, as required by its shared-backend resolver.
-    clients = CLIENTS if authorized == COPILOT_AUTHORIZED_CLIENTS else LEGACY_CLIENTS
+    clients = CLIENTS
     require(all(target["scopes"] == ["user"] and target["authentication"] == "required"
                 and target["delivery"] == ("prepared" if target["client"] == "vscode" else "managed")
                 for target in policies[0]["targets"]),
             "unqualified managed target authority")
     closure = [select(snapshot, selector, clients, cli=CLI) for selector in PINS]
     root = closure[0]
-    require(root["policy"]["minimum_installer_version"] == CLI["version"], "managed installer floor changed")
+    # select() already requires every closure floor to be at most the pinned CLI.
     require({item["client"] for item in root["policy"]["targets"]} == set(authorized), "managed target policy changed")
     if "copilot" in clients:
-        # Actual UAP CLI 0.1.91 directoryEligibilityTargets expands Copilot to
-        # its shared backend sibling, VS Code, for every package in the saved
-        # closure. The sibling is policy-only; no VS Code native install claim.
+        # The released resolver expands Copilot to its shared backend sibling,
+        # VS Code, for every package in the saved closure. The sibling is
+        # policy-only; no VS Code native install claim.
         for item in closure:
             grants = {target["client"]: target for target in item["policy"]["targets"]}
             copilot, companion = grants.get("copilot", {}), grants.get("vscode", {})
@@ -121,7 +125,7 @@ def coverage(case):
     rows = {(item["distribution_id"], item["release_sequence"], item["client"], "user")
             for item in case["associations"]}
     root = next(item for item in case["closure"] if item["distribution_id"] == ROOT)
-    if tuple(target["client"] for target in root["policy"]["targets"]) == COPILOT_AUTHORIZED_CLIENTS:
+    if "vscode" in {target["client"] for target in root["policy"]["targets"]}:
         # Policy-only companion authorization is checked by expected() above;
         # no separate VS Code saved-install lifecycle is attested.
         rows.add((ROOT, 1, "vscode", "user"))
@@ -580,30 +584,20 @@ def run(args, root, case, ctx):
     # The composition owner provides confinement and the legacy native-listing
     # parser; no third client engine or portable semantics are introduced here.
     import catalog_publication_readiness as gate
+    import catalog_project_readiness as project
     clients = tuple(case["targets"])
-    scope = case.get("placement_scope", "user")
-    release_user = case.get("placement_scope") == "user" and clients == CLIENTS
-    historical_user = "placement_scope" not in case and scope == "user"
-    require((historical_user and clients in (LEGACY_CLIENTS, CLIENTS)) or release_user or
-            (scope == "project" and clients == CLIENTS and case.get("signed_source_scope") == "user"),
+    scope = case.get("placement_scope")
+    release_user = scope == "user" and clients == CLIENTS
+    require(release_user or (scope == "project" and clients == CLIENTS and case.get("signed_source_scope") == "user"),
             "unqualified managed lifecycle targets or scope")
-    if historical_user:
-        require(case["cli"] == CLI, "wrong historical managed CLI authority")
-        if clients == CLIENTS:
-            root_selection = next(item for item in case["closure"] if item["distribution_id"] == ROOT)
-            require(tuple(target["client"] for target in root_selection["policy"]["targets"]) == COPILOT_AUTHORIZED_CLIENTS,
-                    "historical six-target User requires prepared VSCode source grant")
-    if release_user or scope == "project":
-        import catalog_project_readiness as project
-        require(case["cli"] == project.reviewed_release()["cli"], "wrong corrected managed CLI authority")
-    binary_arg = getattr(args, "project_binary" if scope == "project" or release_user else "managed_binary", None)
-    require(binary_arg is not None, "missing managed released binary")
-    binary = binary_arg.resolve(strict=True)
+    require(case["cli"] == CLI, "wrong managed CLI authority")
+    require(getattr(args, "binary", None) is not None, "missing managed released binary")
+    binary = args.binary.resolve(strict=True)
     require(gate.digest(binary.read_bytes()) == case["cli"]["binary_digest"], "wrong managed released binary")
     codex = getattr(args, "codex", None)
     require(isinstance(codex, Path) and codex.is_absolute(), "managed Codex path must be absolute")
     require(codex.resolve(strict=True).is_file(), "managed Codex executable missing")
-    prefix = "project" if scope == "project" else "release_user" if release_user else "managed"
+    prefix = "project" if scope == "project" else "release_user"
     args.failure_phase = prefix + ":prepare"
     root.mkdir(mode=0o700)
     roots, env = gate.isolated_environment(root, ctx["directory_origin"], (codex, args.claude, args.copilot, args.opencode))
@@ -611,12 +605,11 @@ def run(args, root, case, ctx):
     seed_runtime(root / "bin", env, codex)
     state_root = roots["workspace"] / ".uap" if scope == "project" else roots["state"]
     intent_root = roots["workspace"] if scope == "project" else state_root
-    scope_args = ["--scope", "project", "--project-root", str(roots["workspace"])] if scope == "project" else ["--scope", "user"] if release_user else []
+    scope_args = ["--scope", "project", "--project-root", str(roots["workspace"])] if scope == "project" else ["--scope", "user"]
     if release_user:
         foreign_paths, foreign_configs = seed_foreign_state(roots)
         foreign_before = snapshot_paths(foreign_paths)
     if scope == "project":
-        import catalog_project_readiness as project
         protected_user = project.initialize_user_profile(args, root, roots, env, readonly)
 
     def command(*argv):
@@ -662,16 +655,12 @@ def run(args, root, case, ctx):
             Path(environment["lock_path"]).resolve() == lock_path.resolve(), "managed environment paths")
     lock = gate.read_json(lock_path)
     aliases = validate_lock(lock, case)
-    if scope == "project" or release_user:
-        import catalog_project_readiness as project
-        project.validate_operation(added, aliases, clients, operation="add", expected_scope=scope)
+    project.validate_operation(added, aliases, clients, operation="add", expected_scope=scope)
     requirements = tomllib.loads(manifest.read_text())
     require(set(requirements.get("dependencies", {})) == {aliases[ROOT]} and
             requirements.get("targets") == {client: [aliases[ROOT]] for client in clients}, "managed root intent")
     installations, owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
-    if scope == "project" or release_user:
-        import catalog_project_readiness as project
-        project.validate_operation(added, aliases, clients, operation="add", expected_scope=scope, installations=installations)
+    project.validate_operation(added, aliases, clients, operation="add", expected_scope=scope, installations=installations)
     # Immutable package acquisition uses the shared cache store in released CLI.
     store = roots["state"] / "store"
     for selected in case["closure"]:
@@ -695,49 +684,43 @@ def run(args, root, case, ctx):
                                 expected_marketplace=gate.managed_marketplace(binding["physical_artifact_id"]),
                                 expected_version=selected["package_version"], expected_path=Path(binding["target_locator"]))
     if scope == "project":
-        import catalog_project_readiness as project
         project.validate_native_resources(installations, case, roots["workspace"], store)
     else:
         native("claude", True)
-        if "copilot" in clients:
-            native("copilot", True)
-        if release_user:
-            validate_release_user_bindings(installations, case, root)
-            listed = command("list")
-            require({item.get("installation_id") for item in listed.get("installations", [])} ==
-                    {item["installation_id"] for item in installations.values()} and len(listed["installations"]) == 4,
-                    "managed installed list closure")
+        native("copilot", True)
+        validate_release_user_bindings(installations, case, root)
+        listed = command("list")
+        require({item.get("installation_id") for item in listed.get("installations", [])} ==
+                {item["installation_id"] for item in installations.values()} and len(listed["installations"]) == 4,
+                "managed installed list closure")
     status = command("deps", "status")
     require(status.get("scope") == scope and status.get("pending_recovery") is False and len(status.get("facts", [])) == len(PINS) * len(clients), "managed status incomplete")
     require({(item.get("alias"), item.get("client_id")) for item in status["facts"]} == {(alias, client) for alias in aliases.values() for client in clients}, "managed status identities")
-    require(all(item.get("owner") == scope + "-default" and set(item.get("facts", [])) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
+    require(all(item.get("owner") == scope + "-default" and set(item.get("facts") or ()) <= {"auth_unverified", "auth_pending", "activation_manual", "activation_prepared"} for item in status["facts"]), "managed status drift")
     immutable = {"manifest": manifest, "lock": lock_path, "state": state_file, "store": store,
                  **{f"owned-{index}": path for index, path in enumerate(owned)}}
-    replays = (("add", "marketing-kit", "--target", ",".join(clients)),) if scope == "project" or release_user else ()
-    for argv in (*replays, ("install", "--locked", "--yes"), ("update", "marketing-kit")):
+    for argv in (("add", "marketing-kit", "--target", ",".join(clients)), ("install", "--locked", "--yes"), ("update", "marketing-kit")):
         before = snapshot_paths(immutable)
         result = command(*argv)
         require(result.get("outcome") == "completed" and result.get("results") == [] and
                 len(result.get("actions", [])) == len(PINS) * len(clients) and all(item.get("action") == "unchanged" for item in result["actions"]), "managed replay changed plan")
-        if scope == "project" or release_user:
-            project.validate_operation(result, aliases, clients, operation="unchanged", expected_scope=scope)
+        project.validate_operation(result, aliases, clients, operation="unchanged", expected_scope=scope)
         require(snapshot_paths(immutable) == before, "managed replay mutated state or artifacts")
-    if scope == "project" or release_user:
-        portable_before = snapshot_paths({"manifest": manifest, "lock": lock_path})
-        repaired = command("repair", "marketing-kit", "--target", ",".join(clients), "--yes")
-        project.validate_operation(repaired, aliases, clients, operation="repair", expected_scope=scope, installations=installations)
-        repaired_installations, repaired_owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
-        require({key: item["installation_id"] for key, item in repaired_installations.items()} ==
-                {key: item["installation_id"] for key, item in installations.items()}, "Project repair changed closure identity")
-        require(snapshot_paths({"manifest": manifest, "lock": lock_path}) == portable_before, "Project repair changed portable pins")
-        if scope == "project":
-            project.validate_native_resources(repaired_installations, case, roots["workspace"], store)
-        else:
-            validate_release_user_bindings(repaired_installations, case, root)
-        installations, owned = repaired_installations, repaired_owned
-        if release_user:
-            native("claude", True)
-            native("copilot", True)
+    portable_before = snapshot_paths({"manifest": manifest, "lock": lock_path})
+    repaired = command("repair", "marketing-kit", "--target", ",".join(clients), "--yes")
+    project.validate_operation(repaired, aliases, clients, operation="repair", expected_scope=scope, installations=installations)
+    repaired_installations, repaired_owned = validate_state(gate.read_json(state_file), case, ctx, root, aliases)
+    require({key: item["installation_id"] for key, item in repaired_installations.items()} ==
+            {key: item["installation_id"] for key, item in installations.items()}, "Project repair changed closure identity")
+    require(snapshot_paths({"manifest": manifest, "lock": lock_path}) == portable_before, "Project repair changed portable pins")
+    if scope == "project":
+        project.validate_native_resources(repaired_installations, case, roots["workspace"], store)
+    else:
+        validate_release_user_bindings(repaired_installations, case, root)
+    installations, owned = repaired_installations, repaired_owned
+    if release_user:
+        native("claude", True)
+        native("copilot", True)
     saved_intent = (manifest.read_bytes(), lock_path.read_bytes()) if release_user else None
     retained = {"store": store, "plugin-data": state_root / "plugin-data"}
     def remove_closure():

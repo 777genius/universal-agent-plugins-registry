@@ -17,6 +17,8 @@ export const clients: ClientTarget[] = [
   { id: 'kimi', name: 'Kimi', icon: 'kimi.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
   { id: 'qoder', name: 'Qoder', icon: 'terminal.svg', note: 'Managed MCP configuration', status: 'CLI supported' },
   { id: 'pi', name: 'Pi', icon: 'terminal.svg', note: 'Skills and supported MCP transports', status: 'CLI supported' },
+  { id: 'hermes', name: 'Hermes', icon: 'terminal.svg', note: 'Skills and supported MCP transports', status: 'CLI supported' },
+  { id: 'antigravity', name: 'Antigravity', icon: 'terminal.svg', note: 'Skills and supported MCP transports', status: 'CLI supported' },
 ]
 
 export function useSite() {

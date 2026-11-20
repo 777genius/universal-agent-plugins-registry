@@ -1,0 +1,12 @@
+{
+  "expires_at": "2026-12-14T12:42:17Z",
+  "generated_at": "2026-11-14T12:42:17Z",
+  "key_id": "uap-directory-2026-01",
+  "production_marker_commit": "03b00ee9b747c06e2dd73d1017c3eab70c7ee444",
+  "publication_id": "43496820010",
+  "purpose": "Untouched signed production baseline for offline catalog readiness regression.",
+  "sequence": 48,
+  "signed_ledger_commit": "41e6bbe49348eca5b491036e8630c9ddaacc7424",
+  "snapshot_digest": "sha256:3b980f468762c48a9ea978b20de98148b81501c2a7b3d4584adcc9fcb0bf7e53",
+  "source_commit": "8360159c07140d17cbd4060a110553092c9cd245"
+}
