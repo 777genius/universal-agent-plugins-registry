@@ -648,6 +648,18 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(retained["source"], originals[0]["source"])
             self.assertEqual(retained["findings"], originals[0]["findings"])
 
+            # The new v3 ceiling is exactly three. Even a source-matched
+            # fourth signed original cannot bypass the schema or validator.
+            injected_fourth = copy.deepcopy(retained)
+            extra = copy.deepcopy(injected_fourth["recovery_witnesses"][-1])
+            extra["origin"]["run_id"] += 10
+            extra["record"]["report_digest"] = "sha256:" + "f" * 64
+            injected_fourth["recovery_witnesses"].append(extra)
+            with self.assertRaises(PublicationError):
+                contract.validate_record(
+                    injected_fourth, subject,
+                    coverage.v2.timestamp(scanner.now(), "generated"), scheduled=True)
+
             # Under the old two-witness ceiling, authenticated current findings
             # must still be rejected instead of disappearing from the signed shard.
             with mock.patch.object(contract, "MAX_RECOVERY_WITNESSES", 2):
