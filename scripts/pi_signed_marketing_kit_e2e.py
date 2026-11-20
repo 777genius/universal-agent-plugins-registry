@@ -119,6 +119,44 @@ def check_installations(document: dict, scope: str) -> dict[str, str]:
     return identities
 
 
+def native_root(env: dict[str, str], project: Path, scope: str) -> Path:
+    return (Path(env["PI_CODING_AGENT_DIR"]) if scope == "user"
+            else project / ".pi")
+
+
+def check_native(env: dict[str, str], project: Path, scope: str,
+                 *, removed: bool = False) -> None:
+    """Inspect real Pi discovery files; a saved receipt alone is insufficient."""
+    root = native_root(env, project, scope)
+    skill = root / "skills" / "campaign-planning" / "SKILL.md"
+    config = root / "mcp.json"
+    required_mcp = {"notion", "hubspot-crm", "playwright"}
+    if removed:
+        require(not skill.exists() and not skill.is_symlink(),
+                "removed Pi profile retains Marketing Kit Skill")
+    else:
+        require(skill.is_file() and not skill.is_symlink()
+                and 0 < skill.stat().st_size < 1024 * 1024,
+                "real Pi Marketing Kit Skill was not materialized")
+    if not config.exists() and not config.is_symlink():
+        require(removed, "Pi MCP configuration absent after signed install")
+        return
+    require(config.is_file() and not config.is_symlink(),
+            "unsafe Pi MCP configuration path")
+    document = json.loads(config.read_text(encoding="utf-8"))
+    servers = document.get("mcpServers")
+    require(isinstance(servers, dict) and
+            all(isinstance(name, str) and isinstance(data, dict)
+                for name, data in servers.items()),
+            "Pi MCP configuration is malformed")
+    if removed:
+        require(not required_mcp.intersection(servers),
+                "removed Pi profile retains signed MCP server")
+    else:
+        require(required_mcp.issubset(servers),
+                "real signed Pi child MCP configuration is incomplete")
+
+
 def fresh_case(root: Path, name: str, scope: str) -> tuple[dict[str, str], Path, Path, Path]:
     case = root / name
     case.mkdir(mode=0o700)
@@ -189,6 +227,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
     original = check_installations(
         invoke(cli, env_a, project_a, "signed list", "list", "--target", "pi", *args_a),
         scope)
+    check_native(env_a, project_a, scope)
     lock_digest = check_lock(portable_a / "uap.lock")
     require((portable_a / "uap.toml").is_file(), "saved source agreement missing")
     report.append({"scope": scope, "stage": "signed-add", "result": "passed",
@@ -220,6 +259,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
     require(lock_digest == check_lock(portable_b / "uap.lock")
             and not set(original.values()) & set(restored.values()),
             "cold restore changed signed pins or reused installation IDs")
+    check_native(env_b, project_b, scope)
     report.append({"scope": scope, "stage": "cold-locked-restore", "result": "passed"})
 
     for env, project, args in ((env_b, project_b, args_b), (env_a, project_a, args_a)):
@@ -228,6 +268,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         data = listing.get("data")
         require(isinstance(data, dict) and data.get("installations") == [],
                 "removed Pi profile retains signed installations")
+        check_native(env, project, scope, removed=True)
     assert_foreign(root, scope)
     report.append({"scope": scope, "stage": "signed-removal-foreign", "result": "passed"})
 
