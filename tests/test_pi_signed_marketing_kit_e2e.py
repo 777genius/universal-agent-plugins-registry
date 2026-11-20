@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pi_signed_marketing_kit_e2e import (
     EXPECTED, CHILD_VERSIONS, RELEASE_VERSIONS, assert_foreign, check_installations,
     check_lock, check_native, fresh_case, json_object, observe_signed_policy,
+    observe_native_doctor, require_native_tamper_refusal,
 )
 
 
@@ -262,6 +263,57 @@ class SignedMarketingNativeMaterializationTests(unittest.TestCase):
                 check_native(env, project, "user", removed=True)
             config.write_text('{"mcpServers":{}}', encoding="utf-8")
             check_native(env, project, "user", removed=True)
+
+
+
+class SignedMarketingDoctorTests(unittest.TestCase):
+    @staticmethod
+    def doctor_report(*findings: dict) -> dict:
+        return {"result": "success", "command": "doctor",
+                "data": {"read_only": True, "installation_count": 4,
+                         "open_operation_count": 0, "findings": list(findings)}}
+
+    def test_refuses_stale_or_unverified_native_and_accepts_real_tamper_signal(self):
+        healthy = self.doctor_report()
+        drift = self.doctor_report({"code": "native_projection_changed",
+                                    "status": "degraded", "client_id": "pi"})
+        unchecked = self.doctor_report({"code": "native_projection_not_checked",
+                                        "status": "unknown", "client_id": "pi"})
+        for report, expectation in ((healthy, False), (drift, True)):
+            with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=report) as invoke:
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"),
+                                      expect_drift=expectation)
+                self.assertEqual(invoke.call_args.args[4:6],
+                                 ("doctor", "marketing-kit"))
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=unchecked):
+            with self.assertRaisesRegex(RuntimeError, "unqualified native"):
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"))
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=healthy):
+            with self.assertRaisesRegex(RuntimeError, "tampered Pi native Skill"):
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"),
+                                      expect_drift=True)
+
+    def test_e2e_tamper_instrumentation_restores_original_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env, project, _, native = fresh_case(Path(temp), "user-A", "user")
+            skill = native / "skills" / "campaign-planning" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            original = b"---\\nname: campaign-planning\\n---\\n"
+            skill.write_bytes(original)
+            before = []
+            def observe(_cli, _env, _project, _args, *, expect_drift=False):
+                current = skill.read_bytes()
+                before.append((expect_drift, current))
+                if expect_drift:
+                    self.assertNotEqual(current, original)
+                else:
+                    self.assertEqual(current, original)
+            with mock.patch("pi_signed_marketing_kit_e2e.observe_native_doctor",
+                            side_effect=observe):
+                require_native_tamper_refusal("cli", env, project, "user",
+                                             ("--scope", "user"))
+            self.assertEqual(skill.read_bytes(), original)
+            self.assertEqual([entry[0] for entry in before], [True, False])
 
 
 
