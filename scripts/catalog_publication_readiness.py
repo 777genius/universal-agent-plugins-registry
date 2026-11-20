@@ -51,11 +51,13 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 CLI = {**managed.CLI, "native_clients": {"claude": "2.1.251", "copilot": "1.0.82"},
        "mcp_inspector": "2.1.0"}
 LIMIT = 4 * 1024 * 1024
-# When the released CLI verifies installed plugins, Claude Code probes their
-# MCP servers. Claude and the servers it starts write logs and caches under
-# HOME (observed on the pinned CLI: Claude MCP logs and needs-auth cache,
-# Firebase and HubSpot CLI logs); they are not installer state or owned artifacts.
-NATIVE_RUNTIME_CACHES = ("home/.cache", "home/.npm", "home/.hscli/logs", "home/.claude/mcp-needs-auth-cache.json")
+# A no-change update still verifies Claude targets with Claude Code's own MCP
+# health probe (`claude mcp get`), which starts or contacts the package MCP
+# servers. These exact paths are the logs and caches that Claude and those
+# servers wrote across the full matrix with the pinned CLI; everything else,
+# including installer state and owned artifacts, is still compared exactly.
+NATIVE_RUNTIME_CACHES = ("home/.cache/claude-cli-nodejs", "home/.claude/mcp-needs-auth-cache.json",
+                         "home/.cache/firebase/firebase-debug.log", "home/.hscli/logs")
 NATIVE_LIST_STEPS = {
     "claude": ("probe", "exit", "json_decode", "json_shape", "matching", "scope", "enabled", "path"),
     "copilot": ("probe", "exit", "section", "format", "count", "identity", "version", "status", "path"),
@@ -159,6 +161,28 @@ def selected(snapshot: dict, alias: str, clients: tuple[str, ...], *, cli: dict 
             "fallback_reason": resolved["fallback_reason"]}
 
 
+def release_components(snapshot: dict, selection: dict) -> set:
+    distribution = next(item for item in snapshot["distributions"] if item["id"] == selection["distribution_id"])
+    return set(next(item for item in distribution["releases"] if item["sequence"] == selection["release_sequence"])["components"])
+
+
+def derived_target(distribution: dict, policy: dict, target: dict) -> bool:
+    """Exactly the target publication derives from pinned client capabilities.
+
+    Owner decision 2026-11-16: no per-package evidence. The shape, source kind,
+    authentication and installer floor must still match the derivation.
+    """
+    floors = registry.DERIVED_CLIENT_MINIMUM_INSTALLER_VERSIONS
+    client = target["client"]
+    if client not in floors or distribution["kind"] == "upstream":
+        return False
+    authentication = {item["authentication"] for item in policy["targets"] if item["client"] not in floors}
+    version = lambda value: tuple(int(part) for part in value.split("."))
+    return (len(authentication) == 1
+            and target == {"client": client, "scopes": ["user"], "delivery": "managed", "authentication": next(iter(authentication))}
+            and version(policy["minimum_installer_version"]) >= version(floors[client]))
+
+
 def row_identity(selection: dict, client: str) -> dict:
     return {**{key: value for key, value in selection.items() if key != "policy" and not key.startswith("_")}, "client": client,
             "target_policy": next(item for item in selection["policy"]["targets"] if item["client"] == client)}
@@ -235,10 +259,7 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_ca
                 if target["scopes"] and all((distribution["id"], policy["release_sequence"], target["client"], scope) in covered
                                             for scope in target["scopes"]):
                     continue
-                if target["client"] in managed.DERIVED_CLIENTS:
-                    # Publication derives these targets from the pinned client
-                    # capabilities (owner decision 2026-11-16); no per-package
-                    # lifecycle evidence is required.
+                if derived_target(distribution, policy, target):
                     continue
                 old_entry = previous.get((policy["release_sequence"], target["client"]))
                 prior = old_entry[0] if old_entry else None
@@ -251,8 +272,9 @@ def policy_scope(baseline: dict, snapshot: dict, selections: list, *, project_ca
                 require(new_floor >= prior_floor, f"uncovered installer floor expansion: {distribution['id']}")
 
 
-def lifecycle_proof(client: str) -> dict:
+def lifecycle_proof(client: str, *, mcp: bool) -> dict:
     return {"add": "passed", "info": "passed", "update": "passed_no_change",
+            "update_native_mcp_health_probe": "claude_mcp_get_ran_package_mcp" if client == "claude" and mcp else "not_applicable",
             "state_bytes_unchanged": True, "owned_artifacts_unchanged": True,
             "remove": "passed_purged", "doctor": "passed_read_only", "installation_count": 0,
             "open_operation_count": 0, "owned_artifacts_absent": True,
@@ -308,7 +330,8 @@ def expected_artifact(snapshot: dict, baseline: dict, identity: dict, ctx: dict)
     dependencies = dependency_cases(snapshot, ctx)
     project_case, release_user_case = dependencies["project_dependencies"], dependencies["release_user_dependencies"]
     policy_scope(baseline, snapshot, selections, project_case=project_case, release_user_case=release_user_case)
-    rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client)} for selection, clients in selections for client in clients]
+    rows = [{**row_identity(selection, client), "proof": lifecycle_proof(client, mcp="mcp" in release_components(snapshot, selection))}
+            for selection, clients in selections for client in clients]
     probes = [probe_contract(selection, method) for selection, _ in selections
               if selection["product_id"] in ("context7", "cloudflare-docs")
               and credential_free_probe(selection) for method in ("tools/list", "tools/call")]
@@ -809,13 +832,13 @@ def run_lifecycle(args: argparse.Namespace, root: Path, selection: dict, clients
     remove_targets(run, selection["product_id"], clients, verify_native_absent)
     require(run("list").get("installations") == [], "installations remain")
     step("snapshot_before_doctor")
-    before = snapshot_roots(roots, ignore=NATIVE_RUNTIME_CACHES)
+    before = snapshot_roots(roots)
     doctor = run("doctor")
     step("validate_doctor")
     # command() has authenticated the full envelope before returning only data.
     validate_doctor({"command": "doctor", "result": "success", "data": doctor}, post_remove=True)
     step("snapshot_after_doctor")
-    require(snapshot_roots(roots, ignore=NATIVE_RUNTIME_CACHES) == before, "doctor mutated roots")
+    require(snapshot_roots(roots) == before, "doctor mutated roots")
     step("validate_cleanup")
     require(doctor.get("read_only") is True and doctor.get("installation_count") == 0 and doctor.get("open_operation_count") == 0, "doctor not clean/read-only")
     require(all(not path.exists() and not path.is_symlink() for path in owned), "owned artifact remains")

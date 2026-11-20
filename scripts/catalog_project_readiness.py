@@ -16,9 +16,9 @@ import tomllib
 import catalog_managed_readiness as managed
 
 require = managed.require
-# Reviewed nonexpiring package facts from the independently authenticated signed45
-# closure (also unchanged in signed46). These are not target grants or a feed:
-# every runtime authorization, signature, expiry and floor remains current.
+# Reviewed nonexpiring immutable package facts of the Marketing Kit closure.
+# These are not target grants or a feed: every runtime authorization,
+# signature, expiry and floor remains current.
 REVIEWED_SOURCE_CLOSURE = [
     {
         "product_id": "marketing-kit",
@@ -117,7 +117,7 @@ def expected(snapshot, select):
     proof.pop("native_plugin_listing")
     proof.update(native_project_resources={client: "passed_exact_resources" for client in CLIENTS},
                  repeat_add="passed_no_change", repair="passed_same_signed_identity",
-                 user_durable_state_unchanged=True, user_native_profiles_unchanged="not_claimed",
+                 user_native_and_durable_state="unchanged_except_exact_project_trust_claude_project_registry_and_native_runtime_caches",
                  claude_profile_setup="native_first_start_then_fixed_unchanged_control_before_uap",
                  native_client_discovery="not_qualified_by_this_case", client_tools_call="not_tested",
                  native_project_cleanup="passed_exact_absence")
@@ -342,14 +342,114 @@ def user_paths(roots):
     return paths
 
 
+# The released CLI places Project resources through the clients' native
+# project flows. By design they record exact trust for the selected project in
+# these native files of record, and Claude Code keeps its project-scoped plugin
+# registry under HOME. Each change is validated by content below.
+PROJECT_TRUST_FILES = (".gemini/trustedFolders.json", ".copilot/config.json", ".codex/config.toml", ".claude/.claude.json")
+CLAUDE_REGISTRY_FILES = (".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json")
+RECORD_FILES = PROJECT_TRUST_FILES + CLAUDE_REGISTRY_FILES
+CLAUDE_MARKETPLACE = re.compile(r"agentplugins-[0-9a-f]{12}")
+# Exact native runtime outputs observed with the pinned CLI: Claude Code's MCP
+# health probe (logs, needs-auth and OAuth discovery state, its own lock),
+# Codex runtime databases and bundled system Skills, and Claude's project
+# plugin store whose registry entries are validated above.
+NATIVE_RUNTIME = re.compile(
+    r"\.cache|\.cache/claude-cli-nodejs(/.*)?|\.claude/mcp-needs-auth-cache\.json|\.claude/\.credentials\.json"
+    r"|\.claude/\.claude\.json\.lock|\.codex/installation_id|\.codex/[a-z]+_[0-9]+\.sqlite(-shm|-wal)?"
+    r"|\.codex/skills|\.codex/skills/\.system(/.*)?|\.codex/(\.tmp|tmp)(/.*)?"
+    r"|\.claude/plugins|\.claude/plugins/(cache|data|marketplaces)"
+    r"|\.claude/plugins/cache/agentplugins-[0-9a-f]{12}(/.*)?|\.claude/plugins/data/[a-z0-9._-]+-agentplugins-[0-9a-f]{12}(/.*)?")
+EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def record_bytes(home):
+    """Baseline bytes of the native files of record, captured before UAP runs."""
+    result = {}
+    for name in RECORD_FILES:
+        path = home / name
+        require(not path.is_symlink() and (not path.exists() or path.is_file() and path.stat().st_size <= 1024 * 1024),
+                "native file of record is not an ordinary bounded file")
+        result[name] = path.read_bytes() if path.exists() else None
+    return result
+
+
+def validate_record(name, before, path, workspace, home):
+    """Allow only exact trust for the selected project and its Claude registry entries."""
+    import catalog_publication_readiness as gate
+    require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 1024 * 1024, "native file of record substituted")
+    body = path.read_bytes()
+    if name == ".codex/config.toml":
+        after, prior = tomllib.loads(body.decode()), tomllib.loads(before.decode()) if before else {}
+    else:
+        after = gate.publication.parse_json_bytes(body, name, max_bytes=1024 * 1024)
+        prior = gate.publication.parse_json_bytes(before, name, max_bytes=1024 * 1024) if before else {}
+    require(isinstance(after, dict) and isinstance(prior, dict), "native file of record shape")
+    rest = copy.deepcopy(after)
+    if name == ".gemini/trustedFolders.json":
+        require(rest.pop(workspace, None) == "TRUST_FOLDER", "Gemini trust is not the exact project")
+    elif name == ".copilot/config.json":
+        folders = rest.get("trustedFolders")
+        require(isinstance(folders, list) and folders.count(workspace) == 1, "Copilot trust is not the exact project")
+        rest["trustedFolders"] = [item for item in folders if item != workspace]
+        if "trustedFolders" not in prior and not rest["trustedFolders"]:
+            rest.pop("trustedFolders")
+    elif name in (".codex/config.toml", ".claude/.claude.json"):
+        expected = {"trust_level": "trusted"} if name == ".codex/config.toml" else {"hasTrustDialogAccepted": True}
+        projects = rest.get("projects")
+        require(isinstance(projects, dict) and projects.pop(workspace, None) == expected, "native trust is not the exact project")
+        if "projects" not in prior and not projects:
+            rest.pop("projects")
+        if name == ".claude/.claude.json" and "userID" not in prior:
+            # Claude Code assigns its own anonymous installation ID on first use.
+            require(isinstance(rest.pop("userID", ""), str), "Claude user ID shape")
+    elif name == ".claude/plugins/installed_plugins.json":
+        plugins, old = rest.pop("plugins", None), prior.pop("plugins", {})
+        require(rest.get("version") == 2 and isinstance(plugins, dict) and isinstance(old, dict), "Claude plugin registry shape")
+        if "version" not in prior:
+            rest.pop("version")
+        cache = home / ".claude/plugins/cache"
+        for key, records in plugins.items():
+            if old.get(key) == records:
+                continue
+            marketplace = key.split("@", 1)[1] if isinstance(key, str) and "@" in key else ""
+            require(CLAUDE_MARKETPLACE.fullmatch(marketplace) is not None and isinstance(records, list) and bool(records)
+                    and all(isinstance(item, dict) and item.get("scope") == "project" and item.get("projectPath") == workspace
+                            and isinstance(item.get("installPath"), str) and Path(item["installPath"]).is_relative_to(cache / marketplace)
+                            for item in records),
+                    "Claude plugin registry changed outside the selected project")
+        require(all(plugins.get(key) == value for key, value in old.items()), "Claude plugin registry rewrote foreign entries")
+    else:
+        skills = Path(workspace) / SKILL_ROOTS["claude"]
+        for key, value in rest.items():
+            if prior.get(key) == value:
+                continue
+            source = value.get("source") if isinstance(value, dict) else None
+            require(CLAUDE_MARKETPLACE.fullmatch(key) is not None and isinstance(source, dict)
+                    and set(value) <= {"source", "installLocation", "lastUpdated"}
+                    and source == {"source": "directory", "path": value.get("installLocation")}
+                    and isinstance(source["path"], str) and Path(source["path"]).parent == skills,
+                    "Claude marketplace registry changed outside the selected project")
+        rest = {key: value for key, value in rest.items() if key in prior}
+    require(rest == prior, "native file of record changed beyond exact project trust")
+
+
 def validate_user_isolation(before, roots):
-    # The released CLI places Project resources through the clients' native
-    # project flows. By design they record exact-project trust and native caches
-    # in the selected client profiles under HOME, so the proof freezes UAP's own
-    # User-scope durable state and XDG configuration, not native profiles.
-    frozen = {key: path for key, path in user_paths(roots).items() if key != "home"}
-    require(managed.snapshot_paths(frozen) == {key: before[key] for key in frozen},
-            "Project operation changed User durable state")
+    after = managed.snapshot_paths(user_paths(roots))
+    message = "Project operation changed User native or durable state"
+    require(all(after[key] == before[key] for key in after if key != "home"), message)
+    old = {entry[0]: entry[1:] for entry in before["home"]}
+    new = {entry[0]: entry[1:] for entry in after["home"]}
+    records = before.get("records", {})
+    for name in sorted(set(old) | set(new)):
+        if old.get(name) == new.get(name) or NATIVE_RUNTIME.fullmatch(name):
+            continue
+        if name.removesuffix(".agentplugins.lock") in RECORD_FILES and name.endswith(".agentplugins.lock"):
+            entry = new.get(name, ())
+            require(len(entry) == 3 and entry[1:] == ("file", EMPTY_DIGEST) and entry[0] & 0o077 == 0, message)
+            continue
+        require(name in RECORD_FILES and new.get(name, ("absent",))[1:2] == ("file",), message)
+        validate_record(name, records.get(name), roots["home"] / name, str(roots["workspace"]), roots["home"])
 
 
 def initialize_user_profile(args, root, roots, env, readonly):
@@ -450,6 +550,7 @@ def initialize_user_profile(args, root, roots, env, readonly):
     # This is the only accepted User baseline. The second control and the
     # public installer both compare to these exact bytes, types and modes.
     protected_user = {key: after[key] for key in user_paths(roots)}
+    protected_user["records"] = record_bytes(roots["home"])
     empty_list("stable")
     admitted_profile()
     require(managed.snapshot_paths(paths) == after, "Claude native profile did not stabilize before UAP")

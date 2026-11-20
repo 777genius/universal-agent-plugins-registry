@@ -147,6 +147,12 @@ class CatalogContractTests(unittest.TestCase):
         self.assertTrue(all(row["fallback_reason"] is None for row in github))
         self.assertIs(artifact["runtime_claims"], False)
         self.assertTrue(all(row["oauth"] == "not_tested" for row in artifact["mcp_probes"]))
+        # The no-change update ran Claude Code's MCP health probe for MCP packages.
+        for row in artifact["rows"]:
+            mcp = "mcp" in gate.release_components(self.snapshot, row)
+            self.assertEqual(row["proof"]["update_native_mcp_health_probe"],
+                             "claude_mcp_get_ran_package_mcp" if row["client"] == "claude" and mcp else "not_applicable")
+        self.assertTrue(any(row["proof"]["update_native_mcp_health_probe"] != "not_applicable" for row in artifact["rows"]))
         gate.validate_artifact(artifact, self.expected())
 
     def test_rejects_mutated_identity_partial_rows_runtime_claims_and_extra_fields(self):
@@ -288,6 +294,41 @@ class CatalogContractTests(unittest.TestCase):
         policy["targets"].append({"client": "future-client", "scopes": ["user"], "delivery": "managed", "authentication": "required"})
         with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/cloudflare:future-client"):
             self.expected()
+
+    def test_derived_target_must_match_the_publisher_derivation_exactly(self):
+        distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
+        policy = next(item for item in distribution["release_policies"] if item["status"] == "active")
+        hermes = next(target for target in policy["targets"] if target["client"] == "hermes")
+        self.assertTrue(gate.derived_target(distribution, policy, hermes))
+        flipped = "not_required" if hermes["authentication"] == "required" else "required"
+        for mutation, changed_distribution, changed_policy, changed_target in (
+            ("extra_scope", distribution, policy, {**hermes, "scopes": ["user", "project"]}),
+            ("flipped_authentication", distribution, policy, {**hermes, "authentication": flipped}),
+            ("prepared_delivery", distribution, policy, {**hermes, "delivery": "prepared"}),
+            ("extra_field", distribution, policy, {**hermes, "app_binding": {"id": "unreviewed"}}),
+            ("lowered_floor", distribution, {**policy, "minimum_installer_version": "0.1.107"}, hermes),
+            ("upstream", {**distribution, "kind": "upstream"}, policy, hermes),
+            ("mixed_authentication", distribution, {**policy, "targets": [*policy["targets"], {
+                "client": "kiro", "scopes": ["user"], "delivery": "managed", "authentication": flipped}]}, hermes),
+            ("not_derived", distribution, policy, {**hermes, "client": "future-client"}),
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertFalse(gate.derived_target(changed_distribution, changed_policy, changed_target))
+        # A malformed derived target is an uncovered policy change, not a pass.
+        for distribution in self.baseline["distributions"]:
+            for item in distribution["release_policies"]:
+                item["targets"] = [target for target in item["targets"] if target["client"] not in gate.managed.DERIVED_CLIENTS]
+        self.expected()
+        for mutation in ("extra_scope", "flipped_authentication", "prepared_delivery"):
+            with self.subTest(policy_scope=mutation):
+                self.snapshot = catalog()
+                distribution = next(item for item in self.snapshot["distributions"] if item["id"] == "777genius/cloudflare")
+                target = next(target for target in next(item for item in distribution["release_policies"] if item["status"] == "active")["targets"]
+                              if target["client"] == "hermes")
+                target.update({"extra_scope": {"scopes": ["user", "project"]}, "flipped_authentication": {"authentication": flipped},
+                               "prepared_delivery": {"delivery": "prepared"}}[mutation])
+                with self.assertRaisesRegex(ValueError, "uncovered target policy change: 777genius/cloudflare:hermes"):
+                    self.expected()
 
     def test_uncovered_alternate_reactivation_or_new_release_cannot_reuse_old_target(self):
         for change in ("reactivation", "new_release", "lower_floor"):
@@ -738,16 +779,25 @@ class CatalogContractTests(unittest.TestCase):
             home = Path(temporary).resolve() / "home"
             (home / ".claude/plugins").mkdir(parents=True)
             (home / ".claude/plugins/installed_plugins.json").write_text("{}")
+            (home / ".cache").mkdir()
             roots = {"home": home}
             before = gate.snapshot_roots(roots, ignore=gate.NATIVE_RUNTIME_CACHES)
             (home / ".cache/claude-cli-nodejs").mkdir(parents=True)
             (home / ".cache/claude-cli-nodejs/mcp.jsonl").write_text("log\n")
             (home / ".claude/mcp-needs-auth-cache.json").write_text("{}")
+            (home / ".hscli/logs").mkdir(parents=True)
+            (home / ".hscli/logs/mcp-start.log").write_text("log\n")
+            self.assertNotEqual(gate.snapshot_roots(roots, ignore=gate.NATIVE_RUNTIME_CACHES), before)  # new .hscli parent
+            (home / ".hscli/logs/mcp-start.log").unlink()
+            (home / ".hscli/logs").rmdir()
+            (home / ".hscli").rmdir()
             self.assertEqual(gate.snapshot_roots(roots, ignore=gate.NATIVE_RUNTIME_CACHES), before)
-            self.assertNotEqual(gate.snapshot_roots(roots), gate.snapshot_roots({"home": home}, ignore=("home/.cache",)))
-            for changed in (".claude/plugins/installed_plugins.json", ".claude/mcp-needs-auth-cache.json.bak", ".cachex"):
+            self.assertNotEqual(gate.snapshot_roots(roots), before)
+            for changed in (".claude/plugins/installed_plugins.json", ".claude/mcp-needs-auth-cache.json.bak", ".cache/other-tool.log",
+                            ".cache/firebase/firebase-other.log"):
                 path = home / changed
                 original = path.read_bytes() if path.exists() else None
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('{"changed": true}')
                 with self.subTest(changed=changed):
                     self.assertNotEqual(gate.snapshot_roots(roots, ignore=gate.NATIVE_RUNTIME_CACHES), before)

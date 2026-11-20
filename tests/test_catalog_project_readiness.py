@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import argparse
 import base64
 import json
 import io
@@ -69,8 +68,8 @@ class ProjectReadinessTests(unittest.TestCase):
         self.assertEqual((saved["target"], saved["outcome"]), ("vscode", "refused"))
         self.assertNotIn("native_plugin_listing", self.case["proof"])
         self.assertEqual(self.case["proof"]["account_runtime"], "not_tested")
-        self.assertIs(self.case["proof"]["user_durable_state_unchanged"], True)
-        self.assertEqual(self.case["proof"]["user_native_profiles_unchanged"], "not_claimed")
+        self.assertEqual(self.case["proof"]["user_native_and_durable_state"],
+                         "unchanged_except_exact_project_trust_claude_project_registry_and_native_runtime_caches")
         baseline = copy.deepcopy(self.snapshot)
         baseline["distributions"] = [item for item in baseline["distributions"] if item["id"] != managed.ROOT]
         gate.policy_scope(baseline, self.snapshot, gate.plan(self.snapshot), project_case=self.case, release_user_case=release_user)
