@@ -233,37 +233,39 @@ def invoke(cli: str, env: dict[str, str], project: Path, stage: str,
 def observe_native_doctor(cli: str, env: dict[str, str],
                           project: Path, scope_args: tuple[str, ...],
                           *, expect_drift: bool = False) -> None:
-    """Use the published CLI's read-only native VerifyOnly integrity observer."""
-    report = invoke(cli, env, project, "native doctor", "doctor",
-                    "marketing-kit", "--target", "pi", *scope_args)
-    data = report.get("data")
-    require(report.get("command") == "doctor" and isinstance(data, dict)
-            and data.get("read_only") is True
-            and type(data.get("installation_count")) is int
-            and data["installation_count"] == 4
-            and data.get("open_operation_count") == 0
-            and isinstance(data.get("findings"), list),
-            "Pi doctor did not observe complete read-only native owners")
-    findings = data["findings"]
-    require(all(isinstance(finding, dict) and
-                isinstance(finding.get("code"), str) and
-                isinstance(finding.get("status"), str)
-                for finding in findings), "Pi doctor findings malformed")
-    native_drift = any(
-        finding["code"] == "native_projection_changed"
-        and finding.get("client_id") == "pi"
-        and finding["status"] == "degraded" for finding in findings)
-    if expect_drift:
-        require(native_drift,
-                "tampered Pi native Skill was not rejected by real CLI doctor")
-    else:
-        require(not any(
-            finding["status"] == "degraded"
-            or finding["code"] in (
-                "native_projection_not_checked", "native_projection_changed",
-                "managed_integrity_check_failed")
-            for finding in findings),
-            "read-only doctor found unqualified native Pi projection")
+    """Verify real native projections for all four signed package owners."""
+    selections = ("marketing-kit",) if expect_drift else tuple(EXPECTED)
+    for alias in selections:
+        report = invoke(cli, env, project, "native doctor", "doctor",
+                        alias, "--target", "pi", *scope_args)
+        data = report.get("data")
+        require(report.get("command") == "doctor" and isinstance(data, dict)
+                and data.get("read_only") is True
+                and type(data.get("installation_count")) is int
+                and data["installation_count"] == 4
+                and data.get("open_operation_count") == 0
+                and isinstance(data.get("findings"), list),
+                "Pi doctor did not observe complete read-only native owners")
+        findings = data["findings"]
+        require(all(isinstance(finding, dict) and
+                    isinstance(finding.get("code"), str) and
+                    isinstance(finding.get("status"), str)
+                    for finding in findings), "Pi doctor findings malformed")
+        native_drift = any(
+            finding["code"] == "native_projection_changed"
+            and finding.get("client_id") == "pi"
+            and finding["status"] == "degraded" for finding in findings)
+        if expect_drift:
+            require(native_drift,
+                    "tampered Pi native Skill was not rejected by real CLI doctor")
+        else:
+            require(not any(
+                finding["status"] == "degraded"
+                or finding["code"] in (
+                    "native_projection_not_checked", "native_projection_changed",
+                    "managed_integrity_check_failed")
+                for finding in findings),
+                "read-only doctor found unqualified native Pi projection")
 
 
 def require_native_tamper_refusal(cli: str, env: dict[str, str],
