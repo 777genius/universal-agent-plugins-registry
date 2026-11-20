@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_registry import (
     RegistryError, load_directory_source, resolve_directory, validate_directory,
-    with_derived_pi_targets,
+    with_derived_client_targets,
 )
 from directory_publication import PublicationError
 from legacy_directory_client_boundary import (
@@ -184,7 +184,7 @@ class DerivedPiTargetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = load_directory_source()
-        cls.derived = with_derived_pi_targets(cls.source)
+        cls.derived = with_derived_client_targets(cls.source)
 
     @staticmethod
     def policy(source: dict, distribution_id: str, sequence: int) -> dict:
@@ -203,10 +203,18 @@ class DerivedPiTargetTests(unittest.TestCase):
                                      f"{distribution['id']}@{policy['release_sequence']}")
         self.assertEqual(self.pi_target(self.derived, "777genius/context7", 7),
                          {**self.PI, "authentication": "not_required"})
-        self.assertEqual(self.policy(self.derived, "777genius/context7", 7)["minimum_installer_version"], "0.1.102")
+        self.assertEqual(self.policy(self.derived, "777genius/context7", 7)["minimum_installer_version"], "0.1.108")
         revoked = copy.deepcopy(self.source)
         self.policy(revoked, "777genius/context7", 7)["status"] = "revoked"
-        self.assertIsNone(self.pi_target(with_derived_pi_targets(revoked), "777genius/context7", 7))
+        self.assertIsNone(self.pi_target(with_derived_client_targets(revoked), "777genius/context7", 7))
+
+    def test_hermes_and_antigravity_are_derived_like_pi(self) -> None:
+        policy = self.policy(self.derived, "777genius/context7", 7)
+        for client in ("hermes", "antigravity"):
+            with self.subTest(client=client):
+                target = next(item for item in policy["targets"] if item["client"] == client)
+                self.assertEqual(target, {"client": client, "scopes": ["user"], "delivery": "managed",
+                                          "authentication": "not_required"})
 
     def test_marketing_kit_and_its_saved_dependencies_get_pi(self) -> None:
         for distribution_id, sequence in (
@@ -221,9 +229,9 @@ class DerivedPiTargetTests(unittest.TestCase):
         policy = self.policy(source, "777genius/notion", 1)
         # Every remaining target supports SSE, so nothing bounds the transport.
         policy["targets"] = [item for item in policy["targets"] if item["client"] in {"cursor", "copilot"}]
-        self.assertIsNone(self.pi_target(with_derived_pi_targets(source), "777genius/notion", 1))
+        self.assertIsNone(self.pi_target(with_derived_client_targets(source), "777genius/notion", 1))
         policy["targets"].insert(0, {**self.PI, "client": "codex", "authentication": "required"})
-        self.assertIsNotNone(self.pi_target(with_derived_pi_targets(source), "777genius/notion", 1))
+        self.assertIsNotNone(self.pi_target(with_derived_client_targets(source), "777genius/notion", 1))
 
     def test_derived_targets_validate_without_pi_evidence_but_upstream_rule_stays(self) -> None:
         self.assertFalse(any(item.get("client") == "pi" for item in self.derived["evidence"]))

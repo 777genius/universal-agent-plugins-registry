@@ -1,7 +1,7 @@
 """The reviewed Directory source stays Pi-free: Pi targets are derived.
 
 Publication adds Pi from the pinned client capabilities
-(`build_registry.with_derived_pi_targets`). An authored Pi target would skip
+(`build_registry.with_derived_client_targets`). An authored Pi target would skip
 that derivation and its installer floor, so the source never carries one.
 """
 from __future__ import annotations

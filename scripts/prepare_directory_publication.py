@@ -26,7 +26,7 @@ from build_registry import (
     validate_bridge_bindings,
     validate_changed_external_releases,
     validate_release_package,
-    with_derived_pi_targets,
+    with_derived_client_targets,
 )
 if __package__:
     from .directory_publication import (
@@ -754,7 +754,7 @@ def build_candidate(
     validate_with_schema(source, SOURCE_SCHEMA)
     # Pi is an ordinary client derived from the pinned client capabilities.
     # Every check below, including eligibility broadening, sees its targets.
-    source = with_derived_pi_targets(source)
+    source = with_derived_client_targets(source)
     require(SHA_RE.fullmatch(source_commit) is not None, "source commit must be a full lowercase SHA")
     try:
         # Establish recipe/source binding before package validation so a

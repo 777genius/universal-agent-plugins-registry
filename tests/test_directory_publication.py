@@ -183,7 +183,7 @@ class CanonicalAndSignatureTests(unittest.TestCase):
             publication.validate_with_schema(candidate, publication.CANDIDATE_SCHEMA)
             publication.validate_directory_records(candidate, snapshot=False)
             # The publisher intentionally derives Pi, but never fabricates materialization evidence.
-            expected = prepare.with_derived_pi_targets(source)["distributions"][0]["release_policies"]
+            expected = prepare.with_derived_client_targets(source)["distributions"][0]["release_policies"]
             self.assertEqual(candidate["distributions"][0]["release_policies"], expected)
             self.assertEqual(
                 [target["client"] for target in expected[0]["targets"]].count("pi"), 1,
@@ -647,7 +647,7 @@ class PublicationLifecycleTests(unittest.TestCase):
                         release["package_source"]["revision"] = "a" * 40
                     release.setdefault("published_at", "2026-08-20T00:00:00Z")
         # The previous snapshot came from this publisher, so it already has Pi.
-        previous = prepare.with_derived_pi_targets(source)
+        previous = prepare.with_derived_client_targets(source)
         previous["revocations"] = []
         for distribution in previous["distributions"]:
             policies = {
@@ -1499,7 +1499,7 @@ class PublicationLifecycleTests(unittest.TestCase):
                 )
             # Once the same derived policy has itself been signed, a refresh
             # with unchanged eligibility must still work offline.
-            signed_pi = prepare.with_derived_pi_targets(copy.deepcopy(source))
+            signed_pi = prepare.with_derived_client_targets(copy.deepcopy(source))
             unchanged = prepare.build_candidate(
                 source, config, current_revision, "local-emergency-offline",
                 signed_pi, repository_root=unavailable,

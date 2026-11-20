@@ -82,7 +82,9 @@ MAX_CATEGORIES = 8
 ICON_NAMES = {"chrome-devtools": "googlechrome.svg", "docker-hub": "docker.svg", "hubspot-crm": "hubspot.svg", "hubspot-developer": "hubspot.svg"}
 CLIENT_IDS = load_client_ids()
 CLIENT_CAPABILITIES = load_client_capabilities()
-PI_MINIMUM_INSTALLER_VERSION = "0.1.102"
+# Clients whose signed targets are derived from the pinned capabilities, with
+# the first installer release that installs them from the Directory.
+DERIVED_CLIENT_MINIMUM_INSTALLER_VERSIONS = {"pi": "0.1.102", "hermes": "0.1.108", "antigravity": "0.1.108"}
 KIND_PRIORITY = {"upstream": 0, "community_bridge": 1, "community": 2}
 DIRECTORY_TREE_DIGEST_ALGORITHM = "agentplugins-tree-sha256-v1"
 DIRECTORY_TREE_DIGEST_DOMAIN = b"agentplugins.package-tree\x00sha256\x00v1"
@@ -1800,47 +1802,49 @@ def _mcp_transports(client: str) -> set[str]:
     return {transport for transport, state in states.items() if state != "unsupported"}
 
 
-def with_derived_pi_targets(source: dict[str, object]) -> dict[str, object]:
-    """Return a copy in which every Pi-compatible active or superseded release also targets Pi.
+def with_derived_client_targets(source: dict[str, object]) -> dict[str, object]:
+    """Return a copy in which every compatible active or superseded release also targets Pi, Hermes and Antigravity.
 
-    Superseded releases stay usable for repair and lock restoration, so they keep Pi too.
+    Superseded releases stay usable for repair and lock restoration, so they keep these clients too.
 
-    Pi compatibility comes only from the pinned client capabilities, never from
-    per-package Pi evidence. The installer still checks each package it installs.
+    Compatibility comes only from the pinned client capabilities, never from
+    per-package evidence. The installer still checks each package it installs.
     """
-    pi = CLIENT_CAPABILITIES["pi"]
     result = copy.deepcopy(source)
-    for distribution in result["distributions"]:
-        # Upstream releases require passed materialization evidence for every
-        # target (signer and released CLI); Pi resolves to a community fallback.
-        if distribution["status"] != "active" or distribution["kind"] == "upstream":
-            continue
-        components = {release["sequence"]: set(release["components"]) for release in distribution["releases"]}
-        for policy in distribution["release_policies"]:
-            parts = components.get(policy["release_sequence"])
-            clients = {target["client"] for target in policy["targets"]}
-            authentication = {target["authentication"] for target in policy["targets"]}
-            if (
-                parts is None or policy["status"] not in ("active", "superseded") or "pi" in clients
-                or len(authentication) != 1
-                or ("skills" in parts and pi["skill_support"] != "native")
-                or ("extensions" in parts and pi["extension_support"] != "native")
-                # Release metadata does not name MCP transports. An existing
-                # target limited to transports Pi also supports bounds them.
-                or ("mcp" in parts and not any(
-                    _mcp_transports(client) and _mcp_transports(client) <= _mcp_transports("pi")
-                    for client in clients
-                ))
-            ):
+    for client_id, minimum_version in DERIVED_CLIENT_MINIMUM_INSTALLER_VERSIONS.items():
+        client = CLIENT_CAPABILITIES[client_id]
+        floor = tuple(int(part) for part in minimum_version.split("."))
+        for distribution in result["distributions"]:
+            # Upstream releases require passed materialization evidence for every
+            # target (signer and released CLI); they resolve to a community fallback.
+            if distribution["status"] != "active" or distribution["kind"] == "upstream":
                 continue
-            policy["targets"].append({
-                "client": "pi", "scopes": ["user"], "delivery": "managed",
-                "authentication": authentication.pop(),
-            })
-            policy["targets"].sort(key=lambda target: CLIENT_IDS.index(target["client"]))
-            minimum = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
-            if minimum < tuple(int(part) for part in PI_MINIMUM_INSTALLER_VERSION.split(".")):
-                policy["minimum_installer_version"] = PI_MINIMUM_INSTALLER_VERSION
+            components = {release["sequence"]: set(release["components"]) for release in distribution["releases"]}
+            for policy in distribution["release_policies"]:
+                parts = components.get(policy["release_sequence"])
+                clients = {target["client"] for target in policy["targets"]}
+                authentication = {target["authentication"] for target in policy["targets"]}
+                if (
+                    parts is None or policy["status"] not in ("active", "superseded") or client_id in clients
+                    or len(authentication) != 1
+                    or ("skills" in parts and client["skill_support"] != "native")
+                    or ("extensions" in parts and client["extension_support"] != "native")
+                    # Release metadata does not name MCP transports. An existing
+                    # target limited to transports this client also supports bounds them.
+                    or ("mcp" in parts and not any(
+                        _mcp_transports(other) and _mcp_transports(other) <= _mcp_transports(client_id)
+                        for other in clients
+                    ))
+                ):
+                    continue
+                policy["targets"].append({
+                    "client": client_id, "scopes": ["user"], "delivery": "managed",
+                    "authentication": next(iter(authentication)),
+                })
+                policy["targets"].sort(key=lambda target: CLIENT_IDS.index(target["client"]))
+                minimum = tuple(int(part) for part in policy["minimum_installer_version"].split("."))
+                if minimum < floor:
+                    policy["minimum_installer_version"] = minimum_version
     return result
 
 
@@ -2244,7 +2248,7 @@ def main() -> int:
         source = load_directory_source()
         validate_directory(source)
         # The signer publishes the derived Pi targets; they need no Pi evidence.
-        validate_directory(with_derived_pi_targets(source), verify_packages=False)
+        validate_directory(with_derived_client_targets(source), verify_packages=False)
         if args.external_release_check:
             base_source = load_directory_source_at_revision(args.base_revision) if args.external_release_check == "changed" else None
             validate_changed_external_releases(source, base_source)
