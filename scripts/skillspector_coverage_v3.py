@@ -935,7 +935,10 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
             require_represented_degraded_findings(item, old_record, new, attempt)
         attempts[identifier] = copy.deepcopy(attempt)  # lineage was checked above
         quarantine_recovery(records, attempts, item, outcome,
-                            prefer_existing=degraded_complete, witness_origin=verified_current_origin)
+                            prefer_existing=degraded_complete or (
+                                conflicting_partial and verified_current_origin is not None),
+                            witness_origin=verified_current_origin,
+                            current_partial_novel=conflicting_partial and verified_current_origin is not None)
         # An authenticated *current* run must not silently discard a genuinely
         # new independent finding merely because the alternate will not fit the
         # signed v3 shard. Historical recovery has its own incomplete disclosure
@@ -1233,7 +1236,8 @@ def witness_fits_shard_budget(record, repository):
     return len(report_json(shard_document(repository, [public]))) <= MAX_SHARD_BYTES
 
 
-def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False, witness_origin=None):
+def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=False, witness_origin=None,
+                        current_partial_novel=False):
     """Keep an original adverse report and disclose that alternate evidence is omitted.
 
     Attempt numbers belong to the originating queue lineage. A conflicting fork
@@ -1273,7 +1277,17 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         new["status"] in {"complete", "partial"} and
         old["source"] == new["source"] and old["scanner"] == new["scanner"] and
         bool(old_groups - new_groups) and bool(new_groups - old_groups))
-    novel = (new_groups - old_groups if degraded_complete or disjoint or
+    # A verified current Partial can regress inspection while containing
+    # every old finding plus new independent evidence. It is neither a
+    # disjoint fork nor a Complete downgrade: retain the old original and
+    # bind the additional evidence to its own authenticated current witness.
+    # Unsigned and historical callers do not activate this narrow path.
+    require(not current_partial_novel or (
+        witness_origin is not None and new["status"] == "partial" and
+        old["status"] == "partial" and old["source"] == new["source"] and
+        old["scanner"] == new["scanner"] and degraded_rescan(old, new)),
+        "current Partial witness requires same-source degraded authenticated evidence")
+    novel = (new_groups - old_groups if degraded_complete or disjoint or current_partial_novel or
              (witness_origin is not None and old.get("recovery_witnesses")) else Counter())
     if novel and witness_origin is None:
         # A verified *current* worker does not provide an independent main
