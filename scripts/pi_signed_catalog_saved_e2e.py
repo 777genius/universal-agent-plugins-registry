@@ -56,6 +56,39 @@ def native_fingerprint(root: Path) -> dict[str, str]:
     return result
 
 
+def check_native_contract(root: Path, components: list[str]) -> None:
+    """Require actual native Pi payload, not just an arbitrary changed marker."""
+    kinds = set(components)
+    require(bool(kinds) and kinds <= {"skills", "mcp", "extensions"},
+            "unsupported reviewed Pi component kinds")
+    if "skills" in kinds:
+        skills = list((root / "skills").rglob("SKILL.md"))
+        require(bool(skills) and all(
+            p.is_file() and not p.is_symlink() and 0 < p.stat().st_size <= 1024 * 1024
+            for p in skills), "Pi native Skills missing or empty")
+    if "mcp" in kinds:
+        config = root / "mcp.json"
+        require(config.is_file() and not config.is_symlink(), "native Pi MCP config absent")
+        document = json.loads(config.read_text(encoding="utf-8"))
+        servers = document.get("mcpServers")
+        require(isinstance(servers, dict) and bool(servers),
+                "native Pi MCP server collection empty")
+        for name, server in servers.items():
+            require(isinstance(name, str) and bool(name)
+                    and isinstance(server, dict)
+                    and ((isinstance(server.get("command"), str) and
+                          bool(server["command"].strip())) or
+                         (isinstance(server.get("url"), str) and
+                          (server["url"].startswith("https://") or
+                           server["url"].startswith("http://127.0.0.1:") or
+                           server["url"].startswith("http://localhost:")))),
+                    "native Pi MCP server has no executable/HTTP transport")
+    if "extensions" in kinds:
+        extensions = root / "extensions"
+        require(extensions.is_dir() and bool(list(extensions.rglob("*"))),
+                "native Pi extensions absent")
+
+
 def signed_info(cli: str, env: dict[str, str], project: Path,
                 distribution: str, scope: str) -> dict:
     response = invoke(cli, env, project, "signed-info", "info", distribution,
@@ -226,6 +259,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
     other = native_fingerprint(native_root(env, project, "project" if scope == "user" else "user"))
     require(actual != native_before and other == other_before,
             "Pi native projection missing or leaked to other scope")
+    check_native_contract(native_root(env, project, scope), source["components"])
     for alias in pinned:
         result = invoke(cli, env, project, "native-doctor", "doctor", alias,
                         "--target", "pi", "--scope", scope,
