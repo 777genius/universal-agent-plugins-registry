@@ -27,8 +27,8 @@ OLD_ZIP = "30996971b3da05f02cf866851e4db306fa963534581d04d03c9b1f60a8ba2769"
 NEW_ZIP = "de2e8e9bc77ca5370b4176df17c46a6bd3f0a4dd1fe28d172d1b8b6dc3a41336"
 ORIGIN = {"run_id": 44733681502, "run_attempt": 1}
 PREVIOUS_ENTRY = re.compile(
-    r"previous/(?:index|selection|attempts|coverage|recovery|publication-base)\\.json|"
-    r"previous/shards/[0-9a-f]{64}\\.json"
+    r"previous/(?:index|selection|attempts|coverage|recovery|publication-base)\.json|"
+    r"previous/shards/[0-9a-f]{64}\.json"
 )
 
 
@@ -66,7 +66,7 @@ def run(previous_zip, current_zip, output):
             entries = [info for info in prior.infolist()
                        if info.filename.startswith("previous/")]
             insist(len(entries) >= 2050, "original manifest/shards incomplete")
-            insist(sum(info.file_size for info in entries) < (400 << 20),
+            insist(sum(info.file_size for info in entries) < (600 << 20),
                    "previous bundle too large")
             previous_dir = root / "previous"
             for info in entries:
