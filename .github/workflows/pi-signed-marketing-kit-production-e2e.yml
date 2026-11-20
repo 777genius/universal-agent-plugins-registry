@@ -39,17 +39,17 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(npm view universal-agent-plugins@0.1.111 version)" = "0.1.111"
-          npm install --global universal-agent-plugins@0.1.111
+          test "$(npm view universal-agent-plugins@0.1.114 version)" = "0.1.114"
+          npm install --global universal-agent-plugins@0.1.114
           npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.5.0
-          test "$(agentplugins version)" = "agentplugins 0.1.111"
+          test "$(agentplugins version)" = "agentplugins 0.1.114"
           test "$(pi --version)" = "1.5.0"
       - name: Execute real production-default signed saved User/Project lifecycle
         shell: bash
         run: |
           set -euo pipefail
           python scripts/pi_signed_marketing_kit_e2e.py \
-            --cli-version 0.1.111 \
+            --cli-version 0.1.114 \
             --report "$RUNNER_TEMP/pi-signed-marketing-${{ matrix.os }}.json"
       - name: Retain strict positive or genuine refusal report
         if: always()

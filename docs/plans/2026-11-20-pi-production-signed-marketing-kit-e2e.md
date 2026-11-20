@@ -14,8 +14,10 @@ production-default saved Directory E2E.
 ## Minimal independent implementation
 
 - Manual, read-only-to-production GitHub Actions workflow on Ubuntu, macOS and
-  Windows using published npm CLI **0.1.111**, native Pi **1.5.0**, exact workflow
+  Windows using published npm CLI **0.1.114**, native Pi **1.5.0**, exact workflow
   source SHA and no Directory-origin override, token or synthetic signing key.
+  Public npm 0.1.114 publication and provenance were independently verified
+  in UAP Actions #44647551865 (not a Pi-signed lifecycle PASS).
 - Four actual signed packages in both User and Project: Marketing Kit 0.1.0 and
   required Notion 0.1.0, HubSpot CRM 0.1.0, Playwright Bridge 0.0.80.
 - Each scope uses isolated disposable profiles A/B. Require four distinct

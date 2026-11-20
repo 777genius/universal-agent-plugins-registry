@@ -79,7 +79,7 @@ def check_lock(path: Path, policy: dict | None = None) -> str:
                 and registry.get("distribution_id") == EXPECTED[alias]
                 and isinstance(registry.get("product_id"), str)
                 and bool(registry["product_id"])
-                # v0.1.111 has only the historical compiled-in signed feed.
+                # The pinned public CLI currently accepts only the legacy implicit feed.
                 and registry.get("feed_id", "") == ""
                 and isinstance(registry.get("repository"), str)
                 and bool(registry["repository"])
