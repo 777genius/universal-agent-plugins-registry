@@ -230,6 +230,63 @@ def invoke(cli: str, env: dict[str, str], project: Path, stage: str,
     return json_object(proc.stdout, stage)
 
 
+def observe_native_doctor(cli: str, env: dict[str, str],
+                          project: Path, scope_args: tuple[str, ...],
+                          *, expect_drift: bool = False) -> None:
+    """Use the published CLI's read-only native VerifyOnly integrity observer."""
+    report = invoke(cli, env, project, "native doctor", "doctor",
+                    "marketing-kit", "--target", "pi", *scope_args)
+    data = report.get("data")
+    require(report.get("command") == "doctor" and isinstance(data, dict)
+            and data.get("read_only") is True
+            and type(data.get("installation_count")) is int
+            and data["installation_count"] == 4
+            and data.get("open_operation_count") == 0
+            and isinstance(data.get("findings"), list),
+            "Pi doctor did not observe complete read-only native owners")
+    findings = data["findings"]
+    require(all(isinstance(finding, dict) and
+                isinstance(finding.get("code"), str) and
+                isinstance(finding.get("status"), str)
+                for finding in findings), "Pi doctor findings malformed")
+    native_drift = any(
+        finding["code"] == "native_projection_changed"
+        and finding.get("client_id") == "pi"
+        and finding["status"] == "degraded" for finding in findings)
+    if expect_drift:
+        require(native_drift,
+                "tampered Pi native Skill was not rejected by real CLI doctor")
+    else:
+        require(not any(
+            finding["status"] == "degraded"
+            or finding["code"] in (
+                "native_projection_not_checked", "native_projection_changed",
+                "managed_integrity_check_failed")
+            for finding in findings),
+            "read-only doctor found unqualified native Pi projection")
+
+
+def require_native_tamper_refusal(cli: str, env: dict[str, str],
+                                 project: Path, scope: str,
+                                 scope_args: tuple[str, ...]) -> None:
+    """Prove a real modified Skill is detected, then restore exact original bytes."""
+    skill = native_root(env, project, scope) / "skills" / "campaign-planning" / "SKILL.md"
+    require(skill.is_file() and not skill.is_symlink()
+            and skill.stat().st_nlink == 1,
+            "native Pi Skill is not a safe disposable test file")
+    original = skill.read_bytes()
+    require(0 < len(original) < 1024 * 1024,
+            "native Pi Skill has no bounded original bytes")
+    try:
+        skill.write_bytes(original + b"\\n<!-- tampered by disposable E2E -->\\n")
+        observe_native_doctor(cli, env, project, scope_args, expect_drift=True)
+    finally:
+        skill.write_bytes(original)
+    require(skill.read_bytes() == original,
+            "native Pi Skill was not restored byte-for-byte")
+    observe_native_doctor(cli, env, project, scope_args)
+
+
 def observe_signed_policy(cli: str, env: dict[str, str], project: Path) -> dict:
     """Read the authentic release and Pi authorization from the public CLI."""
     baseline = None
@@ -295,6 +352,8 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         invoke(cli, env_a, project_a, "signed list", "list", "--target", "pi", *args_a),
         scope, policy)
     check_native(env_a, project_a, scope)
+    observe_native_doctor(cli, env_a, project_a, args_a)
+    require_native_tamper_refusal(cli, env_a, project_a, scope, args_a)
     lock_digest = check_lock(portable_a / "uap.lock", policy)
     require((portable_a / "uap.toml").is_file(), "saved source agreement missing")
     report.append({"scope": scope, "stage": "signed-add", "result": "passed",
@@ -315,6 +374,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         invoke(cli, env_a, project_a, "post-repair list", "list",
                "--target", "pi", *args_a), scope, policy),
             "signed update/repair lost installed owner")
+    observe_native_doctor(cli, env_a, project_a, args_a)
     report.append({"scope": scope, "stage": "repeat-update-repair", "result": "passed"})
 
     for filename in ("uap.toml", "uap.lock"):
@@ -330,6 +390,7 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
             and not set(original.values()) & set(restored.values()),
             "cold restore changed signed pins or reused installation IDs")
     check_native(env_b, project_b, scope)
+    observe_native_doctor(cli, env_b, project_b, args_b)
     report.append({"scope": scope, "stage": "cold-locked-restore", "result": "passed"})
 
     for env, project, args in ((env_b, project_b, args_b), (env_a, project_a, args_a)):
