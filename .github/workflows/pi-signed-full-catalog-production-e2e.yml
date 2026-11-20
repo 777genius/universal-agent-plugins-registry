@@ -1,0 +1,64 @@
+name: Pi signed saved full catalog production E2E
+
+# Strictly manual positive acceptance. DO NOT dispatch until there is an
+# owner/editor-approved, genuine Pi-authorized signed production snapshot.
+# Current sequence 48 is Pi-free. Refusal is FAILURE, never a PASS.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-signed-full-catalog-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-catalog:
+    name: Genuine signed saved Pi / ${{ matrix.os }} / shard-${{ matrix.shard }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.21.1'
+          package-manager-cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Verify immutable tested source and authentic public CLI / native Pi
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(npm view universal-agent-plugins@0.1.114 version)" = "0.1.114"
+          npm install --global universal-agent-plugins@0.1.114
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.5.0
+          test "$(agentplugins version)" = "agentplugins 0.1.114"
+          test "$(pi --version)" = "1.5.0"
+      - name: Execute real signed saved User/Project lifecycle for this six-release shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/pi_signed_catalog_saved_e2e.py \
+            --source-head "$GITHUB_SHA" \
+            --platform "${{ matrix.os }}" \
+            --shard "${{ matrix.shard }}" \
+            --report "$RUNNER_TEMP/pi-signed-full-${{ matrix.os }}-${{ matrix.shard }}.json"
+      - name: Preserve bounded positive or refusal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pi-signed-full-${{ matrix.os }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/pi-signed-full-${{ matrix.os }}-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 14
