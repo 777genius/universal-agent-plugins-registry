@@ -37,6 +37,7 @@ def installed_fixture(scope: str = "user") -> dict:
         {
             "installation_id": str(number), "directory": {
                 "recorded_distribution": distribution,
+                "recorded_release_sequence": 1,
                 "recorded_revision": "c" * 40,
             },
             "clients": [{"client_id": "pi", "scope": scope,
@@ -94,6 +95,7 @@ class SignedMarketingInventoryTests(unittest.TestCase):
             "unknown-record": lambda d: d["data"]["installations"][0]["directory"].update(recorded_distribution="foreign/package"),
             "reused-id": lambda d: d["data"]["installations"][1].update(installation_id="1"),
             "untrusted-revision": lambda d: d["data"]["installations"][0]["directory"].update(recorded_revision="main"),
+            "wrong-sequence": lambda d: d["data"]["installations"][0]["directory"].update(recorded_release_sequence=2),
             "duplicate-record": lambda d: d["data"]["installations"][1]["directory"].update(
                 recorded_distribution=EXPECTED["marketing-kit"]),
         }
