@@ -229,11 +229,16 @@ class QueueTests(unittest.TestCase):
                 {"record": changed, "attempt": coverage.make_attempt(subject, changed)})
         self.assertEqual(records[subject["id"]]["findings"], old["findings"])
         self.assertEqual(attempts, {})
-        # When a full-match fingerprint exists it, not the column alone,
-        # anchors the stable security identity.
+        # Even with an identical upstream match fingerprint, a changed
+        # occurrence position is independent evidence. Coarse identity alone
+        # cannot authorize dropping the original signed finding; quarantine
+        # remains fail-closed until a full-evidence reconciliation.
         old["findings"][0]["match_fingerprint"] = "stable-source-match"
         changed["findings"][0]["match_fingerprint"] = "stable-source-match"
-        self.assertFalse(coverage.degraded_rescan(old, changed))
+        self.assertEqual(coverage.finding_identities(old), coverage.finding_identities(changed))
+        self.assertNotEqual(coverage.finding_evidence_identities(old),
+                            coverage.finding_evidence_identities(changed))
+        self.assertTrue(coverage.degraded_rescan(old, changed))
 
     def test_degraded_partial_preserves_duplicate_finding_identity_counts(self):
         subject = item()
