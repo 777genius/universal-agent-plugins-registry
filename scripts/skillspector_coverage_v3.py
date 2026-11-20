@@ -1476,10 +1476,20 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             # Its current epoch has no retry predecessor; preserve the verified
             # original prefix instead of recomputing it from an unrelated snapshot.
             attempts[item["id"]] = copy.deepcopy(outcome["attempt"])
-            if old_record is not None and outcome["record"]["status"] == "complete" and \
-                    degraded_rescan(old_record, outcome["record"]):
-                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
-            elif old_record is None or old_record["status"] == "error" or outcome["record"]["status"] != "error":
+            fresh = outcome["record"]
+            degraded_first_epoch = old_record is not None and degraded_rescan(old_record, fresh)
+            if degraded_first_epoch:
+                # A missing compatible retry parent cannot erase the separately
+                # verified predecessor Partial. Preserve its exact original
+                # findings, and bind any independent new security evidence to
+                # the authenticated source/run as a bounded signed witness.
+                novel_partial = fresh["status"] == "partial" and bool(
+                    finding_evidence_identities(fresh) -
+                    represented_finding_evidence_identities(old_record))
+                quarantine_recovery(records, attempts, item, outcome,
+                    prefer_existing=fresh["status"] == "partial",
+                    witness_origin=origin, current_partial_novel=novel_partial)
+            elif old_record is None or old_record["status"] == "error" or fresh["status"] != "error":
                 records[item["id"]] = copy.deepcopy(outcome["record"])
                 records[item["id"]]["freshness"] = "current"
             if item["id"] in uncertain_ids:

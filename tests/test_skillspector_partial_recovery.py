@@ -266,6 +266,64 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
+    def test_first_epoch_partial_without_retry_predecessor_preserves_security_evidence(self):
+        """An authenticated attempt-one cannot overwrite an older Partial whose retry was unavailable."""
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+        original = self.authentic_batch(
+            selection, 5791, 0, warning="Earlier verified HIGH finding.",
+            pattern="first-epoch-old-risk", status="partial", reason="static_parse_limit",
+            profile_id="static-extended-v3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self.recover(root / "baseline", selection, [original])
+            old = baseline["records"][subject["id"]]
+            missing_parent = copy.deepcopy(baseline)
+            missing_parent["attempts"] = {}  # Prior signed evidence survives; old retry metadata does not.
+            self.assertTrue(old["findings"])
+
+            for label, warning in (("new-independent", "Distinct newer HIGH finding."),
+                                   ("old-only", None)):
+                with self.subTest(label=label):
+                    new_batch = self.authentic_batch(
+                        selection, 5792, 1, warning=warning,
+                        pattern="first-epoch-new-risk" if warning else None,
+                        status="partial", reason="static_parse_limit",
+                        profile_id="static-standard-v3",
+                    )
+                    new = new_batch["workers"][0]["attempts"][0]["record"]
+                    self.assertTrue(coverage.degraded_rescan(old, new))
+                    if warning:
+                        self.assertTrue(coverage.finding_evidence_identities(new) -
+                                        coverage.finding_evidence_identities(old))
+                        unsigned = copy.deepcopy(new_batch)
+                        unsigned.pop("execution_origin")
+                        with self.assertRaises(PublicationError):
+                            self.recover(root / (label + "-unsigned"), selection,
+                                         [unsigned], missing_parent)
+                    else:
+                        self.assertFalse(new["findings"])
+                    restored = self.recover(root / label, selection, [new_batch], missing_parent)
+                    retained = restored["records"][subject["id"]]
+                    self.assertEqual(retained["status"], "partial")
+                    self.assertEqual(retained["report_digest"], old["report_digest"])
+                    self.assertEqual(retained["findings"], old["findings"])
+                    self.assertTrue(retained["findings_truncated"])
+                    self.assertIn("recovery_conflict", coverage.reason_codes(retained))
+                    self.assertEqual(restored["attempts"][subject["id"]]["attempt_count"], 1)
+                    witnesses = retained.get("recovery_witnesses", [])
+                    if warning:
+                        self.assertEqual(witnesses, [{
+                            "origin": {"run_id": 5792, "run_attempt": 1}, "record": new}])
+                        self.assertEqual(coverage.represented_finding_evidence_identities(retained),
+                                         coverage.finding_evidence_identities(old) |
+                                         coverage.finding_evidence_identities(new))
+                    else:
+                        self.assertEqual(witnesses, [])
+                    self.assertEqual(restored["manifest"]["coverage"]["complete"], 0)
+                    self.assertEqual(restored["manifest"]["coverage"]["partial"], 1)
+
     def test_authenticated_degraded_complete_is_explicit_partial_with_risk_retained(self):
         """A new 'Complete' cannot erase verified same-source risks or analysis."""
         subject = item()
