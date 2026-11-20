@@ -111,6 +111,9 @@ def check_installations(document: dict, scope: str) -> dict[str, str]:
                 and isinstance(binding.get("package_revision"), dict)
                 and binding["package_revision"].get("distribution_id") == distribution
                 and type(binding["package_revision"].get("release_sequence")) is int
+                and binding["package_revision"]["release_sequence"] > 0
+                and signed.get("recorded_release_sequence") ==
+                    binding["package_revision"]["release_sequence"]
                 and isinstance(signed.get("recorded_revision"), str)
                 and re.fullmatch(r"[0-9a-f]{40}", signed["recorded_revision"]),
                 "native Pi installation does not bind materialized signed release")
