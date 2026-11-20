@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 RECORD_SCHEMA = ROOT / "schemas/skillspector-record-v3.schema.json"
 MANIFEST_SCHEMA = ROOT / "schemas/skillspector-manifest-v3.schema.json"
 SHARD_SCHEMA = ROOT / "schemas/skillspector-shard-v3.schema.json"
+# Signed v3 bounds each independently authenticated original, including the
+# third current-run finding set observed in issue #482. Existing v3 reports
+# remain readable; shard and per-witness byte ceilings are unchanged.
+MAX_RECOVERY_WITNESSES = 3
 RETRY_POLICY = {"network_delays_seconds": [900, 3600, 14400], "extended_delay_seconds": 0,
                 "maximum_attempts_per_identity": 4, "history_limit": 8,
                 "queue_lanes": ["new", "retry", "changed"], "normalization_version": 3}
@@ -188,7 +192,7 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     "complete report contains incomplete analyzer evidence")
     witnesses = record.get("recovery_witnesses", [])
     if "recovery_witnesses" in record:
-        require(1 <= len(witnesses) <= 2, "empty or excessive recovery witness list")
+        require(1 <= len(witnesses) <= MAX_RECOVERY_WITNESSES, "empty or excessive recovery witness list")
         # A scanner can never originate a composite report. The signed v3
         # record keeps one original primary report and explicitly carries the
         # other *unaltered* scanner report from an authenticated main checkpoint.
@@ -198,7 +202,7 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                 {"recovery_conflict", "normalization_truncated"} <=
                 {reason["code"] for reason in coverage["reasons"]},
                 "recovery witness requires visible incomplete quarantine")
-        require(len(witnesses) <= 2, "too many independent recovery witnesses")
+        require(len(witnesses) <= MAX_RECOVERY_WITNESSES, "too many independent recovery witnesses")
         seen_witnesses = set()
         for witness in witnesses:
             origin, original = witness["origin"], witness["record"]
