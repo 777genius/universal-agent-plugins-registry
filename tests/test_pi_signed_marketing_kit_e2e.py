@@ -357,6 +357,13 @@ class SignedMarketingDoctorTests(unittest.TestCase):
                 observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"),
                                       expect_drift=True)
 
+    def test_doctor_rejects_unchecked_managed_install_integrity(self):
+        unknown = self.doctor_report({"code": "managed_integrity_not_checked",
+                                      "status": "unknown", "client_id": "pi"})
+        with mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value=unknown):
+            with self.assertRaisesRegex(RuntimeError, "unqualified native"):
+                observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"))
+
     def test_e2e_tamper_instrumentation_restores_original_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
             env, project, _, native = fresh_case(Path(temp), "user-A", "user")

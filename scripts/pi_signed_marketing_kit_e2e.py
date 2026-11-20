@@ -317,7 +317,7 @@ def observe_native_doctor(cli: str, env: dict[str, str],
                 finding["status"] == "degraded"
                 or finding["code"] in (
                     "native_projection_not_checked", "native_projection_changed",
-                    "managed_integrity_check_failed")
+                    "managed_integrity_not_checked", "managed_integrity_check_failed")
                 for finding in findings),
                 "read-only doctor found unqualified native Pi projection")
 
