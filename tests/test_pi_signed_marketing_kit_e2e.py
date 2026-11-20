@@ -12,7 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from pi_signed_marketing_kit_e2e import (
     EXPECTED, CHILD_VERSIONS, assert_foreign, check_installations, check_lock,
-    fresh_case, json_object,
+    check_native, fresh_case, json_object,
 )
 
 
@@ -138,6 +138,37 @@ class SignedMarketingIsolationTests(unittest.TestCase):
             bad.write_text("changed", encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 assert_foreign(root, "user")
+
+
+class SignedMarketingNativeMaterializationTests(unittest.TestCase):
+    def test_requires_actual_skill_and_all_three_mcp_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, project, _, native = fresh_case(Path(tmp), "user-A", "user")
+            with self.assertRaisesRegex(RuntimeError, "Skill"):
+                check_native(env, project, "user")
+            skill = native / "skills" / "campaign-planning" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("---\\nname: campaign-planning\\n---\\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "MCP configuration absent"):
+                check_native(env, project, "user")
+            config = native / "mcp.json"
+            config.write_text(json.dumps({"mcpServers": {
+                "notion": {}, "hubspot-crm": {},
+            }}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                check_native(env, project, "user")
+            config.write_text(json.dumps({"mcpServers": {
+                "notion": {}, "hubspot-crm": {}, "playwright": {},
+            }}), encoding="utf-8")
+            check_native(env, project, "user")
+            with self.assertRaisesRegex(RuntimeError, "retains Marketing Kit Skill"):
+                check_native(env, project, "user", removed=True)
+            skill.unlink()
+            with self.assertRaisesRegex(RuntimeError, "retains signed MCP"):
+                check_native(env, project, "user", removed=True)
+            config.write_text('{"mcpServers":{}}', encoding="utf-8")
+            check_native(env, project, "user", removed=True)
+
 
 
 if __name__ == "__main__":
