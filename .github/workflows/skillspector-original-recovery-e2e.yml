@@ -13,6 +13,7 @@ on:
       - "schemas/skillspector-manifest-v3.schema.json"
       - "schemas/skillspector-shard-v3.schema.json"
       - "tests/test_skillspector_partial_recovery.py"
+      - "scripts/skillspector_current_partial_superset_exact_e2e.py"
 permissions:
   contents: read
   actions: read
@@ -143,3 +144,40 @@ jobs:
           path: ${{ runner.temp }}/original-recovery-proof.json
           if-no-files-found: warn
           retention-days: 7
+
+  original-current-partial-superset:
+    # A separate real-source no-loss gate. Not a production publication.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check cryptography==46.0.3 jsonschema==4.26.0 PyYAML==6.0.3
+      - name: Download original SHA-pinned production plan and current immutable-source worker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/777genius/universal-agent-plugins-registry/actions/artifacts/14629565435/zip" > "${RUNNER_TEMP}/original-plan.zip"
+          gh api "repos/777genius/universal-agent-plugins-registry/actions/artifacts/14630405458/zip" > "${RUNNER_TEMP}/original-worker.zip"
+          echo "30996971b3da05f02cf866851e4db306fa963534581d04d03c9b1f60a8ba2769  ${RUNNER_TEMP}/original-plan.zip" | sha256sum -c --status
+          echo "de2e8e9bc77ca5370b4176df17c46a6bd3f0a4dd1fe28d172d1b8b6dc3a41336  ${RUNNER_TEMP}/original-worker.zip" | sha256sum -c --status
+      - name: Prove exact-source Partial security superset survives authenticated shard read-back
+        run: |
+          python3 -m scripts.skillspector_current_partial_superset_exact_e2e \
+            "${RUNNER_TEMP}/original-plan.zip" \
+            "${RUNNER_TEMP}/original-worker.zip" \
+            "${RUNNER_TEMP}/partial-superset-proof.json"
+      - name: Preserve bounded no-loss acceptance receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: skillspector-original-partial-superset-proof
+          path: ${{ runner.temp }}/partial-superset-proof.json
+          if-no-files-found: warn
+          retention-days: 14
