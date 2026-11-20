@@ -790,9 +790,28 @@ def represented_finding_identities(record):
     return identities
 
 
+def finding_evidence_identities(record):
+    """Attest complete finding groups, not only coarse rule/path identities.
+
+    A stable coarse identity can conceal changed evidence, raw occurrence counts,
+    affected positions or remediation. Remove only independently qualified
+    scanner-generated ID rotations; unknown IDs keep exact byte comparison.
+    A distinct finding group is never silently replaced with a candidate.
+    """
+    return Counter(report_json(group) for group in
+                   _recovery_groups_without_generated_ids(record))
+
+
+def represented_finding_evidence_identities(record):
+    identities = finding_evidence_identities(record)
+    for witness in record.get("recovery_witnesses", []):
+        identities |= finding_evidence_identities(witness["record"])
+    return identities
+
+
 def require_represented_degraded_findings(item, old, new, attempt):
     """Fail closed with bounded digest-only context, never raw source or security evidence."""
-    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
+    old_groups, new_groups = represented_finding_evidence_identities(old), finding_evidence_identities(new)
     novel = new_groups - old_groups
     if novel:
         # Purely numeric diagnostics: old/new group counts can be equal while
@@ -826,7 +845,7 @@ def degraded_rescan(old, new):
         return True
     # Finding group IDs can vary across scanner runs. Retain verified
     # source positions, rules and fingerprint identities across rescans.
-    return bool(represented_finding_identities(old) - finding_identities(new))
+    return bool(represented_finding_evidence_identities(old) - finding_evidence_identities(new))
 
 
 def retained_degraded_replay(item, old_record, old_attempt, outcome):
@@ -850,7 +869,7 @@ def retained_degraded_replay(item, old_record, old_attempt, outcome):
             not degraded_rescan(old_record, new)):
         return False
     return (attempt["fingerprint"] == attempt_fingerprint(item, new) and
-            not finding_identities(new) - finding_identities(old_record))
+            not finding_evidence_identities(new) - finding_evidence_identities(old_record))
 
 
 def witness_fits_max_rebound_id(witness):
@@ -903,7 +922,7 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
     # of claiming Complete or silently dropping findings. Untrusted merges still fail.
     degraded_complete = degraded and new["status"] == "complete"
     conflicting_partial = (degraded and new["status"] == "partial" and
-        bool(finding_identities(new) - finding_identities(old_record)))
+        bool(finding_evidence_identities(new) - finding_evidence_identities(old_record)))
     if degraded_complete or conflicting_partial:
         require(authenticated_current_worker,
                 "complete rescan regresses verified same-source analysis" if degraded_complete else
@@ -922,7 +941,7 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
         # signed v3 shard. Historical recovery has its own incomplete disclosure
         # policy; live publication stays blocked until all new evidence fits.
         if verified_current_origin is not None:
-            require(not (finding_identities(new) - represented_finding_identities(records[identifier])),
+            require(not (finding_evidence_identities(new) - represented_finding_evidence_identities(records[identifier])),
                     "verified current security witness could not be represented in signed shard")
         if predecessor_uncertain(old_record):
             mark_missing_predecessor(records[identifier], attempts[identifier])
@@ -1214,7 +1233,7 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # A recovered Complete may come from a checkpoint rejected in assembly.
     # Historical recovery must enforce the same no-loss rule as current merges.
     degraded_complete = new["status"] == "complete" and degraded_rescan(old, new)
-    old_groups, new_groups = represented_finding_identities(old), finding_identities(new)
+    old_groups, new_groups = represented_finding_evidence_identities(old), finding_evidence_identities(new)
     # Two genuine Partial (or independent fork) scans can each contain an
     # adverse group missing from the other. Quarantining just the "stronger"
     # representative would hide the second authenticated security finding.
