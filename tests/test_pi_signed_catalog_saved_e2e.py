@@ -42,6 +42,7 @@ class FullSignedCatalogTests(unittest.TestCase):
         reports = [
             {"distribution": s["distribution"], "release_sequence": s["release_sequence"],
              "scope": scope, "status": "passed", "snapshot_sequence": 48,
+             "snapshot_digest": "sha256:" + "d" * 64,
              "installed_dependency_count": 1}
             for s, scope in subject.expected_shard(sources, shard)
         ]
