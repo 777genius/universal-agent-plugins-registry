@@ -836,13 +836,18 @@ def degraded_rescan(old, new):
             old["source"] != new["source"] or \
             old.get("target_revision", old["source"]["revision"]) != new["source"]["revision"]:
         return False
-    before, after = old["coverage"], new["coverage"]
-    if after["fully_inspected_files"] < before["fully_inspected_files"]:
-        return True
+    after = new["coverage"]
     completed = {entry["analyzer_id"]: entry.get("completed", 0) for entry in after["analyzers"]}
-    if any(completed.get(entry["analyzer_id"], 0) < entry["completed"]
-           for entry in before["analyzers"] if entry.get("completed", 0)):
-        return True
+    # An independently authenticated witness can have completed analyzer work
+    # absent from the visible primary. Do not discard its signed origin/digest
+    # merely because a new Partial recovers the primary's (weaker) coverage.
+    for prior in (old, *(entry["record"] for entry in old.get("recovery_witnesses", []))):
+        before = prior["coverage"]
+        if after["fully_inspected_files"] < before["fully_inspected_files"]:
+            return True
+        if any(completed.get(entry["analyzer_id"], 0) < entry.get("completed", 0)
+               for entry in before["analyzers"] if entry.get("completed", 0)):
+            return True
     # Finding group IDs can vary across scanner runs. Retain verified
     # source positions, rules and fingerprint identities across rescans.
     return bool(represented_finding_evidence_identities(old) - finding_evidence_identities(new))
@@ -1122,6 +1127,13 @@ def _qualified_quarantine_generated_groups(record):
     """
     coverage = record.get("coverage")
     witnesses = record.get("recovery_witnesses")
+    proof = record.get("recovery_original_grouping")
+    # Quarantine overwrites grouping flags. Only a separately signed, typed
+    # attestation captured BEFORE that mutation can justify generated-ID
+    # equivalence of the retained original. Unknown/old reports fail closed.
+    if proof != {"report_digest": record.get("report_digest"),
+                 "grouping_complete": True, "findings_truncated": False}:
+        return False
     if (not isinstance(coverage, dict) or record.get("status") != "partial" or
             coverage.get("status") != "partial" or
             coverage.get("grouping_complete") is not False or
@@ -1344,6 +1356,17 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         require_represented_degraded_findings(item, old, new, outcome["attempt"])
     chosen = old if prefer_existing or degraded_complete or disjoint or old.get("recovery_witnesses") else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
+    # Bind the originally observed grouping topology to the unchanged scanner
+    # report digest before recovery disclosure mutates its completeness flags.
+    # Never infer this attestation from post-quarantine flags or a witness.
+    if ("recovery_original_grouping" not in retained and
+            "recovery_witnesses" not in retained and
+            retained.get("report_digest") is not None and
+            retained.get("findings_truncated") is False and
+            retained["coverage"].get("grouping_complete") is True):
+        retained["recovery_original_grouping"] = {
+            "report_digest": retained["report_digest"],
+            "grouping_complete": True, "findings_truncated": False}
     added_witness = None
     if novel:
         require(old["source"] == new["source"] and

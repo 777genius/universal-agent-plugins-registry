@@ -733,6 +733,15 @@ class QueueTests(unittest.TestCase):
         self.assertEqual((original["coverage"]["fully_inspected_files"],
                           alternate["coverage"]["fully_inspected_files"]), (2, 1))
         self.assertTrue(coverage.degraded_rescan(original, alternate))
+        # The representative and its witness have crossed analyzer coverage.
+        # A candidate may only replace both if it supersedes BOTH originals.
+        def analyzer_counts(value, x, y):
+            entries = value["coverage"]["analyzers"]
+            assert len(entries) >= 2
+            entries[0]["completed"], entries[1]["completed"] = x, y
+        analyzer_counts(original, 2, 1)
+        analyzer_counts(alternate, 1, 2)
+        analyzer_counts(fully_inspected, 2, 2)
         self.assertEqual(fully_inspected["status"], "complete")
         self.assertFalse(coverage.finding_evidence_identities(alternate) -
                          coverage.finding_evidence_identities(fully_inspected))
@@ -750,6 +759,9 @@ class QueueTests(unittest.TestCase):
             self.assertFalse(kept["coverage"]["grouping_complete"])
             self.assertEqual(kept["report_digest"], original["report_digest"])
             self.assertEqual(kept["recovery_witnesses"][0]["record"], alternate)
+            self.assertEqual(kept["recovery_original_grouping"], {
+                "report_digest": original["report_digest"],
+                "grouping_complete": True, "findings_truncated": False})
             self.assertFalse(coverage.represented_finding_evidence_identities(kept) -
                              coverage.finding_evidence_identities(fully_inspected))
             self.assertFalse(coverage.degraded_rescan(kept, fully_inspected))
@@ -758,6 +770,8 @@ class QueueTests(unittest.TestCase):
 
             for name, tamper in (
                     ("origin", lambda r: r["recovery_witnesses"][0]["origin"].update(run_id=0)),
+                    ("pre_quarantine_proof", lambda r: r["recovery_original_grouping"].update(
+                        report_digest="sha256:" + "f" * 64)),
                     ("source", lambda r: r["recovery_witnesses"][0]["record"]["source"].update(
                         content_digest="sha256:" + "f" * 64)),
                     ("conflict_reason", lambda r: r["coverage"]["reasons"].__setitem__(
@@ -776,6 +790,49 @@ class QueueTests(unittest.TestCase):
                                          forged["findings"])
 
             current_attempt = published["attempts"][subject["id"]]
+            crossed_partial = scan(("shared", "novel"), complete=False, id_prefix=400,
+                                   fully_inspected_files=2, entirely_uninspected_files=0)
+            analyzer_counts(crossed_partial, 2, 1)
+            self.assertTrue(coverage.degraded_rescan(kept, crossed_partial))
+            probe_records = {subject["id"]: copy.deepcopy(kept)}
+            probe_attempts = {subject["id"]: copy.deepcopy(current_attempt)}
+            crossed_attempt = coverage.make_attempt(subject, crossed_partial, current_attempt, kept)
+            self.assertTrue(coverage.apply_outcome(probe_records, probe_attempts, subject,
+                {"attempt": crossed_attempt, "record": crossed_partial}))
+            self.assertEqual(probe_records[subject["id"]]["report_digest"], original["report_digest"])
+            self.assertEqual(probe_records[subject["id"]]["recovery_witnesses"][0]["record"],
+                             alternate)
+            self.assertEqual(probe_records[subject["id"]]["status"], "partial")
+
+            # The same retained topology becomes unsafe if the actual
+            # original scanner grouping was already truncated at acquisition.
+            incomplete_original = copy.deepcopy(original)
+            incomplete_original["coverage"]["grouping_complete"] = False
+            incomplete_original["findings_truncated"] = True
+            scanner.add_coverage_reason(incomplete_original, "normalization_truncated",
+                "Original scanner grouping was already incomplete.")
+            unqualified_previous = bundle(root / "originally-incomplete", selection,
+                                           [incomplete_original])
+            unqualified_worker = worker(selection, [alternate], unqualified_previous)
+            coverage.merge_reports(selection, unqualified_previous, [unqualified_worker],
+                source_commit=COMMIT, output_dir=root / "unqualified",
+                authenticated_current_workers=True,
+                verified_current_origin={"run_id": 44852749618, "run_attempt": 1})
+            unqualified = coverage.read_bundle(root / "unqualified")["records"][subject["id"]]
+            self.assertNotIn("recovery_original_grouping", unqualified)
+            self.assertEqual(coverage._recovery_groups_without_generated_ids(unqualified),
+                             unqualified["findings"])
+            self.assertTrue(coverage.degraded_rescan(unqualified, fully_inspected))
+            self.assertEqual(unqualified["status"], "partial")
+
+            forged_source = copy.deepcopy(original)
+            forged_source["recovery_original_grouping"] = {
+                "report_digest": original["report_digest"],
+                "grouping_complete": True, "findings_truncated": False}
+            with self.assertRaisesRegex(PublicationError,
+                                        "invalid signed pre-quarantine grouping attestation"):
+                coverage.validate_worker(worker(selection, [forged_source]), selection, COMMIT)
+
             next_attempt = coverage.make_attempt(
                 subject, fully_inspected, current_attempt, kept)
             self.assertEqual(next_attempt["attempt_count"], 3)
