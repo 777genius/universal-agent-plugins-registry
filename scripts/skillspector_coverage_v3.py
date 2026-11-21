@@ -1359,7 +1359,8 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     # Bind the originally observed grouping topology to the unchanged scanner
     # report digest before recovery disclosure mutates its completeness flags.
     # Never infer this attestation from post-quarantine flags or a witness.
-    if ("recovery_original_grouping" not in retained and
+    if (witness_origin is not None and
+            "recovery_original_grouping" not in retained and
             "recovery_witnesses" not in retained and
             retained.get("report_digest") is not None and
             retained.get("findings_truncated") is False and
