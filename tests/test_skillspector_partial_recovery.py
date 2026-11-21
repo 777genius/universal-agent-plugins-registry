@@ -266,6 +266,80 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(replay["attempts"], recovered["attempts"])
             self.assertEqual(replay["manifest"]["execution_summary"]["recovered_sources"], 0)
 
+    def test_authenticated_sequential_partial_superset_keeps_both_originals(self):
+        """An authenticated A+B Partial with less coverage must not replace old A.
+
+        Prevent replacing the stronger predecessor with a higher-finding-count
+        report during sequential checkpoint recovery. Both exact originals are
+        represented without claiming analyzer completion or producing Complete.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(labels, inspected):
+            raw = upstream_report()
+            raw["issues"] = [
+                {"id": "PI1", "severity": "HIGH",
+                 "explanation": "Independent " + label + " security warning.",
+                 "pattern": label,
+                 "location": {"file": "SKILL.md", "start_line": n}}
+                for n, label in enumerate(labels, 1)
+            ]
+            raw["analysis_completeness"].update(
+                is_complete=False, status="partial", fully_inspected_files=inspected,
+                partially_inspected_files=1,
+                coverage_percent=50.0 if inspected else 0.0)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Incomplete source."}]
+            value = coverage.scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = coverage.scanner.now()
+            return coverage.scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 1, Path("/source"))
+
+        old = observed(("shared",), 1)
+        new = observed(("shared", "additional"), 0)
+        self.assertEqual(old["source"], new["source"])
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        old_groups = coverage.finding_evidence_identities(old)
+        new_groups = coverage.finding_evidence_identities(new)
+        self.assertFalse(old_groups - new_groups)
+        self.assertEqual(sum((new_groups - old_groups).values()), 1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = self.batch(selection, [old])
+            first["execution_origin"] = {"run_id": 66701, "run_attempt": 1}
+            baseline = self.recover(root / "previous", selection, [first])
+            second = self.batch(selection, [new], baseline)
+            second["execution_origin"] = {"run_id": 66702, "run_attempt": 1}
+
+            unsigned = copy.deepcopy(second)
+            del unsigned["execution_origin"]
+            with self.assertRaises(PublicationError):
+                self.recover(root / "unsigned", selection, [unsigned], baseline)
+
+            recovered = self.recover(root / "qualified", selection, [second], baseline)
+            kept = recovered["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertEqual(kept["report_digest"], old["report_digest"])
+            self.assertEqual(kept["coverage"]["fully_inspected_files"],
+                             old["coverage"]["fully_inspected_files"])
+            self.assertEqual(kept["findings"], old["findings"])
+            self.assertTrue(kept["findings_truncated"])
+            self.assertFalse(kept["coverage"]["grouping_complete"])
+            self.assertEqual(kept["recovery_witnesses"],
+                             [{"origin": {"run_id": 66702, "run_attempt": 1},
+                               "record": new}])
+            self.assertFalse(new_groups -
+                             coverage.represented_finding_evidence_identities(kept))
+            self.assertEqual(recovered["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(recovered["manifest"]["coverage"]["complete"], 0)
+            self.assertEqual(recovered["manifest"]["coverage"]["partial"], 1)
+            replay = self.recover(root / "replay", selection, [second], recovered)
+            self.assertEqual(replay["records"], recovered["records"])
+            self.assertEqual(replay["attempts"], recovered["attempts"])
+
     def test_first_epoch_partial_without_retry_predecessor_preserves_security_evidence(self):
         """An authenticated attempt-one cannot overwrite an older Partial whose retry was unavailable."""
         subject = item()

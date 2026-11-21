@@ -1548,7 +1548,9 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                 require(attempt == make_attempt(item, outcome["record"], old_attempt, old_record,
                     at=attempt["last_attempted_at"]), "recovered attempt lineage differs")
                 attempts[item["id"]] = copy.deepcopy(attempt)
-                quarantine_recovery(records, attempts, item, outcome, witness_origin=origin)
+                quarantine_recovery(records, attempts, item, outcome,
+                    prefer_existing=bool(conflicting_partial), witness_origin=origin,
+                    current_partial_novel=bool(conflicting_partial))
                 if predecessor_uncertain(old_record) or item["id"] in uncertain_ids:
                     mark_missing_predecessor(records[item["id"]], attempts[item["id"]])
                 applied += 1
