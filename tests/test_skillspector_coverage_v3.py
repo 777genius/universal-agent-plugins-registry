@@ -685,6 +685,96 @@ class QueueTests(unittest.TestCase):
             self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
                             coverage.reason_codes(retained))
 
+    def test_quarantined_generated_ids_only_normalize_with_signed_source_witness(self):
+        """Full A+B rescan must recover after signed A / A+B Partial quarantine.
+
+        Raw scanner reports and their digests remain unchanged; only the
+        comparison of genuine generated IDs in already observed groups is
+        qualified. A malformed origin, changed source or changed evidence must
+        never pass through this narrow equality check.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def scan(names, *, complete, id_prefix):
+            raw = upstream_report()
+            raw["issues"] = [
+                {"id": "PI1", "severity": "HIGH",
+                 "finding_id": "finding-" + format(id_prefix + index, "032x"),
+                 "explanation": "Original " + name + " security finding.",
+                 "pattern": name,
+                 "location": {"file": "SKILL.md", "start_line": index}}
+                for index, name in enumerate(names, 1)]
+            if not complete:
+                raw["analysis_completeness"].update(
+                    is_complete=False, status="partial", partially_inspected_files=1)
+                raw["analysis_completeness"]["ledger_exceptions"] = [
+                    {"reason_code": "static_parse_limit", "message": "Source inspection incomplete."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        original = scan(("shared",), complete=False, id_prefix=100)
+        alternate = scan(("shared", "novel"), complete=False, id_prefix=200)
+        fully_inspected = scan(("shared", "novel"), complete=True, id_prefix=300)
+        self.assertTrue(coverage.degraded_rescan(original, alternate))
+        self.assertEqual(fully_inspected["status"], "complete")
+        self.assertFalse(coverage.finding_evidence_identities(alternate) -
+                         coverage.finding_evidence_identities(fully_inspected))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [original])
+            second = worker(selection, [alternate], previous)
+            coverage.merge_reports(selection, previous, [second], source_commit=COMMIT,
+                output_dir=root / "quarantined", authenticated_current_workers=True,
+                verified_current_origin={"run_id": 44852749617, "run_attempt": 1})
+            published = coverage.read_bundle(root / "quarantined")
+            kept = published["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertTrue(kept["findings_truncated"])
+            self.assertFalse(kept["coverage"]["grouping_complete"])
+            self.assertEqual(kept["report_digest"], original["report_digest"])
+            self.assertEqual(kept["recovery_witnesses"][0]["record"], alternate)
+            self.assertFalse(coverage.represented_finding_evidence_identities(kept) -
+                             coverage.finding_evidence_identities(fully_inspected))
+            self.assertFalse(coverage.degraded_rescan(kept, fully_inspected))
+            self.assertNotEqual(coverage._recovery_groups_without_generated_ids(kept),
+                                kept["findings"])
+
+            for name, tamper in (
+                    ("origin", lambda r: r["recovery_witnesses"][0]["origin"].update(run_id=0)),
+                    ("source", lambda r: r["recovery_witnesses"][0]["record"]["source"].update(
+                        content_digest="sha256:" + "f" * 64)),
+                    ("conflict_reason", lambda r: r["coverage"]["reasons"].__setitem__(
+                        slice(None), [reason for reason in r["coverage"]["reasons"]
+                                      if reason["code"] != "recovery_conflict"])),
+                    ("raw_count", lambda r: r["findings"][0].update(raw_count=999)),
+                    ("evidence", lambda r: r["findings"][0].update(
+                        message="Changed security evidence."))):
+                with self.subTest(tamper=name):
+                    forged = copy.deepcopy(kept)
+                    tamper(forged)
+                    if name == "evidence":
+                        self.assertTrue(coverage.degraded_rescan(forged, fully_inspected))
+                    else:
+                        self.assertEqual(coverage._recovery_groups_without_generated_ids(forged),
+                                         forged["findings"])
+
+            current_attempt = published["attempts"][subject["id"]]
+            next_attempt = coverage.make_attempt(
+                subject, fully_inspected, current_attempt, kept)
+            self.assertEqual(next_attempt["attempt_count"], 3)
+            records = {subject["id"]: copy.deepcopy(kept)}
+            attempts = {subject["id"]: copy.deepcopy(current_attempt)}
+            self.assertTrue(coverage.apply_outcome(records, attempts, subject,
+                {"attempt": next_attempt, "record": fully_inspected}))
+            self.assertEqual(records[subject["id"]]["status"], "complete")
+            self.assertFalse(coverage.represented_finding_evidence_identities(kept) -
+                             coverage.finding_evidence_identities(records[subject["id"]]))
+
+
     def test_three_authenticated_current_witnesses_preserve_all_signed_findings(self):
         """Three source-identical scanner originals survive without manufactured Complete.
 

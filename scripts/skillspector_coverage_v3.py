@@ -1110,6 +1110,45 @@ def merge_reports(selection, previous, workers, *, source_commit, output_dir, di
     return manifest
 
 
+def _qualified_quarantine_generated_groups(record):
+    """Trust ID topology of retained groups, not the quarantined scan's completeness.
+
+    Recovery changes grouping_complete/findings_truncated to disclose a conflict.
+    That must not turn an otherwise structurally valid, originally retained
+    finding group into a different security group solely because its scanner
+    generated ID rotated. Only a source-bound, origin-bound alternate from the
+    signed recovery contract may activate this comparison. This does NOT assert
+    that all source files or analyzers were inspected, or change any raw report.
+    """
+    coverage = record.get("coverage")
+    witnesses = record.get("recovery_witnesses")
+    if (not isinstance(coverage, dict) or record.get("status") != "partial" or
+            coverage.get("status") != "partial" or
+            coverage.get("grouping_complete") is not False or
+            record.get("findings_truncated") is not True or
+            not isinstance(witnesses, list) or
+            not 1 <= len(witnesses) <= contract.MAX_RECOVERY_WITNESSES):
+        return False
+    reasons = coverage.get("reasons")
+    if not isinstance(reasons, list) or not all(isinstance(r, dict) for r in reasons):
+        return False
+    codes = {r.get("code") for r in reasons}
+    if not {"recovery_conflict", "normalization_truncated"} <= codes:
+        return False
+    for entry in witnesses:
+        if not isinstance(entry, dict) or set(entry) != {"origin", "record"}:
+            return False
+        origin, other = entry["origin"], entry["record"]
+        if (not isinstance(origin, dict) or set(origin) != {"run_id", "run_attempt"} or
+                not all(type(n) is int and n > 0 for n in origin.values()) or
+                not isinstance(other, dict) or other.get("source") != record.get("source") or
+                other.get("scanner") != record.get("scanner") or
+                other.get("report_digest") == record.get("report_digest") or
+                other.get("recovery_witnesses")):
+            return False
+    return True
+
+
 # Scanner-generated finding IDs may each represent one or several
 # occurrences. Compare their stable one-to-many association topology, not
 # volatile ID strings. This is only for authenticated fork equality; never
@@ -1121,10 +1160,12 @@ def _recovery_groups_without_generated_ids(record):
     """Normalize ONLY valid generated ID rotations, preserving identity partitions."""
     groups = record.get("findings")
     coverage = record.get("coverage")
+    qualified_original = (isinstance(coverage, dict) and
+        coverage.get("grouping_complete") is True and
+        record.get("findings_truncated") is False and
+        not record.get("recovery_witnesses"))
     if (not isinstance(groups, list) or not isinstance(coverage, dict) or
-            coverage.get("grouping_complete") is not True or
-            record.get("findings_truncated") is not False or
-            record.get("recovery_witnesses") or
+            not (qualified_original or _qualified_quarantine_generated_groups(record)) or
             type(record.get("finding_group_count")) is not int or
             len(groups) != record["finding_group_count"] or
             type(record.get("finding_count")) is not int):
