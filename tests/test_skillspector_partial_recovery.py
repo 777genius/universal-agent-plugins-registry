@@ -576,20 +576,17 @@ class RecoveryTests(unittest.TestCase):
                 self.recover(root / "untrusted-novel", selection, [untrusted], baseline)
             oversized = copy.deepcopy(novel)
             oversized["workers"][0]["attempts"][0]["record"]["findings"][0]["message"] = "x" * (260 << 10)
-            # Its authenticated origin is valid, but the immutable witness
-            # exceeds the bounded signed representation. Keep only the prior
-            # original risk with an explicit incomplete-conflict disclosure;
-            # other sources must remain recoverable instead of aborting.
-            oversized_result = self.recover(root / "oversized-witness", selection, [oversized], baseline)
-            retained = oversized_result["records"][subject["id"]]
-            self.assertTrue((root / "oversized-witness" / "index.json").is_file())
-            self.assertEqual(retained["status"], "partial")
-            self.assertEqual(retained["report_digest"], old["report_digest"])
-            self.assertEqual(retained["findings"], old["findings"])
-            self.assertNotIn("recovery_witnesses", retained)
-            self.assertIn("recovery_conflict", coverage.reason_codes(retained))
-            self.assertIn("normalization_truncated", coverage.reason_codes(retained))
-            self.assertEqual(oversized_result["attempts"][subject["id"]]["attempt_count"], 2)
+            # Its authenticated origin is valid, but its independent finding
+            # cannot fit the bounded signed witness. A disclosure alone would
+            # lose that evidence. Fail before advancing attempts or publishing.
+            oversized_path = root / "oversized-witness"
+            with self.assertRaisesRegex(PublicationError,
+                    "verified security witness could not be represented in signed shard") as refusal:
+                self.recover(oversized_path, selection, [oversized], baseline)
+            self.assertIn('"candidate_fits_rebound_budget":false', str(refusal.exception))
+            self.assertIn('"unrepresented_instances":1', str(refusal.exception))
+            self.assertEqual(baseline, unchanged_baseline)
+            self.assertFalse((oversized_path / "index.json").exists())
 
     def test_witness_admission_reserves_worst_case_reidentified_source_id(self):
         # 200 JSON control characters are 1,200 bytes (6 escaped bytes each),
