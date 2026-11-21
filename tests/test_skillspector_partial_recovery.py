@@ -526,10 +526,10 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(merged["attempts"][subject["id"]]["attempt_count"], 2)
             self.assertEqual(merged["attempts"][subject["id"]]["history"],
                              outcome["attempt"]["history"])
-            # A record can have almost no remaining shard capacity even though
-            # its separate witness passes the 256-KiB cap. The actual public
-            # shard wrapper must fit, including recovery reasons, or the
-            # freshly added alternate is disclosed but not published.
+            # The signed shard must have enough capacity for the independent
+            # authenticated finding. A disclosure without its witness is not
+            # security preservation: refuse the entire historical recovery
+            # before committing an advanced retry or any published index.
             no_witness = copy.deepcopy(kept)
             del no_witness["recovery_witnesses"]
             basic_size = len(coverage.report_json(coverage.shard_document(
@@ -537,15 +537,16 @@ class RecoveryTests(unittest.TestCase):
             full_size = len(coverage.report_json(coverage.shard_document(
                 subject["repository"], [coverage.scanner.redact_public_record(kept)])))
             self.assertGreater(full_size, basic_size + 128)
+            unchanged_baseline = copy.deepcopy(baseline)
+            capped_path = root / "shard-witness-budget"
             with mock.patch.object(coverage, "MAX_SHARD_BYTES", basic_size + 128):
-                capped = self.recover(root / "shard-witness-budget", selection, [novel], baseline)
-            safely_kept = capped["records"][subject["id"]]
-            self.assertNotIn("recovery_witnesses", safely_kept)
-            self.assertEqual(safely_kept["report_digest"], old["report_digest"])
-            self.assertEqual(safely_kept["findings"], old["findings"])
-            self.assertEqual(safely_kept["status"], "partial")
-            self.assertIn("recovery_conflict", coverage.reason_codes(safely_kept))
-            self.assertEqual(capped["attempts"][subject["id"]]["attempt_count"], 2)
+                with self.assertRaisesRegex(PublicationError,
+                        "verified security witness could not be represented in signed shard") as refusal:
+                    self.recover(capped_path, selection, [novel], baseline)
+            self.assertIn('"candidate_fits_shard_budget":false', str(refusal.exception))
+            self.assertIn('"unrepresented_instances":1', str(refusal.exception))
+            self.assertEqual(baseline, unchanged_baseline)
+            self.assertFalse((capped_path / "index.json").exists())
             replay = self.recover(root / "witness-replay", selection, [novel], merged)
             self.assertEqual(replay["records"], merged["records"])
             self.assertEqual(replay["attempts"], merged["attempts"])
