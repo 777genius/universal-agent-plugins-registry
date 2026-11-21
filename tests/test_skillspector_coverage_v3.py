@@ -797,8 +797,19 @@ class QueueTests(unittest.TestCase):
             probe_records = {subject["id"]: copy.deepcopy(kept)}
             probe_attempts = {subject["id"]: copy.deepcopy(current_attempt)}
             crossed_attempt = coverage.make_attempt(subject, crossed_partial, current_attempt, kept)
+            # The rotated IDs must not bypass the signed current-origin gate,
+            # even though all security groups already have source-bound evidence.
+            with self.assertRaisesRegex(
+                    PublicationError, "degraded partial rescan introduces new findings"):
+                coverage.apply_outcome(copy.deepcopy(probe_records),
+                    copy.deepcopy(probe_attempts), subject,
+                    {"attempt": crossed_attempt, "record": crossed_partial})
+            # This is an authenticated current-main rescan with a distinct
+            # producing run; its independent findings must remain signed.
             self.assertTrue(coverage.apply_outcome(probe_records, probe_attempts, subject,
-                {"attempt": crossed_attempt, "record": crossed_partial}))
+                {"attempt": crossed_attempt, "record": crossed_partial},
+                authenticated_current_worker=True,
+                verified_current_origin={"run_id": 44852749619, "run_attempt": 1}))
             self.assertEqual(probe_records[subject["id"]]["report_digest"], original["report_digest"])
             self.assertEqual(probe_records[subject["id"]]["recovery_witnesses"][0]["record"],
                              alternate)
