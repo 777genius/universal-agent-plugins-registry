@@ -696,8 +696,16 @@ class QueueTests(unittest.TestCase):
         subject = item()
         selection = {"schema_version": 1, "sources": [subject]}
 
-        def scan(names, *, complete, id_prefix):
+        def scan(names, *, complete, id_prefix, fully_inspected_files,
+                 entirely_uninspected_files):
             raw = upstream_report()
+            # All three reports describe the same three-file source. The
+            # alternate Partial genuinely inspects fewer files; an A+B finding
+            # superset by itself is NOT an analysis-coverage regression.
+            raw["analysis_completeness"].update(
+                fully_inspected_files=fully_inspected_files,
+                entirely_uninspected_files=entirely_uninspected_files,
+                coverage_percent=100.0 * fully_inspected_files / 3)
             raw["issues"] = [
                 {"id": "PI1", "severity": "HIGH",
                  "finding_id": "finding-" + format(id_prefix + index, "032x"),
@@ -716,9 +724,14 @@ class QueueTests(unittest.TestCase):
             return scanner.normalize_report_v3(
                 value, json.dumps(raw).encode(), 0, Path("/source"))
 
-        original = scan(("shared",), complete=False, id_prefix=100)
-        alternate = scan(("shared", "novel"), complete=False, id_prefix=200)
-        fully_inspected = scan(("shared", "novel"), complete=True, id_prefix=300)
+        original = scan(("shared",), complete=False, id_prefix=100,
+                        fully_inspected_files=2, entirely_uninspected_files=0)
+        alternate = scan(("shared", "novel"), complete=False, id_prefix=200,
+                         fully_inspected_files=1, entirely_uninspected_files=1)
+        fully_inspected = scan(("shared", "novel"), complete=True, id_prefix=300,
+                               fully_inspected_files=3, entirely_uninspected_files=0)
+        self.assertEqual((original["coverage"]["fully_inspected_files"],
+                          alternate["coverage"]["fully_inspected_files"]), (2, 1))
         self.assertTrue(coverage.degraded_rescan(original, alternate))
         self.assertEqual(fully_inspected["status"], "complete")
         self.assertFalse(coverage.finding_evidence_identities(alternate) -
