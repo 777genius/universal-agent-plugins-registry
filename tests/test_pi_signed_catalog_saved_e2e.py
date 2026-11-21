@@ -194,6 +194,23 @@ class FullSignedCatalogTests(unittest.TestCase):
                 {"client": "pi", "delivery": "managed", "scopes": ["user"]}]
             self.assertEqual((48, "sha256:" + "0" * 64),
                              subject.signed_info("cli", {}, Path("."), "777genius/a", "user")["snapshot"])
+            release = record["data"]["selected_release"]
+            # An upstream manifest may have no version. Its authenticated
+            # source SHA, digests and release sequence remain required.
+            release["package_version"] = ""
+            self.assertEqual("", subject.signed_info(
+                "cli", {}, Path("."), "777genius/a", "user")["release"]["package_version"])
+            release["resolved_revision"] = "not-a-commit"
+            with self.assertRaisesRegex(RuntimeError, "identity"):
+                subject.signed_info("cli", {}, Path("."), "777genius/a", "user")
+            release["resolved_revision"] = "a" * 40
+            release["manifest_digest"] = "not-a-digest"
+            with self.assertRaisesRegex(RuntimeError, "identity"):
+                subject.signed_info("cli", {}, Path("."), "777genius/a", "user")
+            release["manifest_digest"] = "sha256:" + "c" * 64
+            del release["package_version"]
+            with self.assertRaisesRegex(RuntimeError, "identity"):
+                subject.signed_info("cli", {}, Path("."), "777genius/a", "user")
 
 
 if __name__ == "__main__":
