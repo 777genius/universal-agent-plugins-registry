@@ -178,6 +178,7 @@ def run(previous_zip, current_zip, output):
         rebuilt = coverage.read_bundle(rebuilt_dir)
         published = rebuilt["records"][SUBJECT]
         insist(published["status"] == "partial" and
+               published["findings"] == old["findings"] and
                published["report_digest"] == OLD_REPORT and
                published["recovery_witnesses"] == [{"origin": ORIGIN, "record": new}] and
                not (new_groups - coverage.represented_finding_evidence_identities(published)),

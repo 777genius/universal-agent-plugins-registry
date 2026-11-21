@@ -413,6 +413,33 @@ class QueueTests(unittest.TestCase):
                 witness_origin={"run_id": 44733681502, "run_attempt": 1})
         self.assertEqual(records[subject["id"]], errored)
 
+    def test_historical_partial_witness_capacity_refuses_without_retry_mutation(self):
+        """Signed historical source findings must survive, or no retry is admitted."""
+        subject = item()
+        old = record(subject, status="partial", reason="static_parse_limit")
+        new = copy.deepcopy(old)
+        new["report_digest"] = "sha256:" + "d" * 64
+        new["findings"].append({
+            "id": "novel-critical", "rule": "SC4", "path": "SKILL.md",
+            "line": 17, "pattern": "independent-critical", "severity": "CRITICAL"})
+        new["finding_count"] += 1
+        new["finding_group_count"] += 1
+        incoming = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        records = {subject["id"]: copy.deepcopy(old)}
+        attempts = {subject["id"]: copy.deepcopy(incoming["attempt"])}
+        prior_records, prior_attempts = copy.deepcopy(records), copy.deepcopy(attempts)
+        with mock.patch.object(coverage, "degraded_rescan", return_value=True), \
+             mock.patch.object(coverage, "witness_fits_max_rebound_id", return_value=False):
+            with self.assertRaisesRegex(
+                    PublicationError, "verified security witness could not be represented") as refused:
+                coverage.quarantine_recovery(records, attempts, subject, incoming,
+                    prefer_existing=True, current_partial_novel=True,
+                    witness_origin={"run_id": 44852749621, "run_attempt": 1})
+        self.assertIn('"unrepresented_instances":', str(refused.exception))
+        self.assertNotIn("independent-critical", str(refused.exception))
+        self.assertEqual(records, prior_records)
+        self.assertEqual(attempts, prior_attempts)
+
     def test_authenticated_current_partial_conflict_is_explicitly_quarantined(self):
         """A current-main worker can retain both authentic alternatives without fake Complete."""
         subject = item()
@@ -881,6 +908,34 @@ class QueueTests(unittest.TestCase):
             self.assertFalse(coverage.degraded_rescan(kept, fully_inspected))
             self.assertNotEqual(coverage._recovery_groups_without_generated_ids(kept),
                                 kept["findings"])
+
+            # A provenance-bound quarantine with no novel finding requires no
+            # witness; the original grouping proof still qualifies rotated IDs.
+            rotated_only = scan(("shared",), complete=False, id_prefix=700,
+                                fully_inspected_files=2, entirely_uninspected_files=0)
+            analyzer_counts(rotated_only, 2, 1)
+            zero_records = {subject["id"]: copy.deepcopy(original)}
+            zero_attempt = coverage.make_attempt(subject, rotated_only)
+            zero_attempts = {subject["id"]: copy.deepcopy(zero_attempt)}
+            coverage.quarantine_recovery(zero_records, zero_attempts, subject,
+                {"record": rotated_only, "attempt": zero_attempt},
+                prefer_existing=True,
+                witness_origin={"run_id": 44852749620, "run_attempt": 1})
+            no_witness = zero_records[subject["id"]]
+            self.assertNotIn("recovery_witnesses", no_witness)
+            self.assertEqual(no_witness["recovery_original_grouping"]["report_digest"],
+                             original["report_digest"])
+            self.assertNotEqual(coverage._recovery_groups_without_generated_ids(no_witness),
+                                no_witness["findings"])
+            matching_complete = scan(("shared",), complete=True, id_prefix=800,
+                                     fully_inspected_files=3, entirely_uninspected_files=0)
+            analyzer_counts(matching_complete, 2, 2)
+            self.assertFalse(coverage.degraded_rescan(no_witness, matching_complete))
+            unsigned = copy.deepcopy(no_witness)
+            del unsigned["recovery_original_grouping"]
+            self.assertEqual(coverage._recovery_groups_without_generated_ids(unsigned),
+                             unsigned["findings"])
+            self.assertTrue(coverage.degraded_rescan(unsigned, matching_complete))
 
             for name, tamper in (
                     ("origin", lambda r: r["recovery_witnesses"][0]["origin"].update(run_id=0)),
