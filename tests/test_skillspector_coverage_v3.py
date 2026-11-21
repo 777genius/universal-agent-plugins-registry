@@ -299,6 +299,57 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(records[subject["id"]], old)
         self.assertEqual(attempts, {})
 
+    def test_retained_error_conflict_does_not_receive_partial_grouping_attestation(self):
+        """An authenticated same-attempt Error retained by rank stays a valid Error.
+
+        The raw unsuccessful scanner can still carry security findings, a
+        digest, and *complete finding grouping*. Quarantine does not demote an
+        Error or change its grouping flags, so it must not add the provenance
+        reserved for a demoted Partial/Complete record.
+        """
+        subject = item()
+        raw = upstream_report()
+        raw["execution_successful"] = False
+        raw["issues"] = [{
+            "id": "PI1", "severity": "CRITICAL",
+            "explanation": "Original critical issue from unsuccessful scanner.",
+            "location": {"file": "SKILL.md", "start_line": 3},
+        }]
+        base = scanner.empty_record_v3(subject)
+        base["source"]["content_digest"] = "sha256:" + "a" * 64
+        base["scanned_at"] = scanner.now()
+        errored = scanner.normalize_report_v3(
+            base, json.dumps(raw).encode(), 0, Path("/source"))
+        self.assertEqual(errored["status"], "error")
+        self.assertTrue(errored["coverage"]["grouping_complete"])
+        self.assertFalse(errored["findings_truncated"])
+        self.assertTrue(errored["findings"])
+        self.assertIsNotNone(errored["report_digest"])
+
+        alternate = record(subject, status="partial")
+        self.assertEqual(errored["source"], alternate["source"])
+        self.assertEqual(errored["scanner"], alternate["scanner"])
+        self.assertNotEqual(errored["report_digest"], alternate["report_digest"])
+        outcome = {"record": alternate, "attempt": coverage.make_attempt(subject, alternate)}
+        records = {subject["id"]: copy.deepcopy(errored)}
+        attempts = {subject["id"]: copy.deepcopy(outcome["attempt"])}
+        coverage.quarantine_recovery(records, attempts, subject, outcome,
+            witness_origin={"run_id": 44879250234, "run_attempt": 1})
+        retained = records[subject["id"]]
+
+        self.assertEqual(retained["status"], "error")
+        self.assertEqual(retained["report_digest"], errored["report_digest"])
+        self.assertEqual(retained["findings"], errored["findings"])
+        self.assertEqual(retained["coverage"]["grouping_complete"], True)
+        self.assertFalse(retained["findings_truncated"])
+        self.assertNotIn("recovery_original_grouping", retained)
+        self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                        coverage.reason_codes(retained))
+        # Verify the same standalone-record contract used for workers;
+        # a mistakenly minted Partial-only proof makes this validation fail.
+        contract.validate_record(
+            retained, subject, datetime.now(timezone.utc) + timedelta(minutes=1))
+
     def test_authenticated_current_partial_conflict_is_explicitly_quarantined(self):
         """A current-main worker can retain both authentic alternatives without fake Complete."""
         subject = item()

@@ -1358,8 +1358,12 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
     retained = copy.deepcopy(chosen)
     # Bind the originally observed grouping topology to the unchanged scanner
     # report digest before recovery disclosure mutates its completeness flags.
-    # Never infer this attestation from post-quarantine flags or a witness.
+    # Only a non-legacy Partial/Complete can be demoted to Partial by quarantine;
+    # a retained Error keeps its original grouping flags and must never carry
+    # this Partial-only signed attestation.
     if (witness_origin is not None and
+            retained["status"] in {"partial", "complete"} and
+            "legacy_format" not in retained and
             "recovery_original_grouping" not in retained and
             "recovery_witnesses" not in retained and
             retained.get("report_digest") is not None and
