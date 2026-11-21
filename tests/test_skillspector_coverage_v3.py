@@ -350,6 +350,69 @@ class QueueTests(unittest.TestCase):
         contract.validate_record(
             retained, subject, datetime.now(timezone.utc) + timedelta(minutes=1))
 
+
+    def test_same_source_failed_scan_security_groups_cannot_disappear(self):
+        """A later Partial and a failed scanner may each carry unique risks."""
+        subject = item()
+        raw = upstream_report()
+        raw["execution_successful"] = False
+        raw["issues"] = [{
+            "id": "PI1", "severity": "CRITICAL",
+            "explanation": "Original independent failed-scan security warning.",
+            "location": {"file": "SKILL.md", "start_line": 3},
+        }]
+        base = scanner.empty_record_v3(subject)
+        base["source"]["content_digest"] = "sha256:" + "a" * 64
+        base["scanned_at"] = scanner.now()
+        errored = scanner.normalize_report_v3(
+            base, json.dumps(raw).encode(), 0, Path("/source"))
+        partial = record(subject, status="partial", reason="static_parse_limit")
+        self.assertEqual(errored["status"], "error")
+        self.assertTrue(errored["findings"])
+        self.assertEqual(errored["source"], partial["source"])
+        self.assertEqual(errored["scanner"], partial["scanner"])
+
+        for previous, incoming in ((errored, partial), (partial, errored)):
+            with self.subTest(previous_status=previous["status"]):
+                records = {subject["id"]: copy.deepcopy(previous)}
+                attempts = {}
+                outcome = {"record": incoming,
+                           "attempt": coverage.make_attempt(subject, incoming)}
+                with self.assertRaisesRegex(
+                        PublicationError, "same-source Error security evidence not represented"):
+                    coverage.apply_outcome(records, attempts, subject, outcome)
+                self.assertEqual(records[subject["id"]], previous)
+                self.assertEqual(attempts, {})
+
+        # Even an authenticated recovery conflict cannot silently keep a
+        # higher-severity Error while discarding a *different* Partial warning.
+        new_raw = upstream_report()
+        new_raw["issues"] = [{
+            "id": "PI1", "severity": "HIGH",
+            "explanation": "Additional independently observed source risk.",
+            "location": {"file": "SKILL.md", "start_line": 4},
+        }]
+        new_raw["analysis_completeness"].update(
+            is_complete=False, status="partial", partially_inspected_files=1)
+        new_raw["analysis_completeness"]["ledger_exceptions"] = [{
+            "reason_code": "static_parse_limit", "message": "Uninspected source."}]
+        new_base = scanner.empty_record_v3(subject)
+        new_base["source"]["content_digest"] = "sha256:" + "a" * 64
+        new_base["scanned_at"] = scanner.now()
+        newer = scanner.normalize_report_v3(
+            new_base, json.dumps(new_raw).encode(), 0, Path("/source"))
+        self.assertEqual(newer["status"], "partial")
+        self.assertEqual(errored["source"], newer["source"])
+        self.assertEqual(errored["scanner"], newer["scanner"])
+        later = {"record": newer, "attempt": coverage.make_attempt(subject, newer)}
+        records = {subject["id"]: copy.deepcopy(errored)}
+        attempts = {subject["id"]: copy.deepcopy(later["attempt"])}
+        with self.assertRaisesRegex(
+                PublicationError, "same-source Error security evidence not represented"):
+            coverage.quarantine_recovery(records, attempts, subject, later,
+                witness_origin={"run_id": 44733681502, "run_attempt": 1})
+        self.assertEqual(records[subject["id"]], errored)
+
     def test_authenticated_current_partial_conflict_is_explicitly_quarantined(self):
         """A current-main worker can retain both authentic alternatives without fake Complete."""
         subject = item()

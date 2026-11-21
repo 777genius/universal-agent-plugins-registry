@@ -830,6 +830,36 @@ def require_represented_degraded_findings(item, old, new, attempt, *, degradatio
             json.dumps(context, sort_keys=True, separators=(",", ":")))
 
 
+def require_error_security_evidence_retained(item, previous, incoming, retained, *, boundary):
+    """Fail closed if a same-source failed scanner's independent findings disappear.
+
+    A failed scanner may still emit independently attested CRITICAL/HIGH issues.
+    The v3 signed witness contract cannot carry an Error as an alternate; never
+    silently replace or quarantine such evidence based on a later status alone.
+    This gate preserves raw reports and only emits bounded digest/count context.
+    """
+    if (previous is None or
+            not (previous["status"] == "error" or incoming["status"] == "error") or
+            previous["source"] != incoming["source"] or
+            previous["scanner"] != incoming["scanner"]):
+        return
+    represented = represented_finding_evidence_identities(retained)
+    missing_previous = finding_evidence_identities(previous) - represented
+    missing_incoming = finding_evidence_identities(incoming) - represented
+    if missing_previous or missing_incoming:
+        diagnostic = {
+            "boundary": boundary,
+            "source_digest": source_digest(item),
+            "previous_report_digest": previous.get("report_digest"),
+            "incoming_report_digest": incoming.get("report_digest"),
+            "retained_report_digest": retained.get("report_digest"),
+            "lost_previous_group_instances": sum(missing_previous.values()),
+            "lost_incoming_group_instances": sum(missing_incoming.values()),
+        }
+        raise PublicationError("same-source Error security evidence not represented: " +
+                               json.dumps(diagnostic, sort_keys=True, separators=(",", ":")))
+
+
 def degraded_rescan(old, new):
     """Require non-regressing coverage and findings for the exact same source."""
     if old is None or old["status"] != "partial" or new["status"] not in {"partial", "complete"} or \
@@ -997,6 +1027,8 @@ def apply_outcome(records, attempts, item, outcome, *, replay=False, authenticat
     else:
         record = copy.deepcopy(new)
         record["freshness"] = "current"
+    require_error_security_evidence_retained(item, old_record, new, record,
+                                             boundary="current_attempt")
     persisted_attempt = copy.deepcopy(attempt)
     if old_attempt is not None and old_record is not None and predecessor_uncertain(old_record) and new["status"] == "error":
         # A later failed execution cannot resolve an unavailable predecessor,
@@ -1356,6 +1388,11 @@ def quarantine_recovery(records, attempts, item, outcome, *, prefer_existing=Fal
         require_represented_degraded_findings(item, old, new, outcome["attempt"])
     chosen = old if prefer_existing or degraded_complete or disjoint or old.get("recovery_witnesses") else max((old, new), key=rank)
     retained = copy.deepcopy(chosen)
+    # Error reports can carry independently verified security findings, but
+    # the signed v3 witness contract permits only Partial/Complete alternates.
+    # Reject any conflict that would discard either Error-related finding set.
+    require_error_security_evidence_retained(item, old, new, retained,
+                                             boundary="quarantine")
     # Bind the originally observed grouping topology to the unchanged scanner
     # report digest before recovery disclosure mutates its completeness flags.
     # Only a non-legacy Partial/Complete can be demoted to Partial by quarantine;
@@ -1559,6 +1596,8 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
                     prefer_existing=fresh["status"] == "partial",
                     witness_origin=origin, current_partial_novel=novel_partial)
             elif old_record is None or old_record["status"] == "error" or fresh["status"] != "error":
+                require_error_security_evidence_retained(
+                    item, old_record, fresh, fresh, boundary="first_epoch")
                 records[item["id"]] = copy.deepcopy(outcome["record"])
                 records[item["id"]]["freshness"] = "current"
             if item["id"] in uncertain_ids:
@@ -1571,6 +1610,9 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             identifier = item["id"]
             attempts[identifier] = copy.deepcopy(outcome["attempt"])
             if old_record is None or old_record["status"] == "error":
+                require_error_security_evidence_retained(
+                    item, old_record, outcome["record"], outcome["record"],
+                    boundary="unanchored")
                 records[identifier] = copy.deepcopy(outcome["record"])
                 records[identifier]["freshness"] = "current"
             elif outcome["record"]["status"] != "error":
@@ -1593,10 +1635,16 @@ def recover_previous(selection, previous, recovery_bundles, *, source_commit, di
             if retained_degraded_replay(item, old_record, old_attempt, outcome):
                 continue  # Already published attempt retained more complete original evidence.
             if attempt == old_attempt and outcome["record"]["status"] == "error" and old_record["status"] != "error":
+                require_error_security_evidence_retained(
+                    item, old_record, outcome["record"], old_record,
+                    boundary="failed_attempt_replay")
                 continue  # Exact replay of a failure already retaining useful prior evidence.
             if attempt["attempt_count"] < old_attempt["attempt_count"] and \
                     recovery_history_contains(old_attempt["history"], attempt["history"][-attempt["attempt_count"]:]):
                 if old_record["status"] == "error" and predecessor_uncertain(old_record) and outcome["record"]["status"] != "error":
+                    require_error_security_evidence_retained(
+                        item, old_record, outcome["record"], outcome["record"],
+                        boundary="older_predecessor")
                     records[item["id"]] = copy.deepcopy(outcome["record"])
                     records[item["id"]]["freshness"] = "current"
                     mark_missing_predecessor(records[item["id"]], old_attempt)
