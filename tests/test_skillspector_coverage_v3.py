@@ -299,6 +299,147 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(records[subject["id"]], old)
         self.assertEqual(attempts, {})
 
+    def test_retained_error_conflict_does_not_receive_partial_grouping_attestation(self):
+        """An authenticated same-attempt Error retained by rank stays a valid Error.
+
+        The raw unsuccessful scanner can still carry security findings, a
+        digest, and *complete finding grouping*. Quarantine does not demote an
+        Error or change its grouping flags, so it must not add the provenance
+        reserved for a demoted Partial/Complete record.
+        """
+        subject = item()
+        raw = upstream_report()
+        raw["execution_successful"] = False
+        raw["issues"] = [{
+            "id": "PI1", "severity": "CRITICAL",
+            "explanation": "Original critical issue from unsuccessful scanner.",
+            "location": {"file": "SKILL.md", "start_line": 3},
+        }]
+        base = scanner.empty_record_v3(subject)
+        base["source"]["content_digest"] = "sha256:" + "a" * 64
+        base["scanned_at"] = scanner.now()
+        errored = scanner.normalize_report_v3(
+            base, json.dumps(raw).encode(), 0, Path("/source"))
+        self.assertEqual(errored["status"], "error")
+        self.assertTrue(errored["coverage"]["grouping_complete"])
+        self.assertFalse(errored["findings_truncated"])
+        self.assertTrue(errored["findings"])
+        self.assertIsNotNone(errored["report_digest"])
+
+        alternate = record(subject, status="partial")
+        self.assertEqual(errored["source"], alternate["source"])
+        self.assertEqual(errored["scanner"], alternate["scanner"])
+        self.assertNotEqual(errored["report_digest"], alternate["report_digest"])
+        outcome = {"record": alternate, "attempt": coverage.make_attempt(subject, alternate)}
+        records = {subject["id"]: copy.deepcopy(errored)}
+        attempts = {subject["id"]: copy.deepcopy(outcome["attempt"])}
+        coverage.quarantine_recovery(records, attempts, subject, outcome,
+            witness_origin={"run_id": 44879250234, "run_attempt": 1})
+        retained = records[subject["id"]]
+
+        self.assertEqual(retained["status"], "error")
+        self.assertEqual(retained["report_digest"], errored["report_digest"])
+        self.assertEqual(retained["findings"], errored["findings"])
+        self.assertEqual(retained["coverage"]["grouping_complete"], True)
+        self.assertFalse(retained["findings_truncated"])
+        self.assertNotIn("recovery_original_grouping", retained)
+        self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                        coverage.reason_codes(retained))
+        # Verify the same standalone-record contract used for workers;
+        # a mistakenly minted Partial-only proof makes this validation fail.
+        contract.validate_record(
+            retained, subject, datetime.now(timezone.utc) + timedelta(minutes=1))
+
+
+    def test_same_source_failed_scan_security_groups_cannot_disappear(self):
+        """A later Partial and a failed scanner may each carry unique risks."""
+        subject = item()
+        raw = upstream_report()
+        raw["execution_successful"] = False
+        raw["issues"] = [{
+            "id": "PI1", "severity": "CRITICAL",
+            "explanation": "Original independent failed-scan security warning.",
+            "location": {"file": "SKILL.md", "start_line": 3},
+        }]
+        base = scanner.empty_record_v3(subject)
+        base["source"]["content_digest"] = "sha256:" + "a" * 64
+        base["scanned_at"] = scanner.now()
+        errored = scanner.normalize_report_v3(
+            base, json.dumps(raw).encode(), 0, Path("/source"))
+        partial = record(subject, status="partial", reason="static_parse_limit")
+        self.assertEqual(errored["status"], "error")
+        self.assertTrue(errored["findings"])
+        self.assertEqual(errored["source"], partial["source"])
+        self.assertEqual(errored["scanner"], partial["scanner"])
+
+        for previous, incoming in ((errored, partial), (partial, errored)):
+            with self.subTest(previous_status=previous["status"]):
+                records = {subject["id"]: copy.deepcopy(previous)}
+                attempts = {}
+                outcome = {"record": incoming,
+                           "attempt": coverage.make_attempt(subject, incoming)}
+                with self.assertRaisesRegex(
+                        PublicationError, "same-source Error security evidence not represented"):
+                    coverage.apply_outcome(records, attempts, subject, outcome)
+                self.assertEqual(records[subject["id"]], previous)
+                self.assertEqual(attempts, {})
+
+        # Even an authenticated recovery conflict cannot silently keep a
+        # higher-severity Error while discarding a *different* Partial warning.
+        new_raw = upstream_report()
+        new_raw["issues"] = [{
+            "id": "PI1", "severity": "HIGH",
+            "explanation": "Additional independently observed source risk.",
+            "location": {"file": "SKILL.md", "start_line": 4},
+        }]
+        new_raw["analysis_completeness"].update(
+            is_complete=False, status="partial", partially_inspected_files=1)
+        new_raw["analysis_completeness"]["ledger_exceptions"] = [{
+            "reason_code": "static_parse_limit", "message": "Uninspected source."}]
+        new_base = scanner.empty_record_v3(subject)
+        new_base["source"]["content_digest"] = "sha256:" + "a" * 64
+        new_base["scanned_at"] = scanner.now()
+        newer = scanner.normalize_report_v3(
+            new_base, json.dumps(new_raw).encode(), 0, Path("/source"))
+        self.assertEqual(newer["status"], "partial")
+        self.assertEqual(errored["source"], newer["source"])
+        self.assertEqual(errored["scanner"], newer["scanner"])
+        later = {"record": newer, "attempt": coverage.make_attempt(subject, newer)}
+        records = {subject["id"]: copy.deepcopy(errored)}
+        attempts = {subject["id"]: copy.deepcopy(later["attempt"])}
+        with self.assertRaisesRegex(
+                PublicationError, "same-source Error security evidence not represented"):
+            coverage.quarantine_recovery(records, attempts, subject, later,
+                witness_origin={"run_id": 44733681502, "run_attempt": 1})
+        self.assertEqual(records[subject["id"]], errored)
+
+    def test_historical_partial_witness_capacity_refuses_without_retry_mutation(self):
+        """Signed historical source findings must survive, or no retry is admitted."""
+        subject = item()
+        old = record(subject, status="partial", reason="static_parse_limit")
+        new = copy.deepcopy(old)
+        new["report_digest"] = "sha256:" + "d" * 64
+        new["findings"].append({
+            "id": "novel-critical", "rule": "SC4", "path": "SKILL.md",
+            "line": 17, "pattern": "independent-critical", "severity": "CRITICAL"})
+        new["finding_count"] += 1
+        new["finding_group_count"] += 1
+        incoming = {"record": new, "attempt": coverage.make_attempt(subject, new)}
+        records = {subject["id"]: copy.deepcopy(old)}
+        attempts = {subject["id"]: copy.deepcopy(incoming["attempt"])}
+        prior_records, prior_attempts = copy.deepcopy(records), copy.deepcopy(attempts)
+        with mock.patch.object(coverage, "degraded_rescan", return_value=True), \
+             mock.patch.object(coverage, "witness_fits_max_rebound_id", return_value=False):
+            with self.assertRaisesRegex(
+                    PublicationError, "verified security witness could not be represented") as refused:
+                coverage.quarantine_recovery(records, attempts, subject, incoming,
+                    prefer_existing=True, current_partial_novel=True,
+                    witness_origin={"run_id": 44852749621, "run_attempt": 1})
+        self.assertIn('"unrepresented_instances":', str(refused.exception))
+        self.assertNotIn("independent-critical", str(refused.exception))
+        self.assertEqual(records, prior_records)
+        self.assertEqual(attempts, prior_attempts)
+
     def test_authenticated_current_partial_conflict_is_explicitly_quarantined(self):
         """A current-main worker can retain both authentic alternatives without fake Complete."""
         subject = item()
@@ -313,6 +454,9 @@ class QueueTests(unittest.TestCase):
         current["findings"] = [{"id": "new-high", "rule": "SC4", "path": "requirements.txt",
                                 "line": 3, "pattern": "new-advisory", "severity": "HIGH"}]
         current["finding_count"] = 1
+        # Distinct immutable scanner originals must have independent digests.
+        # A copied raw digest would rightly fail signed-witness admission.
+        current["report_digest"] = "sha256:" + "b" * 64
         outcome = {"record": current, "attempt": coverage.make_attempt(subject, current)}
         self.assertTrue(coverage.degraded_rescan(old, current))
 
@@ -323,10 +467,18 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(baseline[subject["id"]], old)
         self.assertEqual(attempts, {})
 
-        # Only a separately authenticated current worker can expose explicitly
-        # truncated evidence while retaining a real scanner report + retry.
+        # Worker authentication without an exact signed producing origin is
+        # insufficient to omit either independent security finding.
+        with self.assertRaisesRegex(
+                PublicationError, "degraded partial introduces unrepresented new findings"):
+            coverage.apply_outcome(baseline, attempts, subject, outcome,
+                                   authenticated_current_worker=True)
+        self.assertEqual(baseline[subject["id"]], old)
+        self.assertEqual(attempts, {})
+        origin = {"run_id": 44733681502, "run_attempt": 1}
         accepted = coverage.apply_outcome(baseline, attempts, subject, outcome,
-                                         authenticated_current_worker=True)
+                                         authenticated_current_worker=True,
+                                         verified_current_origin=origin)
         self.assertTrue(accepted)
         result = baseline[subject["id"]]
         self.assertEqual(result["status"], "partial")
@@ -335,6 +487,9 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(result["coverage"]["grouping_complete"])
         self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(result))
         self.assertEqual(result["findings"], old["findings"])  # CRITICAL retained over changed HIGH
+        self.assertEqual(result["recovery_witnesses"], [{"origin": origin, "record": current}])
+        self.assertFalse(coverage.finding_evidence_identities(current) -
+                         coverage.represented_finding_evidence_identities(result))
         self.assertEqual(attempts[subject["id"]]["attempt_count"], 1)
         self.assertEqual(attempts[subject["id"]]["reason"], "recovery_conflict")
         self.assertEqual(attempts[subject["id"]]["disposition"], "scheduled")
@@ -396,13 +551,25 @@ class QueueTests(unittest.TestCase):
                     output_dir=root / "untrusted")
             self.assertFalse((root / "untrusted" / "index.json").exists())
 
+            # A verified current main origin, not merely an authenticated
+            # worker flag, is mandatory to sign both distinct risk reports.
+            with self.assertRaisesRegex(
+                    PublicationError, "degraded partial introduces unrepresented new findings"):
+                coverage.merge_reports(selection, previous, [updated_worker], source_commit=COMMIT,
+                    output_dir=root / "originless", authenticated_current_workers=True)
+            self.assertFalse((root / "originless" / "index.json").exists())
+            origin = {"run_id": 44733681502, "run_attempt": 1}
             coverage.merge_reports(selection, previous, [updated_worker], source_commit=COMMIT,
-                output_dir=root / "authenticated", authenticated_current_workers=True)
+                output_dir=root / "authenticated", authenticated_current_workers=True,
+                verified_current_origin=origin)
             verified = coverage.read_bundle(root / "authenticated")
             retained, attempt = verified["records"][subject["id"]], verified["attempts"][subject["id"]]
             self.assertEqual(retained["freshness"], "current")
             self.assertEqual(retained["status"], "partial")
-            self.assertEqual(retained["findings"], current["findings"])
+            self.assertEqual(retained["findings"], old["findings"])
+            self.assertEqual(retained["recovery_witnesses"], [{"origin": origin, "record": current}])
+            self.assertFalse(coverage.finding_evidence_identities(current) -
+                             coverage.represented_finding_evidence_identities(retained))
             self.assertTrue(retained["findings_truncated"])
             self.assertTrue({"recovery_conflict", "normalization_truncated"} <= coverage.reason_codes(retained))
             self.assertEqual(retained["retry"], coverage.retry_summary(attempt))
@@ -578,6 +745,285 @@ class QueueTests(unittest.TestCase):
             self.assertNotIn("Original advisory.", diagnostic)
             self.assertNotIn("new-advisory", diagnostic)
             self.assertFalse((root / "too-small" / "index.json").exists())
+
+    def test_current_partial_superset_with_regressed_analyzer_keeps_authenticated_new_findings(self):
+        """Real 44733681502: five truly additional security groups were omitted
+        (37 were unrepresented *after* quarantine disabled generated-ID
+        normalization). The extended Partial inspected more files overall
+        but regressed a specific analyzer relative to the standard Partial.
+        Both source-identical original reports must remain signed and Partial.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def observed(names, fully_inspected):
+            raw = upstream_report()
+            raw["issues"] = [
+                {"id": "PI1", "severity": "HIGH",
+                 "explanation": "Distinct authenticated " + name + " security advice.",
+                 "pattern": name,
+                 "location": {"file": "SKILL.md", "start_line": index}}
+                for index, name in enumerate(names, start=1)
+            ]
+            raw["analysis_completeness"].update(
+                is_complete=False, status="partial",
+                fully_inspected_files=fully_inspected,
+                partially_inspected_files=1,
+                coverage_percent=50.0 if fully_inspected else 0.0)
+            raw["analysis_completeness"]["ledger_exceptions"] = [
+                {"reason_code": "static_parse_limit", "message": "Incomplete source inspection."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        old = observed(("shared",), 1)
+        new = observed(("shared", "novel"), 0)
+        self.assertEqual(old["source"], new["source"])
+        self.assertTrue(coverage.degraded_rescan(old, new))
+        self.assertFalse(coverage.represented_finding_evidence_identities(old) -
+                         coverage.finding_evidence_identities(new))
+        self.assertEqual(sum((coverage.finding_evidence_identities(new) -
+                              coverage.represented_finding_evidence_identities(old)).values()), 1)
+        origin = {"run_id": 44733681502, "run_attempt": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [old])
+            current = worker(selection, [new], previous)
+            # No signed origin can authorize publication of a mixed finding set.
+            with self.assertRaisesRegex(PublicationError, "introduces new findings"):
+                coverage.merge_reports(selection, previous, [current],
+                    source_commit=COMMIT, output_dir=root / "unsigned")
+            self.assertFalse((root / "unsigned" / "index.json").exists())
+            # A caller cannot bypass the signing gate by claiming that worker
+            # bytes were authenticated while withholding the producing origin.
+            with self.assertRaisesRegex(
+                    PublicationError, "degraded partial introduces unrepresented new findings"):
+                coverage.merge_reports(selection, previous, [current],
+                    source_commit=COMMIT, output_dir=root / "originless",
+                    authenticated_current_workers=True)
+            self.assertFalse((root / "originless" / "index.json").exists())
+            verified_dir = root / "verified"
+            coverage.merge_reports(selection, previous, [current],
+                source_commit=COMMIT, output_dir=verified_dir,
+                authenticated_current_workers=True, verified_current_origin=origin)
+            verified = coverage.read_bundle(verified_dir)
+            retained = verified["records"][subject["id"]]
+            self.assertEqual((retained["status"], retained["coverage"]["status"]),
+                             ("partial", "partial"))
+            self.assertEqual(retained["findings"], old["findings"])
+            self.assertTrue(retained["findings_truncated"])
+            self.assertFalse(retained["coverage"]["grouping_complete"])
+            self.assertEqual(retained["recovery_witnesses"],
+                             [{"origin": origin, "record": new}])
+            self.assertFalse(coverage.finding_evidence_identities(new) -
+                             coverage.represented_finding_evidence_identities(retained))
+            self.assertEqual(verified["attempts"][subject["id"]]["attempt_count"], 2)
+            self.assertEqual(publisher.validate_directory(verified_dir, COMMIT)["manifest"],
+                             verified["manifest"])
+            # The next replay cannot reinterpret the authenticated evidence.
+            self.assertTrue({"recovery_conflict", "normalization_truncated"} <=
+                            coverage.reason_codes(retained))
+
+    def test_quarantined_generated_ids_only_normalize_with_signed_source_witness(self):
+        """Full A+B rescan must recover after signed A / A+B Partial quarantine.
+
+        Raw scanner reports and their digests remain unchanged; only the
+        comparison of genuine generated IDs in already observed groups is
+        qualified. A malformed origin, changed source or changed evidence must
+        never pass through this narrow equality check.
+        """
+        subject = item()
+        selection = {"schema_version": 1, "sources": [subject]}
+
+        def scan(names, *, complete, id_prefix, fully_inspected_files,
+                 entirely_uninspected_files):
+            raw = upstream_report()
+            # All three reports describe the same three-file source. The
+            # alternate Partial genuinely inspects fewer files; an A+B finding
+            # superset by itself is NOT an analysis-coverage regression.
+            raw["analysis_completeness"].update(
+                fully_inspected_files=fully_inspected_files,
+                entirely_uninspected_files=entirely_uninspected_files,
+                coverage_percent=100.0 * fully_inspected_files / 3)
+            raw["issues"] = [
+                {"id": "PI1", "severity": "HIGH",
+                 "finding_id": "finding-" + format(id_prefix + index, "032x"),
+                 "explanation": "Original " + name + " security finding.",
+                 "pattern": name,
+                 "location": {"file": "SKILL.md", "start_line": index}}
+                for index, name in enumerate(names, 1)]
+            if not complete:
+                raw["analysis_completeness"].update(
+                    is_complete=False, status="partial", partially_inspected_files=1)
+                raw["analysis_completeness"]["ledger_exceptions"] = [
+                    {"reason_code": "static_parse_limit", "message": "Source inspection incomplete."}]
+            value = scanner.empty_record_v3(subject)
+            value["source"]["content_digest"] = "sha256:" + "a" * 64
+            value["scanned_at"] = scanner.now()
+            return scanner.normalize_report_v3(
+                value, json.dumps(raw).encode(), 0, Path("/source"))
+
+        original = scan(("shared",), complete=False, id_prefix=100,
+                        fully_inspected_files=2, entirely_uninspected_files=0)
+        alternate = scan(("shared", "novel"), complete=False, id_prefix=200,
+                         fully_inspected_files=1, entirely_uninspected_files=1)
+        fully_inspected = scan(("shared", "novel"), complete=True, id_prefix=300,
+                               fully_inspected_files=3, entirely_uninspected_files=0)
+        self.assertEqual((original["coverage"]["fully_inspected_files"],
+                          alternate["coverage"]["fully_inspected_files"]), (2, 1))
+        self.assertTrue(coverage.degraded_rescan(original, alternate))
+        # The representative and its witness have crossed analyzer coverage.
+        # A candidate may only replace both if it supersedes BOTH originals.
+        def analyzer_counts(value, x, y):
+            entries = value["coverage"]["analyzers"]
+            assert len(entries) >= 2
+            entries[0]["completed"], entries[1]["completed"] = x, y
+        analyzer_counts(original, 2, 1)
+        analyzer_counts(alternate, 1, 2)
+        analyzer_counts(fully_inspected, 2, 2)
+        self.assertEqual(fully_inspected["status"], "complete")
+        self.assertFalse(coverage.finding_evidence_identities(alternate) -
+                         coverage.finding_evidence_identities(fully_inspected))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = bundle(root / "previous", selection, [original])
+            second = worker(selection, [alternate], previous)
+            coverage.merge_reports(selection, previous, [second], source_commit=COMMIT,
+                output_dir=root / "quarantined", authenticated_current_workers=True,
+                verified_current_origin={"run_id": 44852749617, "run_attempt": 1})
+            published = coverage.read_bundle(root / "quarantined")
+            kept = published["records"][subject["id"]]
+            self.assertEqual(kept["status"], "partial")
+            self.assertTrue(kept["findings_truncated"])
+            self.assertFalse(kept["coverage"]["grouping_complete"])
+            self.assertEqual(kept["report_digest"], original["report_digest"])
+            self.assertEqual(kept["recovery_witnesses"][0]["record"], alternate)
+            self.assertEqual(kept["recovery_original_grouping"], {
+                "report_digest": original["report_digest"],
+                "grouping_complete": True, "findings_truncated": False})
+            self.assertFalse(coverage.represented_finding_evidence_identities(kept) -
+                             coverage.finding_evidence_identities(fully_inspected))
+            self.assertFalse(coverage.degraded_rescan(kept, fully_inspected))
+            self.assertNotEqual(coverage._recovery_groups_without_generated_ids(kept),
+                                kept["findings"])
+
+            # A provenance-bound quarantine with no novel finding requires no
+            # witness; the original grouping proof still qualifies rotated IDs.
+            rotated_only = scan(("shared",), complete=False, id_prefix=700,
+                                fully_inspected_files=2, entirely_uninspected_files=0)
+            analyzer_counts(rotated_only, 2, 1)
+            zero_records = {subject["id"]: copy.deepcopy(original)}
+            zero_attempt = coverage.make_attempt(subject, rotated_only)
+            zero_attempts = {subject["id"]: copy.deepcopy(zero_attempt)}
+            coverage.quarantine_recovery(zero_records, zero_attempts, subject,
+                {"record": rotated_only, "attempt": zero_attempt},
+                prefer_existing=True,
+                witness_origin={"run_id": 44852749620, "run_attempt": 1})
+            no_witness = zero_records[subject["id"]]
+            self.assertNotIn("recovery_witnesses", no_witness)
+            self.assertEqual(no_witness["recovery_original_grouping"]["report_digest"],
+                             original["report_digest"])
+            self.assertNotEqual(coverage._recovery_groups_without_generated_ids(no_witness),
+                                no_witness["findings"])
+            matching_complete = scan(("shared",), complete=True, id_prefix=800,
+                                     fully_inspected_files=3, entirely_uninspected_files=0)
+            analyzer_counts(matching_complete, 2, 2)
+            self.assertFalse(coverage.degraded_rescan(no_witness, matching_complete))
+            unsigned = copy.deepcopy(no_witness)
+            del unsigned["recovery_original_grouping"]
+            self.assertEqual(coverage._recovery_groups_without_generated_ids(unsigned),
+                             unsigned["findings"])
+            self.assertTrue(coverage.degraded_rescan(unsigned, matching_complete))
+
+            for name, tamper in (
+                    ("origin", lambda r: r["recovery_witnesses"][0]["origin"].update(run_id=0)),
+                    ("pre_quarantine_proof", lambda r: r["recovery_original_grouping"].update(
+                        report_digest="sha256:" + "f" * 64)),
+                    ("source", lambda r: r["recovery_witnesses"][0]["record"]["source"].update(
+                        content_digest="sha256:" + "f" * 64)),
+                    ("conflict_reason", lambda r: r["coverage"]["reasons"].__setitem__(
+                        slice(None), [reason for reason in r["coverage"]["reasons"]
+                                      if reason["code"] != "recovery_conflict"])),
+                    ("raw_count", lambda r: r["findings"][0].update(raw_count=999)),
+                    ("evidence", lambda r: r["findings"][0].update(
+                        message="Changed security evidence."))):
+                with self.subTest(tamper=name):
+                    forged = copy.deepcopy(kept)
+                    tamper(forged)
+                    if name == "evidence":
+                        self.assertTrue(coverage.degraded_rescan(forged, fully_inspected))
+                    else:
+                        self.assertEqual(coverage._recovery_groups_without_generated_ids(forged),
+                                         forged["findings"])
+
+            current_attempt = published["attempts"][subject["id"]]
+            crossed_partial = scan(("shared", "novel"), complete=False, id_prefix=400,
+                                   fully_inspected_files=2, entirely_uninspected_files=0)
+            analyzer_counts(crossed_partial, 2, 1)
+            self.assertTrue(coverage.degraded_rescan(kept, crossed_partial))
+            probe_records = {subject["id"]: copy.deepcopy(kept)}
+            probe_attempts = {subject["id"]: copy.deepcopy(current_attempt)}
+            crossed_attempt = coverage.make_attempt(subject, crossed_partial, current_attempt, kept)
+            # The rotated IDs must not bypass the signed current-origin gate,
+            # even though all security groups already have source-bound evidence.
+            with self.assertRaisesRegex(
+                    PublicationError, "degraded partial rescan introduces new findings"):
+                coverage.apply_outcome(copy.deepcopy(probe_records),
+                    copy.deepcopy(probe_attempts), subject,
+                    {"attempt": crossed_attempt, "record": crossed_partial})
+            # This is an authenticated current-main rescan with a distinct
+            # producing run; its independent findings must remain signed.
+            self.assertTrue(coverage.apply_outcome(probe_records, probe_attempts, subject,
+                {"attempt": crossed_attempt, "record": crossed_partial},
+                authenticated_current_worker=True,
+                verified_current_origin={"run_id": 44852749619, "run_attempt": 1}))
+            self.assertEqual(probe_records[subject["id"]]["report_digest"], original["report_digest"])
+            self.assertEqual(probe_records[subject["id"]]["recovery_witnesses"][0]["record"],
+                             alternate)
+            self.assertEqual(probe_records[subject["id"]]["status"], "partial")
+
+            # The same retained topology becomes unsafe if the actual
+            # original scanner grouping was already truncated at acquisition.
+            incomplete_original = copy.deepcopy(original)
+            incomplete_original["coverage"]["grouping_complete"] = False
+            incomplete_original["findings_truncated"] = True
+            scanner.add_coverage_reason(incomplete_original, "normalization_truncated",
+                "Original scanner grouping was already incomplete.")
+            unqualified_previous = bundle(root / "originally-incomplete", selection,
+                                           [incomplete_original])
+            unqualified_worker = worker(selection, [alternate], unqualified_previous)
+            coverage.merge_reports(selection, unqualified_previous, [unqualified_worker],
+                source_commit=COMMIT, output_dir=root / "unqualified",
+                authenticated_current_workers=True,
+                verified_current_origin={"run_id": 44852749618, "run_attempt": 1})
+            unqualified = coverage.read_bundle(root / "unqualified")["records"][subject["id"]]
+            self.assertNotIn("recovery_original_grouping", unqualified)
+            self.assertEqual(coverage._recovery_groups_without_generated_ids(unqualified),
+                             unqualified["findings"])
+            self.assertTrue(coverage.degraded_rescan(unqualified, fully_inspected))
+            self.assertEqual(unqualified["status"], "partial")
+
+            forged_source = copy.deepcopy(original)
+            forged_source["recovery_original_grouping"] = {
+                "report_digest": original["report_digest"],
+                "grouping_complete": True, "findings_truncated": False}
+            with self.assertRaisesRegex(PublicationError,
+                                        "invalid signed pre-quarantine grouping attestation"):
+                coverage.validate_worker(worker(selection, [forged_source]), selection, COMMIT)
+
+            next_attempt = coverage.make_attempt(
+                subject, fully_inspected, current_attempt, kept)
+            self.assertEqual(next_attempt["attempt_count"], 3)
+            records = {subject["id"]: copy.deepcopy(kept)}
+            attempts = {subject["id"]: copy.deepcopy(current_attempt)}
+            self.assertTrue(coverage.apply_outcome(records, attempts, subject,
+                {"attempt": next_attempt, "record": fully_inspected}))
+            self.assertEqual(records[subject["id"]]["status"], "complete")
+            self.assertFalse(coverage.represented_finding_evidence_identities(kept) -
+                             coverage.finding_evidence_identities(records[subject["id"]]))
+
 
     def test_three_authenticated_current_witnesses_preserve_all_signed_findings(self):
         """Three source-identical scanner originals survive without manufactured Complete.
