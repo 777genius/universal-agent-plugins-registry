@@ -3,6 +3,7 @@ name: Playwright package E2E
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'bridges/playwright/**'
       - 'plugins/playwright/**'
@@ -21,6 +22,7 @@ concurrency:
 
 jobs:
   lifecycle:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: CLI ${{ matrix.cli }} / eight synthetic profiles
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -47,6 +49,7 @@ jobs:
           retention-days: 14
 
   live-readonly:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: MCP startup and tools/list
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -61,6 +64,7 @@ jobs:
         run: node tests/e2e/playwright-live-readonly.cjs
 
   browser-boundary:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Browser artifact stays in plugin data
     runs-on: ubuntu-24.04
     timeout-minutes: 8

@@ -2,6 +2,7 @@ name: SkillSpector fresh signed Community cohort preflight
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "scripts/skillspector_live_cohort_preflight.py"
       - "scripts/discover_skillspector_sources.py"
@@ -26,6 +27,7 @@ permissions:
 
 jobs:
   current-signed-nine-source-pins:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

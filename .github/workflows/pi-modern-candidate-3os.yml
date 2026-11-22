@@ -2,6 +2,7 @@ name: Pi unsigned modern-v1 candidate writer (3 OS)
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/pi_modern_feed_candidate.py'
       - 'tests/test_pi_modern_feed_candidate.py'
@@ -19,7 +20,7 @@ permissions:
 jobs:
   candidate-writer:
     name: Private unsigned output / ${{ matrix.os }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:

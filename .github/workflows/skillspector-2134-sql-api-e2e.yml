@@ -1,6 +1,7 @@
 name: SkillSpector 2.13.4 SQL API immutable no-LLM qualification
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/skillspector-2134-sql-api-e2e.yml'
       - 'scripts/skillspector_2134_sql_api_e2e.py'
@@ -10,6 +11,7 @@ permissions:
   contents: read
 jobs:
   qualify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:

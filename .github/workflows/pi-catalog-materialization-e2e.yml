@@ -2,6 +2,7 @@ name: Pi active catalog real native materialization (unsigned)
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'registry/directory.json'
       - 'plugins/**'
@@ -22,7 +23,7 @@ concurrency:
 jobs:
   native-materialization:
     name: pinned native Pi / ${{ matrix.os }} / shard ${{ matrix.shard }}
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -86,7 +87,7 @@ jobs:
   exact-coverage:
     name: All 72 active native sources on every OS (not signed entitlement)
     needs: [native-materialization]
-    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
