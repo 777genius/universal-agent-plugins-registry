@@ -148,5 +148,24 @@ class DeferredNativeCIContract(unittest.TestCase):
         self.assertIn("workflow_dispatch", publisher["on"])
 
 
+    def test_always_on_validate_runs_cheap_checks_off_native_pool(self):
+        source = (WORKFLOWS / "validate.yml").read_text()
+        flow = yaml.load(source, Loader=yaml.BaseLoader)
+        self.assertIn("pull_request", flow["on"])
+        self.assertEqual(flow["on"]["push"]["branches"], ["main"])
+        jobs = flow["jobs"]
+        self.assertEqual(set(jobs), {
+            "npm-facade", "bridge-reproduction", "portable-catalog",
+            "agentplugins-chatgpt-catalog-v2",
+        })
+        for name in ("npm-facade", "bridge-reproduction", "agentplugins-chatgpt-catalog-v2"):
+            with self.subTest(job=name):
+                self.assertEqual(jobs[name]["runs-on"], "ubuntu-latest")
+                self.assertNotIn("if", jobs[name])
+                self.assertIn("steps", jobs[name])
+        # The bubblewrap/AppArmor isolation requires the pinned supported image.
+        self.assertEqual(jobs["portable-catalog"]["runs-on"], "ubuntu-24.04")
+        self.assertIn("python3 -m unittest discover -s tests", source)
+
 if __name__ == "__main__":
     unittest.main()
