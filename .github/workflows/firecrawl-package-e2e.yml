@@ -3,6 +3,7 @@ name: Firecrawl package E2E
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'bridges/firecrawl/**'
       - 'plugins/firecrawl/**'
@@ -20,6 +21,7 @@ concurrency:
 
 jobs:
   lifecycle:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: CLI ${{ matrix.cli }} / eight synthetic profiles
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -46,6 +48,7 @@ jobs:
           retention-days: 14
 
   live-readonly:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Hosted MCP initialize and tools/list
     runs-on: ubuntu-24.04
     timeout-minutes: 3
