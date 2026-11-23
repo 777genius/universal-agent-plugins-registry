@@ -2,6 +2,7 @@ name: SkillSpector #470 one real immutable shadow scan (no publication)
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/skillspector-470-real-shadow-e2e.yml"
       - "scripts/skillspector_470_real_shadow_e2e.py"
@@ -19,7 +20,7 @@ concurrency:
 jobs:
   goframe-immutable-shadow:
     # Reject fork code running in this repository's trusted workflow context.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 38
     steps:

@@ -1,6 +1,7 @@
 name: SkillSpector #482 immutable cohort security-parity proof
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - scripts/skillspector_cohort9_semantic_parity_v2.py
       - scripts/skillspector_cohort9_fetch_e2e.py
@@ -11,6 +12,7 @@ permissions:
   actions: read
 jobs:
   immutable-evidence-parity:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

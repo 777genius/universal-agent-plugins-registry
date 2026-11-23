@@ -2,6 +2,7 @@ name: Runtime remediation platform qualification (no credentials)
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/runtime-remediation-qualification.yml
       - scripts/qualify_runtime_remediation.mjs
@@ -25,6 +26,7 @@ concurrency:
 
 jobs:
   qualify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Cold launcher and npm verification / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60

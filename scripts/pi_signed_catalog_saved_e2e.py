@@ -103,6 +103,9 @@ def signed_info(cli: str, env: dict[str, str], project: Path,
             and data["snapshot_sequence"] > 0 and digest(data.get("snapshot_digest")),
             "signed info lacks authenticated distribution/snapshot identity")
     release = data.get("selected_release")
+    # Schema 1 permits an empty version for an immutable upstream manifest.
+    # Never fabricate a version: the signed release sequence, SHA and both
+    # digests below bind identity, and inspect_saved checks the exact lock value.
     require(isinstance(release, dict) and release.get("id") == distribution
             and release.get("release_status") == "active"
             and type(release.get("release_sequence")) is int
@@ -112,8 +115,7 @@ def signed_info(cli: str, env: dict[str, str], project: Path,
             and bool(release["repository"])
             and isinstance(release.get("package_path", ""), str)
             and all(digest(release.get(k)) for k in ("tree_digest", "manifest_digest"))
-            and isinstance(release.get("package_version"), str)
-            and bool(release["package_version"]),
+            and isinstance(release.get("package_version"), str),
             "signed info lacks immutable active release identity")
     targets = release.get("target_compatibility")
     require(isinstance(targets, list) and any(
