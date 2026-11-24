@@ -78,7 +78,7 @@ class PiProjectTrustTests(unittest.TestCase):
                          trust.trust_value_digest(value))
 
     def test_project_record_requires_exact_hook_receipt_and_bytes(self):
-        for tamper in ("none", "hook", "record", "owner", "skill", "mcp", "foreign", "duplicate"):
+        for tamper in ("none", "hook", "record", "owner", "skill", "mcp", "mcp-extra", "foreign", "duplicate"):
             with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as tmp:
                 args = self.fixture(Path(tmp))
                 user, project = args[:2]
@@ -93,6 +93,11 @@ class PiProjectTrustTests(unittest.TestCase):
                     (project / ".pi/skills/owned-skill/SKILL.md").write_bytes(b"modified")
                 elif tamper == "mcp":
                     (project / ".pi/mcp.json").write_text('{"mcpServers":{"owned-mcp":{"url":"https://other.invalid"}}}')
+                elif tamper == "mcp-extra":
+                    config = project / ".pi/mcp.json"
+                    document = json.loads(config.read_text(encoding="utf-8"))
+                    document["foreign"] = {}
+                    config.write_text(json.dumps(document), encoding="utf-8")
                 elif tamper == "foreign":
                     (project / ".pi/settings.json").write_text("{}")
                 elif tamper == "duplicate":

@@ -140,7 +140,9 @@ def verify_project_trust(user: Path, project: Path, packages: dict,
     expected = {}
     owned_skills, owned_servers = set(), set()
     mcp_path = native / "mcp.json"
-    servers = strict_document(mcp_path, 4 << 20, numeric_float=True).get("mcpServers") if mcp_path.exists() else {}
+    mcp_document = strict_document(mcp_path, 4 << 20, numeric_float=True) if mcp_path.exists() else {}
+    require(set(mcp_document) <= {"mcpServers"}, "Pi project MCP document has unexpected fields")
+    servers = mcp_document.get("mcpServers", {})
     require(isinstance(servers, dict), "Pi project MCP collection invalid")
 
     for alias, package in packages.items():
