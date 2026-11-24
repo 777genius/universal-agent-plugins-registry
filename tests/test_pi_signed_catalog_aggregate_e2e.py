@@ -46,26 +46,36 @@ class SignedSavedAggregateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             sources, head = self.sample(folder)
-            report = subject.aggregate_reports(folder, head, sources)
+            report = subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
             self.assertEqual(report["scope_executions"], 216)
             self.assertEqual(report["per_os"], {name: 72 for name in subject.PLATFORMS})
             self.assertEqual(report["snapshot_digest"], "sha256:" + "b" * 64)
+
+    def test_uniform_but_unapproved_publication_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            sources, head = self.sample(folder)
+            for wrong in ((51, "sha256:" + "b" * 64),
+                          (50, "sha256:" + "c" * 64),
+                          (0, "sha256:" + "b" * 64)):
+                with self.subTest(pin=wrong), self.assertRaises(RuntimeError):
+                    subject.aggregate_reports(folder, head, sources, wrong)
 
     def test_missing_extra_or_mismatched_head_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             sources, head = self.sample(folder)
             with self.assertRaises(RuntimeError):
-                subject.aggregate_reports(folder, "f" * 40, sources)
+                subject.aggregate_reports(folder, "f" * 40, sources, (50, "sha256:" + "b" * 64))
             path, _ = self.modify(folder)
             contents = path.read_bytes()
             path.unlink()
             with self.assertRaises(RuntimeError):
-                subject.aggregate_reports(folder, head, sources)
+                subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
             path.write_bytes(contents)
             (folder / "unexpected.json").write_text("{}", encoding="utf-8")
             with self.assertRaises(RuntimeError):
-                subject.aggregate_reports(folder, head, sources)
+                subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
 
     def test_mixed_signed_snapshot_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -76,12 +86,12 @@ class SignedSavedAggregateTests(unittest.TestCase):
                 case["snapshot_digest"] = "sha256:" + "c" * 64
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "different signed snapshots"):
-                subject.aggregate_reports(folder, head, sources)
+                subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
             for case in report["cases"]:
                 case.pop("snapshot_digest")
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaises(RuntimeError):
-                subject.aggregate_reports(folder, head, sources)
+                subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
 
     def test_queued_skipped_refused_or_duplicate_not_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,12 +103,12 @@ class SignedSavedAggregateTests(unittest.TestCase):
                 changed["cases"][0]["status"] = bad
                 path.write_text(json.dumps(changed), encoding="utf-8")
                 with self.subTest(status=bad), self.assertRaises(RuntimeError):
-                    subject.aggregate_reports(folder, head, sources)
+                    subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
             changed = json.loads(json.dumps(report))
             changed["cases"][0] = dict(changed["cases"][1])
             path.write_text(json.dumps(changed), encoding="utf-8")
             with self.assertRaises(RuntimeError):
-                subject.aggregate_reports(folder, head, sources)
+                subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
 
 
 if __name__ == "__main__":

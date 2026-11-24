@@ -39,6 +39,12 @@ def digest(value: object) -> bool:
     return isinstance(value, str) and DIGEST.fullmatch(value) is not None
 
 
+def snapshot_pin(sequence: int, snapshot_digest: str) -> tuple[int, str]:
+    require(type(sequence) is int and sequence > 0 and digest(snapshot_digest),
+            "expected approved signed snapshot identity is invalid")
+    return sequence, snapshot_digest
+
+
 def native_fingerprint(root: Path) -> dict[str, str]:
     """Hash actual native files and reject links/non-files; no private data output."""
     if not root.exists():
@@ -317,7 +323,8 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
     return ("sha256:" + hashlib.sha256(lockbytes).hexdigest(), owners, actual, snapshot)
 
 
-def run_case(cli: str, scratch: Path, source: dict, scope: str) -> dict:
+def run_case(cli: str, scratch: Path, source: dict, scope: str,
+             expected_snapshot: tuple[int, str]) -> dict:
     label = source["distribution"]
     identity = hashlib.sha256(label.encode("utf-8")).hexdigest()[:16]
     root = scratch / ("case-" + identity + "-" + str(source["release_sequence"]) + "-" + scope)
@@ -333,6 +340,8 @@ def run_case(cli: str, scratch: Path, source: dict, scope: str) -> dict:
     native_b = native_fingerprint(native_root(env_b, project_b, scope))
     other_b = native_fingerprint(native_root(env_b, project_b, "project" if scope == "user" else "user"))
     policy = signed_info(cli, env_a, project_a, label, scope)
+    require(policy["snapshot"] == expected_snapshot,
+            "authenticated snapshot differs from expected approved publication")
     check_root_source(policy, source)
     invoke(cli, env_a, project_a, "signed-add", "add", label, "--target", "pi", *args_a)
     original = inspect_saved(cli, env_a, project_a, portable_a, scope, source, native_a, other_a, policy["snapshot"])
@@ -410,7 +419,9 @@ def expected_shard(sources: list[dict], shard: int) -> list[tuple[dict, str]]:
     return [(s, scope) for i, s in enumerate(active) if i % SHARDS == shard for scope in SCOPES]
 
 
-def verify_shard(results: list[dict], sources: list[dict], shard: int) -> None:
+def verify_shard(results: list[dict], sources: list[dict], shard: int,
+                 expected_snapshot: tuple[int, str]) -> None:
+    snapshot_pin(*expected_snapshot)
     expected = {(s["distribution"], s["release_sequence"], scope)
                 for s, scope in expected_shard(sources, shard)}
     actual = [(r.get("distribution"), r.get("release_sequence"), r.get("scope"))
@@ -424,16 +435,22 @@ def verify_shard(results: list[dict], sources: list[dict], shard: int) -> None:
                 and type(r.get("installed_dependency_count")) is int
                 and r["installed_dependency_count"] >= 1 for r in results),
             "full signed saved shard coverage incomplete (skipped/refused is not PASS)")
+    require(all((r["snapshot_sequence"], r["snapshot_digest"]) == expected_snapshot
+                for r in results),
+            "shard uses different signed snapshots from the expected approved publication")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-head", required=True)
+    parser.add_argument("--expected-snapshot-sequence", type=int, required=True)
+    parser.add_argument("--expected-snapshot-digest", required=True)
     parser.add_argument("--platform", required=True, choices=tuple(PLATFORMS))
     parser.add_argument("--shard", type=int, required=True)
     parser.add_argument("--cli", default="agentplugins")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
+    expected_snapshot = snapshot_pin(args.expected_snapshot_sequence, args.expected_snapshot_digest)
     require(SHA.fullmatch(args.source_head) is not None
             and os.environ.get("GITHUB_ACTIONS") == "true"
             and os.environ.get("GITHUB_REPOSITORY") == REPO
@@ -458,8 +475,9 @@ def main() -> int:
     try:
         with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"], prefix="pi-signed-full-") as temp:
             for item, scope in cases:
-                report["cases"].append(run_case(str(Path(binary).resolve()), Path(temp), item, scope))
-        verify_shard(report["cases"], sources, args.shard)
+                report["cases"].append(run_case(str(Path(binary).resolve()), Path(temp),
+                                                item, scope, expected_snapshot))
+        verify_shard(report["cases"], sources, args.shard, expected_snapshot)
         report["status"] = "passed"
         return 0
     except Exception as error:

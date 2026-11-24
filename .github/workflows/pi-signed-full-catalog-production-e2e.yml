@@ -2,9 +2,19 @@ name: Pi signed saved full catalog production E2E
 
 # Strictly manual positive acceptance. DO NOT dispatch until there is an
 # owner/editor-approved, genuine Pi-authorized signed production snapshot.
-# Current sequence 48 is Pi-free. Refusal is FAILURE, never a PASS.
+# Pass the exact independently approved publication identity; inputs do not
+# authorize a publication or replace signed eligibility. Refusal is FAILURE.
 on:
   workflow_dispatch:
+    inputs:
+      expected_snapshot_sequence:
+        description: Exact owner-approved production Directory sequence
+        required: true
+        type: string
+      expected_snapshot_digest:
+        description: Exact owner-approved production Directory digest (sha256:...)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -47,10 +57,15 @@ jobs:
           test "$(pi --version)" = "1.5.0"
       - name: Execute real signed saved User/Project lifecycle for this six-release shard
         shell: bash
+        env:
+          EXPECTED_SNAPSHOT_SEQUENCE: ${{ inputs.expected_snapshot_sequence }}
+          EXPECTED_SNAPSHOT_DIGEST: ${{ inputs.expected_snapshot_digest }}
         run: |
           set -euo pipefail
           python scripts/pi_signed_catalog_saved_e2e.py \
             --source-head "$GITHUB_SHA" \
+            --expected-snapshot-sequence="$EXPECTED_SNAPSHOT_SEQUENCE" \
+            --expected-snapshot-digest="$EXPECTED_SNAPSHOT_DIGEST" \
             --platform "${{ matrix.os }}" \
             --shard "${{ matrix.shard }}" \
             --report "$RUNNER_TEMP/pi-signed-full-${{ matrix.os }}-${{ matrix.shard }}.json"
@@ -87,10 +102,15 @@ jobs:
           path: ${{ runner.temp }}/pi-signed-full-aggregate
       - name: Verify 18 source-bound shards, 216 scopes and one signed snapshot
         shell: bash
+        env:
+          EXPECTED_SNAPSHOT_SEQUENCE: ${{ inputs.expected_snapshot_sequence }}
+          EXPECTED_SNAPSHOT_DIGEST: ${{ inputs.expected_snapshot_digest }}
         run: |
           set -euo pipefail
           python scripts/pi_signed_catalog_aggregate_e2e.py \
             --source-head "$GITHUB_SHA" \
+            --expected-snapshot-sequence="$EXPECTED_SNAPSHOT_SEQUENCE" \
+            --expected-snapshot-digest="$EXPECTED_SNAPSHOT_DIGEST" \
             --artifacts "$RUNNER_TEMP/pi-signed-full-aggregate" \
             --report "$RUNNER_TEMP/pi-signed-full-aggregate.json"
       - name: Preserve independent signed acceptance summary

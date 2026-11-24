@@ -14,11 +14,13 @@ import sys
 
 from pi_signed_catalog_saved_e2e import (
     PLATFORMS, PUBLIC_CLI, REPO, SHA, SHARDS, catalog_sources, digest,
-    expected_shard, require, require_exact_checkout, verify_shard,
+    expected_shard, require, require_exact_checkout, snapshot_pin, verify_shard,
 )
 
 
-def aggregate_reports(folder: Path, head: str, sources: list[dict]) -> dict:
+def aggregate_reports(folder: Path, head: str, sources: list[dict],
+                      expected_snapshot: tuple[int, str]) -> dict:
+    snapshot_pin(*expected_snapshot)
     require(folder.is_dir() and not folder.is_symlink(), "missing safe signed evidence directory")
     expected_files = {
         f"pi-signed-full-{platform}-{shard}.json"
@@ -26,7 +28,7 @@ def aggregate_reports(folder: Path, head: str, sources: list[dict]) -> dict:
     }
     require({p.name for p in folder.iterdir()} == expected_files,
             "missing, duplicated or unexpected cross-OS/shard signed evidence")
-    snapshot = None
+    snapshot = expected_snapshot
     seen = set()
     totals = {platform: 0 for platform in PLATFORMS}
     for platform in PLATFORMS:
@@ -47,7 +49,7 @@ def aggregate_reports(folder: Path, head: str, sources: list[dict]) -> dict:
                     and isinstance(report.get("cases"), list),
                     "mismatched, refused or nonproduction signed shard report")
             cases = report["cases"]
-            verify_shard(cases, sources, shard)
+            verify_shard(cases, sources, shard, expected_snapshot)
             for case in cases:
                 identity = (platform, case["distribution"], case["release_sequence"], case["scope"])
                 require(identity not in seen, "duplicate cross-shard signed scope evidence")
@@ -55,9 +57,8 @@ def aggregate_reports(folder: Path, head: str, sources: list[dict]) -> dict:
                 release = (case["snapshot_sequence"], case.get("snapshot_digest"))
                 require(type(release[0]) is int and release[0] > 0 and digest(release[1]),
                         "unsigned or missing authenticated snapshot digest")
-                require(snapshot is None or release == snapshot,
+                require(release == snapshot,
                         "cross-OS/shard tests used different signed snapshots")
-                snapshot = release
                 totals[platform] += 1
     require(len(seen) == 72 * len(PLATFORMS)
             and all(count == 72 for count in totals.values()),
@@ -71,16 +72,20 @@ def aggregate_reports(folder: Path, head: str, sources: list[dict]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-head", required=True)
+    parser.add_argument("--expected-snapshot-sequence", type=int, required=True)
+    parser.add_argument("--expected-snapshot-digest", required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
+    expected_snapshot = snapshot_pin(args.expected_snapshot_sequence, args.expected_snapshot_digest)
     require(SHA.fullmatch(args.source_head) is not None
             and os.environ.get("GITHUB_ACTIONS") == "true"
             and os.environ.get("GITHUB_REPOSITORY") == REPO
             and os.environ.get("RUNNER_OS") == "Linux",
             "aggregate requires authentic exact-source GitHub Actions runner")
     require_exact_checkout(args.source_head)
-    result = aggregate_reports(args.artifacts, args.source_head, catalog_sources(args.source_head))
+    result = aggregate_reports(args.artifacts, args.source_head,
+                               catalog_sources(args.source_head), expected_snapshot)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print("Signed saved Pi cross-OS aggregate:", json.dumps(result, sort_keys=True))
