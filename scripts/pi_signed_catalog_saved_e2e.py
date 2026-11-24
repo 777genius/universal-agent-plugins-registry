@@ -121,8 +121,12 @@ def signed_info(cli: str, env: dict[str, str], project: Path,
             and bool(release["repository"])
             and isinstance(release.get("package_path", ""), str)
             and all(digest(release.get(k)) for k in ("tree_digest", "manifest_digest"))
-            and isinstance(release.get("package_version"), str),
+            and isinstance(release.get("package_version", ""), str),
             "signed info lacks immutable active release identity")
+    # The frozen public CLI uses Go omitempty for an empty package version.
+    # Normalize only that wire representation; check_root_source and the
+    # signed lock/receipt comparisons still bind the reviewed version.
+    release = dict(release, package_version=release.get("package_version", ""))
     targets = release.get("target_compatibility")
     require(isinstance(targets, list) and any(
         isinstance(t, dict) and t.get("client") == "pi"
@@ -145,6 +149,7 @@ def check_root_source(signed: dict, item: dict) -> None:
     require(release["repository"] == reviewed.group(1)
             and release.get("package_path", "") == reviewed.group(3)
             and release["release_sequence"] == item["release_sequence"]
+            and release["package_version"] == item["package_version"]
             and (item["authored_revision"] is None or
                  release["resolved_revision"] == item["authored_revision"])
             and release["tree_digest"] == item["tree_digest"]
@@ -244,7 +249,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
                 and registry.get("path", "") == release.get("package_path", "")
                 and registry.get("commit") == release["resolved_revision"]
                 and registry.get("release_sequence") == release["release_sequence"]
-                and package.get("version") == release["package_version"]
+                and package.get("version", "") == release["package_version"]
                 and all(package[k] == release[k] for k in ("tree_digest", "manifest_digest")),
                 "saved package differs from authenticated signed dependency")
         feed_id = registry.get("feed_id", "")
@@ -255,7 +260,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
         if alias == root_alias:
             require(not parents, "saved root has unexpected parents")
         else:
-            require(bool(parents) and all(
+            require(bool(package.get("version")) and bool(parents) and all(
                 isinstance(edge, dict) and edge.get("alias") in pinned
                 and isinstance(edge.get("selector"), dict)
                 and edge["selector"].get("kind") == "version"
@@ -304,7 +309,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
                 and revision.get("release_sequence") == release["release_sequence"]
                 and revision.get("resolved_revision") == release["resolved_revision"]
                 and all(revision.get(k) == package[k] for k in ("tree_digest", "manifest_digest"))
-                and revision.get("version") == release["package_version"]
+                and revision.get("version", "") == release["package_version"]
                 and signed.get("recorded_release_sequence") == release["release_sequence"]
                 and signed.get("recorded_revision") == release["resolved_revision"]
                 and signed.get("recorded_snapshot_sequence") == snapshot[0]
@@ -398,13 +403,15 @@ def catalog_sources(head: str) -> list[dict]:
                 release = releases[policy["release_sequence"]]
                 key = (dist["id"], release["sequence"])
                 require(key not in pins, "duplicate authored active Directory policy")
-                pins[key] = release["package_source"]["revision"]
+                require(isinstance(release["package_version"], str),
+                        "authored release version is malformed")
+                pins[key] = (release["package_source"]["revision"], release["package_version"])
     sources = active_sources(head)
     require(len(pins) == len(sources), "authored source inventory differs")
     for item in sources:
         key = (item["distribution"], item["release_sequence"])
         require(key in pins, "unbound authored source policy")
-        item["authored_revision"] = pins[key]
+        item["authored_revision"], item["package_version"] = pins[key]
     return sources
 
 
