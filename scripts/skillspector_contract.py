@@ -190,6 +190,20 @@ def validate_record(record, item, generated, *, scheduled=False, allowed_profile
                     not any(analyzer.get(key, 0) != 0 for key in ("failed", "partial", "skipped", "unaccounted")) and
                     (analyzer.get("status") != "disabled" or analyzer.get("analyzer_id") in scanner.DISABLED_STATIC_ANALYZERS),
                     "complete report contains incomplete analyzer evidence")
+    if "recovery_original_grouping" in record:
+        # This provenance is produced only by the trusted recovery merger,
+        # never by an untrusted scanner worker. Older signed records without
+        # this field remain incomplete rather than being guessed complete.
+        require(scheduled and record["status"] == "partial" and
+                record["coverage"].get("grouping_complete") is False and
+                record["findings_truncated"] is True and
+                "legacy_format" not in record and
+                {"recovery_conflict", "normalization_truncated"} <=
+                {reason["code"] for reason in coverage["reasons"]} and
+                record["recovery_original_grouping"] == {
+                    "report_digest": record.get("report_digest"),
+                    "grouping_complete": True, "findings_truncated": False},
+                "invalid signed pre-quarantine grouping attestation")
     witnesses = record.get("recovery_witnesses", [])
     if "recovery_witnesses" in record:
         require(1 <= len(witnesses) <= MAX_RECOVERY_WITNESSES, "empty or excessive recovery witness list")

@@ -1005,6 +1005,16 @@
         2
       ]
     },
+    "recovery_original_grouping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["report_digest", "grouping_complete", "findings_truncated"],
+      "properties": {
+        "report_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "grouping_complete": {"const": true},
+        "findings_truncated": {"const": false}
+      }
+    },
     "recovery_witnesses": {
       "type": "array",
       "maxItems": 3,
