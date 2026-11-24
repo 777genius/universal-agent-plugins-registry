@@ -19,6 +19,7 @@ import sys
 import tempfile
 
 from pi_catalog_inventory_e2e import ROOT, active_sources, require_exact_checkout
+from pi_signed_project_trust import check_opposite_after_project, check_removed, verify_project_trust
 from pi_signed_marketing_kit_e2e import (
     StageFailure, fresh_case, invoke, native_root, require,
 )
@@ -320,8 +321,13 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
             "saved Pi owner set incomplete")
     actual = native_fingerprint(native_root(env, project, scope))
     other = native_fingerprint(native_root(env, project, "project" if scope == "user" else "user"))
-    require(actual != native_before and other == other_before,
-            "Pi native projection missing or leaked to other scope")
+    require(actual != native_before, "Pi native projection missing")
+    if scope == "project":
+        user = native_root(env, project, "user")
+        verify_project_trust(user, project, pinned, owners, snapshot)
+        check_opposite_after_project(user, other_before, other)
+    else:
+        require(other == other_before, "Pi native projection leaked to other scope")
     check_native_contract(native_root(env, project, scope), source["components"])
     for alias in pinned:
         observe_readonly_doctor(cli, env, project, portable, scope, alias, len(pinned))
@@ -368,17 +374,19 @@ def run_case(cli: str, scratch: Path, source: dict, scope: str,
     require(restored[0] == original[0] and
             not (set(restored[1].values()) & set(original[1].values())),
             "cold restore reused owner identity or changed immutable lock")
-    for env, project, portable, args, before, other in (
-            (env_b, project_b, portable_b, args_b, native_b, other_b),
-            (env_a, project_a, portable_a, args_a, native_a, other_a)):
+    for env, project, portable, args, before, other, installed in (
+            (env_b, project_b, portable_b, args_b, native_b, other_b, restored[2]),
+            (env_a, project_a, portable_a, args_a, native_a, other_a, original[2])):
         invoke(cli, env, project, "signed-remove", "remove", source["manifest_name"], *args)
         response = invoke(cli, env, project, "removed-list", "list", "--target", "pi", *args)
         data = response.get("data")
         require(isinstance(data, dict) and data.get("installations") == [],
                 "signed dependency owners remain after removal")
-        require(native_fingerprint(native_root(env, project, scope)) == before
-                and native_fingerprint(native_root(env, project, "project" if scope == "user" else "user")) == other,
-                "native Pi projection remains or other scope was modified")
+        active = native_root(env, project, scope)
+        opposite = native_root(env, project, "project" if scope == "user" else "user")
+        check_removed(active, before, native_fingerprint(active), had_mcp="mcp.json" in installed)
+        check_removed(opposite, other, native_fingerprint(opposite),
+                      had_mcp=False, project_user=scope == "project")
     for suffix in ("A", "B"):
         case = root / suffix
         for marker in (case / "home/foreign-do-not-change.txt",
