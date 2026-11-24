@@ -46,14 +46,35 @@ class FullSignedCatalogTests(unittest.TestCase):
              "installed_dependency_count": 1}
             for s, scope in subject.expected_shard(sources, shard)
         ]
-        subject.verify_shard(reports, sources, shard)
+        expected = (48, "sha256:" + "d" * 64)
+        subject.verify_shard(reports, sources, shard, expected)
+        for wrong in ((49, expected[1]), (48, "sha256:" + "e" * 64),
+                      (True, expected[1]), (48, "bad")):
+            with self.subTest(pin=wrong), self.assertRaises(RuntimeError):
+                subject.verify_shard(reports, sources, shard, wrong)
         for bad in (reports[:-1], reports + [reports[0]],
                     [dict(reports[0], status="skipped"), *reports[1:]],
                     [dict(reports[0], status="refused"), *reports[1:]],
                     [dict(reports[0], snapshot_sequence=None), *reports[1:]],
                     [dict(reports[0], installed_dependency_count=0), *reports[1:]]):
             with self.subTest(bad=bad[0]), self.assertRaises(RuntimeError):
-                subject.verify_shard(bad, sources, shard)
+                subject.verify_shard(bad, sources, shard, expected)
+
+    def test_wrong_authenticated_publication_refused_before_add(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            item = self.sources()[0]
+            with (
+                patch.object(subject, "fresh_case", return_value=({}, root, root, root)),
+                patch.object(subject, "native_root", return_value=root),
+                patch.object(subject, "native_fingerprint", return_value={}),
+                patch.object(subject, "signed_info",
+                             return_value={"snapshot": (49, "sha256:" + "d" * 64)}),
+                patch.object(subject, "invoke") as invoke,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "expected approved publication"):
+                    subject.run_case("cli", root, item, "project", (50, "sha256:" + "e" * 64))
+                invoke.assert_not_called()
 
     def test_catalog_drift_or_bad_shard_fails(self):
         with self.assertRaises(RuntimeError):
