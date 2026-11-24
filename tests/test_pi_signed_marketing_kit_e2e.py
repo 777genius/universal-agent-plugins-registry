@@ -364,7 +364,7 @@ class SignedMarketingDoctorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unqualified native"):
                 observe_native_doctor("cli", {}, Path("A"), ("--scope", "user"))
 
-    def test_e2e_tamper_instrumentation_restores_original_bytes(self):
+    def test_e2e_tamper_requires_cli_to_restore_original_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
             env, project, _, native = fresh_case(Path(temp), "user-A", "user")
             skill = native / "skills" / "campaign-planning" / "SKILL.md"
@@ -379,12 +379,39 @@ class SignedMarketingDoctorTests(unittest.TestCase):
                     self.assertNotEqual(current, original)
                 else:
                     self.assertEqual(current, original)
-            with mock.patch("pi_signed_marketing_kit_e2e.observe_native_doctor",
-                            side_effect=observe):
+            def repair(*args):
+                self.assertNotEqual(skill.read_bytes(), original)
+                self.assertEqual(args[3:], ("repair native drift", "repair",
+                                            "marketing-kit", "--target", "pi",
+                                            "--scope", "user"))
+                skill.write_bytes(original)
+
+            with (mock.patch("pi_signed_marketing_kit_e2e.observe_native_doctor",
+                             side_effect=observe),
+                  mock.patch("pi_signed_marketing_kit_e2e.invoke",
+                             side_effect=repair) as cli):
                 require_native_tamper_refusal("cli", env, project, "user",
                                              ("--scope", "user"))
+                cli.assert_called_once()
             self.assertEqual(skill.read_bytes(), original)
             self.assertEqual([entry[0] for entry in before], [True, False])
+
+    def test_e2e_tamper_noop_repair_fails_without_harness_restore(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env, project, _, native = fresh_case(Path(temp), "user-A", "user")
+            skill = native / "skills" / "campaign-planning" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            original = b"---\nname: campaign-planning\n---\n"
+            skill.write_bytes(original)
+            with (mock.patch("pi_signed_marketing_kit_e2e.observe_native_doctor") as doctor,
+                  mock.patch("pi_signed_marketing_kit_e2e.invoke", return_value={}) as cli):
+                with self.assertRaisesRegex(RuntimeError, "CLI repair did not restore"):
+                    require_native_tamper_refusal("cli", env, project, "user",
+                                                 ("--scope", "user"))
+                cli.assert_called_once()
+                doctor.assert_called_once_with(
+                    "cli", env, project, ("--scope", "user"), expect_drift=True)
+            self.assertNotEqual(skill.read_bytes(), original)
 
 
 

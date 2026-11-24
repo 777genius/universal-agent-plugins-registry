@@ -325,7 +325,7 @@ def observe_native_doctor(cli: str, env: dict[str, str],
 def require_native_tamper_refusal(cli: str, env: dict[str, str],
                                  project: Path, scope: str,
                                  scope_args: tuple[str, ...]) -> None:
-    """Prove a real modified Skill is detected, then restore exact original bytes."""
+    """Prove the published CLI detects and repairs real native Skill drift."""
     skill = native_root(env, project, scope) / "skills" / "campaign-planning" / "SKILL.md"
     require(skill.is_file() and not skill.is_symlink()
             and skill.stat().st_nlink == 1,
@@ -333,13 +333,15 @@ def require_native_tamper_refusal(cli: str, env: dict[str, str],
     original = skill.read_bytes()
     require(0 < len(original) < 1024 * 1024,
             "native Pi Skill has no bounded original bytes")
-    try:
-        skill.write_bytes(original + b"\\n<!-- tampered by disposable E2E -->\\n")
-        observe_native_doctor(cli, env, project, scope_args, expect_drift=True)
-    finally:
-        skill.write_bytes(original)
-    require(skill.read_bytes() == original,
-            "native Pi Skill was not restored byte-for-byte")
+    skill.write_bytes(original + b"\n<!-- tampered by disposable E2E -->\n")
+    observe_native_doctor(cli, env, project, scope_args, expect_drift=True)
+    # Only the real CLI may restore the disposable profile. A refusal or
+    # no-op is a failed acceptance case, never a harness-assisted repair.
+    invoke(cli, env, project, "repair native drift", "repair", "marketing-kit",
+           "--target", "pi", *scope_args)
+    require(skill.is_file() and not skill.is_symlink()
+            and skill.stat().st_nlink == 1 and skill.read_bytes() == original,
+            "CLI repair did not restore native Pi Skill byte-for-byte")
     observe_native_doctor(cli, env, project, scope_args)
 
 
@@ -417,16 +419,17 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
     check_native(env_a, project_a, scope)
     check_opposite_scope(env_a, project_a, scope)
     observe_native_doctor(cli, env_a, project_a, args_a)
-    require_native_tamper_refusal(cli, env_a, project_a, scope, args_a)
     lock_digest = check_lock(portable_a / "uap.lock", policy)
     require((portable_a / "uap.toml").is_file(), "saved source agreement missing")
+    manifest_bytes = (portable_a / "uap.toml").read_bytes()
     report.append({"scope": scope, "stage": "signed-add", "result": "passed",
                    "installed": len(original), "lock_digest": lock_digest,
                    "snapshot_sequence": policy["snapshot_sequence"]})
 
     def assert_unchanged(stage: str) -> None:
-        require(lock_digest == check_lock(portable_a / "uap.lock", policy),
-                stage + ": signed saved lock changed")
+        require(lock_digest == check_lock(portable_a / "uap.lock", policy)
+                and (portable_a / "uap.toml").read_bytes() == manifest_bytes,
+                stage + ": signed saved lock or source agreement changed")
         require(original == check_installations(
             invoke(cli, env_a, project_a, stage + " list", "list",
                    "--target", "pi", *args_a), scope, policy),
@@ -434,6 +437,9 @@ def run_scope(cli: str, root: Path, scope: str, report: list[dict]) -> None:
         check_native(env_a, project_a, scope)
         check_opposite_scope(env_a, project_a, scope)
         observe_native_doctor(cli, env_a, project_a, args_a)
+
+    require_native_tamper_refusal(cli, env_a, project_a, scope, args_a)
+    assert_unchanged("drift-repair")
 
     invoke(cli, env_a, project_a, "repeat signed add", "add", "marketing-kit",
            "--target", "pi", *args_a)
