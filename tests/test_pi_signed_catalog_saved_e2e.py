@@ -18,6 +18,7 @@ class FullSignedCatalogTests(unittest.TestCase):
             {"distribution": f"777genius/example-{i:02d}", "release_sequence": 1,
              "distribution_status": "active", "manifest_name": f"example-{i:02d}",
              "revision": "a" * 40, "authored_revision": "a" * 40,
+             "package_version": "1.0.0", "components": ["mcp"],
              "source": f"github:777genius/example-{i:02d}@{'a'*40}//packages/{i:02d}",
              "tree_digest": "sha256:" + "b" * 64,
              "manifest_digest": "sha256:" + "c" * 64}
@@ -182,6 +183,7 @@ class FullSignedCatalogTests(unittest.TestCase):
     def test_authored_revision_is_not_current_test_commit(self):
         item = self.sources()[0]
         release = {"release_sequence": 1, "resolved_revision": "d" * 40,
+                   "package_version": item["package_version"],
                    "repository": "777genius/example-00", "package_path": "packages/00",
                    "tree_digest": item["tree_digest"],
                    "manifest_digest": item["manifest_digest"]}
@@ -196,6 +198,80 @@ class FullSignedCatalogTests(unittest.TestCase):
         release["tree_digest"] = "sha256:" + "e" * 64
         with self.assertRaises(RuntimeError):
             subject.check_root_source({"release": release}, item)
+
+    def test_authored_version_must_match_normalized_signed_info(self):
+        item = self.sources()[0]
+        release = {"release_sequence": 1, "resolved_revision": item["revision"],
+                   "repository": "777genius/example-00", "package_path": "packages/00",
+                   "tree_digest": item["tree_digest"], "manifest_digest": item["manifest_digest"],
+                   "package_version": ""}
+        with self.assertRaisesRegex(RuntimeError, "reviewed catalog source"):
+            subject.check_root_source({"release": release}, item)
+        item["package_version"] = ""
+        subject.check_root_source({"release": release}, item)
+        release["package_version"] = "1.0.0"
+        with self.assertRaisesRegex(RuntimeError, "reviewed catalog source"):
+            subject.check_root_source({"release": release}, item)
+
+    def test_saved_version_wire_omission_only_for_versionless_release(self):
+        missing = object()
+        for signed_version, lock_version, receipt_version, passes in (
+            ("", missing, missing, True),
+            ("", "", "", True),
+            ("", None, missing, False),
+            ("", missing, None, False),
+            ("", "1.0.0", missing, False),
+            ("", missing, "1.0.0", False),
+            ("1.0.0", "1.0.0", "1.0.0", True),
+            ("1.0.0", missing, "1.0.0", False),
+            ("1.0.0", "1.0.0", missing, False),
+        ):
+            with self.subTest(version=signed_version, passes=passes), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project = root / "project"
+                project.mkdir()
+                env = {"PI_CODING_AGENT_DIR": str(root / "native")}
+                native = subject.native_root(env, project, "user")
+                native.mkdir()
+                (native / "mcp.json").write_text(
+                    '{"mcpServers":{"example":{"command":"node"}}}', encoding="utf-8")
+                source = self.sources()[0]
+                source["package_version"] = signed_version
+                dist, alias = source["distribution"], source["manifest_name"]
+                release = {"id": dist, "release_sequence": 1,
+                           "resolved_revision": source["revision"],
+                           "repository": "777genius/example-00", "package_path": "packages/00",
+                           "tree_digest": source["tree_digest"], "manifest_digest": source["manifest_digest"],
+                           "package_version": signed_version}
+                package = {"alias": alias, "source_key": "directory:" + dist, "targets": ["pi"],
+                           "tree_digest": release["tree_digest"], "manifest_digest": release["manifest_digest"],
+                           "source": {"registry": {"distribution": dist, "distribution_id": dist,
+                                                   "product_id": "example", "release_sequence": 1,
+                                                   "repository": release["repository"], "path": release["package_path"],
+                                                   "commit": release["resolved_revision"]}}}
+                revision = {"distribution_id": dist, "release_sequence": 1,
+                            "resolved_revision": release["resolved_revision"],
+                            "tree_digest": release["tree_digest"], "manifest_digest": release["manifest_digest"]}
+                if lock_version is not missing:
+                    package["version"] = lock_version
+                if receipt_version is not missing:
+                    revision["version"] = receipt_version
+                (root / "uap.lock").write_text(json.dumps({"packages": [package]}), encoding="utf-8")
+                receipt = {"installation_id": "example-owner", "directory": {
+                    "recorded_distribution": dist, "recorded_release_sequence": 1,
+                    "recorded_revision": release["resolved_revision"], "recorded_snapshot_sequence": 49},
+                    "clients": [{"client_id": "pi", "scope": "user", "materialization": "materialized",
+                                 "verification": "installation_verified", "package_revision": revision}]}
+                info = {"product_id": "example", "release": release, "snapshot": (49, "sha256:" + "d" * 64)}
+                with (patch.object(subject, "signed_info", return_value=info),
+                      patch.object(subject, "invoke", return_value={"data": {"installations": [receipt]}}),
+                      patch.object(subject, "observe_readonly_doctor")):
+                    args = ("cli", env, project, root, "user", source, {}, {}, info["snapshot"])
+                    if passes:
+                        subject.inspect_saved(*args)
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            subject.inspect_saved(*args)
 
     def test_signed_info_rejects_missing_pi_grant(self):
         record = {"command": "info", "result": "success", "data": {
@@ -230,8 +306,12 @@ class FullSignedCatalogTests(unittest.TestCase):
                 subject.signed_info("cli", {}, Path("."), "777genius/a", "user")
             release["manifest_digest"] = "sha256:" + "c" * 64
             del release["package_version"]
-            with self.assertRaisesRegex(RuntimeError, "identity"):
-                subject.signed_info("cli", {}, Path("."), "777genius/a", "user")
+            self.assertEqual("", subject.signed_info(
+                "cli", {}, Path("."), "777genius/a", "user")["release"]["package_version"])
+            for invalid in (None, 1, False):
+                release["package_version"] = invalid
+                with self.assertRaisesRegex(RuntimeError, "identity"):
+                    subject.signed_info("cli", {}, Path("."), "777genius/a", "user")
 
 
 if __name__ == "__main__":
