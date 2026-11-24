@@ -180,6 +180,22 @@ class FullSignedCatalogTests(unittest.TestCase):
             subject.check_known_dependency_closure("777genius/marketing-kit",
                                                    required | {"777genius/unreviewed"})
 
+    def test_dependency_graph_rejects_reachable_cycles_and_orphans(self):
+        def graph(**parents):
+            return {alias: {"required_by": [{"alias": parent} for parent in edges]}
+                    for alias, edges in parents.items()}
+
+        subject.check_dependency_graph(graph(root=[]), "root")
+        subject.check_dependency_graph(
+            graph(root=[], a=["root"], b=["root"], c=["a", "b"]), "root")
+        for invalid in (graph(root=[], a=["root", "b"], b=["a"]),
+                        graph(root=[], a=["root", "a"]),
+                        graph(root=[], a=[]),
+                        graph(root=[], a=["b"], b=["a"])):
+            with self.subTest(graph=invalid), self.assertRaisesRegex(
+                    RuntimeError, "orphaned or cyclic"):
+                subject.check_dependency_graph(invalid, "root")
+
     def test_authored_revision_is_not_current_test_commit(self):
         item = self.sources()[0]
         release = {"release_sequence": 1, "resolved_revision": "d" * 40,
