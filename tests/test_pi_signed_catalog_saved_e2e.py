@@ -44,7 +44,8 @@ class FullSignedCatalogTests(unittest.TestCase):
             {"distribution": s["distribution"], "release_sequence": s["release_sequence"],
              "scope": scope, "status": "passed", "snapshot_sequence": 48,
              "snapshot_digest": "sha256:" + "d" * 64,
-             "installed_dependency_count": 1}
+             "installed_dependency_count": 1,
+             "installed_distributions": [s["distribution"]]}
             for s, scope in subject.expected_shard(sources, shard)
         ]
         expected = (48, "sha256:" + "d" * 64)
@@ -57,7 +58,13 @@ class FullSignedCatalogTests(unittest.TestCase):
                     [dict(reports[0], status="skipped"), *reports[1:]],
                     [dict(reports[0], status="refused"), *reports[1:]],
                     [dict(reports[0], snapshot_sequence=None), *reports[1:]],
-                    [dict(reports[0], installed_dependency_count=0), *reports[1:]]):
+                    [dict(reports[0], installed_dependency_count=0), *reports[1:]],
+                    [dict(reports[0], installed_dependency_count=2), *reports[1:]],
+                    [dict(reports[0], installed_distributions=None), *reports[1:]],
+                    [dict(reports[0], installed_distributions=[{}]), *reports[1:]],
+                    [dict(reports[0], installed_distributions=["wrong/root"]), *reports[1:]],
+                    [dict(reports[0], installed_dependency_count=2,
+                          installed_distributions=[reports[0]["distribution"]] * 2), *reports[1:]]):
             with self.subTest(bad=bad[0]), self.assertRaises(RuntimeError):
                 subject.verify_shard(bad, sources, shard, expected)
 

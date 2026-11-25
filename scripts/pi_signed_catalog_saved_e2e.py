@@ -405,7 +405,8 @@ def run_case(cli: str, scratch: Path, source: dict, scope: str,
     return {"distribution": label, "release_sequence": source["release_sequence"],
             "scope": scope, "status": "passed", "snapshot_sequence": policy["snapshot"][0],
             "snapshot_digest": policy["snapshot"][1],
-            "installed_dependency_count": len(original[1])}
+            "installed_dependency_count": len(original[1]),
+            "installed_distributions": sorted(original[1])}
 
 
 def catalog_sources(head: str) -> list[dict]:
@@ -458,6 +459,16 @@ def verify_shard(results: list[dict], sources: list[dict], shard: int,
                 and type(r.get("installed_dependency_count")) is int
                 and r["installed_dependency_count"] >= 1 for r in results),
             "full signed saved shard coverage incomplete (skipped/refused is not PASS)")
+    for case in results:
+        distributions = case.get("installed_distributions")
+        require(isinstance(distributions, list) and all(
+            isinstance(dist, str) and bool(dist) for dist in distributions),
+            "missing or malformed signed dependency identities")
+        identities = set(distributions)
+        require(len(identities) == len(distributions) == case["installed_dependency_count"]
+                and case["distribution"] in identities,
+                "signed dependency identities differ from reported root/count")
+        check_known_dependency_closure(case["distribution"], identities)
     require(all((r["snapshot_sequence"], r["snapshot_digest"]) == expected_snapshot
                 for r in results),
             "shard uses different signed snapshots from the expected approved publication")
